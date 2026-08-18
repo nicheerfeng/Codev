@@ -3,6 +3,7 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import type { PanelImperativeHandle } from "react-resizable-panels";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { consumeLaunchFiles, getLaunchDir } from "@/lib/launchDir";
@@ -90,6 +91,7 @@ import {
   leafIds,
   navigateFocusedBlocks,
   ptyIdForLeaf,
+  TerminalPanel,
   type PaneBounds,
   type TerminalPaneHandle,
   useAgentActivityStore,
@@ -338,6 +340,49 @@ export default function App() {
   const { hasComposer, keysLoaded } = useAiBootstrap();
 
   const activeTab = tabs.find((t) => t.id === activeId);
+
+  // Terminal tabs live in the right-side dock panel; file tabs own the header
+  // bar and the main workspace surface. Each side keeps its own "effective
+  // active id" so switching to a terminal does not blank the file area and
+  // vice versa.
+  const fileTabs = useMemo(
+    () => spaceTabs.filter((t) => t.kind !== "terminal"),
+    [spaceTabs],
+  );
+  const terminalTabs = useMemo(
+    () => spaceTabs.filter((t) => t.kind === "terminal"),
+    [spaceTabs],
+  );
+  const lastFileTabIdRef = useRef<number | null>(null);
+  const lastTerminalTabIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (activeTab && activeTab.kind !== "terminal") {
+      lastFileTabIdRef.current = activeId;
+    }
+    if (activeTab?.kind === "terminal") {
+      lastTerminalTabIdRef.current = activeId;
+    }
+  }, [activeTab, activeId]);
+  const fileActiveId =
+    activeTab && activeTab.kind !== "terminal"
+      ? activeId
+      : (lastFileTabIdRef.current ??
+        fileTabs[fileTabs.length - 1]?.id ??
+        -1);
+  const terminalActiveId =
+    activeTab?.kind === "terminal"
+      ? activeId
+      : (lastTerminalTabIdRef.current ??
+        terminalTabs[terminalTabs.length - 1]?.id ??
+        -1);
+
+  const terminalPanelRef = useRef<PanelImperativeHandle>(null);
+  useEffect(() => {
+    const panel = terminalPanelRef.current;
+    if (!panel) return;
+    if (terminalTabs.length > 0) panel.expand();
+    else panel.collapse();
+  }, [terminalTabs.length]);
   const isTerminalTab = activeTab?.kind === "terminal";
   const isBlockTab = activeTerminalTab?.blocks === true;
   const isEditorTab = activeTab?.kind === "editor";
@@ -1355,8 +1400,8 @@ export default function App() {
         <div className="relative flex h-screen flex-col overflow-hidden bg-background text-foreground">
           {!zenMode && (
             <Header
-              tabs={spaceTabs}
-              activeId={activeId}
+              tabs={fileTabs}
+              activeId={fileActiveId}
               onSelect={setActiveId}
               onNew={openNewTab}
               onNewBlock={openNewBlockTab}
@@ -1460,42 +1505,76 @@ export default function App() {
               </ResizablePanel>
               <ResizableHandle withHandle />
               <ResizablePanel id="workspace" defaultSize="78%" minSize="30%">
-                <div className="flex h-full min-h-0 flex-col">
-                  <div className="relative min-h-0 flex-1">
-                    <WorkspaceSurface
-                      tabs={tabs}
-                      activeId={activeId}
-                      activeTab={activeTab}
-                      registerTerminalHandle={registerTerminalHandle}
+                <ResizablePanelGroup orientation="horizontal">
+                  <ResizablePanel
+                    id="main-content"
+                    defaultSize={terminalTabs.length > 0 ? 70 : 100}
+                    minSize="30%"
+                  >
+                    <div className="flex h-full min-h-0 flex-col">
+                      <div className="relative min-h-0 flex-1">
+                        <WorkspaceSurface
+                          tabs={fileTabs}
+                          activeId={fileActiveId}
+                          activeTab={fileTabs.find(
+                            (t) => t.id === fileActiveId,
+                          )}
+                          registerTerminalHandle={registerTerminalHandle}
+                          onSearchReady={handleSearchReady}
+                          onCwd={handleTerminalCwd}
+                          onExit={handleLeafExit}
+                          onFocusLeaf={handleFocusLeaf}
+                          registerEditorHandle={registerEditorHandle}
+                          onEditorDirtyChange={handleEditorDirty}
+                          onEditorCloseTab={disposeTab}
+                          registerPreviewHandle={registerPreviewHandle}
+                          onPreviewUrlChange={handlePreviewUrl}
+                          onAiDiffAccept={(id) => respondToApproval(id, true)}
+                          onAiDiffReject={(id) => respondToApproval(id, false)}
+                          onOpenCommitFile={openCommitFileDiffTab}
+                          onGitHistorySearchHandle={setGitHistoryHandle}
+                          onSetMarkdownView={setMarkdownView}
+                        />
+                      </div>
+
+                      <WorkspaceInputBar
+                        isBlockTab={isBlockTab}
+                        isTerminalTab={isTerminalTab}
+                        activeLeafId={activeLeafId}
+                        cwd={activeCwd}
+                        home={home}
+                        hasComposer={hasComposer}
+                        panelOpen={panelOpen}
+                        keysLoaded={keysLoaded}
+                        onConnect={() => void openSettingsWindow("models")}
+                      />
+                    </div>
+                  </ResizablePanel>
+                  <ResizableHandle withHandle />
+                  <ResizablePanel
+                    id="terminal-panel"
+                    panelRef={terminalPanelRef}
+                    defaultSize="30%"
+                    minSize="10%"
+                    collapsible
+                    collapsedSize={0}
+                  >
+                    <TerminalPanel
+                      tabs={terminalTabs}
+                      activeId={terminalActiveId}
+                      onSelect={setActiveId}
+                      onClose={handleClose}
+                      onNew={openNewTab}
+                      onRename={handleRenameTab}
+                      onCollapse={() => terminalPanelRef.current?.collapse()}
+                      registerHandle={registerTerminalHandle}
                       onSearchReady={handleSearchReady}
                       onCwd={handleTerminalCwd}
                       onExit={handleLeafExit}
                       onFocusLeaf={handleFocusLeaf}
-                      registerEditorHandle={registerEditorHandle}
-                      onEditorDirtyChange={handleEditorDirty}
-                      onEditorCloseTab={disposeTab}
-                      registerPreviewHandle={registerPreviewHandle}
-                      onPreviewUrlChange={handlePreviewUrl}
-                      onAiDiffAccept={(id) => respondToApproval(id, true)}
-                      onAiDiffReject={(id) => respondToApproval(id, false)}
-                      onOpenCommitFile={openCommitFileDiffTab}
-                      onGitHistorySearchHandle={setGitHistoryHandle}
-                      onSetMarkdownView={setMarkdownView}
                     />
-                  </div>
-
-                  <WorkspaceInputBar
-                    isBlockTab={isBlockTab}
-                    isTerminalTab={isTerminalTab}
-                    activeLeafId={activeLeafId}
-                    cwd={activeCwd}
-                    home={home}
-                    hasComposer={hasComposer}
-                    panelOpen={panelOpen}
-                    keysLoaded={keysLoaded}
-                    onConnect={() => void openSettingsWindow("models")}
-                  />
-                </div>
+                  </ResizablePanel>
+                </ResizablePanelGroup>
               </ResizablePanel>
             </ResizablePanelGroup>
           </main>
