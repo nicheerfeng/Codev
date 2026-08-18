@@ -14,8 +14,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
-import { AgentIcon } from "@/modules/agents/lib/agentIcon";
-import type { AgentLaunchRequest } from "@/modules/agents/lib/launcher";
 import {
   ALL_LANGUAGES,
   EXPOSED_LANGUAGES,
@@ -23,20 +21,12 @@ import {
 import { resolveDisplayName } from "@/modules/editor/lib/languageResolver";
 import { fileIconUrl } from "@/modules/explorer/lib/iconResolver";
 import {
-  leafIds,
-  ptyIdForLeaf,
-  tabAgentStatus,
-  useAgentActivityStore,
-} from "@/modules/terminal";
-import {
   ArrowRight01Icon,
   Cancel01Icon,
   CancelCircleIcon,
-  CheckmarkCircle01Icon,
   ComputerTerminal02Icon,
   Globe02Icon,
   IncognitoIcon,
-  Message02Icon,
   PencilEdit02Icon,
   Tick02Icon,
 } from "@hugeicons/core-free-icons";
@@ -62,7 +52,6 @@ type Props = {
   onNewPrivate: () => void;
   onNewPreview: () => void;
   onNewEditor: () => void;
-  onLaunchAgents: (request: AgentLaunchRequest) => void;
   onClose: (id: number) => void;
   /** Chrome-style: close every tab to the right of the given tab. */
   onCloseTabsToRight: (id: number) => void;
@@ -87,7 +76,6 @@ export function TabBar({
   onNewPrivate,
   onNewPreview,
   onNewEditor,
-  onLaunchAgents,
   onClose,
   onCloseTabsToRight,
   onCloseOtherTabs,
@@ -587,7 +575,6 @@ export function TabBar({
           onNewPrivate={onNewPrivate}
           onNewPreview={onNewPreview}
           onNewEditor={onNewEditor}
-          onLaunchAgents={onLaunchAgents}
         />
       </div>
     </div>
@@ -603,22 +590,7 @@ function DropIndicator() {
   );
 }
 
-function useTabAgentStatus(tab: Tab) {
-  const phases = useAgentActivityStore((s) => s.phases);
-  const agents = useAgentActivityStore((s) => s.agents);
-  if (tab.kind !== "terminal" || tab.private) {
-    return { state: null, agent: null } as const;
-  }
-  const ptyIds: number[] = [];
-  for (const leaf of leafIds(tab.paneTree)) {
-    const id = ptyIdForLeaf(leaf);
-    if (id !== null) ptyIds.push(id);
-  }
-  return tabAgentStatus(phases, agents, ptyIds);
-}
-
 export function TabIcon({ tab }: { tab: Tab }) {
-  const agentStatus = useTabAgentStatus(tab);
   if (tab.kind === "editor" || tab.kind === "markdown") {
     const url =
       tab.kind === "editor" && tab.overrideLanguage
@@ -656,31 +628,6 @@ export function TabIcon({ tab }: { tab: Tab }) {
         strokeWidth={2}
         className="shrink-0"
       />
-    );
-  }
-  if (agentStatus.state === "attention") {
-    return (
-      <HugeiconsIcon
-        icon={Message02Icon}
-        size={14}
-        strokeWidth={2}
-        className="shrink-0"
-      />
-    );
-  }
-  if (agentStatus.state === "finished") {
-    return (
-      <HugeiconsIcon
-        icon={CheckmarkCircle01Icon}
-        size={14}
-        strokeWidth={2}
-        className="shrink-0"
-      />
-    );
-  }
-  if (agentStatus.state === "working" && agentStatus.agent) {
-    return (
-      <AgentIcon agent={agentStatus.agent} size={14} className="shrink-0" />
     );
   }
   return (
