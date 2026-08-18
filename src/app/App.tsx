@@ -31,14 +31,12 @@ import {
 import { AiComposerProvider } from "@/modules/ai/lib/composer";
 import { native } from "@/modules/ai/lib/native";
 import { CommandPalette, createCommandItems } from "@/modules/command-palette";
-import { useControlBridge } from "@/modules/control";
 import {
   type EditorPaneHandle,
   NewEditorDialog,
   useApplyEditorFontSize,
   useEditorFileSync,
-} from "@/modules/editor";
-import { FileExplorer, type FileExplorerHandle } from "@/modules/explorer";
+} from "@/modules/editor";import { FileExplorer, type FileExplorerHandle } from "@/modules/explorer";
 import type { GitHistorySearchHandle } from "@/modules/git-history";
 import {
   Header,
@@ -100,7 +98,6 @@ import {
   writeToSession,
 } from "@/modules/terminal";
 import { ThemeProvider, useThemeFileEditing } from "@/modules/theme";
-import { UpdaterDialog } from "@/modules/updater";
 import {
   useWorkspaceEnvStore,
   workspaceScopeKey,
@@ -1326,46 +1323,6 @@ export default function App() {
     [openFileTab],
   );
 
-  const openControlFile = useCallback(
-    ({
-      path,
-      line,
-      focus,
-      spaceId,
-    }: {
-      path: string;
-      line?: number;
-      focus: boolean;
-      spaceId: string;
-    }) => {
-      if (focus && useSpaces.getState().activeId !== spaceId) {
-        useSpaces.getState().setActive(spaceId);
-      }
-      const id = openFileTab(path, true, {
-        spaceId,
-        activate: focus,
-      });
-      const editor = editorRefs.current.get(id);
-      if (line !== undefined) {
-        if (editor) editor.gotoLine(line, { focus });
-        else pendingEditorNavigation.current.set(id, { line, focus });
-      } else if (focus) {
-        if (editor) editor.focus();
-        else pendingEditorNavigation.current.set(id, { focus: true });
-      }
-      return id;
-    },
-    [openFileTab],
-  );
-
-  useControlBridge({
-    ready: spacesHydrated && launchCwdResolved,
-    tabsRef,
-    activeTabIdRef: activeIdRef,
-    activeSpaceIdRef,
-    onOpen: openControlFile,
-  });
-
   useEffect(() => {
     setLspNavigator({ openFile: openContentHit });
     return () => setLspNavigator(null);
@@ -1645,8 +1602,6 @@ export default function App() {
             rootPath={explorerRoot ?? home}
             onCreated={(path) => openFileTab(path)}
           />
-
-          <UpdaterDialog />
 
           <CloseDialogs
             tabs={tabs}

@@ -12,7 +12,6 @@ use std::thread;
 use portable_pty::PtySize;
 use tauri::ipc::{Channel, Response};
 
-use crate::modules::control::ControlState;
 use crate::modules::workspace::{user_spawn_cwd_or_home, WorkspaceEnv, WorkspaceRegistry};
 use session::Session;
 
@@ -43,7 +42,6 @@ impl PtyState {
 pub async fn pty_open(
     app: tauri::AppHandle,
     state: tauri::State<'_, PtyState>,
-    control: tauri::State<'_, ControlState>,
     registry: tauri::State<'_, WorkspaceRegistry>,
     cols: u16,
     rows: u16,
@@ -51,20 +49,13 @@ pub async fn pty_open(
     workspace: Option<WorkspaceEnv>,
     blocks: Option<bool>,
     shell: Option<String>,
-    pane_id: Option<u32>,
+    _pane_id: Option<u32>,
     on_data: Channel<Response>,
     on_exit: Channel<i32>,
 ) -> Result<u32, String> {
     let workspace = WorkspaceEnv::from_option(workspace);
     let blocks = blocks.unwrap_or(false);
     let cwd = user_spawn_cwd_or_home(&registry, cwd.as_deref(), &workspace);
-    // A Windows helper cannot execute inside WSL without explicit path and
-    // network translation. Do not inject credentials for a broken command.
-    let control_env = if workspace.is_wsl() {
-        None
-    } else {
-        pane_id.and_then(|pane_id| control.shell_env(pane_id))
-    };
     let id = state.next_id.fetch_add(1, Ordering::Relaxed);
     let session = tauri::async_runtime::spawn_blocking(move || {
         session::spawn(
@@ -76,7 +67,6 @@ pub async fn pty_open(
             workspace,
             blocks,
             shell,
-            control_env,
             on_data,
             on_exit,
         )
