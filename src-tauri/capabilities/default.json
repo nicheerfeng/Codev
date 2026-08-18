@@ -23,7 +23,6 @@
     "opener:default",
     "log:default",
     "os:default",
-    "notification:default",
     "store:default",
     "autostart:allow-enable",
     "autostart:allow-disable",
