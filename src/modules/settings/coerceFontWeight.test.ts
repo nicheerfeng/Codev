@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { coerceFontWeight } from "./store";
+import { coerceFontWeight, coerceLocale } from "./store";
 
 describe("coerceFontWeight", () => {
   it("keeps supported weights", () => {
@@ -16,5 +16,17 @@ describe("coerceFontWeight", () => {
     expect(coerceFontWeight("")).toBe("normal");
     expect(coerceFontWeight("900")).toBe("normal");
     expect(coerceFontWeight("heavy")).toBe("normal");
+  });
+});
+
+describe("coerceLocale", () => {
+  it("keeps supported locales", () => {
+    expect(coerceLocale("en")).toBe("en");
+    expect(coerceLocale("zh")).toBe("zh");
+  });
+
+  it("falls back to English for invalid values", () => {
+    expect(coerceLocale("fr")).toBe("en");
+    expect(coerceLocale(null)).toBe("en");
   });
 });

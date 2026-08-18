@@ -1,4 +1,5 @@
 import type { KeyBinding, ShortcutId } from "@/modules/shortcuts/shortcuts";
+import type { Locale } from "@/lib/i18n/types";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { LazyStore } from "@tauri-apps/plugin-store";
 
@@ -98,6 +99,7 @@ export const EDITOR_THEME_LABELS: Record<EditorThemeId, string> = {
 };
 
 export type Preferences = {
+  locale: Locale;
   theme: ThemePref;
   themeId: string;
   backgroundKind: BackgroundKind;
@@ -165,6 +167,7 @@ export type LspCustomServer = {
 };
 
 const STORE_PATH = "terax-settings.json";
+const KEY_LOCALE = "locale";
 const KEY_THEME = "theme";
 const KEY_THEME_ID = "themeId";
 const KEY_BG_KIND = "backgroundKind";
@@ -231,6 +234,7 @@ export const TERMINAL_SCROLLBACK_PRESETS = [
 ] as const;
 
 export const DEFAULT_PREFERENCES: Preferences = {
+  locale: "en",
   theme: "system",
   themeId: DEFAULT_THEME_ID,
   backgroundKind: "none",
@@ -291,6 +295,7 @@ export async function loadPreferences(): Promise<Preferences> {
   const map = new Map<string, unknown>(entries);
   const get = <T>(k: string): T | undefined => map.get(k) as T | undefined;
   return {
+    locale: coerceLocale(get<unknown>(KEY_LOCALE)),
     theme: get<ThemePref>(KEY_THEME) ?? DEFAULT_PREFERENCES.theme,
     themeId: get<string>(KEY_THEME_ID) ?? DEFAULT_PREFERENCES.themeId,
     backgroundKind:
@@ -419,6 +424,16 @@ export async function setLspCustomServers(
   value: LspCustomServer[],
 ): Promise<void> {
   await writePref(KEY_LSP_CUSTOM_SERVERS, value);
+}
+
+/** 校验持久化语言值，异常值回退到默认英文。 */
+export function coerceLocale(value: unknown): Locale {
+  return value === "zh" || value === "en" ? value : DEFAULT_PREFERENCES.locale;
+}
+
+/** 持久化界面语言并同步到其他窗口。 */
+export async function setLocale(value: Locale): Promise<void> {
+  await writePref(KEY_LOCALE, coerceLocale(value));
 }
 
 export async function setTheme(value: ThemePref): Promise<void> {
@@ -694,6 +709,7 @@ export async function onPreferencesChange(
   cb: (key: PrefKey, value: unknown) => void,
 ): Promise<UnlistenFn> {
   const map: Record<string, PrefKey> = {
+    [KEY_LOCALE]: "locale",
     [KEY_THEME]: "theme",
     [KEY_THEME_ID]: "themeId",
     [KEY_BG_KIND]: "backgroundKind",

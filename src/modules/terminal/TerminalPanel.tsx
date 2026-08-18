@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
 import type { Tab } from "@/modules/tabs";
 import { labelFor, TabIcon } from "@/modules/tabs";
 import type { SearchAddon } from "@xterm/addon-search";
@@ -45,6 +46,7 @@ export function TerminalPanel({
   onExit,
   onFocusLeaf,
 }: Props) {
+  const translate = useT();
   return (
     <div className="flex h-full min-h-0 flex-col bg-card">
       <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border/60 px-2">
@@ -55,7 +57,7 @@ export function TerminalPanel({
           className="shrink-0 text-muted-foreground"
         />
         <span className="pr-1 text-[11px] font-medium text-muted-foreground">
-          Terminal
+          {translate("Terminal")}
         </span>
         <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {tabs.map((t) => (
@@ -78,7 +80,7 @@ export function TerminalPanel({
               <span className="truncate">{labelFor(t)}</span>
               <button
                 type="button"
-                aria-label="Close terminal"
+                aria-label={translate("Close terminal")}
                 className="rounded p-0.5 opacity-0 transition-opacity hover:bg-muted group-hover:opacity-70"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -94,8 +96,8 @@ export function TerminalPanel({
           type="button"
           className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
           onClick={onNew}
-          title="New terminal"
-          aria-label="New terminal"
+          title={translate("New terminal")}
+          aria-label={translate("New terminal")}
         >
           <HugeiconsIcon icon={PlusSignIcon} size={13} strokeWidth={2} />
         </button>
@@ -103,8 +105,8 @@ export function TerminalPanel({
           type="button"
           className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
           onClick={onCollapse}
-          title="Hide terminal panel"
-          aria-label="Hide terminal panel"
+          title={translate("Hide terminal panel")}
+          aria-label={translate("Hide terminal panel")}
         >
           <span className="text-[11px] leading-4">»</span>
         </button>

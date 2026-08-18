@@ -4,6 +4,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { useShortcutLabel } from "@/modules/shortcuts";
 import { labelFor, type Tab, TabIcon } from "@/modules/tabs";
@@ -84,6 +85,7 @@ export function SpaceSwitcher({
   onReorderTab,
   onReorderSpaces,
 }: Props) {
+  const translate = useT();
   const spaces = useSpaces((s) => s.spaces);
   const activeId = useSpaces((s) => s.activeId);
   const setActive = useSpaces((s) => s.setActive);
@@ -240,7 +242,7 @@ export function SpaceSwitcher({
       <PopoverTrigger asChild>
         <button
           type="button"
-          title={shortcut ? `Spaces · ${shortcut}` : "Spaces"}
+          title={shortcut ? `${translate("Spaces")} · ${shortcut}` : translate("Spaces")}
           className="flex h-7 shrink-0 items-center gap-2 rounded-md px-2 text-muted-foreground/90 outline-none transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
         >
           <span className="max-w-36 truncate text-xs font-medium">
@@ -256,7 +258,7 @@ export function SpaceSwitcher({
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={6} className="w-[20rem] p-1.5">
         <div className="flex items-center justify-between px-1.5 pb-1.5 pt-0.5">
-          <span className="text-xs font-semibold text-foreground">Spaces</span>
+          <span className="text-xs font-semibold text-foreground">{translate("Spaces")}</span>
           {shortcut && (
             <Kbd className="h-5 bg-muted/70 text-[10px]">{shortcut}</Kbd>
           )}
@@ -305,7 +307,7 @@ export function SpaceSwitcher({
             className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
           >
             <HugeiconsIcon icon={PlusSignIcon} size={14} strokeWidth={1.75} />
-            <span className="flex-1">New space</span>
+            <span className="flex-1">{translate("New space")}</span>
           </button>
         </div>
       </PopoverContent>
@@ -382,6 +384,7 @@ function SpaceRow({
   onJumpTab,
   onCloseTab,
 }: SpaceRowProps) {
+  const translate = useT();
   const isDragging = dragging?.kind === "space" && dragging.id === space.id;
   const moveTarget = drop?.kind === "into-space" && drop.spaceId === space.id;
   const reorderEdge =
@@ -419,7 +422,7 @@ function SpaceRow({
         <button
           type="button"
           data-no-drag
-          aria-label={expanded ? "Collapse" : "Expand"}
+          aria-label={expanded ? translate("Collapse") : translate("Expand")}
           onClick={(e) => {
             e.stopPropagation();
             onToggle();
@@ -456,14 +459,14 @@ function SpaceRow({
             >
               <RowAction
                 icon={PencilEdit02Icon}
-                label="Rename space"
+                label={translate("Rename space")}
                 onClick={onStartRename}
               />
-              <RowAction icon={PlusSignIcon} label="New tab" onClick={onNewTab} />
+              <RowAction icon={PlusSignIcon} label={translate("New tab")} onClick={onNewTab} />
               {canDelete && (
                 <RowAction
                   icon={Delete02Icon}
-                  label="Delete space"
+                  label={translate("Delete space")}
                   destructive
                   onClick={onDelete}
                 />
@@ -490,7 +493,7 @@ function SpaceRow({
           ))}
           {tabs.length === 0 && (
             <span className="px-2 py-1 text-[10.5px] text-muted-foreground/50">
-              {draggingTabFromOther ? "Drop to move here" : "No tabs"}
+              {draggingTabFromOther ? translate("Drop to move here") : translate("No tabs")}
             </span>
           )}
         </div>
@@ -522,6 +525,7 @@ function TabRow({
   onJump: () => void;
   onClose: () => void;
 }) {
+  const translate = useT();
   const subtitle = subtitleFor(tab);
   const isDragging = dragging?.kind === "tab" && dragging.id === tab.id;
   const reorderEdge =
@@ -569,7 +573,7 @@ function TabRow({
             e.stopPropagation();
             onClose();
           }}
-          aria-label="Close tab"
+          aria-label={translate("Close tab")}
           className="flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/tab:opacity-70 hover:opacity-100"
         >
           <HugeiconsIcon icon={Cancel01Icon} size={11} strokeWidth={2} />

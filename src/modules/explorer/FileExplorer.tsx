@@ -12,6 +12,7 @@ import {
   useState,
 } from "react";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
 import {
   RootTree,
   type RootTreeHandle,
@@ -52,6 +53,7 @@ function RootSection({
   onRemove: () => void;
   children: React.ReactNode;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(true);
   return (
     <div
@@ -77,7 +79,7 @@ function RootSection({
             e.stopPropagation();
             setOpen((v) => !v);
           }}
-          aria-label={open ? "Collapse" : "Expand"}
+          aria-label={open ? t("Collapse") : t("Expand")}
         >
           <span className="inline-block text-[10px] leading-4">
             {open ? "▾" : "▸"}
@@ -98,8 +100,8 @@ function RootSection({
             e.stopPropagation();
             onRemove();
           }}
-          aria-label="Remove root"
-          title="Remove from workspace"
+          aria-label={t("Remove root")}
+          title={t("Remove from workspace")}
         >
           <span className="inline-block text-[11px] leading-4">×</span>
         </button>
@@ -121,6 +123,7 @@ export const FileExplorer = memo(
     },
     ref,
   ) {
+    const t = useT();
     const [drives, setDrives] = useState<string[]>([]);
     const [browsePath, setBrowsePath] = useState<string | null>(null);
     const [addOpen, setAddOpen] = useState(false);
@@ -194,7 +197,7 @@ export const FileExplorer = memo(
               strokeWidth={1.5}
               className="mx-1 shrink-0 text-muted-foreground"
             />
-            Workspace
+            {t("Workspace")}
           </span>
           {!browsePath && (
             <Button
@@ -205,8 +208,8 @@ export const FileExplorer = memo(
                 setAddOpen((v) => !v);
                 setAddValue("");
               }}
-              title="Add folder to workspace"
-              aria-label="Add folder to workspace"
+              title={t("Add folder to workspace")}
+              aria-label={t("Add folder to workspace")}
             >
               <HugeiconsIcon icon={PlusSignIcon} size={13} strokeWidth={2} />
             </Button>
@@ -226,7 +229,7 @@ export const FileExplorer = memo(
                   setAddValue("");
                 }
               }}
-              placeholder="Enter folder path, e.g. D:/projects"
+              placeholder={t("Enter folder path, e.g. D:/projects")}
               className="h-6 min-w-0 flex-1 rounded-sm border border-border/60 bg-transparent px-1.5 text-xs outline-none placeholder:text-muted-foreground/60 focus:border-primary/60"
             />
             <Button
@@ -235,7 +238,7 @@ export const FileExplorer = memo(
               className="h-6 px-2 text-xs"
               onClick={commitAdd}
             >
-              Add
+              {t("Add")}
             </Button>
           </div>
         )}
@@ -267,8 +270,8 @@ export const FileExplorer = memo(
                 size="icon"
                 className="size-6 text-muted-foreground hover:text-foreground"
                 onClick={() => setBrowsePath(null)}
-                title="Back to workspace roots"
-                aria-label="Back"
+                title={t("Back to workspace roots")}
+                aria-label={t("Back")}
               >
                 ←
               </Button>
@@ -296,12 +299,12 @@ export const FileExplorer = memo(
               className="text-muted-foreground"
             />
             <div className="text-xs text-muted-foreground">
-              No folders in workspace
+              {t("No folders in workspace")}
             </div>
             <div className="text-[11px] text-muted-foreground/70">
               {showDrives
-                ? "Pick a drive above to browse, or add a folder path."
-                : "Add a folder path above to browse it."}
+                ? t("Pick a drive above to browse, or add a folder path.")
+                : t("Add folder path above to browse it.")}
             </div>
           </div>
         ) : (

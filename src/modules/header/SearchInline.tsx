@@ -27,11 +27,6 @@ const TERM_DECORATIONS = {
 export type SearchTarget =
   | { kind: "terminal"; addon: SearchAddon; focus: () => void }
   | { kind: "editor"; handle: EditorPaneHandle; focus: () => void }
-  | {
-      kind: "git-history";
-      handle: { setQuery: (q: string) => void; clearQuery: () => void };
-      focus: () => void;
-    }
   | null;
 
 export type SearchInlineHandle = { focus: () => void };
@@ -68,15 +63,8 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
       return tokens.join(KEY_SEP);
     }, [userShortcuts]);
 
-    const baseLabel = target?.kind === "git-history" ? "Git search" : "Search";
-
-    const placeholder = useMemo(() => {
-      return shortcutText ? `${baseLabel} (${shortcutText})` : baseLabel;
-    }, [baseLabel, shortcutText]);
-
-    const tooltipTitle = useMemo(() => {
-      return shortcutText ? `${baseLabel} (${shortcutText})` : baseLabel;
-    }, [baseLabel, shortcutText]);
+    const placeholder = shortcutText ? `Search (${shortcutText})` : "Search";
+    const tooltipTitle = placeholder;
 
     const expanded = !compact || openInCompact;
 
@@ -129,7 +117,6 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
         if (forward) target.handle.findNext();
         else target.handle.findPrevious();
       }
-      // git-history: the list filters live; Enter has no next/prev semantics.
     };
 
     return (

@@ -53,14 +53,13 @@ export function useSpacesBoot({
     void (async () => {
       try {
         const { spaces, activeId, states } = await loadAll();
+        await usePreferencesStore
+          .getState()
+          .init()
+          .catch(() => {});
 
         if (spaces.length === 0) {
           const root = launchCwd ?? home ?? null;
-          // Hydrate prefs before reading the saved workspace env.
-          await usePreferencesStore
-            .getState()
-            .init()
-            .catch(() => {});
           const meta: SpaceMeta = {
             id: DEFAULT_SPACE_ID,
             name: "Default",
