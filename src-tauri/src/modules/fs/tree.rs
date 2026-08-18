@@ -213,6 +213,28 @@ pub fn fs_read_dir(
     Ok(entries)
 }
 
+/// Enumerates available drive roots. Windows: existing `X:/` drives
+/// (A..Z). Other platforms: a single `/` root so the explorer strip is a
+/// no-op.
+#[tauri::command]
+pub fn fs_list_drives() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        let mut drives = Vec::new();
+        for letter in 'A'..='Z' {
+            let root = format!("{letter}:/");
+            if std::path::Path::new(&root).exists() {
+                drives.push(root);
+            }
+        }
+        drives
+    }
+    #[cfg(not(windows))]
+    {
+        vec!["/".to_string()]
+    }
+}
+
 /// Lists immediate subdirectories of `path`. Kept for the CwdBreadcrumb.
 ///
 /// Symlinks to directories are included (matches shell `cd` semantics).

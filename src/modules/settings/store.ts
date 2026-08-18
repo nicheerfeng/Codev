@@ -156,6 +156,9 @@ export type Preferences = {
   editorWordWrapColumn: number;
   showHidden: boolean;
   explorerGitDecorations: boolean;
+  /** Multi-root workspace: imported folder roots (forward-slash paths). */
+  workspaceRoots: string[];
+  activeWorkspaceRoot: string | null;
   terminalWebglEnabled: boolean;
   terminalCursorBlink: boolean;
   terminalCursorStyle: TerminalCursorStyle;
@@ -249,6 +252,8 @@ const KEY_EDITOR_WORD_WRAP_COLUMN = "editorWordWrapColumn";
 const KEY_SHOW_HIDDEN = "showHidden";
 const LEGACY_KEY_SHOW_HIDDEN_DIRS = "showHiddenDirectories";
 const KEY_EXPLORER_GIT_DECORATIONS = "explorerGitDecorations";
+const KEY_WORKSPACE_ROOTS = "workspaceRoots";
+const KEY_ACTIVE_WORKSPACE_ROOT = "activeWorkspaceRoot";
 const KEY_TERMINAL_WEBGL_ENABLED = "terminalWebglEnabled";
 const KEY_TERMINAL_CURSOR_BLINK = "terminalCursorBlink";
 const KEY_TERMINAL_CURSOR_STYLE = "terminalCursorStyle";
@@ -338,6 +343,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   editorWordWrapColumn: EDITOR_WORD_WRAP_COLUMN_DEFAULT,
   showHidden: false,
   explorerGitDecorations: true,
+  workspaceRoots: [],
+  activeWorkspaceRoot: null,
   terminalWebglEnabled: true,
   terminalCursorBlink: false,
   terminalCursorStyle: "bar",
@@ -491,6 +498,13 @@ export async function loadPreferences(): Promise<Preferences> {
     explorerGitDecorations:
       get<boolean>(KEY_EXPLORER_GIT_DECORATIONS) ??
       DEFAULT_PREFERENCES.explorerGitDecorations,
+    workspaceRoots: normalizeWorkspaceRoots(
+      get<string[]>(KEY_WORKSPACE_ROOTS) ?? DEFAULT_PREFERENCES.workspaceRoots,
+    ),
+    activeWorkspaceRoot: normalizeWorkspaceRoot(
+      get<string | null>(KEY_ACTIVE_WORKSPACE_ROOT) ??
+        DEFAULT_PREFERENCES.activeWorkspaceRoot,
+    ),
     terminalWebglEnabled:
       get<boolean>(KEY_TERMINAL_WEBGL_ENABLED) ??
       DEFAULT_PREFERENCES.terminalWebglEnabled,
@@ -606,6 +620,36 @@ function clampBlur(v: number): number {
   return Math.min(64, Math.max(0, Math.round(v)));
 }
 
+/** Normalizes one workspace root: backslashes to forward slashes, trims
+ *  trailing slashes (except drive roots like `C:/` and the Unix root `/`),
+ *  drops empties. Returns null for blank input. */
+export function normalizeWorkspaceRoot(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const norm = raw.replace(/\\/g, "/").trim();
+  if (!norm) return null;
+  if (norm === "/") return "/";
+  const trimmed = norm.replace(/\/+$/, "");
+  // `C:` (bare drive letter) is not absolute; keep it out of roots.
+  if (!trimmed.includes("/") && trimmed.endsWith(":")) return `${trimmed}/`;
+  return trimmed || null;
+}
+
+/** Normalizes a roots array: dedupe, keep order, and keep only entries whose
+ *  normalized form survives. Used at load time to guard the persisted list. */
+export function normalizeWorkspaceRoots(raw: string[] | null | undefined): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const r of raw) {
+    const n = normalizeWorkspaceRoot(r);
+    if (n && !seen.has(n)) {
+      seen.add(n);
+      out.push(n);
+    }
+  }
+  return out;
+}
+
 export async function setBackgroundKind(value: BackgroundKind): Promise<void> {
   await writePref(KEY_BG_KIND, value);
 }
@@ -630,6 +674,16 @@ export async function setDefaultModel(value: ModelId): Promise<void> {
 
 export async function setEditorTheme(value: EditorThemePref): Promise<void> {
   await writePref(KEY_EDITOR_THEME, value);
+}
+
+export async function setWorkspaceRoots(value: string[]): Promise<void> {
+  await writePref(KEY_WORKSPACE_ROOTS, normalizeWorkspaceRoots(value));
+}
+
+export async function setActiveWorkspaceRoot(
+  value: string | null,
+): Promise<void> {
+  await writePref(KEY_ACTIVE_WORKSPACE_ROOT, normalizeWorkspaceRoot(value));
 }
 
 export function clampEditorFontSize(value: number): number {
@@ -970,6 +1024,8 @@ export async function onPreferencesChange(
     [KEY_EDITOR_WORD_WRAP_COLUMN]: "editorWordWrapColumn",
     [KEY_SHOW_HIDDEN]: "showHidden",
     [KEY_EXPLORER_GIT_DECORATIONS]: "explorerGitDecorations",
+    [KEY_WORKSPACE_ROOTS]: "workspaceRoots",
+    [KEY_ACTIVE_WORKSPACE_ROOT]: "activeWorkspaceRoot",
     [KEY_TERMINAL_WEBGL_ENABLED]: "terminalWebglEnabled",
     [KEY_TERMINAL_CURSOR_BLINK]: "terminalCursorBlink",
     [KEY_TERMINAL_CURSOR_STYLE]: "terminalCursorStyle",
