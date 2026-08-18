@@ -27,7 +27,6 @@ export type ShortcutId =
   | "pane.swapRight"
   | "pane.swapUp"
   | "pane.swapDown"
-  | "pane.source"
   | "terminal.clear"
   | "blocks.prev"
   | "blocks.next"
@@ -173,12 +172,6 @@ export const SHORTCUTS: Shortcut[] = [
     label: "Swap pane down",
     group: "Panes",
     defaultBindings: [{ [MOD_PROP]: true, alt: true, key: "ArrowDown" }],
-  },
-  {
-    id: "pane.source",
-    label: "Toggle source panel",
-    group: "Panes",
-    defaultBindings: [{ [MOD_PROP]: true, key: "g" }],
   },
   {
     id: "terminal.clear",
