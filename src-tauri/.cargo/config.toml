@@ -1,0 +1,10 @@
+# Local build tuning: keep peak memory within ~12GB on 16GB dev machines.
+# 20-core parallel rustc easily exceeds 16GB RAM (each rustc needs 1-3GB),
+# which made dev machines swap and freeze during the initial compile.
+[build]
+jobs = 6
+
+# Dev builds skip debug info: much lower memory + faster compile.
+# Release profile is untouched (stays fully optimized).
+[profile.dev]
+debug = false
