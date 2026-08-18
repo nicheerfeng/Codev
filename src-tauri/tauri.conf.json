@@ -4,9 +4,9 @@
   "version": "0.8.6",
   "identifier": "app.crynta.terax",
   "build": {
-    "beforeDevCommand": "pnpm build:cli:dev && pnpm dev",
+    "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build:cli && pnpm build",
+    "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist",
     "removeUnusedCommands": true
   },
@@ -34,11 +34,7 @@
   },
   "bundle": {
     "active": true,
-    "externalBin": [
-      "binaries/terax-cli"
-    ],
     "targets": "all",
-    "createUpdaterArtifacts": true,
     "copyright": "Copyright 2026 Crynta",
     "license": "Apache-2.0",
     "publisher": "Crynta",
@@ -106,13 +102,5 @@
         ]
       }
     ]
-  },
-  "plugins": {
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNCQUJGRDhBQjYwRTM0NjkKUldScE5BNjJpdjJyT3dIN0dqbUpHaDA4QW1GaDVmTTllRXdZVk96dFNTRUZ3Y2hiVGszYjFqRloK",
-      "endpoints": [
-        "https://github.com/crynta/terax-ai/releases/latest/download/latest.json"
-      ]
-    }
   }
 }

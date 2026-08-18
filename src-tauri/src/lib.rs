@@ -1,6 +1,6 @@
 pub mod modules;
 
-use modules::{agent, control, fs, git, history, lsp, net, pty, secrets, shell, workspace};
+use modules::{agent, fs, git, history, lsp, net, pty, secrets, shell, workspace};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
@@ -175,15 +175,12 @@ pub fn run() {
     let launch = parse_launch_target();
     let cli_dir = launch.dir.clone();
     workspace::init_launch_cwd(cli_dir.as_deref());
-    let control_state = control::ControlState::default();
-    let control_for_setup = control_state.clone();
 
     let builder = tauri::Builder::default();
     #[cfg(target_os = "linux")]
     let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
     builder
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         // Skip restoring VISIBLE — frontend calls window.show() after first
         // paint so the user never sees a transparent window-shadow flash on
         // Windows/Linux.
@@ -203,9 +200,6 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .setup(move |_app| {
-            if let Err(error) = control::start(_app.handle().clone(), control_for_setup.clone()) {
-                log::warn!("could not start Terax control server: {error}");
-            }
             // macOS skips parent() for the settings window, so tie its lifecycle
             // to the main window here instead. Other platforms keep parent().
             #[cfg(target_os = "macos")]
@@ -225,7 +219,6 @@ pub fn run() {
             Ok(())
         })
         .manage(pty::PtyState::default())
-        .manage(control_state)
         .manage(shell::ShellState::default())
         .manage(secrets::SecretsState::default())
         .manage(fs::watch::FsWatchState::default())
@@ -309,8 +302,6 @@ pub fn run() {
             workspace::wsl_home,
             workspace::workspace_authorize,
             workspace::workspace_current_dir,
-            control::control_frontend_ready,
-            control::control_respond,
             get_launch_dir,
             get_launch_files,
             open_settings_window,
@@ -337,9 +328,6 @@ pub fn run() {
                 tauri::RunEvent::Exit => {
                     if let Some(state) = app.try_state::<lsp::LspState>() {
                         state.kill_all();
-                    }
-                    if let Some(state) = app.try_state::<control::ControlState>() {
-                        state.shutdown();
                     }
                 }
                 // macOS delivers "Open With" files here, not as argv (cold and
