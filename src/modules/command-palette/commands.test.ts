@@ -39,8 +39,6 @@ function baseContext(
     focusSearch: noop,
     focusExplorerSearch: noop,
     toggleSidebar: noop,
-    toggleAi: noop,
-    askAiSelection: noop,
     openSettings: noop,
     openKeyboardShortcuts: noop,
     openSpacesOverview: noop,
