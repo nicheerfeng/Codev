@@ -36,8 +36,8 @@ import {
   NewEditorDialog,
   useApplyEditorFontSize,
   useEditorFileSync,
-} from "@/modules/editor";import { FileExplorer, type FileExplorerHandle } from "@/modules/explorer";
-import type { GitHistorySearchHandle } from "@/modules/git-history";
+} from "@/modules/editor";
+import { FileExplorer, type FileExplorerHandle } from "@/modules/explorer";
 import {
   Header,
   type SearchInlineHandle,
@@ -46,7 +46,6 @@ import {
 import { setLspNavigator } from "@/modules/lsp";
 import type { PreviewPaneHandle } from "@/modules/preview";
 import { openSettingsWindow } from "@/modules/settings/openSettingsWindow";
-import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
   shouldDisablePaneSwapShortcut,
   type ShortcutHandlers,
@@ -59,11 +58,6 @@ import {
   SidebarRail,
   useSidebarPanel,
 } from "@/modules/sidebar";
-import {
-  SourceControlPanel,
-  useRepositoryTargeting,
-  useSourceControlContext,
-} from "@/modules/source-control";
 import {
   SpaceSwitcher,
   useSpacePersistence,
@@ -100,7 +94,6 @@ import {
 import { ThemeProvider, useThemeFileEditing } from "@/modules/theme";
 import {
   useWorkspaceEnvStore,
-  workspaceScopeKey,
   type WorkspaceEnv,
 } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
@@ -151,11 +144,6 @@ export default function App() {
     newMarkdownTab,
     setMarkdownView,
     setOverrideLanguage,
-    openAiDiffTab,
-    closeAiDiffTab,
-    openGitDiffTab,
-    openCommitHistoryTab,
-    openCommitFileDiffTab,
     closeTab,
     closeTabs,
     updateTab,
@@ -190,8 +178,6 @@ export default function App() {
   const previewRefs = useRef<Map<number, PreviewPaneHandle>>(new Map());
   const [activeEditorHandle, setActiveEditorHandle] =
     useState<EditorPaneHandle | null>(null);
-  const [gitHistoryHandle, setGitHistoryHandle] =
-    useState<GitHistorySearchHandle | null>(null);
   const { zoomIn, zoomOut, zoomReset } = useZoom();
   useApplyEditorFontSize();
   const terminalPathDropTarget = useTerminalFileDrop();
@@ -235,7 +221,6 @@ export default function App() {
     activeIdRef.current = activeId;
     activeSpaceIdRef.current = activeSpaceId;
   }, [tabs, activeId, activeSpaceId]);
-  const sourceControlSpaceId = activeSpaceId ?? DEFAULT_SPACE_ID;
 
   const handleWorkspaceChange = useCallback(
     async (env: WorkspaceEnv) => {
@@ -306,11 +291,9 @@ export default function App() {
     persistSidebarView,
     persistSidebarCollapsed,
     toggleSidebar,
-    cycleSidebarView,
-    openSidebarView,
     persistSidebarWidth,
     toggleExplorerFocus,
-  } = useSidebarPanel(explorerRef);
+    } = useSidebarPanel(explorerRef);
 
   const [newEditorOpen, setNewEditorOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -332,7 +315,6 @@ export default function App() {
   const openPanel = useChatStore((s) => s.openPanel);
   const panelOpen = useChatStore((s) => s.panelOpen);
   const setLive = useChatStore((s) => s.setLive);
-  const respondToApproval = useChatStore((s) => s.respondToApproval);
 
   const { hasComposer, keysLoaded } = useAiBootstrap();
 
@@ -383,7 +365,6 @@ export default function App() {
   const isTerminalTab = activeTab?.kind === "terminal";
   const isBlockTab = activeTerminalTab?.blocks === true;
   const isEditorTab = activeTab?.kind === "editor";
-  const isGitHistoryTab = activeTab?.kind === "git-history";
 
   useEditorFileSync({ tabs, tabsRef, editorRefs });
   useThemeFileEditing({ tabsRef, openFileTab });
@@ -565,12 +546,6 @@ export default function App() {
 
   const handleAttachFileToAgent = useCallback(
     (path: string) => {
-      if (!hasComposer) {
-        void openSettingsWindow("models");
-        return;
-      }
-      // Dispatch a window event the composer listens for. Same pattern as
-      // selections — keeps file-explorer decoupled from the AI module.
       window.dispatchEvent(
         new CustomEvent<string>("terax:ai-attach-file", { detail: path }),
       );
@@ -764,65 +739,12 @@ export default function App() {
 
   const activeFilePath = (() => {
     if (activeTab?.kind === "editor") return activeTab.path;
-    if (activeTab?.kind === "git-diff") {
-      if (/^([A-Za-z]:|\/|\\)/.test(activeTab.path)) return activeTab.path;
-      const root = activeTab.repoRoot.replace(/[\\/]+$/, "");
-      const rel = activeTab.path.replace(/^[\\/]+/, "");
-      return `${root}/${rel}`;
-    }
-    if (activeTab?.kind === "git-commit-file") {
-      const root = activeTab.repoRoot.replace(/[\\/]+$/, "");
-      const rel = activeTab.path.replace(/^[\\/]+/, "");
-      return `${root}/${rel}`;
-    }
     return null;
   })();
   const explorerActiveFilePath =
     activeTab?.kind === "editor" || activeTab?.kind === "markdown"
       ? activeTab.path
       : null;
-  const isRepositoryContextCurrent = useCallback(
-    (spaceId: string, workspaceKey: string) => {
-      const currentSpaceId = useSpaces.getState().activeId ?? DEFAULT_SPACE_ID;
-      const currentWorkspaceKey = workspaceScopeKey(
-        useWorkspaceEnvStore.getState().env,
-      );
-      return spaceId === currentSpaceId && workspaceKey === currentWorkspaceKey;
-    },
-    [],
-  );
-  const openSourceControl = useCallback(() => {
-    openSidebarView("source-control");
-  }, [openSidebarView]);
-  const {
-    repositoryTarget: sourceControlRepositoryTarget,
-    openInSourceControl: handleOpenRepositoryInSourceControl,
-    openGitHistory: handleOpenGitHistoryForPath,
-    followActiveContext: handleFollowRepositoryContext,
-  } = useRepositoryTargeting({
-    spaceId: sourceControlSpaceId,
-    workspaceKey: workspaceScopeKey(workspaceEnv),
-    isContextCurrent: isRepositoryContextCurrent,
-    openSourceControl,
-    openCommitHistoryTab,
-  });
-  const { sourceControl, toggleSourceControl, openGitGraphFromContext } =
-    useSourceControlContext({
-      activeTab,
-      tabs,
-      activeTerminalLeafCwd,
-      explorerRoot,
-      launchCwd,
-      launchCwdResolved,
-      home,
-      sidebarView,
-      repositoryTarget: sourceControlRepositoryTarget,
-      cycleSidebarView,
-      openCommitHistoryTab,
-    });
-  const explorerGitDecorations = usePreferencesStore(
-    (s) => s.explorerGitDecorations,
-  );
 
   const openPreviewTab = useCallback(
     (url: string) => {
@@ -920,7 +842,6 @@ export default function App() {
       "pane.swapRight": () => swapActivePane("right"),
       "pane.swapUp": () => swapActivePane("up"),
       "pane.swapDown": () => swapActivePane("down"),
-      "pane.source": toggleSourceControl,
       "terminal.clear": () => {
         clearFocusedTerminal();
       },
@@ -975,7 +896,6 @@ export default function App() {
       splitActivePaneInActiveTab,
       focusNextPaneInTab,
       swapActivePane,
-      toggleSourceControl,
       hasComposer,
       togglePanelAndFocus,
       toggleMini,
@@ -1153,21 +1073,13 @@ export default function App() {
         handle: activeEditorHandle,
         focus: () => activeEditorHandle.focus(),
       };
-    if (isGitHistoryTab && gitHistoryHandle)
-      return {
-        kind: "git-history",
-        handle: gitHistoryHandle,
-        focus: () => {},
-      };
     return null;
   }, [
     isTerminalTab,
     isEditorTab,
-    isGitHistoryTab,
     activeLeafId,
     activeSearchAddon,
     activeEditorHandle,
-    gitHistoryHandle,
   ]);
 
   const activeCwd = activeTerminalLeafCwd;
@@ -1267,8 +1179,6 @@ export default function App() {
             openNewPrivate: openNewPrivateTab,
             openNewEditor: () => setNewEditorOpen(true),
             openNewPreview: () => openPreviewTab(""),
-            openGitGraph: openGitGraphFromContext,
-            toggleSourceControl,
             closeActiveTabOrPane: handleCloseTabOrPane,
             splitPaneRight: () => splitActivePaneInActiveTab("row"),
             splitPaneDown: () => splitActivePaneInActiveTab("col"),
@@ -1297,8 +1207,6 @@ export default function App() {
       openNewBlockTab,
       openNewPrivateTab,
       openPreviewTab,
-      openGitGraphFromContext,
-      toggleSourceControl,
       handleCloseTabOrPane,
       splitActivePaneInActiveTab,
       toggleSidebar,
@@ -1365,7 +1273,6 @@ export default function App() {
               onNewPrivate={openNewPrivateTab}
               onNewPreview={() => openPreviewTab("")}
               onNewEditor={() => setNewEditorOpen(true)}
-              onNewGitGraph={openGitGraphFromContext}
               onLaunchAgents={launchAgentGroup}
               onClose={handleClose}
               onCloseTabsToRight={handleCloseTabsToRight}
@@ -1415,7 +1322,7 @@ export default function App() {
                     key={sidebarView}
                     className="min-h-0 flex-1 terax-panel-in"
                   >
-                    {sidebarView === "explorer" ? (
+                    {sidebarView === "explorer" && (
                       <FileExplorer
                         ref={explorerRef}
                         roots={workspaceRoots}
@@ -1423,40 +1330,18 @@ export default function App() {
                         onAddRoot={(p) => void addRoot(p)}
                         onRemoveRoot={(p) => void removeRoot(p)}
                         onSetActiveRoot={(p) => void setActiveRoot(p)}
-                        gitStatus={
-                          explorerGitDecorations ? sourceControl.status : null
-                        }
                         activeFilePath={explorerActiveFilePath}
                         onOpenFile={handleOpenFile}
                         onPathRenamed={handlePathRenamed}
                         onPathDeleted={handlePathDeleted}
                         onRevealInTerminal={cdInNewTab}
-                        onOpenInSourceControl={
-                          handleOpenRepositoryInSourceControl
-                        }
-                        onOpenGitHistory={handleOpenGitHistoryForPath}
-                        onAttachToAgent={handleAttachFileToAgent}
                         pathDropTarget={terminalPathDropTarget}
-                      />
-                    ) : (
-                      <SourceControlPanel
-                        open
-                        sourceControl={sourceControl}
-                        onOpenDiff={openGitDiffTab}
-                        onOpenGitGraph={openGitGraphFromContext}
-                        onOpenFile={handleOpenFile}
-                        onNavigateToPath={cdInNewTab}
-                        repositoryTarget={sourceControlRepositoryTarget}
-                        onFollowRepositoryContext={
-                          handleFollowRepositoryContext
-                        }
                       />
                     )}
                   </div>
                   <SidebarRail
                     activeView={sidebarView}
                     onSelectView={persistSidebarView}
-                    changedCount={sourceControl.changedCount}
                   />
                 </div>
               </ResizablePanel>
@@ -1486,10 +1371,6 @@ export default function App() {
                           onEditorCloseTab={disposeTab}
                           registerPreviewHandle={registerPreviewHandle}
                           onPreviewUrlChange={handlePreviewUrl}
-                          onAiDiffAccept={(id) => respondToApproval(id, true)}
-                          onAiDiffReject={(id) => respondToApproval(id, false)}
-                          onOpenCommitFile={openCommitFileDiffTab}
-                          onGitHistorySearchHandle={setGitHistoryHandle}
                           onSetMarkdownView={setMarkdownView}
                         />
                       </div>
@@ -1561,10 +1442,7 @@ export default function App() {
 
           {hasComposer ? (
             <>
-              <AgentRunBridge
-                openAiDiffTab={openAiDiffTab}
-                closeAiDiffTab={closeAiDiffTab}
-              />
+              <AgentRunBridge />
               <LocalAgentNotificationsBridge />
             </>
           ) : null}

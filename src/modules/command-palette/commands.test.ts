@@ -33,8 +33,6 @@ function baseContext(
     openNewPrivate: noop,
     openNewEditor: noop,
     openNewPreview: noop,
-    openGitGraph: noop,
-    toggleSourceControl: noop,
     closeActiveTabOrPane: noop,
     splitPaneRight: noop,
     splitPaneDown: noop,

@@ -17,7 +17,6 @@ import {
   AiBrowserIcon,
   ArrowRight01Icon,
   ComputerTerminal02Icon,
-  GitBranchIcon,
   Globe02Icon,
   IncognitoIcon,
   PencilEdit02Icon,
@@ -32,7 +31,6 @@ type Props = {
   onNewPrivate: () => void;
   onNewPreview: () => void;
   onNewEditor: () => void;
-  onNewGitGraph: () => void;
   onLaunchAgents: (request: AgentLaunchRequest) => void;
 };
 
@@ -42,7 +40,6 @@ export function NewTabMenu({
   onNewPrivate,
   onNewPreview,
   onNewEditor,
-  onNewGitGraph,
   onLaunchAgents,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -162,15 +159,7 @@ export function NewTabMenu({
                   {fmtShortcut(MOD_KEY, "P")}
                 </span>
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={onNewGitGraph}>
-                <HugeiconsIcon
-                  icon={GitBranchIcon}
-                  size={14}
-                  strokeWidth={1.75}
-                />
-                <span className="flex-1">Git Graph</span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
+                          </DropdownMenuContent>
           </DropdownMenu>
         </span>
       </PopoverAnchor>

@@ -33,9 +33,7 @@ import {
   Cancel01Icon,
   CancelCircleIcon,
   CheckmarkCircle01Icon,
-  Clock01Icon,
   ComputerTerminal02Icon,
-  GitCompareIcon,
   Globe02Icon,
   IncognitoIcon,
   Message02Icon,
@@ -64,7 +62,6 @@ type Props = {
   onNewPrivate: () => void;
   onNewPreview: () => void;
   onNewEditor: () => void;
-  onNewGitGraph: () => void;
   onLaunchAgents: (request: AgentLaunchRequest) => void;
   onClose: (id: number) => void;
   /** Chrome-style: close every tab to the right of the given tab. */
@@ -90,7 +87,6 @@ export function TabBar({
   onNewPrivate,
   onNewPreview,
   onNewEditor,
-  onNewGitGraph,
   onLaunchAgents,
   onClose,
   onCloseTabsToRight,
@@ -239,8 +235,7 @@ export function TabBar({
               }
             />
             {tabs.map((t, i) => {
-              const isPreview =
-                (t.kind === "editor" || t.kind === "git-diff") && t.preview;
+              const isPreview = t.kind === "editor" && t.preview;
               const isActive = t.id === activeId;
               const isNew = !firstRender && !seen.has(t.id);
 
@@ -592,7 +587,6 @@ export function TabBar({
           onNewPrivate={onNewPrivate}
           onNewPreview={onNewPreview}
           onNewEditor={onNewEditor}
-          onNewGitGraph={onNewGitGraph}
           onLaunchAgents={onLaunchAgents}
         />
       </div>
@@ -654,40 +648,10 @@ export function TabIcon({ tab }: { tab: Tab }) {
       />
     );
   }
-  if (tab.kind === "ai-diff") {
-    return (
-      <HugeiconsIcon
-        icon={GitCompareIcon}
-        size={14}
-        strokeWidth={2}
-        className="shrink-0"
-      />
-    );
-  }
   if (tab.kind === "terminal" && tab.private) {
     return (
       <HugeiconsIcon
         icon={IncognitoIcon}
-        size={14}
-        strokeWidth={2}
-        className="shrink-0"
-      />
-    );
-  }
-  if (tab.kind === "git-diff" || tab.kind === "git-commit-file") {
-    return (
-      <HugeiconsIcon
-        icon={GitCompareIcon}
-        size={14}
-        strokeWidth={2}
-        className="shrink-0"
-      />
-    );
-  }
-  if (tab.kind === "git-history") {
-    return (
-      <HugeiconsIcon
-        icon={Clock01Icon}
         size={14}
         strokeWidth={2}
         className="shrink-0"

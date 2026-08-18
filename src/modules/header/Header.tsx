@@ -33,7 +33,6 @@ type Props = {
   onNewPrivate: () => void;
   onNewPreview: () => void;
   onNewEditor: () => void;
-  onNewGitGraph: () => void;
   onLaunchAgents: (request: AgentLaunchRequest) => void;
   onClose: (id: number) => void;
   /** Chrome-style: close every tab to the right of the given tab. */
@@ -68,7 +67,6 @@ export function Header({
   onNewPrivate,
   onNewPreview,
   onNewEditor,
-  onNewGitGraph,
   onLaunchAgents,
   onClose,
   onCloseTabsToRight,
@@ -167,7 +165,6 @@ export function Header({
           onNewPrivate={onNewPrivate}
           onNewPreview={onNewPreview}
           onNewEditor={onNewEditor}
-          onNewGitGraph={onNewGitGraph}
           onLaunchAgents={onLaunchAgents}
           onClose={onClose}
           onCloseTabsToRight={onCloseTabsToRight}

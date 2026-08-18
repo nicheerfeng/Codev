@@ -1,7 +1,6 @@
 import type { ComponentProps } from "react";
 import { cn } from "@/lib/utils";
-import { AiDiffStack, EditorStack, GitDiffStack } from "@/modules/editor";
-import { GitHistoryStack } from "@/modules/git-history";
+import { EditorStack } from "@/modules/editor";
 import { MarkdownStack } from "@/modules/markdown";
 import { PreviewStack } from "@/modules/preview";
 import type { Tab } from "@/modules/tabs";
@@ -10,8 +9,6 @@ import { TerminalStack } from "@/modules/terminal";
 type TerminalStackProps = ComponentProps<typeof TerminalStack>;
 type EditorStackProps = ComponentProps<typeof EditorStack>;
 type PreviewStackProps = ComponentProps<typeof PreviewStack>;
-type AiDiffStackProps = ComponentProps<typeof AiDiffStack>;
-type GitHistoryStackProps = ComponentProps<typeof GitHistoryStack>;
 
 type Props = {
   tabs: Tab[];
@@ -27,10 +24,6 @@ type Props = {
   onEditorCloseTab: EditorStackProps["onCloseTab"];
   registerPreviewHandle: PreviewStackProps["registerHandle"];
   onPreviewUrlChange: PreviewStackProps["onUrlChange"];
-  onAiDiffAccept: AiDiffStackProps["onAccept"];
-  onAiDiffReject: AiDiffStackProps["onReject"];
-  onOpenCommitFile: GitHistoryStackProps["onOpenCommitFile"];
-  onGitHistorySearchHandle: GitHistoryStackProps["onSearchHandle"];
   onSetMarkdownView: EditorStackProps["onSetMarkdownView"];
 };
 
@@ -53,10 +46,6 @@ export function WorkspaceSurface({
   onEditorCloseTab,
   registerPreviewHandle,
   onPreviewUrlChange,
-  onAiDiffAccept,
-  onAiDiffReject,
-  onOpenCommitFile,
-  onGitHistorySearchHandle,
   onSetMarkdownView,
 }: Props) {
   const kind = activeTab?.kind;
@@ -64,9 +53,6 @@ export function WorkspaceSurface({
   const isEditorTab = kind === "editor";
   const isPreviewTab = kind === "preview";
   const isMarkdownTab = kind === "markdown";
-  const isAiDiffTab = kind === "ai-diff";
-  const isGitDiffTab = kind === "git-diff" || kind === "git-commit-file";
-  const isGitHistoryTab = kind === "git-history";
 
   return (
     <div className="relative h-full min-h-0">
@@ -128,43 +114,6 @@ export function WorkspaceSurface({
           tabs={tabs}
           activeId={activeId}
           onSetMarkdownView={onSetMarkdownView}
-        />
-      </div>
-      <div
-        className={cn(
-          "absolute inset-0 px-3 pt-2 pb-2",
-          !isAiDiffTab && "invisible pointer-events-none",
-        )}
-        aria-hidden={!isAiDiffTab}
-      >
-        <AiDiffStack
-          tabs={tabs}
-          activeId={activeId}
-          onAccept={onAiDiffAccept}
-          onReject={onAiDiffReject}
-        />
-      </div>
-      <div
-        className={cn(
-          "absolute inset-0 px-3 pt-2 pb-2",
-          !isGitDiffTab && "invisible pointer-events-none",
-        )}
-        aria-hidden={!isGitDiffTab}
-      >
-        <GitDiffStack tabs={tabs} activeId={activeId} />
-      </div>
-      <div
-        className={cn(
-          "absolute inset-0",
-          !isGitHistoryTab && "invisible pointer-events-none",
-        )}
-        aria-hidden={!isGitHistoryTab}
-      >
-        <GitHistoryStack
-          tabs={tabs}
-          activeId={activeId}
-          onOpenCommitFile={onOpenCommitFile}
-          onSearchHandle={onGitHistorySearchHandle}
         />
       </div>
     </div>
