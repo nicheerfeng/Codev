@@ -24,10 +24,8 @@ export const COMMAND_GROUPS = [
   "Spaces",
   "Tabs",
   "Panes",
-  "Git",
   "Search",
   "View",
-  "AI",
 ] as const;
 
 export type CommandPaletteActionContext = {
@@ -149,7 +147,7 @@ export function createCommandItems(
       id: "tab.newPrivate",
       title: "New private terminal",
       group: "Tabs",
-      keywords: ["privacy", "private", "incognito", "hidden from ai"],
+      keywords: ["privacy", "private", "incognito", "not saved"],
       icon: IncognitoIcon,
       shortcutId: "tab.newPrivate",
       run: ctx.openNewPrivate,

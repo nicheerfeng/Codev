@@ -26,6 +26,7 @@ import {
   useState,
 } from "react";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
 import { ExplorerSearch, type ExplorerSearchHandle } from "./ExplorerSearch";
 import { EntryRow, PendingRow, StatusRow, type RowActions } from "./TreeRow";
 import { InlineInput } from "./InlineInput";
@@ -187,6 +188,7 @@ export const RootTree = memo(
     },
     ref,
   ) {
+    const t = useT();
     const tree = useFileTree(rootPath, { onPathRenamed, onPathDeleted });
     const [selectedPath, setSelectedPath] = useState<string | null>(null);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -356,7 +358,7 @@ export const RootTree = memo(
             className="text-muted-foreground"
           />
           <div className="text-xs text-muted-foreground">
-            No current directory
+            {t("No current directory")}
           </div>
         </div>
       );
@@ -507,8 +509,8 @@ export const RootTree = memo(
             size="icon"
             className="size-6 text-muted-foreground hover:text-foreground"
             onClick={() => setIsSearchOpen((v) => !v)}
-            title="Search files"
-            aria-label="Search files"
+            title={t("Search files")}
+            aria-label={t("Search files")}
           >
             <HugeiconsIcon icon={Search01Icon} size={13} strokeWidth={2} />
           </Button>
@@ -518,7 +520,7 @@ export const RootTree = memo(
             size="icon"
             className="size-6 text-muted-foreground hover:text-foreground"
             onClick={() => tree.beginCreate(rootPath, "file")}
-            title="New file"
+            title={t("New file")}
           >
             <HugeiconsIcon icon={FileAddIcon} size={13} strokeWidth={2} />
           </Button>
@@ -527,7 +529,7 @@ export const RootTree = memo(
             size="icon"
             className="size-6 text-muted-foreground hover:text-foreground"
             onClick={() => tree.beginCreate(rootPath, "dir")}
-            title="New folder"
+            title={t("New folder")}
           >
             <HugeiconsIcon icon={FolderAddIcon} size={13} strokeWidth={2} />
           </Button>
@@ -536,7 +538,7 @@ export const RootTree = memo(
             size="icon"
             className="size-6 text-muted-foreground hover:text-foreground"
             onClick={() => tree.refresh(rootPath)}
-            title="Refresh"
+            title={t("Refresh")}
           >
             <HugeiconsIcon icon={Refresh01Icon} size={12} strokeWidth={2} />
           </Button>
@@ -604,7 +606,7 @@ export const RootTree = memo(
                     <InlineInput
                       initial=""
                       placeholder={
-                        pendingAtRoot.kind === "dir" ? "New folder" : "New file"
+                        pendingAtRoot.kind === "dir" ? t("New folder") : t("New file")
                       }
                       onCommit={tree.commitCreate}
                       onCancel={tree.cancelCreate}
@@ -667,7 +669,7 @@ export const RootTree = memo(
                       className={COMPACT_ITEM}
                       onSelect={() => onOpenFile(menuTarget.path, true)}
                     >
-                      Open
+                      {t("Open")}
                     </ContextMenuItem>
                   )}
                   {onRevealInTerminal && (
@@ -681,7 +683,7 @@ export const RootTree = memo(
                         )
                       }
                     >
-                      Open in Terminal
+                      {t("Open in Terminal")}
                     </ContextMenuItem>
                   )}
                   {menuTarget.isDir && onAddAsRoot && (
@@ -689,14 +691,14 @@ export const RootTree = memo(
                       className={COMPACT_ITEM}
                       onSelect={() => onAddAsRoot(menuTarget.path)}
                     >
-                      Add to Workspace Roots
+                      {t("Add to Workspace Roots")}
                     </ContextMenuItem>
                   )}
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     onSelect={() => void revealInFinder(menuTarget.path)}
                   >
-                    Reveal in Finder
+                    {t("Reveal in Finder")}
                   </ContextMenuItem>
                   <ContextMenuSeparator />
                   <ContextMenuItem
@@ -710,7 +712,7 @@ export const RootTree = memo(
                       )
                     }
                   >
-                    New File
+                    {t("New file")}
                   </ContextMenuItem>
                   <ContextMenuItem
                     className={COMPACT_ITEM}
@@ -723,14 +725,14 @@ export const RootTree = memo(
                       )
                     }
                   >
-                    New Folder
+                    {t("New folder")}
                   </ContextMenuItem>
                   <ContextMenuSeparator />
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     onSelect={() => void copyToClipboard(menuTarget.path)}
                   >
-                    Copy Path
+                    {t("Copy Path")}
                   </ContextMenuItem>
                   <ContextMenuItem
                     className={COMPACT_ITEM}
@@ -740,7 +742,7 @@ export const RootTree = memo(
                       )
                     }
                   >
-                    Copy Relative Path
+                    {t("Copy Relative Path")}
                   </ContextMenuItem>
                   <ContextMenuSeparator />
                   <ContextMenuItem
@@ -757,7 +759,7 @@ export const RootTree = memo(
                       }
                     }}
                   >
-                    {deleteConfirm ? "Click again to confirm" : "Delete"}
+                    {deleteConfirm ? t("Click again to confirm") : t("Delete")}
                   </ContextMenuItem>
                 </>
               ) : (
@@ -767,40 +769,40 @@ export const RootTree = memo(
                       className={COMPACT_ITEM}
                       onSelect={() => onRevealInTerminal(rootPath)}
                     >
-                      Open in Terminal
+                      {t("Open in Terminal")}
                     </ContextMenuItem>
                   )}
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     onSelect={() => void revealInFinder(rootPath)}
                   >
-                    Reveal in Finder
+                    {t("Reveal in Finder")}
                   </ContextMenuItem>
                   <ContextMenuSeparator />
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     onSelect={() => tree.beginCreate(rootPath, "file")}
                   >
-                    New File
+                    {t("New file")}
                   </ContextMenuItem>
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     onSelect={() => tree.beginCreate(rootPath, "dir")}
                   >
-                    New Folder
+                    {t("New folder")}
                   </ContextMenuItem>
                   <ContextMenuSeparator />
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     onSelect={() => void copyToClipboard(rootPath)}
                   >
-                    Copy Path
+                    {t("Copy Path")}
                   </ContextMenuItem>
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     onSelect={() => tree.refresh(rootPath)}
                   >
-                    Refresh
+                    {t("Refresh")}
                   </ContextMenuItem>
                 </>
               )}

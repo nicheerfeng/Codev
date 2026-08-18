@@ -8,6 +8,7 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useT } from "@/lib/i18n";
 import { fileIconUrl } from "@/modules/explorer/lib/iconResolver";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
@@ -59,6 +60,7 @@ export function CommandPalette({
   onOpenContentHit,
   insertCommand,
 }: Props) {
+  const t = useT();
   const [query, setQuery] = useState("");
   const [value, setValue] = useState("");
   const [page, setPage] = useState<"root" | "themes">("root");
@@ -203,19 +205,19 @@ export function CommandPalette({
   );
 
   const placeholder = inThemes
-    ? "Search themes..."
+    ? t("Search themes...")
     : parsed.mode === "content"
-      ? "Find text in files..."
+      ? t("Find text in files...")
       : parsed.mode === "history"
-        ? "Search command history..."
-        : "Type a command, > for history, # to find in files";
+        ? t("Search command history...")
+        : t("Type a command, > for history, # to find in files");
 
   return (
     <CommandDialog
       open={open}
       onOpenChange={handleOpenChange}
-      title="Command Palette"
-      description="Run a command, switch theme, or search your workspace."
+      title={t("Command Palette")}
+      description={t("Run a command, switch theme, or search your workspace.")}
       className="top-1/2 w-[min(680px,calc(100vw-32px))] -translate-y-1/2"
     >
       <Command
@@ -235,7 +237,7 @@ export function CommandPalette({
         <ScrollArea className="max-h-[420px]">
           <CommandList className="max-h-none overflow-visible pr-3">
             {inThemes ? (
-              <CommandGroup heading="Themes">
+              <CommandGroup heading={t("Themes")}>
                 <CommandItem
                   value="theme:back"
                   onSelect={exitThemes}
@@ -246,7 +248,7 @@ export function CommandPalette({
                     size={14}
                     strokeWidth={1.75}
                   />
-                  <span>Back</span>
+                  <span>{t("Back")}</span>
                 </CommandItem>
                 {themes.map((t) => (
                   <CommandItem
@@ -266,21 +268,22 @@ export function CommandPalette({
                     ) : null}
                   </CommandItem>
                 ))}
-                {themes.length === 0 ? <StatusItem label="No themes" /> : null}
+                {themes.length === 0 ? <StatusItem label={t("No themes")} /> : null}
               </CommandGroup>
             ) : parsed.mode === "commands" ? (
               rankedCommands.length === 0 ? (
-                <EmptyHint />
+                <EmptyHint t={t} />
               ) : (
                 COMMAND_GROUPS.map((group) => {
                   const rows = rankedCommands.filter((a) => a.group === group);
                   if (rows.length === 0) return null;
                   return (
-                    <CommandGroup key={group} heading={group}>
+                    <CommandGroup key={group} heading={t(group)}>
                       {rows.map((item) => (
                         <ActionItem
                           key={item.id}
                           item={item}
+                          t={t}
                           shortcutLabel={formatShortcut(
                             item.shortcutId,
                             userShortcuts,
@@ -293,17 +296,18 @@ export function CommandPalette({
                 })
               )
             ) : parsed.mode === "content" ? (
-              <CommandGroup heading="Contents">
+              <CommandGroup heading={t("Contents")}>
                 {!workspaceRoot ? (
-                  <StatusItem label="No workspace root" />
+                  <StatusItem label={t("No workspace root")} />
                 ) : parsed.term.length < CONTENT_SEARCH_MIN_QUERY ? (
-                  <StatusItem label="Type at least 2 characters" />
+                  <StatusItem label={t("Type at least 2 characters")} />
                 ) : (
                   <AsyncBody
                     loading={content.loading}
                     error={content.error}
                     empty={content.results.length === 0}
-                    emptyLabel="No matches"
+                    emptyLabel={t("No matches")}
+                    t={t}
                     onRetry={content.retry}
                   >
                     {content.results.map((hit) => (
@@ -330,15 +334,16 @@ export function CommandPalette({
                 )}
               </CommandGroup>
             ) : parsed.mode === "history" ? (
-              <CommandGroup heading="Command history">
+              <CommandGroup heading={t("Command history")}>
                 {!insertCommand ? (
-                  <StatusItem label="Open a terminal to run history" />
+                  <StatusItem label={t("Open a terminal to run history")} />
                 ) : (
                   <AsyncBody
                     loading={history.loading}
                     error={history.error}
                     empty={history.results.length === 0}
-                    emptyLabel="No history"
+                    emptyLabel={t("No history")}
+                    t={t}
                     onRetry={history.retry}
                   >
                     {history.results.map((cmd) => (
@@ -363,7 +368,7 @@ export function CommandPalette({
                 )}
               </CommandGroup>
             ) : (
-              <CommandGroup heading="Search modes">
+              <CommandGroup heading={t("Search modes")}>
                 {MODE_HINTS.map((hint) => (
                   <CommandItem
                     key={hint.sigil}
@@ -407,10 +412,12 @@ function rankCommands(
 
 function ActionItem({
   item,
+  t,
   shortcutLabel,
   onRun,
 }: {
   item: PaletteItem;
+  t: (text: string) => string;
   shortcutLabel: string | null;
   onRun: () => void;
 }) {
@@ -430,7 +437,7 @@ function ActionItem({
           className="text-muted-foreground"
         />
       ) : null}
-      <span className="truncate">{item.title}</span>
+      <span className="truncate">{t(item.title)}</span>
       {rightLabel ? (
         <CommandShortcut
           className={item.disabledReason ? "normal-case tracking-normal" : ""}
@@ -447,6 +454,7 @@ function AsyncBody({
   error,
   empty,
   emptyLabel,
+  t,
   onRetry,
   children,
 }: {
@@ -454,20 +462,21 @@ function AsyncBody({
   error: string | null;
   empty: boolean;
   emptyLabel: string;
+  t: (text: string) => string;
   onRetry: () => void;
   children: React.ReactNode;
 }) {
   if (error) {
     return (
       <>
-        <StatusItem label="Search failed" tone="error" />
+        <StatusItem label={t("Search failed")} tone="error" />
         <CommandItem value="retry" onSelect={onRetry} className="text-[12.5px]">
-          <span>Retry</span>
+          <span>{t("Retry")}</span>
         </CommandItem>
       </>
     );
   }
-  if (empty && loading) return <StatusItem label="Searching..." />;
+  if (empty && loading) return <StatusItem label={t("Searching...")} />;
   if (empty) return <StatusItem label={emptyLabel} />;
   return <>{children}</>;
 }
@@ -502,11 +511,11 @@ function StatusItem({
   );
 }
 
-function EmptyHint() {
+function EmptyHint({ t }: { t: (text: string) => string }) {
   return (
     <div className="flex flex-col items-center gap-2 px-4 py-10 text-center text-sm text-muted-foreground">
       <HugeiconsIcon icon={CommandIcon} size={18} strokeWidth={1.5} />
-      <span>No commands found. Type ? to see search modes.</span>
+      <span>{t("No commands found. Type ? to see search modes.")}</span>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { useT } from "@/lib/i18n";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,6 +32,7 @@ export function NewTabMenu({
   onNewPreview,
   onNewEditor,
 }: Props) {
+  const t = useT();
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
@@ -40,7 +42,7 @@ export function NewTabMenu({
           variant="ghost"
           size="icon"
           className="size-7 shrink-0 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-          title="New tab"
+          title={t("New tab")}
         >
           <HugeiconsIcon icon={PlusSignIcon} size={14} strokeWidth={2} />
         </Button>
@@ -52,7 +54,7 @@ export function NewTabMenu({
             size={14}
             strokeWidth={1.75}
           />
-          <span className="flex-1">Terminal</span>
+          <span className="flex-1">{t("Terminal")}</span>
           <span className="text-xs text-muted-foreground">
             {fmtShortcut(MOD_KEY, "T")}
           </span>
@@ -63,7 +65,7 @@ export function NewTabMenu({
             size={14}
             strokeWidth={1.75}
           />
-          <span className="flex-1">Blocks</span>
+          <span className="flex-1">{t("Blocks")}</span>
           <span className="text-xs text-muted-foreground">
             {fmtShortcut(MOD_KEY, SHIFT_KEY, "T")}
           </span>
@@ -74,7 +76,7 @@ export function NewTabMenu({
             size={14}
             strokeWidth={1.75}
           />
-          <span className="flex-1">Privacy</span>
+          <span className="flex-1">{t("Privacy")}</span>
           <span className="text-xs text-muted-foreground">
             {fmtShortcut(MOD_KEY, "R")}
           </span>
@@ -85,7 +87,7 @@ export function NewTabMenu({
             size={14}
             strokeWidth={1.75}
           />
-          <span className="flex-1">Editor</span>
+          <span className="flex-1">{t("Editor")}</span>
           <span className="text-xs text-muted-foreground">
             {fmtShortcut(MOD_KEY, "E")}
           </span>
@@ -96,7 +98,7 @@ export function NewTabMenu({
             size={14}
             strokeWidth={1.75}
           />
-          <span className="flex-1">Preview</span>
+          <span className="flex-1">{t("Preview")}</span>
           <span className="text-xs text-muted-foreground">
             {fmtShortcut(MOD_KEY, "P")}
           </span>

@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
 import { FolderTreeIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { SidebarViewId } from "./types";
@@ -17,7 +18,8 @@ type Props = {
 };
 
 export function SidebarRail({ activeView, onSelectView }: Props) {
-  const items: RailItem[] = [{ id: "explorer", label: "Files", icon: FolderTreeIcon }];
+  const t = useT();
+  const items: RailItem[] = [{ id: "explorer", label: t("Files"), icon: FolderTreeIcon }];
 
   return (
     <div
