@@ -1,4 +1,3 @@
-import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -15,18 +14,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import {
-  type OsNotificationResult,
-  testAgentOsNotification,
-} from "@/modules/agents/lib/notify";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import type { ThemePref } from "@/modules/settings/store";
 import {
-  setAgentNotifications,
   setAutostart,
   setConfirmCloseRunningTerminal,
   setDefaultWorkspaceEnv,
-  setExplorerGitDecorations,
   setRestoreWindowState,
   setShowHidden,
   setTerminalCursorBlink,
@@ -83,13 +76,6 @@ const SHELL_AUTO = "auto";
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 2.0;
 const ZOOM_STEP = 0.05;
-const NOTIFICATION_TEST_DELAY_MS = 2_000;
-
-type NotificationTestState =
-  | OsNotificationResult
-  | "idle"
-  | "waiting"
-  | "sending";
 
 export function GeneralSection() {
   const { mode, setMode } = useTheme();
@@ -97,9 +83,6 @@ export function GeneralSection() {
   const autostart = usePreferencesStore((s) => s.autostart);
   const restoreWindowState = usePreferencesStore((s) => s.restoreWindowState);
   const showHidden = usePreferencesStore((s) => s.showHidden);
-  const explorerGitDecorations = usePreferencesStore(
-    (s) => s.explorerGitDecorations,
-  );
   const terminalWebglEnabled = usePreferencesStore(
     (s) => s.terminalWebglEnabled,
   );
@@ -120,20 +103,6 @@ export function GeneralSection() {
     (s) => s.confirmCloseRunningTerminal,
   );
   const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
-  const agentNotifications = usePreferencesStore((s) => s.agentNotifications);
-  const [notificationTest, setNotificationTest] =
-    useState<NotificationTestState>("idle");
-  const notificationTestPending =
-    notificationTest === "waiting" || notificationTest === "sending";
-
-  const testNotification = async () => {
-    setNotificationTest("waiting");
-    await new Promise((resolve) =>
-      setTimeout(resolve, NOTIFICATION_TEST_DELAY_MS),
-    );
-    setNotificationTest("sending");
-    setNotificationTest(await testAgentOsNotification());
-  };
 
   useEffect(() => {
     let alive = true;
@@ -232,15 +201,6 @@ export function GeneralSection() {
           <Switch
             checked={showHidden}
             onCheckedChange={(v) => void setShowHidden(v)}
-          />
-        </SettingRow>
-        <SettingRow
-          title="Git decorations"
-          description="Tint changed files and dim gitignored entries in the file explorer."
-        >
-          <Switch
-            checked={explorerGitDecorations}
-            onCheckedChange={(v) => void setExplorerGitDecorations(v)}
           />
         </SettingRow>
       </div>
@@ -383,7 +343,7 @@ export function GeneralSection() {
         {(wslDistros.length > 0 || defaultWorkspaceEnv !== "local") && (
           <SettingRow
             title="Workspace environment"
-            description="Where new spaces run, terminal and AI agent alike: Windows or a WSL distro. Existing spaces keep theirs; switch any from the status bar."
+            description="Where new spaces run: Windows or a WSL distro. Existing spaces keep theirs; switch any from the status bar."
           >
             <Select
               value={defaultWorkspaceEnv}
@@ -500,35 +460,6 @@ export function GeneralSection() {
       </div>
 
       <div className="flex flex-col gap-2">
-        <Label>Agents</Label>
-        <SettingRow
-          title="Coding agent notifications"
-          description="Alert when a coding agent needs your input or finishes. Native notification when Terax is unfocused, in-app otherwise."
-        >
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="xs"
-              disabled={!agentNotifications || notificationTestPending}
-              title={notificationTestTitle(notificationTest)}
-              onClick={() => void testNotification()}
-            >
-              {notificationTestLabel(notificationTest)}
-            </Button>
-            <Switch
-              checked={agentNotifications}
-              disabled={notificationTestPending}
-              onCheckedChange={(v) => {
-                setNotificationTest("idle");
-                void setAgentNotifications(v);
-              }}
-            />
-          </div>
-        </SettingRow>
-      </div>
-
-      <div className="flex flex-col gap-2">
         <Label>Startup</Label>
         <div className="flex flex-col gap-2">
           <SettingRow
@@ -561,38 +492,6 @@ function Label({ children }: { children: React.ReactNode }) {
       {children}
     </span>
   );
-}
-
-function notificationTestLabel(status: NotificationTestState): string {
-  switch (status) {
-    case "waiting":
-      return "Switch apps...";
-    case "sending":
-      return "Sending...";
-    case "requested":
-      return "Requested";
-    case "denied":
-      return "Blocked";
-    case "failed":
-      return "Failed";
-    default:
-      return "Test in 2s";
-  }
-}
-
-function notificationTestTitle(status: NotificationTestState): string {
-  switch (status) {
-    case "waiting":
-      return "Switch to another app to verify native delivery";
-    case "requested":
-      return "The native notification was requested";
-    case "denied":
-      return "Notifications are disabled by the system";
-    case "failed":
-      return "Terax could not request a native notification";
-    default:
-      return "Send a native test notification after two seconds";
-  }
 }
 
 function FontFamilyInput({

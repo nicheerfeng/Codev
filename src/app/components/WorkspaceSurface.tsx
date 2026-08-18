@@ -21,7 +21,6 @@ type Props = {
   onFocusLeaf: TerminalStackProps["onFocusLeaf"];
   registerEditorHandle: EditorStackProps["registerHandle"];
   onEditorDirtyChange: EditorStackProps["onDirtyChange"];
-  onEditorCloseTab: EditorStackProps["onCloseTab"];
   registerPreviewHandle: PreviewStackProps["registerHandle"];
   onPreviewUrlChange: PreviewStackProps["onUrlChange"];
   onSetMarkdownView: EditorStackProps["onSetMarkdownView"];
@@ -43,7 +42,6 @@ export function WorkspaceSurface({
   onFocusLeaf,
   registerEditorHandle,
   onEditorDirtyChange,
-  onEditorCloseTab,
   registerPreviewHandle,
   onPreviewUrlChange,
   onSetMarkdownView,
@@ -85,7 +83,6 @@ export function WorkspaceSurface({
           activeId={activeId}
           registerHandle={registerEditorHandle}
           onDirtyChange={onEditorDirtyChange}
-          onCloseTab={onEditorCloseTab}
           onSetMarkdownView={onSetMarkdownView}
         />
       </div>

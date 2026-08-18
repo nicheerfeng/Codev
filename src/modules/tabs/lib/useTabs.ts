@@ -1,9 +1,5 @@
 import { isMarkdownPath } from "@/lib/utils";
 import {
-  createAgentPanePlan,
-  type AgentInstanceCount,
-} from "@/modules/agents/lib/launcher";
-import {
   findLeafCwd,
   hasLeaf,
   leafIds,
@@ -44,7 +40,7 @@ export type TerminalTab = TabBase & {
   paneTree: PaneNode;
   activeLeafId: number;
   blocks?: boolean;
-  /** AI agent cannot read buffer / context of this terminal. */
+  /** Private terminal does not expose its buffer as workspace context. */
   private?: boolean;
   /** User-set label that overrides the cwd-derived name. Survives cd. */
   customTitle?: string;
@@ -79,11 +75,7 @@ export type MarkdownTab = TabBase & {
   path: string;
 };
 
-export type Tab =
-  | TerminalTab
-  | EditorTab
-  | PreviewTab
-  | MarkdownTab;
+export type Tab = TerminalTab | EditorTab | PreviewTab | MarkdownTab;
 
 export type TabPatch = Partial<{
   title: string;
@@ -612,41 +604,6 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     ).__teraxNewBlockTab = newBlockTab;
   }, [newBlockTab]);
 
-  const newAgentGroupTab = useCallback(
-    (cwd: string | undefined, title: string, instances: AgentInstanceCount) => {
-      const tabId = nextIdRef.current++;
-      const { paneTree, leafIds: agentLeafIds } = createAgentPanePlan(
-        instances,
-        () => nextIdRef.current++,
-        cwd,
-      );
-      setTabs((t) => [
-        ...t,
-        {
-          id: tabId,
-          kind: "terminal",
-          spaceId: activeSpaceIdRef.current,
-          title,
-          customTitle: title,
-          cwd,
-          paneTree,
-          activeLeafId: agentLeafIds[0],
-        },
-      ]);
-      setActiveId(tabId);
-      return { tabId, leafIds: agentLeafIds };
-    },
-    [],
-  );
-
-  const newAgentTab = useCallback(
-    (cwd: string | undefined, title: string) => {
-      const { tabId, leafIds: agentLeafIds } = newAgentGroupTab(cwd, title, 1);
-      return { tabId, leafId: agentLeafIds[0] };
-    },
-    [newAgentGroupTab],
-  );
-
   const newPrivateTab = useCallback((cwd?: string) => {
     const tabId = nextIdRef.current++;
     const leafId = nextIdRef.current++;
@@ -704,14 +661,13 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     setTabs((curr) =>
       curr.map((t) => {
         if (t.id !== id) return t;
-        if ((t.kind === "editor") && t.preview) {
+        if (t.kind === "editor" && t.preview) {
           return { ...t, preview: false };
         }
         return t;
       }),
     );
   }, []);
-
 
   const newPreviewTab = useCallback((url: string) => {
     const id = nextIdRef.current++;
@@ -799,7 +755,6 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     },
     [],
   );
-
 
   const closeTab = useCallback((id: number) => {
     let toDispose: number[] = [];
@@ -1091,8 +1046,6 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     setOverrideLanguage,
     newTab,
     newBlockTab,
-    newAgentTab,
-    newAgentGroupTab,
     newPrivateTab,
     openFileTab,
     pinTab,

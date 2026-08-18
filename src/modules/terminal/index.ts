@@ -13,11 +13,6 @@ export {
   writeToSession,
 } from "./lib/useTerminalSession";
 export {
-  type AgentTabStatus,
-  tabAgentStatus,
-  useAgentActivityStore,
-} from "./lib/agentActivity";
-export {
   type TerminalPathDropTarget,
   useTerminalFileDrop,
 } from "./lib/useTerminalFileDrop";

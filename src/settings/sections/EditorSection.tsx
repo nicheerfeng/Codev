@@ -31,7 +31,6 @@ import {
   setEditorFormatterByLang,
   setEditorWordWrap,
   setEditorWordWrapColumn,
-  setVimMode,
 } from "@/modules/settings/store";
 import { Cancel01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -44,7 +43,6 @@ const AUTO_SAVE_STEP = 100;
 
 export function EditorSection() {
   const editorFontSize = usePreferencesStore((s) => s.editorFontSize);
-  const vimMode = usePreferencesStore((s) => s.vimMode);
   const editorWordWrap = usePreferencesStore((s) => s.editorWordWrap);
   const editorWordWrapColumn = usePreferencesStore(
     (s) => s.editorWordWrapColumn,
@@ -94,15 +92,6 @@ export function EditorSection() {
 
       <div className="flex flex-col gap-2">
         <Label>Editing</Label>
-        <SettingRow
-          title="Vim mode"
-          description="Enable Vim keybindings in the code editor."
-        >
-          <Switch
-            checked={vimMode}
-            onCheckedChange={(v) => void setVimMode(v)}
-          />
-        </SettingRow>
         <SettingRow
           title="Word wrap"
           description="Wrap long lines instead of scrolling horizontally."
