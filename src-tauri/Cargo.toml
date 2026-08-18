@@ -50,14 +50,6 @@ tauri-plugin-log = "2"
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"
 tauri-plugin-process = "2"
-tauri-plugin-notification = "2"
-reqwest = { version = "0.12", default-features = false, features = [
-	"rustls-tls",
-	"stream",
-] }
-bytes = "1"
-futures-util = "0.3"
-tokio = { version = "1", default-features = false, features = ["rt"] }
 tempfile = "3"
 notify = "8.2.0"
 which = "8.0.4"
@@ -70,9 +62,6 @@ tempfile = "3"
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "3.6", default-features = false, features = [
-	"apple-native",
-] }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSUserDefaults"] }
 
@@ -81,9 +70,6 @@ objc2-foundation = { version = "0.3", features = ["NSString", "NSUserDefaults"] 
 tauri-plugin-clipboard-manager = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-keyring = { version = "3.6", default-features = false, features = [
-	"windows-native",
-] }
 windows-sys = { version = "0.61", features = [
 	"Win32_Foundation",
 	"Win32_Security",

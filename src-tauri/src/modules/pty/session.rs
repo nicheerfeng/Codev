@@ -6,14 +6,11 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, ChildKiller, MasterPty, PtySize};
 use tauri::ipc::{Channel, Response};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
-use super::agent_detect::AgentDetector;
 use super::da_filter::DaFilter;
 use super::shell_init;
 use crate::modules::workspace::WorkspaceEnv;
-
-const AGENT_EVENT: &str = "terax:agent-signal";
 
 // Flusher coalesces a short window after first-byte arrival so we send chunks,
 // not single bytes. MAX_IDLE is only a safety net for missed signals.
@@ -82,7 +79,9 @@ struct ChildKillGuard {
 
 impl ChildKillGuard {
     fn new(killer: Box<dyn ChildKiller + Send + Sync>) -> Self {
-        Self { killer: Some(killer) }
+        Self {
+            killer: Some(killer),
+        }
     }
 
     fn disarm(&mut self) {
@@ -163,10 +162,8 @@ pub fn spawn(
         exited: exited.clone(),
     });
 
-    let pending: Arc<(Mutex<Vec<u8>>, Condvar)> = Arc::new((
-        Mutex::new(Vec::with_capacity(READ_BUF)),
-        Condvar::new(),
-    ));
+    let pending: Arc<(Mutex<Vec<u8>>, Condvar)> =
+        Arc::new((Mutex::new(Vec::with_capacity(READ_BUF)), Condvar::new()));
     let done = Arc::new(AtomicBool::new(false));
     let spawn_at = Instant::now();
 
@@ -174,7 +171,6 @@ pub fn spawn(
 
     let pending_r = pending.clone();
     let writer_for_da = writer.clone();
-    let app_reader = app.clone();
     let first_byte_r = first_byte;
     let reader_thread = thread::Builder::new()
         .name("terax-pty-reader".into())
@@ -182,7 +178,6 @@ pub fn spawn(
             let mut buf = [0u8; READ_BUF];
             let mut filtered: Vec<u8> = Vec::with_capacity(READ_BUF);
             let mut da_filter = DaFilter::new();
-            let mut agent_detect = AgentDetector::new();
             let mut dropped_bytes: u64 = 0;
             loop {
                 match reader.read(&mut buf) {
@@ -190,11 +185,11 @@ pub fn spawn(
                     Ok(n) => {
                         if !first_byte_r.load(Ordering::Relaxed) {
                             first_byte_r.store(true, Ordering::Release);
-                            log::debug!("pty first byte after {}ms", spawn_at.elapsed().as_millis());
+                            log::debug!(
+                                "pty first byte after {}ms",
+                                spawn_at.elapsed().as_millis()
+                            );
                         }
-                        agent_detect.process(&buf[..n], |t| {
-                            let _ = app_reader.emit(AGENT_EVENT, t.into_signal(id));
-                        });
                         filtered.clear();
                         da_filter.process(&buf[..n], &mut filtered, |reply| {
                             if let Ok(mut w) = writer_for_da.lock() {
@@ -220,9 +215,6 @@ pub fn spawn(
                     }
                 }
             }
-            agent_detect.finish(|t| {
-                let _ = app_reader.emit(AGENT_EVENT, t.into_signal(id));
-            });
             pending_r.1.notify_one();
             if dropped_bytes > 0 {
                 log::warn!("pty backpressure: dropped {dropped_bytes} bytes (cap {MAX_PENDING})");
