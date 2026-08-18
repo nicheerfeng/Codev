@@ -15,7 +15,6 @@ import {
   Search01Icon,
   Settings01Icon,
   SidebarLeftIcon,
-  SourceCodeIcon,
   SparklesIcon,
   TerminalIcon,
 } from "@hugeicons/core-free-icons";
@@ -43,8 +42,6 @@ export type CommandPaletteActionContext = {
   openNewPrivate: () => void;
   openNewEditor: () => void;
   openNewPreview: () => void;
-  openGitGraph: () => void;
-  toggleSourceControl: () => void;
   closeActiveTabOrPane: () => void;
   splitPaneRight: () => void;
   splitPaneDown: () => void;
@@ -209,24 +206,7 @@ export function createCommandItems(
       disabledReason: splitDisabled,
       run: ctx.splitPaneDown,
     },
-    {
-      id: "git.graph",
-      title: "Open git graph",
-      group: "Git",
-      keywords: ["git", "graph", "history", "log", "commits"],
-      icon: SourceCodeIcon,
-      run: ctx.openGitGraph,
-    },
-    {
-      id: "git.source",
-      title: "Toggle source control",
-      group: "Git",
-      keywords: ["git", "source control", "changes", "staging", "diff"],
-      icon: SourceCodeIcon,
-      shortcutId: "pane.source",
-      run: ctx.toggleSourceControl,
-    },
-    {
+{
       id: "search.content",
       title: "Find content in files",
       group: "Search",

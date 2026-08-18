@@ -30,17 +30,6 @@ describe("serializeTabs", () => {
       term({ id: 1 }),
       term({ id: 3, private: true }),
       {
-        id: 5,
-        kind: "git-diff",
-        spaceId: "s1",
-        title: "d",
-        path: "/a/x",
-        repoRoot: "/a",
-        mode: "+",
-        originalPath: null,
-        preview: true,
-      },
-      {
         id: 7,
         kind: "editor",
         spaceId: "s1",
