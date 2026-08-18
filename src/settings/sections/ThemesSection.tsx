@@ -8,6 +8,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
@@ -42,6 +43,7 @@ import { useMemo, useRef, useState } from "react";
 import { SectionHeader } from "../components/SectionHeader";
 
 export function ThemesSection() {
+  const translate = useT();
   const { themeId, setThemeId, resolvedMode, customThemes } = useTheme();
   const builtinThemes = listBuiltinThemes();
   const themes = useMemo(
@@ -137,8 +139,8 @@ export function ThemesSection() {
   return (
     <div className="flex flex-col gap-6">
       <SectionHeader
-        title="Themes"
-        description="Theme, background image, and customization."
+        title={translate("Themes")}
+        description={translate("Theme, background image, and customization.")}
       />
 
       <div
@@ -154,7 +156,7 @@ export function ThemesSection() {
         }}
       >
         <div className="flex items-center justify-between">
-          <Label>Theme</Label>
+          <Label>{translate("Theme")}</Label>
           <div className="flex items-center gap-1.5">
             <Button
               variant="outline"
@@ -163,7 +165,7 @@ export function ThemesSection() {
               onClick={onCreateTheme}
             >
               <HugeiconsIcon icon={PlusSignIcon} size={11} strokeWidth={2} />
-              Create
+              {translate("Create")}
             </Button>
             <Button
               variant="outline"
@@ -171,7 +173,7 @@ export function ThemesSection() {
               className="h-7 px-2 text-[11px]"
               onClick={onPickThemeFile}
             >
-              Import .terax-theme
+              {translate("Import .terax-theme")}
             </Button>
           </div>
           <input
@@ -244,7 +246,7 @@ export function ThemesSection() {
                   <span className="ml-1 flex shrink-0 items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
                     <span
                       role="button"
-                      aria-label={`Edit ${t.name}`}
+                      aria-label={`${translate("Edit theme")} ${t.name}`}
                       className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
                       onClick={(e) => {
                         e.stopPropagation();
@@ -259,7 +261,7 @@ export function ThemesSection() {
                     </span>
                     <span
                       role="button"
-                      aria-label={`Remove ${t.name}`}
+                      aria-label={`${translate("Remove theme")} ${t.name}`}
                       className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-destructive"
                       onClick={(e) => {
                         e.stopPropagation();
@@ -279,9 +281,9 @@ export function ThemesSection() {
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 flex-col">
-            <Label>Editor theme</Label>
+            <Label>{translate("Editor theme")}</Label>
             <span className="text-[11px] text-muted-foreground">
-              Syntax colors for the code editor. Auto follows the app theme.
+              {translate("Syntax colors for the code editor. Auto follows the app theme.")}
             </span>
           </div>
           <Select
@@ -293,7 +295,7 @@ export function ThemesSection() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={EDITOR_THEME_AUTO} className="text-[12px]">
-                Auto (match app theme)
+                {translate("Auto (match app theme)")}
               </SelectItem>
               <SelectSeparator />
               {[...EDITOR_THEMES]
@@ -330,7 +332,7 @@ export function ThemesSection() {
         }}
       >
         <div className="flex items-center justify-between">
-          <Label>Background</Label>
+          <Label>{translate("Background")}</Label>
           <div className="flex items-center gap-2">
             {backgroundKind === "image" && backgroundImageId ? (
               <Button
@@ -339,7 +341,7 @@ export function ThemesSection() {
                 className="h-7 px-2 text-[11px] text-muted-foreground hover:text-destructive"
                 onClick={() => void onRemoveBackground()}
               >
-                Remove
+                {translate("Remove")}
               </Button>
             ) : null}
             <Button
@@ -348,7 +350,9 @@ export function ThemesSection() {
               className="h-7 px-2 text-[11px]"
               onClick={onPickBgFile}
             >
-              {backgroundKind === "image" ? "Replace image" : "Choose image"}
+              {backgroundKind === "image"
+                ? translate("Replace image")
+                : translate("Choose image")}
             </Button>
             <input
               ref={bgInputRef}
@@ -371,7 +375,7 @@ export function ThemesSection() {
           <div className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
             <div className="flex items-center justify-between gap-3">
               <span className="text-[11.5px] text-muted-foreground">
-                Opacity
+                {translate("Opacity")}
               </span>
               <span className="tabular-nums text-[11px] text-muted-foreground">
                 {Math.round(backgroundOpacity * 100)}%
@@ -385,7 +389,9 @@ export function ThemesSection() {
               onValueChange={(v) => void setBackgroundOpacity(v[0] ?? 0)}
             />
             <div className="flex items-center justify-between gap-3 pt-1">
-              <span className="text-[11.5px] text-muted-foreground">Blur</span>
+              <span className="text-[11.5px] text-muted-foreground">
+                {translate("Blur")}
+              </span>
               <span className="tabular-nums text-[11px] text-muted-foreground">
                 {backgroundBlur}px
               </span>
@@ -400,8 +406,9 @@ export function ThemesSection() {
           </div>
         ) : (
           <p className="text-[11px] text-muted-foreground">
-            Drop an image here or pick one. Stored locally; doesn't affect the
-            default look until set.
+            {translate(
+              "Drop an image here or pick one. Stored locally; doesn't affect the default look until set.",
+            )}
           </p>
         )}
       </div>

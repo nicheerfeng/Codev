@@ -7,6 +7,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { useT } from "@/lib/i18n";
 import {
   FORMATTER_LABELS,
   FORMATTERS,
@@ -42,6 +43,7 @@ import { SettingRow } from "../components/SettingRow";
 const AUTO_SAVE_STEP = 100;
 
 export function EditorSection() {
+  const t = useT();
   const editorFontSize = usePreferencesStore((s) => s.editorFontSize);
   const editorWordWrap = usePreferencesStore((s) => s.editorWordWrap);
   const editorWordWrapColumn = usePreferencesStore(
@@ -61,13 +63,13 @@ export function EditorSection() {
   return (
     <div className="flex flex-col gap-6">
       <SectionHeader
-        title="Editor"
-        description="Editing behavior, saving, and language servers."
+        title={t("Editor")}
+        description={t("Editing behavior, saving, and language servers.")}
       />
 
       <div className="flex flex-col gap-2">
-        <Label>Appearance</Label>
-        <SettingRow title="Font size" description="Code editor text size.">
+        <Label>{t("Appearance")}</Label>
+        <SettingRow title={t("Font size")} description={t("Code editor text size.")}>
           <Select
             value={String(editorFontSize)}
             onValueChange={(v) => void setEditorFontSize(Number(v))}
@@ -91,10 +93,10 @@ export function EditorSection() {
       </div>
 
       <div className="flex flex-col gap-2">
-        <Label>Editing</Label>
+        <Label>{t("Editing")}</Label>
         <SettingRow
-          title="Word wrap"
-          description="Wrap long lines instead of scrolling horizontally."
+          title={t("Word wrap")}
+          description={t("Wrap long lines instead of scrolling horizontally.")}
         >
           <Switch
             checked={editorWordWrap}
@@ -110,10 +112,10 @@ export function EditorSection() {
       </div>
 
       <div className="flex flex-col gap-2">
-        <Label>Saving</Label>
+        <Label>{t("Saving")}</Label>
         <SettingRow
-          title="Auto save"
-          description="Automatically save files after a delay when changes are detected."
+          title={t("Auto save")}
+          description={t("Automatically save files after a delay when changes are detected.")}
         >
           <Switch
             checked={editorAutoSave}
@@ -127,8 +129,8 @@ export function EditorSection() {
           />
         )}
         <SettingRow
-          title="Format on save"
-          description="Format the file on explicit save (Cmd+S / :w) with the formatter below."
+          title={t("Format on save")}
+          description={t("Format the file on explicit save (Cmd+S / :w) with the formatter below.")}
         >
           <Switch
             checked={editorFormatOnSave}
@@ -138,8 +140,8 @@ export function EditorSection() {
         {editorFormatOnSave && (
           <>
             <SettingRow
-              title="Formatter"
-              description="Language server formats the buffer before writing; external tools run on the saved file from your PATH."
+              title={t("Formatter")}
+              description={t("Language server formats the buffer before writing; external tools run on the saved file from your PATH.")}
             >
               <FormatterSelect
                 value={editorFormatter}
@@ -170,6 +172,7 @@ function FormatterSelect({
   value: EditorFormatter;
   onChange: (v: EditorFormatter) => void;
 }) {
+  const t = useT();
   return (
     <Select value={value} onValueChange={(v) => onChange(v as EditorFormatter)}>
       <SelectTrigger className="h-8 w-40 text-[12px]">
@@ -178,7 +181,7 @@ function FormatterSelect({
       <SelectContent>
         {FORMATTER_OPTIONS.map((id) => (
           <SelectItem key={id} value={id}>
-            {FORMATTER_LABELS[id]}
+            {t(FORMATTER_LABELS[id])}
           </SelectItem>
         ))}
       </SelectContent>
@@ -187,6 +190,7 @@ function FormatterSelect({
 }
 
 function CustomFormatCommandInput() {
+  const t = useT();
   const stored = usePreferencesStore((s) => s.editorCustomFormatCommand);
   const [draft, setDraft] = useState(stored);
 
@@ -196,8 +200,8 @@ function CustomFormatCommandInput() {
 
   return (
     <SettingRow
-      title="Custom command"
-      description="Runs on the saved file; {file} is replaced with the quoted path (appended when omitted)."
+      title={t("Custom command")}
+      description={t("Runs on the saved file; {file} is replaced with the quoted path (appended when omitted).")}
     >
       <Input
         value={draft}
@@ -216,6 +220,7 @@ function CustomFormatCommandInput() {
 }
 
 function FormatterOverrides() {
+  const t = useT();
   const byLang = usePreferencesStore((s) => s.editorFormatterByLang);
   const entries = Object.entries(byLang);
   const unused = EXPOSED_LANGUAGES.filter((l) => !(l.ext in byLang));
@@ -226,8 +231,8 @@ function FormatterOverrides() {
   return (
     <>
       <SettingRow
-        title="Language overrides"
-        description="Use a different formatter for specific languages (e.g. Ruff for Python)."
+        title={t("Language overrides")}
+        description={t("Use a different formatter for specific languages (e.g. Ruff for Python).")}
       >
         <button
           type="button"
@@ -238,7 +243,7 @@ function FormatterOverrides() {
             if (first) update({ ...byLang, [first.ext]: "lsp" });
           }}
         >
-          Add override
+          {t("Add override")}
         </button>
       </SettingRow>
       {entries.map(([lang, formatter]) => (
@@ -276,7 +281,7 @@ function FormatterOverrides() {
           <button
             type="button"
             className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="Remove override"
+            title={t("Remove override")}
             onClick={() => {
               const next = { ...byLang };
               delete next[lang];
@@ -306,6 +311,7 @@ function AutoSaveDelayInput({
   value: number;
   onChange: (v: number) => void;
 }) {
+  const t = useT();
   const [draft, setDraft] = useState(String(value));
 
   useEffect(() => {
@@ -325,8 +331,8 @@ function AutoSaveDelayInput({
 
   return (
     <SettingRow
-      title="Auto save delay"
-      description="Delay before unsaved changes are saved automatically."
+      title={t("Auto save delay")}
+      description={t("Delay before unsaved changes are saved automatically.")}
     >
       <div className="flex items-center gap-2">
         <Input
@@ -357,6 +363,7 @@ function WordWrapColumnInput({
   value: number;
   onChange: (v: number) => void;
 }) {
+  const t = useT();
   const [draft, setDraft] = useState(String(value));
 
   useEffect(() => {
@@ -376,8 +383,8 @@ function WordWrapColumnInput({
 
   return (
     <SettingRow
-      title="Wrap column"
-      description="Soft-wrap at this column, or earlier when the editor is narrower."
+      title={t("Wrap column")}
+      description={t("Soft-wrap at this column, or earlier when the editor is narrower.")}
     >
       <div className="flex items-center gap-2">
         <Input
