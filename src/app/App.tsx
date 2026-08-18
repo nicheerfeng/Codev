@@ -79,6 +79,7 @@ import {
   useTabs,
   useWindowTitle,
   useWorkspaceCwd,
+  useWorkspaceRoots,
 } from "@/modules/tabs";
 import { DEFAULT_SPACE_ID } from "@/modules/tabs/lib/useTabs";
 import {
@@ -345,10 +346,14 @@ export default function App() {
   useEditorFileSync({ tabs, tabsRef, editorRefs });
   useThemeFileEditing({ tabsRef, openFileTab });
 
+  const { roots: workspaceRoots, activeRoot, addRoot, removeRoot, setActiveRoot } =
+    useWorkspaceRoots();
+
   const { explorerRoot, inheritedCwdForNewTab } = useWorkspaceCwd(
     activeTab,
     tabs,
     launchCwd ?? home,
+    activeRoot ?? workspaceRoots[0] ?? null,
   );
 
   useWindowTitle(activeTab, explorerRoot);
@@ -1411,7 +1416,11 @@ export default function App() {
                     {sidebarView === "explorer" ? (
                       <FileExplorer
                         ref={explorerRef}
-                        rootPath={explorerRoot}
+                        roots={workspaceRoots}
+                        activeRoot={activeRoot}
+                        onAddRoot={(p) => void addRoot(p)}
+                        onRemoveRoot={(p) => void removeRoot(p)}
+                        onSetActiveRoot={(p) => void setActiveRoot(p)}
                         gitStatus={
                           explorerGitDecorations ? sourceControl.status : null
                         }

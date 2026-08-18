@@ -26,4 +26,5 @@ export {
   type TabPatch,
 } from "./lib/useTabs";
 export { useWorkspaceCwd } from "./lib/useWorkspaceCwd";
+export { useWorkspaceRoots } from "./lib/useWorkspaceRoots";
 export { useWindowTitle } from "./lib/useWindowTitle";

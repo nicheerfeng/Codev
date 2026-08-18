@@ -338,9 +338,26 @@ pub struct WslDistro {
 #[cfg(windows)]
 pub fn resolve_path(path: &str, workspace: &WorkspaceEnv) -> PathBuf {
     match workspace {
-        WorkspaceEnv::Local => PathBuf::from(path),
+        WorkspaceEnv::Local => {
+            // A bare drive letter ("C:") is a drive-relative path on Windows;
+            // normalize to the drive root so fs commands always see an
+            // absolute path (read_dir("C:") is not the drive root).
+            if is_drive_letter_path(path) {
+                return PathBuf::from(format!("{path}/"));
+            }
+            PathBuf::from(path)
+        }
         WorkspaceEnv::Wsl { distro } => wsl_path_to_host(distro, path),
     }
+}
+
+/// True for Windows drive-letter paths: exactly one alphabetic char + `:`.
+#[cfg(windows)]
+fn is_drive_letter_path(path: &str) -> bool {
+    let mut chars = path.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic())
+        && chars.next() == Some(':')
+        && chars.next().is_none()
 }
 
 #[cfg(not(windows))]
