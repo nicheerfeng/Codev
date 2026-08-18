@@ -9,7 +9,6 @@ export type DirEntry = {
   kind: "file" | "dir" | "symlink";
   size: number;
   mtime: number;
-  gitignored: boolean;
 };
 
 type ChildrenState =
@@ -66,12 +65,7 @@ function isUnder(key: string, root: string): boolean {
 function sameDirListing(a: DirEntry[], b: DirEntry[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
-    if (
-      a[i].name !== b[i].name ||
-      a[i].kind !== b[i].kind ||
-      a[i].gitignored !== b[i].gitignored
-    )
-      return false;
+    if (a[i].name !== b[i].name || a[i].kind !== b[i].kind) return false;
   }
   return true;
 }
@@ -84,8 +78,6 @@ type Options = {
 export function useFileTree(rootPath: string | null, options?: Options) {
   const showHidden = usePreferencesStore((s) => s.showHidden);
   const showHiddenRef = useRef(showHidden);
-  const gitDecorations = usePreferencesStore((s) => s.explorerGitDecorations);
-  const gitDecorationsRef = useRef(gitDecorations);
   const [nodes, setNodes] = useState<TreeState>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(
@@ -100,10 +92,6 @@ export function useFileTree(rootPath: string | null, options?: Options) {
   useEffect(() => {
     showHiddenRef.current = showHidden;
   }, [showHidden]);
-
-  useEffect(() => {
-    gitDecorationsRef.current = gitDecorations;
-  }, [gitDecorations]);
 
   useEffect(() => {
     expandedRef.current = expanded;
@@ -132,7 +120,6 @@ export function useFileTree(rootPath: string | null, options?: Options) {
       const entries = await invoke<DirEntry[]>("fs_read_dir", {
         path,
         showHidden: showHiddenRef.current,
-        gitDecorations: gitDecorationsRef.current,
         workspace: currentWorkspaceEnv(),
       });
 
@@ -142,7 +129,9 @@ export function useFileTree(rootPath: string | null, options?: Options) {
       }
 
       const liveDirs = new Set(
-        entries.filter((e) => e.kind === "dir").map((e) => joinPath(path, e.name)),
+        entries
+          .filter((e) => e.kind === "dir")
+          .map((e) => joinPath(path, e.name)),
       );
       const removedRoots: string[] = [];
       for (const key of Object.keys(nodesRef.current)) {
@@ -175,7 +164,8 @@ export function useFileTree(rootPath: string | null, options?: Options) {
           return changed ? n : c;
         });
         const toUnwatch: string[] = [];
-        for (const d of dead) if (watchedRef.current.delete(d)) toUnwatch.push(d);
+        for (const d of dead)
+          if (watchedRef.current.delete(d)) toUnwatch.push(d);
         watchRemove(toUnwatch);
       }
     } catch (e) {
@@ -252,11 +242,11 @@ export function useFileTree(rootPath: string | null, options?: Options) {
       .filter(([, state]) => state.status === "loaded")
       .map(([path]) => path);
     for (const path of loadedPaths) void fetchChildren(path);
-    // Re-list loaded directories when visibility or git-decoration prefs change.
+    // Re-list loaded directories when visibility changes.
     // `nodes` is intentionally omitted so ordinary tree edits don't refetch
     // every expanded directory.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showHidden, gitDecorations, rootPath, fetchChildren]);
+  }, [showHidden, rootPath, fetchChildren]);
 
   const toggle = useCallback(
     (path: string) => {

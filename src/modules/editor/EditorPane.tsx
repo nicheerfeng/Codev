@@ -1,8 +1,5 @@
-import { endpointIdFromCompatModel } from "@/modules/ai/config";
-import { getCustomEndpointKey, getKey } from "@/modules/ai/lib/keyring";
 import { lspFormatDocument, useLspExtension } from "@/modules/lsp";
 import { usePreferencesStore } from "@/modules/settings/preferences";
-import { onKeysChanged } from "@/modules/settings/store";
 import { acceptCompletion, startCompletion } from "@codemirror/autocomplete";
 import { redo, undo } from "@codemirror/commands";
 import {
@@ -15,7 +12,6 @@ import {
 } from "@codemirror/search";
 import { Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
-import { vim } from "@replit/codemirror-vim";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import {
@@ -30,10 +26,6 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
-import {
-  inlineCompletion,
-  triggerInlineCompletion,
-} from "./lib/autocomplete/inlineExtension";
 import { diagnosticsReporter } from "./lib/diagnosticsReporter";
 import { useDiagnosticsStore } from "./lib/diagnosticsStore";
 import {
@@ -43,7 +35,6 @@ import {
   indentExtension,
   languageCompartment,
   lspCompartment,
-  vimCompartment,
   wordWrapExtension,
   wrapCompartment,
 } from "./lib/extensions";
@@ -57,9 +48,6 @@ import { detectIndentUnit } from "./lib/indent";
 import { type LanguageResult, resolveLanguage } from "./lib/languageResolver";
 import { FORCE_READ_LIMIT, useDocument } from "./lib/useDocument";
 import { useEditorThemeExt } from "./lib/useEditorThemeExt";
-import { initVimGlobals, vimHandlersExtension } from "./lib/vim";
-
-initVimGlobals();
 
 export type EditorPaneHandle = {
   setQuery: (q: string) => void;
@@ -78,8 +66,6 @@ export type EditorPaneHandle = {
   /** Apply CodeMirror's undo/redo commands. */
   undo: () => void;
   redo: () => void;
-  /** Request an AI ghost suggestion at the cursor. */
-  triggerAiComplete: () => void;
   /** Open CodeMirror's completion popup. */
   triggerCodeComplete: () => void;
 };
@@ -89,7 +75,6 @@ type Props = {
   overrideLanguage?: string | null;
   onDirtyChange?: (dirty: boolean) => void;
   onSaved?: () => void;
-  onClose?: () => void;
 };
 
 // Above this, syntax highlighting and LSP are disabled: a multi-MB lezer
@@ -106,7 +91,7 @@ function formatBytes(n: number): string {
 // skip re-rendering entirely when App re-renders (terminal events, tab churn).
 export const EditorPane = memo(
   forwardRef<EditorPaneHandle, Props>(function EditorPane(props, ref) {
-    const { path, overrideLanguage, onDirtyChange, onSaved, onClose } = props;
+    const { path, overrideLanguage, onDirtyChange, onSaved } = props;
 
     const { doc, onChange, save, reload, adoptDiskText, openAnyway } =
       useDocument({
@@ -119,57 +104,12 @@ export const EditorPane = memo(
     adoptDiskTextRef.current = adoptDiskText;
     const cmRef = useRef<ReactCodeMirrorRef>(null);
     const themeExt = useEditorThemeExt();
-    const vimMode = usePreferencesStore((s) => s.vimMode);
     const wordWrapColumn = usePreferencesStore((s) =>
       s.editorWordWrap ? s.editorWordWrapColumn : null,
     );
     const languageRef = useRef<string | null>(null);
     const [langId, setLangId] = useState<string | null>(null);
-    const apiKeyRef = useRef<string | null>(null);
 
-    useEffect(() => {
-      let cancelled = false;
-      const refresh = async () => {
-        const s = usePreferencesStore.getState();
-        const provider = s.autocompleteProvider;
-        if (
-          provider === "lmstudio" ||
-          provider === "mlx" ||
-          provider === "ollama"
-        ) {
-          apiKeyRef.current = null;
-          return;
-        }
-        // OpenAI-compatible keys live in a per-endpoint keyring slot.
-        if (provider === "openai-compatible") {
-          const eid = endpointIdFromCompatModel(s.autocompleteModelId);
-          const k = eid ? await getCustomEndpointKey(eid) : null;
-          if (!cancelled) apiKeyRef.current = k;
-          return;
-        }
-        const k = await getKey(provider);
-        if (!cancelled) apiKeyRef.current = k;
-      };
-      void refresh();
-      let unlistenKeys: (() => void) | undefined;
-      void onKeysChanged(() => void refresh()).then((un) => {
-        if (cancelled) un();
-        else unlistenKeys = un;
-      });
-      const unsubPrefs = usePreferencesStore.subscribe((state, prev) => {
-        if (
-          state.autocompleteProvider !== prev.autocompleteProvider ||
-          state.autocompleteModelId !== prev.autocompleteModelId
-        ) {
-          void refresh();
-        }
-      });
-      return () => {
-        cancelled = true;
-        unlistenKeys?.();
-        unsubPrefs();
-      };
-    }, []);
     // Stabilize save + onSaved via refs so the extensions array never changes
     // identity — a new identity makes @uiw/react-codemirror reconfigure the
     // whole state, wiping the language compartment.
@@ -177,8 +117,6 @@ export const EditorPane = memo(
     saveRef.current = save;
     const onSavedRef = useRef(onSaved);
     onSavedRef.current = onSaved;
-    const onCloseRef = useRef(onClose);
-    onCloseRef.current = onClose;
     const lspActiveRef = useRef(false);
     const warnedNoLspRef = useRef(false);
     const warnedNoFormatRef = useRef(false);
@@ -309,11 +247,6 @@ export const EditorPane = memo(
 
     const extensions = useMemo(
       () => [
-        // basicSetup is added before user extensions by @uiw/react-codemirror,
-        // so we must elevate vim's precedence to win the keymap.
-        vimCompartment.of(
-          usePreferencesStore.getState().vimMode ? Prec.highest(vim()) : [],
-        ),
         wrapCompartment.of(
           wordWrapExtension(
             usePreferencesStore.getState().editorWordWrap
@@ -321,59 +254,12 @@ export const EditorPane = memo(
               : null,
           ),
         ),
-        vimHandlersExtension(() => ({
-          save: () => {
-            void performSaveRef.current();
-          },
-          close: () => onCloseRef.current?.(),
-        })),
         ...buildSharedExtensions(),
         indentCompartment.of(DEFAULT_INDENT),
         languageCompartment.of([]),
         lspCompartment.of([]),
         diagnosticsReporter(() => pathRef.current),
-        // Before inlineCompletion so an open popup wins Tab over the ghost.
         Prec.highest(keymap.of([{ key: "Tab", run: acceptCompletion }])),
-        inlineCompletion({
-          getPrefs: () => {
-            const s = usePreferencesStore.getState();
-            const p = s.autocompleteProvider;
-            // autocompleteModelId holds the compat- id of the chosen endpoint.
-            const compatEp =
-              p === "openai-compatible"
-                ? s.customEndpoints.find(
-                    (e) =>
-                      e.id === endpointIdFromCompatModel(s.autocompleteModelId),
-                  )
-                : undefined;
-            const modelId =
-              p === "lmstudio"
-                ? s.lmstudioModelId
-                : p === "mlx"
-                  ? s.mlxModelId
-                  : p === "ollama"
-                    ? s.ollamaModelId
-                    : p === "openai-compatible"
-                      ? (compatEp?.modelId ?? "")
-                      : p === "openrouter"
-                        ? s.openrouterModelId
-                        : s.autocompleteModelId;
-            return {
-              enabled: s.autocompleteEnabled,
-              trigger: s.autocompleteTrigger,
-              provider: p,
-              modelId,
-              apiKey: apiKeyRef.current,
-              lmstudioBaseURL: s.lmstudioBaseURL,
-              mlxBaseURL: s.mlxBaseURL,
-              ollamaBaseURL: s.ollamaBaseURL,
-              openaiCompatibleBaseURL:
-                compatEp?.baseURL ?? s.openaiCompatibleBaseURL,
-            };
-          },
-          getPath: () => pathRef.current,
-          getLanguage: () => languageRef.current,
-        }),
         keymap.of([
           {
             key: "Mod-s",
@@ -388,14 +274,6 @@ export const EditorPane = memo(
       ],
       [],
     );
-
-    useEffect(() => {
-      const view = cmRef.current?.view;
-      if (!view) return;
-      view.dispatch({
-        effects: vimCompartment.reconfigure(vimMode ? Prec.highest(vim()) : []),
-      });
-    }, [vimMode]);
 
     useEffect(() => {
       const view = cmRef.current?.view;
@@ -534,10 +412,6 @@ export const EditorPane = memo(
           const view = cmRef.current?.view;
           if (view) redo(view);
         },
-        triggerAiComplete: () => {
-          const view = cmRef.current?.view;
-          if (view) triggerInlineCompletion(view);
-        },
         triggerCodeComplete: () => {
           const view = cmRef.current?.view;
           if (!view) return;
@@ -624,7 +498,8 @@ export const EditorPane = memo(
         );
       }
 
-      const canForce = doc.status === "toolarge" && doc.size <= FORCE_READ_LIMIT;
+      const canForce =
+        doc.status === "toolarge" && doc.size <= FORCE_READ_LIMIT;
       return (
         <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
           <div className="text-sm text-foreground">

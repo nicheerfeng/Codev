@@ -10,7 +10,6 @@ import { chromeTheme } from "./chromeTheme";
 export const languageCompartment = new Compartment();
 export const readOnlyCompartment = new Compartment();
 export const wrapCompartment = new Compartment();
-export const vimCompartment = new Compartment();
 export const lspCompartment = new Compartment();
 export const indentCompartment = new Compartment();
 
@@ -101,20 +100,6 @@ const SHARED_EXTENSIONS: readonly Extension[] = Object.freeze([
     },
     ".cm-cursor, .cm-dropCursor": {
       borderLeftColor: "var(--foreground)",
-    },
-    // Vim normal-mode block cursor — translucent foreground, no rose hue.
-    ".cm-fat-cursor": {
-      background:
-        "color-mix(in srgb, var(--foreground) 35%, transparent) !important",
-      outline:
-        "1px solid color-mix(in srgb, var(--foreground) 55%, transparent) !important",
-      color: "var(--foreground) !important",
-      borderRadius: "2px",
-    },
-    "&:not(.cm-focused) .cm-fat-cursor": {
-      background: "transparent !important",
-      outline:
-        "1px solid color-mix(in srgb, var(--foreground) 35%, transparent) !important",
     },
     ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection":
       {

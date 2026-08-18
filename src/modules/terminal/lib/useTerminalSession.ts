@@ -25,7 +25,6 @@ import {
 } from "./osc-handlers";
 import { openPty, type PtySession } from "./pty-bridge";
 import "../block/block.css";
-import { ensureAgentActivityListener, isAgentActivePty } from "./agentActivity";
 import {
   acquireSlot,
   applyBackgroundActive,
@@ -300,7 +299,7 @@ export function ptyIdForLeaf(leafId: number): number | null {
 }
 
 function leafBusy(s: Session): boolean {
-  return s.commandRunning || (s.pty !== null && isAgentActivePty(s.pty.id));
+  return s.commandRunning;
 }
 
 const HIDDEN_RELEASE_DELAY_MS = 300;
@@ -352,8 +351,7 @@ function onLeafCommandState(leafId: number, running: boolean): void {
     return;
   }
   cancelHiddenRelease(s);
-  // A command started in a hidden released leaf (e.g. submitted by the AI):
-  // rebind its retained slot so output parses live instead of filling the
+  // A command started in a hidden released leaf: rebind its retained slot so
   // ring. Deferred: this callback fires inside xterm's parse loop and the
   // rebind touches the same terminal (fit/resize).
   if (!s.visibleNow && !s.hasSlot && s.container && !s.disposed) {
@@ -365,13 +363,6 @@ function onLeafCommandState(leafId: number, running: boolean): void {
     }, 0);
   }
 }
-
-ensureAgentActivityListener((ptyId) => {
-  const leafId = leafIdForPty(ptyId);
-  if (leafId === null) return;
-  const s = sessions.get(leafId);
-  if (s) scheduleHiddenRelease(leafId, s);
-});
 
 configureRendererPool({
   resolveLeaf(leafId) {

@@ -9,7 +9,6 @@ type Props = {
   activeId: number;
   onDirtyChange: (id: number, dirty: boolean) => void;
   registerHandle: (id: number, handle: EditorPaneHandle | null) => void;
-  onCloseTab: (id: number) => void;
   onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
 };
 
@@ -18,7 +17,6 @@ export function EditorStack({
   activeId,
   onDirtyChange,
   registerHandle,
-  onCloseTab,
   onSetMarkdownView,
 }: Props) {
   const editors = tabs.filter(
@@ -31,7 +29,6 @@ export function EditorStack({
   // the parent. Memoizing per id keeps each callback's identity stable.
   const registerRef = useRef(registerHandle);
   const dirtyRef = useRef(onDirtyChange);
-  const closeRef = useRef(onCloseTab);
 
   useEffect(() => {
     registerRef.current = registerHandle;
@@ -39,15 +36,11 @@ export function EditorStack({
   useEffect(() => {
     dirtyRef.current = onDirtyChange;
   }, [onDirtyChange]);
-  useEffect(() => {
-    closeRef.current = onCloseTab;
-  }, [onCloseTab]);
 
   const refCallbacks = useRef(
     new Map<number, (h: EditorPaneHandle | null) => void>(),
   );
   const dirtyCallbacks = useRef(new Map<number, (dirty: boolean) => void>());
-  const closeCallbacks = useRef(new Map<number, () => void>());
 
   const getRefCallback = (id: number) => {
     let cb = refCallbacks.current.get(id);
@@ -65,14 +58,6 @@ export function EditorStack({
     }
     return cb;
   };
-  const getCloseCallback = (id: number) => {
-    let cb = closeCallbacks.current.get(id);
-    if (!cb) {
-      cb = () => closeRef.current(id);
-      closeCallbacks.current.set(id, cb);
-    }
-    return cb;
-  };
 
   // Drop callback entries for closed tabs to avoid unbounded growth.
   useEffect(() => {
@@ -82,9 +67,6 @@ export function EditorStack({
     }
     for (const id of dirtyCallbacks.current.keys()) {
       if (!live.has(id)) dirtyCallbacks.current.delete(id);
-    }
-    for (const id of closeCallbacks.current.keys()) {
-      if (!live.has(id)) closeCallbacks.current.delete(id);
     }
   }, [editors]);
 
@@ -116,7 +98,6 @@ export function EditorStack({
                 path={t.path}
                 overrideLanguage={t.overrideLanguage}
                 onDirtyChange={getDirtyCallback(t.id)}
-                onClose={getCloseCallback(t.id)}
               />
             </div>
           </div>

@@ -39,11 +39,7 @@ import { COMPACT_CONTENT, COMPACT_ITEM } from "./lib/menuItemClass";
 import { useExplorerDnd } from "./lib/useExplorerDnd";
 import { useExplorerFileDrop } from "./lib/useExplorerFileDrop";
 import { useFileTree } from "./lib/useFileTree";
-import { useGitStatus } from "./lib/useGitStatus";
-import type { GitStatusCode } from "./lib/gitStatusUtils";
 import { useGlobalShortcuts } from "@/modules/shortcuts";
-import { usePreferencesStore } from "@/modules/settings/preferences";
-import type { GitStatusSnapshot } from "@/modules/ai/lib/native";
 import type { TerminalPathDropTarget } from "@/modules/terminal";
 
 export type RootTreeHandle = {
@@ -59,13 +55,9 @@ export type RootTreeProps = {
   onPathRenamed?: (from: string, to: string) => void;
   onPathDeleted?: (path: string) => void;
   onRevealInTerminal?: (path: string) => void;
-  onOpenInSourceControl?: (path: string) => void;
-  onOpenGitHistory?: (path: string) => void;
-  onAttachToAgent?: (path: string) => void;
   /** Adds the target folder to the workspace roots (multi-root). */
   onAddAsRoot?: (path: string) => void;
   pathDropTarget?: TerminalPathDropTarget;
-  gitStatus?: GitStatusSnapshot | null;
 };
 
 type Row =
@@ -77,8 +69,6 @@ type Row =
       isDir: boolean;
       isExpanded: boolean;
       depth: number;
-      gitignored: boolean;
-      gitStatusCode: GitStatusCode | null;
     }
   | {
       kind: "rename";
@@ -87,11 +77,15 @@ type Row =
       name: string;
       isDir: boolean;
       depth: number;
-      gitignored: boolean;
-      gitStatusCode: GitStatusCode | null;
     }
   | { kind: "pending"; key: string; depth: number; pendingKind: "file" | "dir" }
-  | { kind: "status"; key: string; depth: number; tone: "muted" | "error"; message: string };
+  | {
+      kind: "status";
+      key: string;
+      depth: number;
+      tone: "muted" | "error";
+      message: string;
+    };
 
 const ROW_HEIGHT = 24;
 const OVERSCAN = 8;
@@ -109,12 +103,11 @@ function parentOf(path: string, fallback: string): string {
 function buildRows(
   rootPath: string,
   tree: ReturnType<typeof useFileTree>,
-  lookup: (path: string) => GitStatusCode | null,
 ): { rows: Row[]; entryIndexByPath: Map<string, number> } {
   const rows: Row[] = [];
   const entryIndexByPath = new Map<string, number>();
 
-  const walk = (parent: string, depth: number, parentIgnored: boolean) => {
+  const walk = (parent: string, depth: number) => {
     const node = tree.nodes[parent];
     if (!node || node.status !== "loaded") return;
     for (const entry of node.entries) {
@@ -122,8 +115,6 @@ function buildRows(
       const isDir = entry.kind === "dir";
       const expanded = isDir && tree.expanded.has(path);
       const isRenaming = tree.renaming === path;
-      const gitignored = parentIgnored || entry.gitignored;
-      const gitStatusCode = gitignored ? null : lookup(path);
       if (isRenaming) {
         rows.push({
           kind: "rename",
@@ -132,8 +123,6 @@ function buildRows(
           name: entry.name,
           isDir,
           depth,
-          gitignored,
-          gitStatusCode,
         });
       } else {
         entryIndexByPath.set(path, rows.length);
@@ -145,8 +134,6 @@ function buildRows(
           isDir,
           isExpanded: expanded,
           depth,
-          gitignored,
-          gitStatusCode,
         });
       }
       if (isDir && expanded) {
@@ -176,13 +163,13 @@ function buildRows(
             message: child.message,
           });
         } else if (child?.status === "loaded") {
-          walk(path, depth + 1, gitignored);
+          walk(path, depth + 1);
         }
       }
     }
   };
 
-  walk(rootPath, 0, false);
+  walk(rootPath, 0);
   return { rows, entryIndexByPath };
 }
 
@@ -195,22 +182,12 @@ export const RootTree = memo(
       onPathRenamed,
       onPathDeleted,
       onRevealInTerminal,
-      onOpenInSourceControl,
-      onOpenGitHistory,
-      onAttachToAgent,
       onAddAsRoot,
       pathDropTarget,
-      gitStatus,
     },
     ref,
   ) {
     const tree = useFileTree(rootPath, { onPathRenamed, onPathDeleted });
-    const gitDecorations = usePreferencesStore((s) => s.explorerGitDecorations);
-    const { lookup: lookupGitStatus } = useGitStatus(
-      rootPath,
-      gitDecorations ? gitStatus : null,
-      gitDecorations,
-    );
     const [selectedPath, setSelectedPath] = useState<string | null>(null);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const [isSearchActive, setIsSearchActive] = useState(false);
@@ -219,8 +196,12 @@ export const RootTree = memo(
     const scrollRef = useRef<HTMLDivElement>(null);
 
     const { rows, entryIndexByPath } = useMemo(() => {
-      if (!rootPath) return { rows: [] as Row[], entryIndexByPath: new Map<string, number>() };
-      return buildRows(rootPath, tree, lookupGitStatus);
+      if (!rootPath)
+        return {
+          rows: [] as Row[],
+          entryIndexByPath: new Map<string, number>(),
+        };
+      return buildRows(rootPath, tree);
       // `tree` is intentionally omitted: its identity changes every render, but
       // the listed fields are the only inputs buildRows actually reads.
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -230,7 +211,6 @@ export const RootTree = memo(
       tree.expanded,
       tree.renaming,
       tree.pendingCreate,
-      lookupGitStatus,
     ]);
 
     const rowActions = useMemo<RowActions>(
@@ -284,7 +264,8 @@ export const RootTree = memo(
     });
 
     const dropTargetDir = dnd.dropTargetDir ?? fileDrop.externalTargetDir;
-    const rootIsDropTarget = dropTargetDir != null && dropTargetDir === rootPath;
+    const rootIsDropTarget =
+      dropTargetDir != null && dropTargetDir === rootPath;
     useEffect(() => {
       if (!dropTargetDir || dropTargetDir === rootPath) return;
       if (tree.expanded.has(dropTargetDir)) return;
@@ -317,7 +298,10 @@ export const RootTree = memo(
 
     const lastSyncedActivePathRef = useRef<string | null>(null);
     useEffect(() => {
-      if (!activeFilePath || activeFilePath === lastSyncedActivePathRef.current) {
+      if (
+        !activeFilePath ||
+        activeFilePath === lastSyncedActivePathRef.current
+      ) {
         return;
       }
       if (!entryIndexByPath.has(activeFilePath)) return;
@@ -473,8 +457,6 @@ export const RootTree = memo(
               isDropTarget={dropTargetDir === row.path}
               onOpenFile={onOpenFile}
               onSelectPath={setSelectedPath}
-              gitStatusCode={row.gitStatusCode}
-              gitignored={gitDecorations && row.gitignored}
             />
           );
         }
@@ -489,7 +471,11 @@ export const RootTree = memo(
           );
         case "status":
           return (
-            <StatusRow depth={row.depth} message={row.message} tone={row.tone} />
+            <StatusRow
+              depth={row.depth}
+              message={row.message}
+              tone={row.tone}
+            />
           );
       }
     };
@@ -564,9 +550,6 @@ export const RootTree = memo(
           onRequestClose={() => setIsSearchOpen(false)}
           onActiveChange={setIsSearchActive}
           onRevealInTerminal={onRevealInTerminal}
-          onOpenInSourceControl={onOpenInSourceControl}
-          onOpenGitHistory={onOpenGitHistory}
-          onAttachToAgent={onAttachToAgent}
         />
 
         {!isSearchActive ? (
@@ -709,22 +692,6 @@ export const RootTree = memo(
                       Add to Workspace Roots
                     </ContextMenuItem>
                   )}
-                  {menuTarget.isDir && onOpenInSourceControl && (
-                    <ContextMenuItem
-                      className={COMPACT_ITEM}
-                      onSelect={() => onOpenInSourceControl(menuTarget.path)}
-                    >
-                      Open in Source Control
-                    </ContextMenuItem>
-                  )}
-                  {menuTarget.isDir && onOpenGitHistory && (
-                    <ContextMenuItem
-                      className={COMPACT_ITEM}
-                      onSelect={() => onOpenGitHistory(menuTarget.path)}
-                    >
-                      Open Git History
-                    </ContextMenuItem>
-                  )}
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     onSelect={() => void revealInFinder(menuTarget.path)}
@@ -768,17 +735,12 @@ export const RootTree = memo(
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     onSelect={() =>
-                      void copyToClipboard(relativePath(rootPath, menuTarget.path))
+                      void copyToClipboard(
+                        relativePath(rootPath, menuTarget.path),
+                      )
                     }
                   >
                     Copy Relative Path
-                  </ContextMenuItem>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem
-                    className={COMPACT_ITEM}
-                    onSelect={() => onAttachToAgent?.(menuTarget.path)}
-                  >
-                    Attach to Agent
                   </ContextMenuItem>
                   <ContextMenuSeparator />
                   <ContextMenuItem
@@ -806,22 +768,6 @@ export const RootTree = memo(
                       onSelect={() => onRevealInTerminal(rootPath)}
                     >
                       Open in Terminal
-                    </ContextMenuItem>
-                  )}
-                  {onOpenInSourceControl && (
-                    <ContextMenuItem
-                      className={COMPACT_ITEM}
-                      onSelect={() => onOpenInSourceControl(rootPath)}
-                    >
-                      Open in Source Control
-                    </ContextMenuItem>
-                  )}
-                  {onOpenGitHistory && (
-                    <ContextMenuItem
-                      className={COMPACT_ITEM}
-                      onSelect={() => onOpenGitHistory(rootPath)}
-                    >
-                      Open Git History
                     </ContextMenuItem>
                   )}
                   <ContextMenuItem

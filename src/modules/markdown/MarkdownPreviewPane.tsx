@@ -1,4 +1,3 @@
-import { MarkdownCode } from "@/components/ai-elements/markdown-code";
 import { cn } from "@/lib/utils";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
@@ -25,7 +24,7 @@ type Props = {
   onSetView: (mode: "rendered" | "raw") => void;
 };
 
-const components = { a: MarkdownLink, code: MarkdownCode };
+const components = { a: MarkdownLink };
 
 export function MarkdownPreviewPane({ path, visible, onSetView }: Props) {
   const [status, setStatus] = useState<Status>({ kind: "loading" });

@@ -69,10 +69,7 @@ import {
   writeToSession,
 } from "@/modules/terminal";
 import { ThemeProvider, useThemeFileEditing } from "@/modules/theme";
-import {
-  useWorkspaceEnvStore,
-  type WorkspaceEnv,
-} from "@/modules/workspace";
+import { useWorkspaceEnvStore, type WorkspaceEnv } from "@/modules/workspace";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { SearchAddon } from "@xterm/addon-search";
@@ -263,7 +260,7 @@ export default function App() {
     toggleSidebar,
     persistSidebarWidth,
     toggleExplorerFocus,
-    } = useSidebarPanel(explorerRef);
+  } = useSidebarPanel(explorerRef);
 
   const [newEditorOpen, setNewEditorOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -305,9 +302,7 @@ export default function App() {
   const fileActiveId =
     activeTab && activeTab.kind !== "terminal"
       ? activeId
-      : (lastFileTabIdRef.current ??
-        fileTabs[fileTabs.length - 1]?.id ??
-        -1);
+      : (lastFileTabIdRef.current ?? fileTabs[fileTabs.length - 1]?.id ?? -1);
   const terminalActiveId =
     activeTab?.kind === "terminal"
       ? activeId
@@ -328,8 +323,13 @@ export default function App() {
   useEditorFileSync({ tabs, tabsRef, editorRefs });
   useThemeFileEditing({ tabsRef, openFileTab });
 
-  const { roots: workspaceRoots, activeRoot, addRoot, removeRoot, setActiveRoot } =
-    useWorkspaceRoots();
+  const {
+    roots: workspaceRoots,
+    activeRoot,
+    addRoot,
+    removeRoot,
+    setActiveRoot,
+  } = useWorkspaceRoots();
 
   const { explorerRoot, inheritedCwdForNewTab } = useWorkspaceCwd(
     activeTab,
@@ -464,7 +464,6 @@ export default function App() {
     const next = (idx + delta + spaces.length) % spaces.length;
     setActive(spaces[next].id);
   }, []);
-
 
   const openNewTab = useCallback(() => {
     newTab(inheritedCwdForNewTab());
@@ -676,8 +675,6 @@ export default function App() {
       "terminal.clear": () => {
         clearFocusedTerminal();
       },
-      "terminal.toggleInput": () =>
-        window.dispatchEvent(new CustomEvent("terax:toggle-block-input")),
       "blocks.prev": () => navigateFocusedBlocks(-1),
       "blocks.next": () => navigateFocusedBlocks(1),
       "search.focus": () => {
@@ -694,8 +691,6 @@ export default function App() {
       "view.zenMode": () => setZenMode((v) => !v),
       "editor.undo": () => editorRefs.current.get(activeId)?.undo(),
       "editor.redo": () => editorRefs.current.get(activeId)?.redo(),
-      "editor.aiComplete": () =>
-        editorRefs.current.get(activeId)?.triggerAiComplete(),
       "editor.codeComplete": () =>
         editorRefs.current.get(activeId)?.triggerCodeComplete(),
     }),
@@ -732,7 +727,6 @@ export default function App() {
       if (
         id === "editor.undo" ||
         id === "editor.redo" ||
-        id === "editor.aiComplete" ||
         id === "editor.codeComplete"
       ) {
         return activeTab?.kind !== "editor";
@@ -744,11 +738,7 @@ export default function App() {
           (e.target as HTMLElement | null) ?? document.activeElement;
         return !(target as HTMLElement | null)?.closest?.(".xterm");
       }
-      if (
-        id === "terminal.toggleInput" ||
-        id === "blocks.prev" ||
-        id === "blocks.next"
-      ) {
+      if (id === "blocks.prev" || id === "blocks.next") {
         return !(activeTab?.kind === "terminal" && activeTab.blocks === true);
       }
       if (id === "sidebar.toggle") {
@@ -819,8 +809,6 @@ export default function App() {
     (tabId: number, leafId: number) => focusPane(tabId, leafId),
     [focusPane],
   );
-
-
 
   const handleLeafExit = useCallback(
     (leafId: number, _code: number) => {
@@ -1032,7 +1020,6 @@ export default function App() {
     [isTerminalTab, activeLeafId],
   );
 
-
   const shell = (
     <ThemeProvider>
       <TooltipProvider>
@@ -1139,7 +1126,6 @@ export default function App() {
                           onFocusLeaf={handleFocusLeaf}
                           registerEditorHandle={registerEditorHandle}
                           onEditorDirtyChange={handleEditorDirty}
-                          onEditorCloseTab={disposeTab}
                           registerPreviewHandle={registerPreviewHandle}
                           onPreviewUrlChange={handlePreviewUrl}
                           onSetMarkdownView={setMarkdownView}
@@ -1190,7 +1176,6 @@ export default function App() {
           )}
 
           <Toaster position="bottom-right" />
-
 
           {switcherState && (
             <TabSwitcherHud tabs={spaceTabs} state={switcherState} />

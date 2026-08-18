@@ -1,4 +1,4 @@
-import { native } from "@/modules/ai/lib/native";
+import { workspaceAuthorize } from "@/modules/workspace/native";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import type { Tab } from "@/modules/tabs";
 import { DEFAULT_SPACE_ID } from "@/modules/tabs/lib/useTabs";
@@ -103,7 +103,7 @@ export function useSpacesBoot({
         }
 
         await Promise.allSettled(
-          uniqueCwds(restored).map((cwd) => native.workspaceAuthorize(cwd)),
+          uniqueCwds(restored).map((cwd) => workspaceAuthorize(cwd)),
         );
 
         const initialActiveIndex: Record<string, number> = {};

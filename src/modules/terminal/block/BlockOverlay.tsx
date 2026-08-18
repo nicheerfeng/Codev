@@ -5,7 +5,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { useChatStore } from "@/modules/ai/store/chatStore";
 import {
   ArrowDown01Icon,
   ArrowUp01Icon,
@@ -17,7 +16,6 @@ import {
   MoreHorizontalIcon,
   Refresh01Icon,
   Search01Icon,
-  SparklesIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { homeDir } from "@tauri-apps/api/path";
@@ -28,7 +26,6 @@ import type {
   PositionedBlock,
   VisibleBlocks,
 } from "./lib/blockDecorations";
-import { capAttachOutput } from "./lib/outputCap";
 
 let cachedHome: string | null = null;
 void homeDir()
@@ -215,11 +212,6 @@ function Toolbar({ block, all, onSearch }: ChromeProps) {
 
 function BlockMenu({ block, all, onSearch }: ChromeProps) {
   const output = () => all.readOutput(block.id) ?? "";
-  const attach = () => {
-    const out = capAttachOutput(output());
-    const text = out ? `$ ${block.command}\n${out}` : `$ ${block.command}`;
-    useChatStore.getState().attachSelection(text, "terminal");
-  };
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -266,11 +258,6 @@ function BlockMenu({ block, all, onSearch }: ChromeProps) {
             const text = `$ ${block.command}\n${output()}`;
             copy(text, "Block copied");
           }}
-        />
-        <MenuItem
-          icon={SparklesIcon}
-          label="Attach to AI chat"
-          onClick={attach}
         />
         <MenuItem
           icon={Search01Icon}
