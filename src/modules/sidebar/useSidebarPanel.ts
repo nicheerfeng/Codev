@@ -6,13 +6,11 @@ import {
   useState,
 } from "react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
-import type { SidebarViewId } from "./types";
 
-export const SIDEBAR_DEFAULT_WIDTH = 260;
+const SIDEBAR_DEFAULT_WIDTH = 260;
 export const SIDEBAR_MIN_WIDTH = 220;
 export const SIDEBAR_MAX_WIDTH = 480;
 const SIDEBAR_WIDTH_STORAGE_KEY = "terax.sidebar.width";
-const SIDEBAR_VIEW_STORAGE_KEY = "terax.sidebar.view";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "terax.sidebar.collapsed";
 
 export function shouldPersistSidebarWidth(
@@ -41,16 +39,6 @@ function readSidebarWidth(): number {
   }
 }
 
-function readSidebarView(): SidebarViewId {
-  try {
-    const stored = window.localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY);
-    if (stored === "explorer") return stored;
-  } catch {
-    // ignore
-  }
-  return "explorer";
-}
-
 function readSidebarCollapsed(): boolean {
   try {
     return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
@@ -71,19 +59,8 @@ export function useSidebarPanel(
   const sidebarWidthRef = useRef(readSidebarWidth());
   const sidebarWidthWriteTimerRef = useRef(0);
   const explorerReturnFocusRef = useRef<HTMLElement | null>(null);
-  const [sidebarView, setSidebarViewState] =
-    useState<SidebarViewId>(readSidebarView);
   const [initialSidebarCollapsed] = useState(readSidebarCollapsed);
   const collapsedRef = useRef(initialSidebarCollapsed);
-
-  const persistSidebarView = useCallback((view: SidebarViewId) => {
-    setSidebarViewState(view);
-    try {
-      window.localStorage.setItem(SIDEBAR_VIEW_STORAGE_KEY, view);
-    } catch {
-      // storage may fail in private mode
-    }
-  }, []);
 
   const persistSidebarCollapsed = useCallback((collapsed: boolean) => {
     if (collapsedRef.current === collapsed) return;
@@ -104,35 +81,6 @@ export function useSidebarPanel(
     if (p.getSize().asPercentage <= 0) p.resize(`${sidebarWidthRef.current}px`);
     else p.collapse();
   }, []);
-
-  const cycleSidebarView = useCallback(
-    (view: SidebarViewId) => {
-      const panel = sidebarRef.current;
-      const collapsed = panel ? panel.getSize().asPercentage <= 0 : false;
-      if (collapsed) {
-        if (panel) panel.resize(`${sidebarWidthRef.current}px`);
-        if (view !== sidebarView) persistSidebarView(view);
-        return;
-      }
-      if (view === sidebarView) {
-        panel?.collapse();
-        return;
-      }
-      persistSidebarView(view);
-    },
-    [persistSidebarView, sidebarView],
-  );
-
-  const openSidebarView = useCallback(
-    (view: SidebarViewId) => {
-      const panel = sidebarRef.current;
-      if (panel && panel.getSize().asPercentage <= 0) {
-        panel.resize(`${sidebarWidthRef.current}px`);
-      }
-      if (view !== sidebarView) persistSidebarView(view);
-    },
-    [persistSidebarView, sidebarView],
-  );
 
   const persistSidebarWidth = useCallback(
     (next: number, isUserInteraction: boolean) => {
@@ -165,9 +113,8 @@ export function useSidebarPanel(
     const explorer = explorerRef.current;
     const panel = sidebarRef.current;
     const collapsed = panel ? panel.getSize().asPercentage <= 0 : false;
-    if (sidebarView !== "explorer" || collapsed) {
+    if (collapsed) {
       if (panel && collapsed) panel.resize(`${sidebarWidthRef.current}px`);
-      if (sidebarView !== "explorer") persistSidebarView("explorer");
       const active = document.activeElement;
       explorerReturnFocusRef.current =
         active instanceof HTMLElement && active !== document.body
@@ -191,18 +138,14 @@ export function useSidebarPanel(
     explorerReturnFocusRef.current =
       active instanceof HTMLElement && active !== document.body ? active : null;
     explorer.focus();
-  }, [explorerRef, persistSidebarView, sidebarView]);
+  }, [explorerRef]);
 
   return {
     sidebarRef,
     sidebarWidthRef,
-    sidebarView,
     initialSidebarCollapsed,
-    persistSidebarView,
     persistSidebarCollapsed,
     toggleSidebar,
-    cycleSidebarView,
-    openSidebarView,
     persistSidebarWidth,
     toggleExplorerFocus,
   };

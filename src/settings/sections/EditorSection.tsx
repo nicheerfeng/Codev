@@ -8,11 +8,6 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useT } from "@/lib/i18n";
-import {
-  FORMATTER_LABELS,
-  FORMATTERS,
-} from "@/modules/editor/lib/externalFormat";
-import { EXPOSED_LANGUAGES } from "@/modules/editor/lib/languageDefinitions";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
   AUTO_SAVE_DELAY_MAX,
@@ -22,26 +17,18 @@ import {
   EDITOR_FONT_SIZES,
   EDITOR_WORD_WRAP_COLUMN_MAX,
   EDITOR_WORD_WRAP_COLUMN_MIN,
-  type EditorFormatter,
   setEditorAutoSave,
   setEditorAutoSaveDelay,
-  setEditorCustomFormatCommand,
   setEditorFontSize,
-  setEditorFormatOnSave,
-  setEditorFormatter,
-  setEditorFormatterByLang,
   setEditorWordWrap,
   setEditorWordWrapColumn,
 } from "@/modules/settings/store";
-import { Cancel01Icon } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useState } from "react";
-import { LspServersGroup } from "../components/LspServersGroup";
-import { SectionHeader } from "../components/SectionHeader";
 import { SettingRow } from "../components/SettingRow";
 
 const AUTO_SAVE_STEP = 100;
 
+/** 渲染紧凑的字体、换行和自动保存设置。 */
 export function EditorSection() {
   const t = useT();
   const editorFontSize = usePreferencesStore((s) => s.editorFontSize);
@@ -51,282 +38,94 @@ export function EditorSection() {
   );
   const editorAutoSave = usePreferencesStore((s) => s.editorAutoSave);
   const editorAutoSaveDelay = usePreferencesStore((s) => s.editorAutoSaveDelay);
-  const editorFormatOnSave = usePreferencesStore((s) => s.editorFormatOnSave);
-  const editorFormatter = usePreferencesStore((s) => s.editorFormatter);
-  const editorFormatterByLang = usePreferencesStore(
-    (s) => s.editorFormatterByLang,
-  );
-  const usesCustom =
-    editorFormatter === "custom" ||
-    Object.values(editorFormatterByLang).includes("custom");
 
   return (
-    <div className="flex flex-col gap-6">
-      <SectionHeader
-        title={t("Editor")}
-        description={t("Editing behavior, saving, and language servers.")}
-      />
-
-      <div className="flex flex-col gap-2">
-        <Label>{t("Appearance")}</Label>
-        <SettingRow title={t("Font size")} description={t("Code editor text size.")}>
-          <Select
-            value={String(editorFontSize)}
-            onValueChange={(v) => void setEditorFontSize(Number(v))}
-          >
-            <SelectTrigger size="sm" className="h-8 w-28 text-[12px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {EDITOR_FONT_SIZES.map((size) => (
-                <SelectItem
-                  key={size}
-                  value={String(size)}
-                  className="text-[12px]"
-                >
-                  {size} px
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </SettingRow>
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <Label>{t("Editing")}</Label>
-        <SettingRow
-          title={t("Word wrap")}
-          description={t("Wrap long lines instead of scrolling horizontally.")}
-        >
-          <Switch
-            checked={editorWordWrap}
-            onCheckedChange={(v) => void setEditorWordWrap(v)}
-          />
-        </SettingRow>
-        {editorWordWrap && (
-          <WordWrapColumnInput
-            value={editorWordWrapColumn}
-            onChange={(v) => void setEditorWordWrapColumn(v)}
-          />
-        )}
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <Label>{t("Saving")}</Label>
-        <SettingRow
-          title={t("Auto save")}
-          description={t("Automatically save files after a delay when changes are detected.")}
-        >
-          <Switch
-            checked={editorAutoSave}
-            onCheckedChange={(v) => void setEditorAutoSave(v)}
-          />
-        </SettingRow>
-        {editorAutoSave && (
-          <AutoSaveDelayInput
-            value={editorAutoSaveDelay}
-            onChange={(v) => void setEditorAutoSaveDelay(v)}
-          />
-        )}
-        <SettingRow
-          title={t("Format on save")}
-          description={t("Format the file on explicit save (Cmd+S / :w) with the formatter below.")}
-        >
-          <Switch
-            checked={editorFormatOnSave}
-            onCheckedChange={(v) => void setEditorFormatOnSave(v)}
-          />
-        </SettingRow>
-        {editorFormatOnSave && (
-          <>
-            <SettingRow
-              title={t("Formatter")}
-              description={t("Language server formats the buffer before writing; external tools run on the saved file from your PATH.")}
-            >
-              <FormatterSelect
-                value={editorFormatter}
-                onChange={(v) => void setEditorFormatter(v)}
-              />
-            </SettingRow>
-            {usesCustom && <CustomFormatCommandInput />}
-            <FormatterOverrides />
-          </>
-        )}
-      </div>
-
-      <LspServersGroup />
-    </div>
-  );
-}
-
-const FORMATTER_OPTIONS: EditorFormatter[] = [
-  "lsp",
-  ...(Object.keys(FORMATTERS) as EditorFormatter[]),
-  "custom",
-];
-
-function FormatterSelect({
-  value,
-  onChange,
-}: {
-  value: EditorFormatter;
-  onChange: (v: EditorFormatter) => void;
-}) {
-  const t = useT();
-  return (
-    <Select value={value} onValueChange={(v) => onChange(v as EditorFormatter)}>
-      <SelectTrigger className="h-8 w-40 text-[12px]">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {FORMATTER_OPTIONS.map((id) => (
-          <SelectItem key={id} value={id}>
-            {t(FORMATTER_LABELS[id])}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-function CustomFormatCommandInput() {
-  const t = useT();
-  const stored = usePreferencesStore((s) => s.editorCustomFormatCommand);
-  const [draft, setDraft] = useState(stored);
-
-  useEffect(() => {
-    setDraft(stored);
-  }, [stored]);
-
-  return (
-    <SettingRow
-      title={t("Custom command")}
-      description={t("Runs on the saved file; {file} is replaced with the quoted path (appended when omitted).")}
-    >
-      <Input
-        value={draft}
-        placeholder="mytool --fix {file}"
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => {
-          if (draft !== stored) void setEditorCustomFormatCommand(draft);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") e.currentTarget.blur();
-        }}
-        className="h-8 w-64 font-mono text-[12px] md:text-[12px]"
-      />
-    </SettingRow>
-  );
-}
-
-function FormatterOverrides() {
-  const t = useT();
-  const byLang = usePreferencesStore((s) => s.editorFormatterByLang);
-  const entries = Object.entries(byLang);
-  const unused = EXPOSED_LANGUAGES.filter((l) => !(l.ext in byLang));
-
-  const update = (next: Record<string, EditorFormatter>) =>
-    void setEditorFormatterByLang(next);
-
-  return (
-    <>
+    <section className="flex flex-col gap-2">
+      <h2 className="text-[12px] font-semibold tracking-tight">
+        {t("Editor")}
+      </h2>
       <SettingRow
-        title={t("Language overrides")}
-        description={t("Use a different formatter for specific languages (e.g. Ruff for Python).")}
+        title={t("Font size")}
+        description={t("Code editor text size.")}
       >
-        <button
-          type="button"
-          disabled={unused.length === 0}
-          className="h-8 rounded-md border border-border px-3 text-[12px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
-          onClick={() => {
-            const first = unused[0];
-            if (first) update({ ...byLang, [first.ext]: "lsp" });
-          }}
+        <Select
+          value={String(editorFontSize)}
+          onValueChange={(value) => void setEditorFontSize(Number(value))}
         >
-          {t("Add override")}
-        </button>
+          <SelectTrigger size="sm" className="h-7 w-20 text-[11px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {EDITOR_FONT_SIZES.map((size) => (
+              <SelectItem
+                key={size}
+                value={String(size)}
+                className="text-[11px]"
+              >
+                {size}px
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </SettingRow>
-      {entries.map(([lang, formatter]) => (
-        <div
-          key={lang}
-          className="flex items-center justify-end gap-2 rounded-md border border-border/50 bg-muted/20 px-3 py-1.5"
-        >
-          <Select
-            value={lang}
-            onValueChange={(nextLang) => {
-              if (nextLang === lang) return;
-              const next = { ...byLang };
-              delete next[lang];
-              next[nextLang] = formatter;
-              update(next);
-            }}
-          >
-            <SelectTrigger className="h-7 w-44 text-[12px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {EXPOSED_LANGUAGES.filter(
-                (l) => l.ext === lang || !(l.ext in byLang),
-              ).map((l) => (
-                <SelectItem key={l.ext} value={l.ext}>
-                  {l.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <FormatterSelect
-            value={formatter}
-            onChange={(v) => update({ ...byLang, [lang]: v })}
-          />
-          <button
-            type="button"
-            className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-            title={t("Remove override")}
-            onClick={() => {
-              const next = { ...byLang };
-              delete next[lang];
-              update(next);
-            }}
-          >
-            <HugeiconsIcon icon={Cancel01Icon} size={12} strokeWidth={2} />
-          </button>
-        </div>
-      ))}
-    </>
+      <SettingRow
+        title={t("Word wrap")}
+        description={t("Wrap long lines instead of scrolling horizontally.")}
+      >
+        <Switch
+          checked={editorWordWrap}
+          onCheckedChange={(value) => void setEditorWordWrap(value)}
+        />
+      </SettingRow>
+      {editorWordWrap && (
+        <WordWrapColumnInput
+          value={editorWordWrapColumn}
+          onChange={(value) => void setEditorWordWrapColumn(value)}
+        />
+      )}
+      <SettingRow
+        title={t("Auto save")}
+        description={t(
+          "Automatically save files after a delay when changes are detected.",
+        )}
+      >
+        <Switch
+          checked={editorAutoSave}
+          onCheckedChange={(value) => void setEditorAutoSave(value)}
+        />
+      </SettingRow>
+      {editorAutoSave && (
+        <AutoSaveDelayInput
+          value={editorAutoSaveDelay}
+          onChange={(value) => void setEditorAutoSaveDelay(value)}
+        />
+      )}
+    </section>
   );
 }
 
-function Label({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="text-[11px] font-medium tracking-tight text-muted-foreground">
-      {children}
-    </span>
-  );
-}
-
+/** 渲染自动保存延迟输入。 */
 function AutoSaveDelayInput({
   value,
   onChange,
 }: {
   value: number;
-  onChange: (v: number) => void;
+  onChange: (value: number) => void;
 }) {
   const t = useT();
   const [draft, setDraft] = useState(String(value));
 
-  useEffect(() => {
-    setDraft(String(value));
-  }, [value]);
+  useEffect(() => setDraft(String(value)), [value]);
 
   const commit = () => {
-    const n = Number(draft);
-    if (!Number.isFinite(n)) {
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed)) {
       setDraft(String(value));
       return;
     }
-    const clamped = clampAutoSaveDelay(n);
-    setDraft(String(clamped));
-    if (clamped !== value) onChange(clamped);
+    const next = clampAutoSaveDelay(parsed);
+    setDraft(String(next));
+    if (next !== value) onChange(next);
   };
 
   return (
@@ -334,73 +133,66 @@ function AutoSaveDelayInput({
       title={t("Auto save delay")}
       description={t("Delay before unsaved changes are saved automatically.")}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5">
         <Input
           type="number"
           min={AUTO_SAVE_DELAY_MIN}
           max={AUTO_SAVE_DELAY_MAX}
           step={AUTO_SAVE_STEP}
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(event) => setDraft(event.target.value)}
           onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.currentTarget.blur();
-            }
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
           }}
-          className="h-8 w-20 rounded-md border border-border bg-background px-2.5 text-right text-[12px] md:text-[12px] tabular-nums outline-none focus:border-foreground/40 focus-visible:ring-0 focus-visible:border-foreground/40 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+          className="h-7 w-16 px-2 text-right text-[11px] tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
         />
-        <span className="text-[11px] text-muted-foreground">ms</span>
+        <span className="text-[10px] text-muted-foreground">ms</span>
       </div>
     </SettingRow>
   );
 }
 
+/** 渲染软换行列数输入。 */
 function WordWrapColumnInput({
   value,
   onChange,
 }: {
   value: number;
-  onChange: (v: number) => void;
+  onChange: (value: number) => void;
 }) {
   const t = useT();
   const [draft, setDraft] = useState(String(value));
 
-  useEffect(() => {
-    setDraft(String(value));
-  }, [value]);
+  useEffect(() => setDraft(String(value)), [value]);
 
   const commit = () => {
-    const n = Number(draft);
-    if (!Number.isFinite(n)) {
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed)) {
       setDraft(String(value));
       return;
     }
-    const clamped = clampEditorWordWrapColumn(n);
-    setDraft(String(clamped));
-    if (clamped !== value) onChange(clamped);
+    const next = clampEditorWordWrapColumn(parsed);
+    setDraft(String(next));
+    if (next !== value) onChange(next);
   };
 
   return (
-    <SettingRow
-      title={t("Wrap column")}
-      description={t("Soft-wrap at this column, or earlier when the editor is narrower.")}
-    >
-      <div className="flex items-center gap-2">
+    <SettingRow title={t("Wrap column")}>
+      <div className="flex items-center gap-1.5">
         <Input
           type="number"
           min={EDITOR_WORD_WRAP_COLUMN_MIN}
           max={EDITOR_WORD_WRAP_COLUMN_MAX}
-          step={1}
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(event) => setDraft(event.target.value)}
           onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") e.currentTarget.blur();
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
           }}
-          className="h-8 w-20 rounded-md border border-border bg-background px-2.5 text-right text-[12px] md:text-[12px] tabular-nums outline-none focus:border-foreground/40 focus-visible:ring-0 focus-visible:border-foreground/40 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+          className="h-7 w-16 px-2 text-right text-[11px] tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
         />
-        <span className="text-[11px] text-muted-foreground">columns</span>
+        <span className="text-[10px] text-muted-foreground">columns</span>
       </div>
     </SettingRow>
   );

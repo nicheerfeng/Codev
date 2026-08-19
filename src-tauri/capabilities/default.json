@@ -20,12 +20,10 @@
     "core:window:allow-set-title",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
+    "dialog:default",
     "opener:default",
     "log:default",
     "os:default",
-    "store:default",
-    "autostart:allow-enable",
-    "autostart:allow-disable",
-    "autostart:allow-is-enabled"
+    "store:default"
   ]
 }

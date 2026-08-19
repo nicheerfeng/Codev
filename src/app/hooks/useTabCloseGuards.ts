@@ -59,10 +59,15 @@ export function useTabCloseGuards({
 
   const handleClose = useCallback(
     async (id: number) => {
-      // Last tab in its space can't be closed (closeTab refuses). Skip the
-      // dialog entirely so confirming it doesn't appear to silently fail.
-      if (nextActiveInSpace(tabs, id) === null) return;
       const t = tabs.find((x) => x.id === id);
+      // A file-only workspace may close its final editor; the final terminal
+      // remains protected because it is the shell session for that space.
+      if (
+        nextActiveInSpace(tabs, id) === null &&
+        t?.kind !== "editor" &&
+        t?.kind !== "markdown"
+      )
+        return;
       if (t?.kind === "editor" && t.dirty) {
         setPendingCloseTab(id);
         return;
@@ -104,10 +109,14 @@ export function useTabCloseGuards({
   );
 
   const planCloseMany = useCallback(
-    (kind: CloseManyKind, anchorId: number) =>
-      kind === "right"
-        ? planCloseTabsToRight(tabsRef.current, anchorId, activeIdRef.current)
-        : planCloseOtherTabs(tabsRef.current, anchorId, activeIdRef.current),
+    (kind: CloseManyKind, anchorId: number, scopeIds?: number[]) => {
+      const source = scopeIds
+        ? tabsRef.current.filter((tab) => scopeIds.includes(tab.id))
+        : tabsRef.current;
+      return kind === "right"
+        ? planCloseTabsToRight(source, anchorId, activeIdRef.current)
+        : planCloseOtherTabs(source, anchorId, activeIdRef.current);
+    },
     [],
   );
 
@@ -120,8 +129,12 @@ export function useTabCloseGuards({
   );
 
   const handleCloseMany = useCallback(
-    async (kind: CloseManyKind, anchorId: number) => {
-      const plan = planCloseMany(kind, anchorId);
+    async (
+      kind: CloseManyKind,
+      anchorId: number,
+      scopeIds?: number[],
+    ) => {
+      const plan = planCloseMany(kind, anchorId, scopeIds);
       if (plan.closeIds.length === 0) return;
       const requestId = ++closeManyRequestRef.current;
       const hazards = await evaluateCloseMany(plan.closeIds);
@@ -145,6 +158,20 @@ export function useTabCloseGuards({
   const handleCloseOtherTabs = useCallback(
     (anchorId: number) => {
       void handleCloseMany("other", anchorId);
+    },
+    [handleCloseMany],
+  );
+
+  const handleCloseTabsToRightInGroup = useCallback(
+    (groupIds: number[], anchorId: number) => {
+      void handleCloseMany("right", anchorId, groupIds);
+    },
+    [handleCloseMany],
+  );
+
+  const handleCloseOtherTabsInGroup = useCallback(
+    (groupIds: number[], anchorId: number) => {
+      void handleCloseMany("other", anchorId, groupIds);
     },
     [handleCloseMany],
   );
@@ -231,6 +258,8 @@ export function useTabCloseGuards({
     handleClose,
     handleCloseTabsToRight,
     handleCloseOtherTabs,
+    handleCloseTabsToRightInGroup,
+    handleCloseOtherTabsInGroup,
     confirmClose,
     cancelClose,
     confirmTerminalClose,

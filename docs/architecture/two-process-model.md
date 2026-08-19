@@ -1,142 +1,44 @@
 # Two-process model and IPC command reference
 
-This guide elaborates on `TERAX.md`. If anything here conflicts with `TERAX.md`, `TERAX.md` wins.
+Terax 由 Rust 后端和前端 WebView 组成。Rust 负责文件、目录、PTY、Shell 和工作区状态；前端负责界面、编辑器、文件树、Markdown 视图和终端渲染。
 
-## The split
+前端不直接访问文件系统或创建进程，所有主机操作都通过 `invoke()` 调用 `src-tauri/src/lib.rs` 注册的命令。
 
-Terax is two processes: the Rust backend (`src-tauri/`) and the webview frontend (`src/`).
+## Adding an IPC command
 
-- **Rust owns all OS access**: PTY, file system, git, shell spawn, network, secrets, workspace authorization.
-- **The webview never touches the FS, processes, or shells directly**. Every host operation goes through an `invoke()` call to a command registered in `src-tauri/src/lib.rs`.
+1. 在 `src-tauri/src/modules/<area>/` 添加 Rust 命令。
+2. 在 `src-tauri/src/lib.rs` 的 `generate_handler!` 中注册。
+3. 在对应的 `src/modules/<area>/lib/` 添加轻量前端调用。
+4. 为路径、工作区和平台边界补充测试；避免引入常驻服务或额外运行时。
 
-This boundary is the root of the security model. Untrusted input (terminal escape sequences, file content, AI tool results) is parsed and validated in Rust or in carefully scoped frontend code, never executed by the renderer.
+## Command groups
 
-## Adding a new IPC command
+### PTY
 
-1. Write the `#[tauri::command]` async function in the appropriate `src-tauri/src/modules/<area>/` module.
-2. Register it in `src-tauri/src/lib.rs` inside the `tauri::generate_handler![...]` block (`src-tauri/src/lib.rs:191`).
-3. If the command uses a Tauri plugin API (window, clipboard, dialog, etc.), add the plugin permission to `src-tauri/capabilities/default.json`.
-4. Add a typed frontend wrapper in the matching `src/modules/<area>/lib/` directory and call it through Tauri's `invoke()` API.
-5. If the command touches the file system, network, or shell, it must go through the existing guards (`security.ts` deny-list, workspace authorization registry, SSRF guard, AI tool approval).
+`pty_open`、`pty_write`、`pty_resize`、`pty_close`、`pty_close_all`、`pty_has_foreground_process`、`pty_has_foreground_job`、`pty_shell_name`、`pty_list_shells`。
 
-Custom commands do not need to be listed one-by-one in `default.json`; the capability covers the window. Plugin permissions do.
+### Files and search
 
-## Command catalog
+目录树：`list_subdirs`、`fs_read_dir`、`fs_list_drives`、`fs_list_files`；文件：`fs_read_file`、`fs_write_file`、`fs_stat`、`fs_canonicalize`；变更：`fs_create_file`、`fs_create_dir`、`fs_rename`、`fs_delete`、`fs_copy`；监听：`fs_watch_add`、`fs_watch_remove`；搜索：`fs_search`、`fs_grep`、`fs_grep_interactive`、`fs_glob`。
 
-The commands registered in `src-tauri/src/lib.rs` are grouped below by module. Names are the Rust function names as seen by the frontend.
+### Workspace and history
 
-### PTY (`src-tauri/src/modules/pty/`)
+工作区：`wsl_list_distros`、`wsl_default_distro`、`wsl_home`、`workspace_authorize`、`workspace_current_dir`。历史：`history_suggest`、`history_commands`、`history_record`、`history_list`。
 
-Long-lived interactive terminal sessions.
+### Window and launch
 
-- `pty_open` - create a new PTY session
-- `pty_write` - send input bytes (text or control sequences)
-- `pty_resize` - resize the PTY
-- `pty_close` / `pty_close_all` - destroy one or all sessions
-- `pty_has_foreground_process` / `pty_has_foreground_job` - detect whether a command is running
-- `pty_shell_name` / `pty_list_shells` - shell detection and enumeration
-
-Output streams from `pty_open` via a Tauri `Channel<PtyEvent>`.
-
-### File system (`src-tauri/src/modules/fs/`)
-
-#### Tree
-
-- `list_subdirs` - list subdirectories
-- `fs_read_dir` - read a directory
-
-#### File
-
-- `fs_read_file` - read file contents
-- `fs_write_file` - write file contents
-- `fs_stat` - file metadata
-- `fs_canonicalize` - canonical path
-
-#### Mutate
-
-- `fs_create_file` / `fs_create_dir`
-- `fs_rename` / `fs_delete` / `fs_copy`
-
-#### Watch
-
-- `fs_watch_add` / `fs_watch_remove` - filesystem change notifications
-
-#### Search
-
-- `fs_search` - fuzzy file finder
-- `fs_list_files` - recursive file listing
-
-#### Grep
-
-- `fs_grep` - content search
-- `fs_grep_interactive` - interactive content search
-- `fs_glob` - glob matching
-
-### Git (`src-tauri/src/modules/git/`)
-
-All git commands are gated through the workspace authorization registry.
-
-- `git_resolve_repo` / `git_panel_snapshot`
-- `git_status`
-- `git_diff` / `git_diff_content`
-- `git_stage` / `git_unstage` / `git_discard`
-- `git_commit`
-- `git_fetch` / `git_pull_ff_only` / `git_push`
-- `git_log` / `git_show_commit` / `git_commit_files` / `git_commit_file_diff`
-- `git_remote_url`
-- `git_list_branches` / `git_checkout_branch`
-
-### Shell (`src-tauri/src/modules/shell/`)
-
-Three distinct surfaces:
-
-- `shell_run_command` - one-shot subshell exec for AI tools
-- `shell_session_open` / `shell_session_run` / `shell_session_close` - persistent agent shell with state across calls
-- `shell_bg_spawn` / `shell_bg_logs` / `shell_bg_kill` / `shell_bg_list` - long-running background processes with bounded ring-buffer log capture
-
-### Workspace (`src-tauri/src/modules/workspace.rs`)
-
-- `workspace_authorize` / `workspace_current_dir` - the spawn/git/AI cwd authorization registry
-- `wsl_list_distros` / `wsl_default_distro` / `wsl_home` - WSL bridge
-
-### Network (`src-tauri/src/modules/net.rs`)
-
-- `ai_http_request` / `ai_http_stream` - AI HTTP proxy with SSRF guard
-- `lm_ping` - local-model ping
-
-### Secrets (`src-tauri/src/modules/secrets.rs`)
-
-- `secrets_get` / `secrets_set` / `secrets_delete` / `secrets_get_all` - OS keychain access, service `terax-ai`
-
-### Agent hooks (`src-tauri/src/modules/agent.rs`)
-
-- `agent_enable_hooks` / `agent_hooks_status` - install/status terminal coding-agent hooks (Claude Code, Codex, Gemini CLI)
-
-### History (`src-tauri/src/modules/history/`)
-
-- `history_suggest` / `history_commands` / `history_record` / `history_list` - shell history integration
-
-### Settings window
-
-- `get_launch_dir` - CLI launch directory, drained on first read
-- `open_settings_window` - open the separate settings webview (optional `tab` deep-link)
-
-### CLI control plane
-
-- `control_frontend_ready` - marks the restored main UI ready for routed CLI actions
-- `control_respond` - completes a pending UI-bound CLI request
-
-See [CLI control plane](cli-control.md) for the local protocol and packaging model.
+`get_launch_dir`、`get_launch_files`、`open_settings_window`。启动参数中的目录作为工作区，文件作为待打开标签；macOS 的“打开方式”事件走同一套入口。
 
 ## Invariants
 
-- The webview must not spawn processes, read files, or make network calls except through the commands above.
-- New commands must be registered in `lib.rs` and guarded at the boundary (workspace auth, deny-list, SSRF, approval flow).
-- Plugin permissions must be added to `src-tauri/capabilities/default.json` if the command uses a plugin API.
+- 文件和进程操作只能从 Rust 边界进入。
+- 新命令必须注册并覆盖路径、工作区和平台约束。
+- 终端输出按字节流处理，不能把终端内容当作可执行代码。
+- 新功能必须服务于文件树、阅读器、终端或多项目工作区，避免恢复插件、后台索引和重复抽象。
 
 ## See also
 
-- [`TERAX.md`](../../TERAX.md) - the architecture source of truth
-- [`docs/README.md`](../README.md) - index of contributor guides
-- [PTY shell integration](pty-shell-integration.md) - how sessions and shell integration work
-- [Security model](security-model.md) - the boundaries every command must respect
+- [`TERAX.md`](../../TERAX.md) - 当前架构边界
+- [`docs/README.md`](../README.md) - 文档索引
+- [PTY shell integration](pty-shell-integration.md) - PTY 与 Shell 集成
+- [Security model](security-model.md) - IPC、路径和终端安全边界

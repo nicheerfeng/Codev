@@ -21,7 +21,7 @@ IDs start at 1 and monotonically increase; they are never reused so the frontend
 
 `session::spawn` (`session.rs:102`) starts three threads per session:
 
-1. **Reader** - reads bytes from the PTY master, runs the DA filter and agent detector, and pushes filtered bytes into a pending buffer.
+1. **Reader** - reads bytes from the PTY master, runs the DA filter, and pushes filtered bytes into a pending buffer.
 2. **Flusher** - coalesces output and sends it to the frontend over the data channel.
 3. **Waiter** - waits for the child process to exit, flushes the tail, and emits the exit code.
 
@@ -80,10 +80,6 @@ On macOS and Linux, `Drop for Session` calls `killer.kill()`. Dev `Ctrl-C` of `c
 ### DA filter
 
 PowerShell / PSReadLine sends a cursor-position query (`ESC[6n`) at startup and blocks until it gets an answer. The `DaFilter` (`da_filter.rs`) intercepts that query and replies on the PTY input so the shell does not hang.
-
-### Agent detection
-
-The reader thread runs an `AgentDetector` (`agent_detect.rs`) over the byte stream. It is armed by `OSC 133;C;<cmd>` or by a self-armed `OSC 777` marker and emits `terax:agent-signal` transitions (`started`, `working`, `attention`, `finished`, `exited`). Detection is driven only by OSC sequences, never by raw output, so a repainting TUI never flaps.
 
 ### Enter key
 

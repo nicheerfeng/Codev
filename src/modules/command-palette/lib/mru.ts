@@ -33,6 +33,15 @@ export function recordUse(id: string): void {
   }
 }
 
+/** 清除本次工作区重置需要移除的命令面板历史排序。 */
+export function clearMru(): void {
+  try {
+    localStorage.removeItem(KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function mruSnapshot(): MruMap {
   return read();
 }

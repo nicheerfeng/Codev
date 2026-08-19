@@ -1,7 +1,7 @@
 [package]
 name = "terax"
 version = "0.8.6"
-description = "Terax — an open-source AI-native terminal emulator"
+description = "Terax — a minimal code and document reader with an integrated terminal"
 authors = ["crynta"]
 license = "Apache-2.0"
 edition = "2021"
@@ -32,10 +32,10 @@ serde_json = "1"
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-getrandom = "0.3"
 portable-pty = "0.9"
 dirs = "6"
 log = "0.4"
@@ -45,14 +45,11 @@ grep-searcher = "0.1"
 grep-matcher = "0.1"
 globset = "0.4"
 nucleo-matcher = "0.3"
-shared_child = "1"
 tauri-plugin-log = "2"
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"
-tauri-plugin-process = "2"
 tempfile = "3"
 notify = "8.2.0"
-which = "8.0.4"
 
 [dev-dependencies]
 proptest = "1"
@@ -79,10 +76,6 @@ windows-sys = { version = "0.61", features = [
 	"Win32_System_Threading",
 	"Win32_System_Diagnostics_ToolHelp",
 ] }
-
-[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-tauri-plugin-autostart = "2"
-tauri-plugin-window-state = "2"
 
 [profile.dev]
 incremental = true

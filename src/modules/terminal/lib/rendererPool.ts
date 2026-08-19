@@ -28,7 +28,7 @@ import {
 import { createTerminalLinkHandler } from "./terminalLinks";
 import { pasteIntoTerminal } from "./terminalPaste";
 
-export const POOL_MAX_SIZE = 5;
+const POOL_MAX_SIZE = 5;
 const FIT_DEBOUNCE_MS = 8;
 const PTY_RESIZE_DEBOUNCE_MS = 256;
 const SNAPSHOT_SCROLLBACK_CAP = 5_000;
@@ -37,13 +37,12 @@ export type SlotAdapter = {
   resolveLeaf(leafId: number): LeafBridge | null;
   evictLeaf(leafId: number): void;
   isLeafFocused(leafId: number): boolean;
-  isLeafBlocks(leafId: number): boolean;
   isLeafBusy(leafId: number): boolean;
   isLeafVisible(leafId: number): boolean;
   storeSnapshot(leafId: number, out: SerializeOutput): void;
 };
 
-export type LeafBridge = {
+type LeafBridge = {
   writeToPty(data: string): void;
   resizePty(cols: number, rows: number): void;
   // Force a SIGWINCH on the underlying PTY at the given dims. Implemented
@@ -122,40 +121,6 @@ function setWindowActive(active: boolean): void {
 export function configureRendererPool(a: SlotAdapter): void {
   adapter = a;
   bindWindowActivityListeners();
-}
-
-export function forEachSlot(fn: (slot: Slot) => void): void {
-  for (const s of slots) fn(s);
-}
-
-export function poolSize(): number {
-  return slots.length;
-}
-
-export type PoolSlotStat = {
-  id: number;
-  leafId: number | null;
-  retainedLeafId: number | null;
-  parked: boolean;
-  cols: number;
-  rows: number;
-  bufferLines: number;
-  webgl: boolean;
-  canvases: number;
-};
-
-export function poolSlotStats(): PoolSlotStat[] {
-  return slots.map((s) => ({
-    id: s.id,
-    leafId: s.currentLeafId,
-    retainedLeafId: s.retainedLeafId,
-    parked: s.parked,
-    cols: s.term.cols,
-    rows: s.term.rows,
-    bufferLines: s.term.buffer.active.length,
-    webgl: !!s.webglAddon,
-    canvases: s.webglCanvases.length,
-  }));
 }
 
 // Bracketed paste via xterm, so an app that enabled it (Claude Code) treats a
@@ -380,13 +345,11 @@ function evictionScore(s: Slot): number {
   const leafId = s.currentLeafId;
   const visible = leafId !== null && (adapter?.isLeafVisible(leafId) ?? false);
   const busy = leafId !== null && (adapter?.isLeafBusy(leafId) ?? false);
-  const blocks = leafId !== null && (adapter?.isLeafBlocks(leafId) ?? false);
   const focused = leafId !== null && (adapter?.isLeafFocused(leafId) ?? false);
   return (
     (visible ? 1000 : 0) +
     (isAltScreen(s) ? 100 : 0) +
     (busy ? 80 : 0) +
-    (blocks ? 50 : 0) +
     (focused ? 10 : 0) +
     s.lastUsedAt / 1e12
   );
@@ -669,7 +632,7 @@ function setupResizeObserver(slot: Slot, p: AcquireParams): void {
   slot.observer.observe(container);
 }
 
-export type SerializeOutput = {
+type SerializeOutput = {
   snapshot: string | null;
   cols: number;
   rows: number;

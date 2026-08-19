@@ -6,12 +6,6 @@
 if ($global:__TERAX_HOOKS_LOADED) { return }
 $global:__TERAX_HOOKS_LOADED = $true
 
-if ($env:TERAX_CLI -and (Test-Path -LiteralPath $env:TERAX_CLI -PathType Leaf)) {
-    function global:terax {
-        & $env:TERAX_CLI @args
-    }
-}
-
 try {
     [Console]::InputEncoding  = [System.Text.UTF8Encoding]::new($false)
     [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -91,15 +85,6 @@ function global:prompt {
         $cwdEnc = __terax_urlencode $cwd
         $hostName = [System.Environment]::MachineName
         $osc7 = "$esc]7;file://$hostName$cwdEnc$esc\"
-    }
-
-    # Block mode: the host renders its own input bar, so suppress the shell
-    # prompt (markers only) and reserve the header/gap rows in the prompt
-    # itself -- same layout contract as the zsh integration.
-    if ($env:TERAX_BLOCKS) {
-        $global:LASTEXITCODE = $lec
-        $gap = if ($global:__terax_block_seen) { "`n`n" } else { "`n" }
-        return "$oscD$oscA$osc7$gap$oscB"
     }
 
     $original = if (Test-Path Function:__terax_user_prompt) {

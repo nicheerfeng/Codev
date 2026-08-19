@@ -7,33 +7,37 @@ export type ThemePref = "system" | "light" | "dark";
 
 export const DEFAULT_THEME_ID = "terax-default";
 
+const LEGACY_BUILTIN_THEME_IDS = new Set([
+  "claude",
+  "kanagawa",
+  "kanagawa-dragon",
+  "tokyo-night",
+  "rose-pine",
+  "everforest",
+  "nord",
+  "gruvbox",
+  "dracula",
+  "solarized",
+  "tide",
+  "sage",
+  "caffeine",
+]);
+
+/** 将已移除的内置主题迁移到新的 Codium Dark，保留自定义主题 id。 */
+function migrateBuiltinThemeId(value: string | undefined): string {
+  if (!value) return DEFAULT_THEME_ID;
+  return LEGACY_BUILTIN_THEME_IDS.has(value) ? "codium-dark" : value;
+}
+
 export type BackgroundKind = "none" | "image";
 
 export type TerminalCursorStyle = "bar" | "block" | "underline";
 
 export const EDITOR_THEMES = [
-  "kanagawa",
-  "kanagawa-lotus",
-  "kanagawa-dragon",
-  "tokyo-night",
+  "codium-dark",
+  "codium-light",
   "catppuccin-mocha",
   "catppuccin-latte",
-  "rose-pine",
-  "rose-pine-dawn",
-  "everforest",
-  "everforest-light",
-  "dracula",
-  "solarized-dark",
-  "solarized-light",
-  "nord",
-  "gruvbox-dark",
-  "atomone",
-  "aura",
-  "copilot",
-  "github-dark",
-  "github-light",
-  "xcode-dark",
-  "xcode-light",
 ] as const;
 
 export type EditorThemeId = (typeof EDITOR_THEMES)[number];
@@ -49,53 +53,17 @@ export function isEditorThemeId(v: unknown): v is EditorThemeId {
 }
 
 export const EDITOR_THEME_MODE: Record<EditorThemeId, "light" | "dark"> = {
-  kanagawa: "dark",
-  "kanagawa-lotus": "light",
-  "kanagawa-dragon": "dark",
-  "tokyo-night": "dark",
+  "codium-dark": "dark",
+  "codium-light": "light",
   "catppuccin-mocha": "dark",
   "catppuccin-latte": "light",
-  "rose-pine": "dark",
-  "rose-pine-dawn": "light",
-  everforest: "dark",
-  "everforest-light": "light",
-  dracula: "dark",
-  "solarized-dark": "dark",
-  "solarized-light": "light",
-  nord: "dark",
-  "gruvbox-dark": "dark",
-  atomone: "dark",
-  aura: "dark",
-  copilot: "dark",
-  "github-dark": "dark",
-  "github-light": "light",
-  "xcode-dark": "dark",
-  "xcode-light": "light",
 };
 
 export const EDITOR_THEME_LABELS: Record<EditorThemeId, string> = {
-  kanagawa: "Kanagawa Wave",
-  "kanagawa-lotus": "Kanagawa Lotus",
-  "kanagawa-dragon": "Kanagawa Dragon",
-  "tokyo-night": "Tokyo Night",
+  "codium-dark": "Codium Dark",
+  "codium-light": "Codium Light",
   "catppuccin-mocha": "Catppuccin Mocha",
   "catppuccin-latte": "Catppuccin Latte",
-  "rose-pine": "Rosé Pine",
-  "rose-pine-dawn": "Rosé Pine Dawn",
-  everforest: "Everforest Dark",
-  "everforest-light": "Everforest Light",
-  dracula: "Dracula",
-  "solarized-dark": "Solarized Dark",
-  "solarized-light": "Solarized Light",
-  nord: "Nord",
-  "gruvbox-dark": "Gruvbox Dark",
-  atomone: "Atom One",
-  aura: "Aura",
-  copilot: "Copilot",
-  "github-dark": "GitHub Dark",
-  "github-light": "GitHub Light",
-  "xcode-dark": "Xcode Dark",
-  "xcode-light": "Xcode Light",
 };
 
 export type Preferences = {
@@ -108,8 +76,6 @@ export type Preferences = {
   backgroundBlur: number;
   editorTheme: EditorThemePref;
   editorFontSize: number;
-  autostart: boolean;
-  restoreWindowState: boolean;
   editorWordWrap: boolean;
   editorWordWrapColumn: number;
   showHidden: boolean;
@@ -132,38 +98,6 @@ export type Preferences = {
   shortcuts: Record<ShortcutId, KeyBinding[]>;
   editorAutoSave: boolean;
   editorAutoSaveDelay: number;
-  editorFormatOnSave: boolean;
-  editorFormatter: EditorFormatter;
-  /** languageResolver id -> formatter, overriding the global default. */
-  editorFormatterByLang: Record<string, EditorFormatter>;
-  /** Shell template for the "custom" formatter; {file} is the quoted path. */
-  editorCustomFormatCommand: string;
-  lspActivation: Record<string, LspActivation>;
-  lspCustomServers: LspCustomServer[];
-};
-
-export type EditorFormatter =
-  | "lsp"
-  | "biome"
-  | "prettier"
-  | "ruff"
-  | "rustfmt"
-  | "gofmt"
-  | "clang-format"
-  | "shfmt"
-  | "zigfmt"
-  | "custom";
-
-export type LspActivation = "enabled" | "dismissed";
-
-export type LspCustomServer = {
-  id: string;
-  name: string;
-  command: string;
-  args: string[];
-  /** languageResolver id -> LSP languageId */
-  languages: Record<string, string>;
-  rootMarkers: string[];
 };
 
 const STORE_PATH = "terax-settings.json";
@@ -176,14 +110,13 @@ const KEY_BG_OPACITY = "backgroundOpacity";
 const KEY_BG_BLUR = "backgroundBlur";
 const KEY_EDITOR_THEME = "editorTheme";
 const KEY_EDITOR_FONT_SIZE = "editorFontSize";
-const KEY_AUTOSTART = "autostart";
-const KEY_RESTORE_WINDOW = "restoreWindowState";
 const KEY_EDITOR_WORD_WRAP = "editorWordWrap";
 const KEY_EDITOR_WORD_WRAP_COLUMN = "editorWordWrapColumn";
 const KEY_SHOW_HIDDEN = "showHidden";
 const LEGACY_KEY_SHOW_HIDDEN_DIRS = "showHiddenDirectories";
 const KEY_WORKSPACE_ROOTS = "workspaceRoots";
 const KEY_ACTIVE_WORKSPACE_ROOT = "activeWorkspaceRoot";
+const KEY_WORKSPACE_HISTORY_RESET_VERSION = "workspaceHistoryResetVersion";
 const KEY_TERMINAL_WEBGL_ENABLED = "terminalWebglEnabled";
 const KEY_TERMINAL_CURSOR_BLINK = "terminalCursorBlink";
 const KEY_TERMINAL_CURSOR_STYLE = "terminalCursorStyle";
@@ -200,16 +133,10 @@ const KEY_DEFAULT_WORKSPACE_ENV = "defaultWorkspaceEnv";
 const KEY_SHORTCUTS = "shortcuts";
 const KEY_EDITOR_AUTO_SAVE = "editorAutoSave";
 const KEY_EDITOR_AUTO_SAVE_DELAY = "editorAutoSaveDelay";
-const KEY_EDITOR_FORMAT_ON_SAVE = "editorFormatOnSave";
-const KEY_EDITOR_FORMATTER = "editorFormatter";
-const KEY_EDITOR_FORMATTER_BY_LANG = "editorFormatterByLang";
-const KEY_EDITOR_CUSTOM_FORMAT_COMMAND = "editorCustomFormatCommand";
-const KEY_LSP_ACTIVATION = "lspActivation";
-const KEY_LSP_CUSTOM_SERVERS = "lspCustomServers";
 
-export const TERMINAL_FONT_SIZE_DEFAULT = 14;
-export const TERMINAL_FONT_SIZE_MIN = 8;
-export const TERMINAL_FONT_SIZE_MAX = 32;
+const TERMINAL_FONT_SIZE_DEFAULT = 14;
+const TERMINAL_FONT_SIZE_MIN = 8;
+const TERMINAL_FONT_SIZE_MAX = 32;
 
 export const TERMINAL_FONT_SIZES = [
   10, 12, 13, 14, 15, 16, 18, 20, 22, 24,
@@ -226,15 +153,15 @@ export const EDITOR_WORD_WRAP_COLUMN_DEFAULT = 80;
 export const EDITOR_WORD_WRAP_COLUMN_MIN = 20;
 export const EDITOR_WORD_WRAP_COLUMN_MAX = 500;
 
-export const TERMINAL_SCROLLBACK_DEFAULT = 2000;
-export const TERMINAL_SCROLLBACK_MIN = 200;
-export const TERMINAL_SCROLLBACK_MAX = 50_000;
+const TERMINAL_SCROLLBACK_DEFAULT = 2000;
+const TERMINAL_SCROLLBACK_MIN = 200;
+const TERMINAL_SCROLLBACK_MAX = 50_000;
 export const TERMINAL_SCROLLBACK_PRESETS = [
   500, 1000, 2000, 5000, 10_000, 25_000,
 ] as const;
 
 export const DEFAULT_PREFERENCES: Preferences = {
-  locale: "en",
+  locale: "zh",
   theme: "system",
   themeId: DEFAULT_THEME_ID,
   backgroundKind: "none",
@@ -243,8 +170,6 @@ export const DEFAULT_PREFERENCES: Preferences = {
   backgroundBlur: 0,
   editorTheme: EDITOR_THEME_AUTO,
   editorFontSize: EDITOR_FONT_SIZE_DEFAULT,
-  autostart: false,
-  restoreWindowState: true,
   editorWordWrap: false,
   editorWordWrapColumn: EDITOR_WORD_WRAP_COLUMN_DEFAULT,
   showHidden: false,
@@ -266,15 +191,14 @@ export const DEFAULT_PREFERENCES: Preferences = {
   shortcuts: {} as Record<ShortcutId, KeyBinding[]>,
   editorAutoSave: false,
   editorAutoSaveDelay: 1000,
-  editorFormatOnSave: false,
-  editorFormatter: "lsp",
-  editorFormatterByLang: {},
-  editorCustomFormatCommand: "",
-  lspActivation: {},
-  lspCustomServers: [],
 };
 
 const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: 200 });
+const staleSessionStore = new LazyStore("terax-spaces.json", {
+  defaults: {},
+  autoSave: 500,
+});
+const WORKSPACE_HISTORY_RESET_VERSION = 1;
 
 // LazyStore.onChange only fires within the writing process. The settings
 // page lives in a separate webview, so writes there never reach the main
@@ -288,16 +212,60 @@ async function writePref<T>(key: string, value: T): Promise<void> {
   await emit(PREFS_CHANGED_EVENT, { key, value });
 }
 
+/** 清理本次界面重构前遗留的空间会话记录，仅执行一次。 */
+export async function clearStaleWorkspaceHistory(): Promise<boolean> {
+  try {
+    const version = await store.get<number>(
+      KEY_WORKSPACE_HISTORY_RESET_VERSION,
+    );
+    if (version === WORKSPACE_HISTORY_RESET_VERSION) return false;
+    await staleSessionStore.clear();
+    await staleSessionStore.save();
+    await store.set(
+      KEY_WORKSPACE_HISTORY_RESET_VERSION,
+      WORKSPACE_HISTORY_RESET_VERSION,
+    );
+    await store.save();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function loadPreferences(): Promise<Preferences> {
   // Single IPC roundtrip — fetching keys individually fans out to one
   // `plugin:store|get` per setting and is the dominant boot cost.
   const entries = await store.entries();
   const map = new Map<string, unknown>(entries);
   const get = <T>(k: string): T | undefined => map.get(k) as T | undefined;
+  const storedWorkspaceRoots = get<string[]>(KEY_WORKSPACE_ROOTS);
+  const workspaceRoots = normalizeWorkspaceRoots(storedWorkspaceRoots);
+  if (
+    Array.isArray(storedWorkspaceRoots) &&
+    JSON.stringify(storedWorkspaceRoots) !== JSON.stringify(workspaceRoots)
+  ) {
+    void writePref(KEY_WORKSPACE_ROOTS, workspaceRoots);
+  }
+  const storedActiveRoot = normalizeWorkspaceRoot(
+    get<string | null>(KEY_ACTIVE_WORKSPACE_ROOT),
+  );
+  const activeWorkspaceRoot =
+    storedActiveRoot && workspaceRoots.includes(storedActiveRoot)
+      ? storedActiveRoot
+      : (workspaceRoots[0] ?? DEFAULT_PREFERENCES.activeWorkspaceRoot);
+  if (storedActiveRoot !== activeWorkspaceRoot) {
+    void writePref(KEY_ACTIVE_WORKSPACE_ROOT, activeWorkspaceRoot);
+  }
+  const storedThemeId = get<string>(KEY_THEME_ID);
+  const themeId = migrateBuiltinThemeId(storedThemeId);
+  if (storedThemeId !== themeId) {
+    void writePref(KEY_THEME_ID, themeId);
+  }
+
   return {
     locale: coerceLocale(get<unknown>(KEY_LOCALE)),
     theme: get<ThemePref>(KEY_THEME) ?? DEFAULT_PREFERENCES.theme,
-    themeId: get<string>(KEY_THEME_ID) ?? DEFAULT_PREFERENCES.themeId,
+    themeId,
     backgroundKind:
       get<BackgroundKind>(KEY_BG_KIND) ?? DEFAULT_PREFERENCES.backgroundKind,
     backgroundImageId:
@@ -318,10 +286,6 @@ export async function loadPreferences(): Promise<Preferences> {
     editorFontSize: clampEditorFontSize(
       get<number>(KEY_EDITOR_FONT_SIZE) ?? DEFAULT_PREFERENCES.editorFontSize,
     ),
-    autostart: get<boolean>(KEY_AUTOSTART) ?? DEFAULT_PREFERENCES.autostart,
-    restoreWindowState:
-      get<boolean>(KEY_RESTORE_WINDOW) ??
-      DEFAULT_PREFERENCES.restoreWindowState,
     editorWordWrap:
       get<boolean>(KEY_EDITOR_WORD_WRAP) ?? DEFAULT_PREFERENCES.editorWordWrap,
     editorWordWrapColumn: clampEditorWordWrapColumn(
@@ -332,13 +296,8 @@ export async function loadPreferences(): Promise<Preferences> {
       get<boolean>(KEY_SHOW_HIDDEN) ??
       get<boolean>(LEGACY_KEY_SHOW_HIDDEN_DIRS) ??
       DEFAULT_PREFERENCES.showHidden,
-    workspaceRoots: normalizeWorkspaceRoots(
-      get<string[]>(KEY_WORKSPACE_ROOTS) ?? DEFAULT_PREFERENCES.workspaceRoots,
-    ),
-    activeWorkspaceRoot: normalizeWorkspaceRoot(
-      get<string | null>(KEY_ACTIVE_WORKSPACE_ROOT) ??
-        DEFAULT_PREFERENCES.activeWorkspaceRoot,
-    ),
+    workspaceRoots,
+    activeWorkspaceRoot,
     terminalWebglEnabled:
       get<boolean>(KEY_TERMINAL_WEBGL_ENABLED) ??
       DEFAULT_PREFERENCES.terminalWebglEnabled,
@@ -386,47 +345,10 @@ export async function loadPreferences(): Promise<Preferences> {
       get<number>(KEY_EDITOR_AUTO_SAVE_DELAY) ??
         DEFAULT_PREFERENCES.editorAutoSaveDelay,
     ),
-    editorFormatOnSave:
-      get<boolean>(KEY_EDITOR_FORMAT_ON_SAVE) ??
-      DEFAULT_PREFERENCES.editorFormatOnSave,
-    editorFormatter:
-      get<EditorFormatter>(KEY_EDITOR_FORMATTER) ??
-      DEFAULT_PREFERENCES.editorFormatter,
-    editorFormatterByLang:
-      get<Record<string, EditorFormatter>>(KEY_EDITOR_FORMATTER_BY_LANG) ??
-      DEFAULT_PREFERENCES.editorFormatterByLang,
-    editorCustomFormatCommand:
-      get<string>(KEY_EDITOR_CUSTOM_FORMAT_COMMAND) ??
-      DEFAULT_PREFERENCES.editorCustomFormatCommand,
-    lspActivation:
-      get<Record<string, LspActivation>>(KEY_LSP_ACTIVATION) ??
-      DEFAULT_PREFERENCES.lspActivation,
-    lspCustomServers:
-      get<LspCustomServer[]>(KEY_LSP_CUSTOM_SERVERS) ??
-      DEFAULT_PREFERENCES.lspCustomServers,
   };
 }
 
-export async function setLspActivation(
-  id: string,
-  value: LspActivation | null,
-): Promise<void> {
-  const current =
-    ((await store.get(KEY_LSP_ACTIVATION)) as Record<string, LspActivation>) ??
-    {};
-  const next = { ...current };
-  if (value === null) delete next[id];
-  else next[id] = value;
-  await writePref(KEY_LSP_ACTIVATION, next);
-}
-
-export async function setLspCustomServers(
-  value: LspCustomServer[],
-): Promise<void> {
-  await writePref(KEY_LSP_CUSTOM_SERVERS, value);
-}
-
-/** 校验持久化语言值，异常值回退到默认英文。 */
+/** 校验持久化语言值，异常值回退到默认中文。 */
 export function coerceLocale(value: unknown): Locale {
   return value === "zh" || value === "en" ? value : DEFAULT_PREFERENCES.locale;
 }
@@ -474,8 +396,12 @@ export function normalizeWorkspaceRoot(
   return trimmed || null;
 }
 
-/** Normalizes a roots array: dedupe, keep order, and keep only entries whose
- *  normalized form survives. Used at load time to guard the persisted list. */
+/** 判定旧版本自动加入的裸盘符根，避免启动时重新展开整块磁盘。 */
+function isBareDriveRoot(path: string): boolean {
+  return /^[A-Za-z]:\/$/.test(path);
+}
+
+/** 规范化工作区根目录并清理旧版本的裸盘符根。 */
 export function normalizeWorkspaceRoots(
   raw: string[] | null | undefined,
 ): string[] {
@@ -484,12 +410,19 @@ export function normalizeWorkspaceRoots(
   const out: string[] = [];
   for (const r of raw) {
     const n = normalizeWorkspaceRoot(r);
-    if (n && !seen.has(n)) {
+    if (n && !isBareDriveRoot(n) && !seen.has(n)) {
       seen.add(n);
       out.push(n);
     }
   }
-  return out;
+  return out.filter(
+    (path) =>
+      !out.some(
+        (parent) =>
+          parent !== path &&
+          path.toLowerCase().startsWith(`${parent.toLowerCase()}/`),
+      ),
+  );
 }
 
 export async function setBackgroundKind(value: BackgroundKind): Promise<void> {
@@ -534,14 +467,6 @@ export function clampEditorFontSize(value: number): number {
 
 export async function setEditorFontSize(value: number): Promise<void> {
   await writePref(KEY_EDITOR_FONT_SIZE, clampEditorFontSize(value));
-}
-
-export async function setAutostart(value: boolean): Promise<void> {
-  await writePref(KEY_AUTOSTART, value);
-}
-
-export async function setRestoreWindowState(value: boolean): Promise<void> {
-  await writePref(KEY_RESTORE_WINDOW, value);
 }
 
 export async function setEditorWordWrap(value: boolean): Promise<void> {
@@ -666,28 +591,6 @@ export async function setEditorAutoSaveDelay(value: number): Promise<void> {
   await writePref(KEY_EDITOR_AUTO_SAVE_DELAY, clampAutoSaveDelay(value));
 }
 
-export async function setEditorFormatOnSave(value: boolean): Promise<void> {
-  await writePref(KEY_EDITOR_FORMAT_ON_SAVE, value);
-}
-
-export async function setEditorFormatter(
-  value: EditorFormatter,
-): Promise<void> {
-  await writePref(KEY_EDITOR_FORMATTER, value);
-}
-
-export async function setEditorFormatterByLang(
-  value: Record<string, EditorFormatter>,
-): Promise<void> {
-  await writePref(KEY_EDITOR_FORMATTER_BY_LANG, value);
-}
-
-export async function setEditorCustomFormatCommand(
-  value: string,
-): Promise<void> {
-  await writePref(KEY_EDITOR_CUSTOM_FORMAT_COMMAND, value);
-}
-
 export async function setDefaultWorkspaceEnv(value: string): Promise<void> {
   await writePref(KEY_DEFAULT_WORKSPACE_ENV, value);
 }
@@ -696,10 +599,6 @@ export async function setShortcuts(
   value: Record<ShortcutId, KeyBinding[]> | {},
 ): Promise<void> {
   await writePref(KEY_SHORTCUTS, value);
-}
-
-export async function resetShortcuts(): Promise<void> {
-  await writePref(KEY_SHORTCUTS, DEFAULT_PREFERENCES.shortcuts);
 }
 
 export type PrefKey = keyof Preferences;
@@ -718,8 +617,6 @@ export async function onPreferencesChange(
     [KEY_BG_BLUR]: "backgroundBlur",
     [KEY_EDITOR_THEME]: "editorTheme",
     [KEY_EDITOR_FONT_SIZE]: "editorFontSize",
-    [KEY_AUTOSTART]: "autostart",
-    [KEY_RESTORE_WINDOW]: "restoreWindowState",
     [KEY_EDITOR_WORD_WRAP]: "editorWordWrap",
     [KEY_EDITOR_WORD_WRAP_COLUMN]: "editorWordWrapColumn",
     [KEY_SHOW_HIDDEN]: "showHidden",
@@ -741,12 +638,6 @@ export async function onPreferencesChange(
     [KEY_SHORTCUTS]: "shortcuts",
     [KEY_EDITOR_AUTO_SAVE]: "editorAutoSave",
     [KEY_EDITOR_AUTO_SAVE_DELAY]: "editorAutoSaveDelay",
-    [KEY_EDITOR_FORMAT_ON_SAVE]: "editorFormatOnSave",
-    [KEY_EDITOR_FORMATTER]: "editorFormatter",
-    [KEY_EDITOR_FORMATTER_BY_LANG]: "editorFormatterByLang",
-    [KEY_EDITOR_CUSTOM_FORMAT_COMMAND]: "editorCustomFormatCommand",
-    [KEY_LSP_ACTIVATION]: "lspActivation",
-    [KEY_LSP_CUSTOM_SERVERS]: "lspCustomServers",
   };
   // Same-process writes still fire onChange immediately; cross-window writes
   // arrive via the Tauri event emitted by writePref().

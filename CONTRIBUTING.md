@@ -1,17 +1,6 @@
 # Contributing to Terax
 
-Terax is a solo-maintained project with a strong product direction. Contributions are welcome, but **alignment matters more than volume**.
-
-This document helps you decide *whether* and *how* to contribute in a way that's likely to get merged, so neither of us wastes time.
-
-## How this project is run
-
-- Terax has one active maintainer ([@crynta](https://github.com/crynta)).
-- Review bandwidth is limited.
-- Not every contribution can be accepted, even if it's technically correct. Alignment with project direction matters as much as code quality.
-- For scope and direction, see [ROADMAP.md](ROADMAP.md). Read it before opening anything non-trivial.
-
-This is normal for a solo project. A "no" on a PR is not personal.
+Terax 采用小核心、低依赖的产品方向。贡献应围绕多项目工作区、文件树、代码/文档阅读器和集成终端展开。
 
 ## Quick start
 
@@ -20,241 +9,56 @@ pnpm install
 pnpm tauri dev
 ```
 
-Prereqs: Rust (stable), Node 20+, pnpm, plus your platform's [Tauri prerequisites](https://tauri.app/start/prerequisites/).
+依赖 Rust stable、Node.js 22+、pnpm 和当前平台的 [Tauri prerequisites](https://tauri.app/start/prerequisites/)。
 
-For the architecture and how to contribute safely, see [TERAX.md](TERAX.md) and the [docs/ index](docs/README.md).
+## Before opening a change
 
-## Where to discuss
+先阅读 [ROADMAP.md](ROADMAP.md)、[TERAX.md](TERAX.md) 和 [docs/README.md](docs/README.md)。大型改动、架构调整和新依赖应先在 issue 中确认范围；小型 bug 修复、测试和文档修正可直接提交。
 
-Discord: [Crynta OS](https://discord.gg/tyveTUyEp7)
-
-Use Discord for design discussion, scope questions, "should I work on X?", quick feedback. Use GitHub Issues for tracking concrete bugs and features.
-
-## What makes a good contribution
-
-These get merged fast:
-
-- **Bug fixes** with clear reproduction steps.
-- **Docs / typos / small UX fixes** - open a PR directly.
-- **Pre-discussed features** - alignment in an issue or Discord first.
-- **Small, focused changes** - easy to review, low risk.
-
-If your change is small and obvious (typo, narrow bugfix, small docs change), open a PR directly. No issue required.
-
-## Keep changes focused
-
-**Only change what's needed to accomplish your stated goal.**
-
-If you're fixing a bug in `terminal.tsx`, don't also:
-
-- Reformat other files
-- Clean up unrelated code
-- Fix lint issues in files you didn't need to touch
-- Combine multiple unrelated fixes in one PR
-
-Even when these changes are "improvements", they make review harder and slow everything down. If you want to clean things up, open a separate PR after discussion.
-
-**One PR = one logical change.** Multi-concern PRs will be asked to split.
-
-## Discuss first (required for larger changes)
-
-For anything beyond a small fix, **discussion is required before opening a PR**. This includes:
-
-- New features
-- UI/UX changes or changes to default behavior
-- Refactors or "cleanup" work
-- Performance rewrites
-- Architectural changes
-- Anything touching many files or systems
-- New AI providers
-
-Pull requests with significant unsolicited changes will be closed without detailed review. This isn't meant to discourage contribution. It ensures alignment before significant work goes in.
-
-A 10-minute conversation saves a 500-line PR that doesn't fit the roadmap.
+每个改动只解决一个问题。不要顺手重构相邻模块、恢复已删除功能或添加备用配置。
 
 ## Quality bar
 
-Terax positions itself as **lightweight, fast, production-grade**. Every PR is reviewed against:
+提交前运行：
 
-- `pnpm lint` clean
-- `pnpm check-types` clean
-- `pnpm test` clean
-- `cargo clippy --all-targets --locked -- -D warnings` clean
-- `cargo nextest run --locked` clean (or `cargo test --locked`)
-- `cargo fmt` applied before pushing
-- No perf regressions in known hot paths: terminal renderer, PTY stream, AI streaming, source control, file explorer
-- No new heavy dependencies (>50KB gzip in client bundle, >5MB compiled on Rust side) without justification
-- Platform parity preserved (macOS / Linux / Windows / WSL still work)
-- Security review for changes to AI tool surface, file system access, network paths, IPC commands
-
-If you're not sure how to measure perf or what counts as a hot path, ask in Discord or an issue. Better to confirm than get bounced.
-
-## Changes to core subsystems require a test
-
-The most common way a PR breaks Terax is a **local fix with global blast radius**: the diff solves one reported case, reads fine, passes type-check and clippy, and silently breaks the same subsystem in every other case. Review alone does not catch these. A test does.
-
-So if your change touches behavior in any of these load-bearing paths, the PR must add or extend a test that locks the invariant you're relying on:
-
-- **Shell/terminal spawn**: what shell launches, with which cwd, env, and login flags. A "fix" here can stop terminals from starting entirely.
-- **Workspace authorization**: which directories spawns, git, and AI tools may operate in. Both the allow and the deny side.
-- **Git command layer**: repo-root resolution, pathspec/argument guards, status parsing.
-- **Filesystem mutation**: atomic writes, symlink handling, no-data-loss on partial failure.
-- **IPC command surface and AI tool surface**: anything the webview or the agent can invoke.
-- **Pure logic with wide reach**: cwd inheritance, tab/split tree transforms, OSC/prompt parsing, the command guard.
-
-The bar for the test is real coverage of the contract, not a placeholder. Test the case that would actually break: the edge, the deny path, the "what happens one level above home". If you can't see how to test it, ask in Discord before opening the PR. That conversation is usually shorter than the revert.
-
-UI rendering, themes, syntax-highlight tables, and anything the type-checker already guarantees do not need tests.
-
-## What Terax is not
-
-To set expectations:
-
-- Terax is terminal-first, not an IDE clone. Focused capabilities such as LSP, AI autocomplete, formatting, source control, and previews belong when they stay fast, lazy, and resource-bounded.
-- Not building: Jupyter-style workspaces, integrated debugger and profiler suites, package manager UIs, a full web browser, unbounded background indexing, or an IDE-scale extension host.
-- This is not a curated "first open-source contribution" project. Beginners are welcome but expect normal review.
-- Mechanical refactors, broad style changes, drive-by rewrites are not helpful.
-- AI-assisted contributions are welcome, but the PR must reflect understanding of the existing patterns. Low-effort AI-generated code that wasn't read by the author will be closed.
-
-## Branches
-
-Branch off `main`. Use these prefixes (kebab-case):
-
-| Prefix       | Use for                                  |
-| ------------ | ---------------------------------------- |
-| `feat/`      | New feature                              |
-| `fix/`       | Bug fix                                  |
-| `chore/`     | Refactor, tooling, config, dependencies  |
-| `docs/`      | Docs-only changes                        |
-| `perf/`      | Performance work                         |
-| `security/`  | Security fix or hardening                |
-
-Examples: `feat/split-panes`, `fix/explorer-focus`, `security/path-guard`.
-
-Don't open PRs from your fork's `main` branch. Work on a feature branch.
-
-## Commits & PRs
-
-The **PR title becomes the squash commit** for most PRs. Multi-commit PRs with well-crafted atomic commits may be merged with a merge commit at the maintainer's discretion (security audits, multi-step refactors). Title must follow [Conventional Commits](https://www.conventionalcommits.org/):
-
-```
-feat(terminal): add split panes
-fix(explorer): prevent input from disappearing on create
-chore(deps): bump tauri to 2.x
-security(ai): tighten path guard
+```bash
+pnpm lint
+pnpm check-types
+pnpm test
+cd src-tauri && cargo fmt --check
+cd src-tauri && cargo check
 ```
 
-Types: `feat`, `fix`, `chore`, `docs`, `perf`, `refactor`, `test`, `build`, `ci`, `security`.
-
-Common scopes: `terminal`, `editor`, `explorer`, `pty`, `ai`, `agents`, `settings`, `tabs`, `shortcuts`, `ui`, `git`, `preview`, `windows`, `linux`, `macos`, `wsl`.
-
-Within a PR, individual commit messages can be free-form (they get squashed or grouped).
-
-**Fill out the PR template.** Include: what changed, why, how you tested. Screenshots/GIFs for UI changes. "Tested manually by ..." is the bare minimum.
-
-**Open a draft PR early** if you want feedback mid-flight. Mark "Ready for review" when done.
-
-### What gets merged faster
-
-- Clear problem statement
-- Small, focused diff
-- Follows existing patterns (read 2-3 nearby files before writing yours)
-- All type-checks / lints / tests pass
-- Manual testing notes describing the steps you took
-
-### What gets bounced back
-
-- Mixed-concern PRs
-- Large architectural PRs without prior discussion
-- New dependencies without justification
-- Breaking changes without migration notes
-- Incidental reformatting unrelated to the change
-- AI-generated code that obviously wasn't read by the author
-
-## Code style
-
-- Follow existing patterns. Read 2-3 adjacent files before adding new ones.
-- TypeScript: no `any` unless you really mean it. Strict mode is on.
-- Rust: `cargo fmt` + `clippy` clean.
-- Comments: only for *why*, not *what*. Code should explain itself. No multi-paragraph docstrings.
-- No emojis in code or commit messages.
-- American English in user-facing strings.
+触及 PTY、Shell、工作区授权、文件写入、标签/分屏和 OSC 解析时，必须补充或更新对应测试。UI 样式、主题和语法高亮表通常不需要额外测试。
 
 ## Project layout
 
-```
-src-tauri/                  Rust backend
-  src/
-    lib.rs                  Tauri command registration
-    modules/
-      agent.rs              Terminal coding-agent hook installer/status
-      fs/                   File system commands (read/write/search/grep)
-      git/                  Source control commands
-      history/              Shell history integration
-      mod.rs                Module exports
-      net.rs                AI HTTP proxy with SSRF guard
-      proc.rs               Process utilities
-      pty/                  Terminal sessions, shell integration, DA filter
-      secrets.rs            OS keychain access
-      shell/                Oneshot/session/background shell commands
-      workspace.rs          WSL bridge, workspace env, authorization registry
+```text
+src-tauri/
+  src/lib.rs              Tauri command registration
+  src/modules/fs/         File tree, read/write, watch and search
+  src/modules/history/    Shell history persistence
+  src/modules/pty/        PTY sessions and shell integration
+  src/modules/workspace.rs  Workspace roots and WSL environments
 
-src/                        React frontend
-  App.tsx                   Top-level coordinator
-  components/               shadcn/ui + AI Elements
-  modules/
-    agents/                 Agent notifications and management
-    ai/                     Agents, sessions, tools, providers, composer
-    command-palette/        Modal command palette and actions
-    editor/                 CodeMirror stack, AI autocomplete
-    explorer/               File tree
-    git-history/            Git graph and history pane
-    header/                 Top bar, search, window controls
-    markdown/               Markdown preview renderer
-    preview/                Dev server, image, and web preview
-    settings/               Settings UI and preferences store
-    shortcuts/              Keymap registry
-    sidebar/                Activity bar and side panels
-    source-control/         Source control panel
-    spaces/                 Workspace spaces/projects with per-space tab persistence
-    statusbar/              Bottom bar and cwd breadcrumb
-    tabs/                   Tab/split model
-    terminal/               xterm.js sessions, OSC handlers, renderer pool
-    theme/                  Custom theme engine and presets
-    updater/                Auto-updater UI
-    workspace/              Workspace environment switching
+src/
+  app/                    Main window coordinator and workspace surface
+  modules/editor/         CodeMirror editor and language highlighting
+  modules/explorer/       File tree and file actions
+  modules/markdown/       Raw/rendered Markdown reader
+  modules/spaces/         Multi-project spaces
+  modules/tabs/           Tab and split-pane state
+  modules/terminal/       xterm sessions and renderer pool
+  modules/settings/       Preferences and settings window
+  modules/theme/          App and editor themes
 ```
 
-## FAQ
+## Scope rules
 
-**Q: Should I ask before fixing a typo or obvious bug?**
-A: No, open a PR directly.
+项目不接受扩展/插件系统、LSP、代码诊断、自动格式化、网页预览、常驻索引、图形化 Git、AI/Agent 或独立 CLI 控制平面。终端中已有的 Shell 工具可以完成这些工作，不需要在阅读器内复制一套运行时。
 
-**Q: I have an idea for a new feature.**
-A: Open a GitHub issue or bring it to Discord. Don't open a PR without prior discussion.
+新增依赖必须说明它直接减少核心复杂度或解决当前平台问题；能用现有模块完成的功能不要新增抽象层。
 
-**Q: My PR was closed without detailed feedback.**
-A: Usually means it didn't align with project direction, or scope was too large to review responsibly. This is normal for a solo project. Reopen is welcome if you want to take another pass at a smaller scope.
+## Style
 
-**Q: Can I work on an open issue?**
-A: Comment first to confirm it's still relevant and nobody else is on it. For anything non-trivial, discuss approach before implementing.
-
-**Q: I noticed cleaner code I could write while working on my fix.**
-A: Focus on your stated goal. Submit cleanup as a separate PR after discussion if it matters.
-
-**Q: How long does review take?**
-A: Depends. Small bug fix or docs: usually within a few days. Larger feature: maybe a week or two. Pre-discussed work moves faster.
-
-**Q: Why did my PR for a new AI provider get closed?**
-A: Most provider requests are now covered by the `openai-compatible` provider (point it at any OpenAI-compatible base URL) or OpenRouter. New built-in providers must justify unique value beyond what those cover.
-
-**Q: My PR conflicts after main moved. Should I rebase?**
-A: If the change is still relevant and reasonably small, yes. If it's a large stale PR, expect it to be closed with an offer to reopen after rebase. Rotting velocity is real, not personal.
-
-## Security issues
-
-Don't file them as public issues. See [SECURITY.md](SECURITY.md).
-
-## License
-
-By contributing you agree your work is licensed under [Apache-2.0](LICENSE). No CLA required.
+遵循现有 TypeScript、Rust 和 Biome 格式。注释说明设计原因，不重复代码行为。提交信息使用 Conventional Commits，例如 `fix(terminal): keep cwd after cd`。

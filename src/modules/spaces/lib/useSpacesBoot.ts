@@ -1,5 +1,7 @@
 import { workspaceAuthorize } from "@/modules/workspace/native";
 import { usePreferencesStore } from "@/modules/settings/preferences";
+import { clearStaleWorkspaceHistory } from "@/modules/settings/store";
+import { clearMru } from "@/modules/command-palette/lib/mru";
 import type { Tab } from "@/modules/tabs";
 import { DEFAULT_SPACE_ID } from "@/modules/tabs/lib/useTabs";
 import { isLeaf, type PaneNode } from "@/modules/terminal/lib/panes";
@@ -52,7 +54,12 @@ export function useSpacesBoot({
 
     void (async () => {
       try {
-        const { spaces, activeId, states } = await loadAll();
+        const historyCleared = await clearStaleWorkspaceHistory();
+        if (historyCleared) clearMru();
+        const loaded = historyCleared
+          ? { spaces: [] as SpaceMeta[], activeId: null, states: new Map() }
+          : await loadAll();
+        const { spaces, activeId, states } = loaded;
         await usePreferencesStore
           .getState()
           .init()

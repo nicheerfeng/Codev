@@ -43,7 +43,7 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   initialMode?: "commands" | "content";
   commandItems: PaletteItem[];
-  workspaceRoot: string | null;
+  workspaceRoots: string[];
   onOpenContentHit: (path: string, line: number) => void;
   insertCommand: ((cmd: string) => void) | null;
 };
@@ -56,7 +56,7 @@ export function CommandPalette({
   onOpenChange,
   initialMode,
   commandItems,
-  workspaceRoot,
+  workspaceRoots,
   onOpenContentHit,
   insertCommand,
 }: Props) {
@@ -72,7 +72,7 @@ export function CommandPalette({
   const themeFilter = inThemes ? query.trim() : "";
 
   const content = useContentSearch(
-    workspaceRoot,
+    workspaceRoots,
     parsed.term,
     open && !inThemes && parsed.mode === "content",
   );
@@ -297,7 +297,7 @@ export function CommandPalette({
               )
             ) : parsed.mode === "content" ? (
               <CommandGroup heading={t("Contents")}>
-                {!workspaceRoot ? (
+                {workspaceRoots.length === 0 ? (
                   <StatusItem label={t("No workspace root")} />
                 ) : parsed.term.length < CONTENT_SEARCH_MIN_QUERY ? (
                   <StatusItem label={t("Type at least 2 characters")} />
@@ -326,7 +326,7 @@ export function CommandPalette({
                           {hit.text.trim()}
                         </span>
                         <span className="ml-auto max-w-64 shrink-0 truncate text-[11px] font-normal text-muted-foreground">
-                          {hit.rel}:{hit.line}
+                          {basename(hit.root)}:{hit.rel}:{hit.line}
                         </span>
                       </CommandItem>
                     ))}

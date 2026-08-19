@@ -63,10 +63,6 @@ export function resolveDisplayName(filename: string | null): string {
   return base.charAt(0).toUpperCase() + base.slice(1);
 }
 
-export function resolveLanguageSync(filename: string): LanguageResult | null {
-  return cache.get(match(basenameOf(filename)).key) ?? null;
-}
-
 export async function resolveLanguage(
   filename: string,
 ): Promise<LanguageResult | null> {
@@ -84,8 +80,4 @@ export async function resolveLanguage(
   };
   cache.set(key, result);
   return result;
-}
-
-export function preloadLanguages(filenames: string[]): void {
-  for (const f of filenames) void resolveLanguage(f).catch(() => {});
 }

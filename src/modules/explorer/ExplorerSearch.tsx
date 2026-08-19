@@ -47,11 +47,20 @@ const DEBOUNCE_MS = 300;
 type Props = {
   rootPath: string;
   onOpenFile: (path: string) => void;
+  onAddAsRoot?: (path: string) => void;
+  selectedPaths?: string[];
+  onSelectPath?: (path: string, multi: boolean) => void;
   open: boolean;
   onRequestClose: () => void;
   onActiveChange?: (active: boolean) => void;
   onRevealInTerminal?: (path: string) => void;
 };
+
+/** 返回文件所在目录，用于从文件右键菜单加入其所在文件夹。 */
+function parentOf(path: string, fallback: string): string {
+  const i = path.lastIndexOf("/");
+  return i > 0 ? path.slice(0, i) : fallback;
+}
 
 export type ExplorerSearchHandle = {
   focus: () => void;
@@ -63,6 +72,9 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
     {
       rootPath,
       onOpenFile,
+      onAddAsRoot,
+      selectedPaths = [],
+      onSelectPath,
       open,
       onRequestClose,
       onActiveChange,
@@ -77,6 +89,8 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [searching, setSearching] = useState(false);
     const [truncated, setTruncated] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [retryToken, setRetryToken] = useState(0);
     const inputRef = useRef<HTMLInputElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const lastKeyboardNavAt = useRef(0);
@@ -96,6 +110,7 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
         setSelectedIndex(0);
         setSearching(false);
         setTruncated(false);
+        setError(null);
       }
     }, [open]);
 
@@ -106,9 +121,11 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
         setSelectedIndex(0);
         setSearching(false);
         setTruncated(false);
+        setError(null);
         return;
       }
       setSearching(true);
+      setError(null);
       let alive = true;
       const handle = setTimeout(async () => {
         try {
@@ -126,10 +143,10 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
           }
         } catch (e) {
           if (alive) {
-            console.error("fs_search failed:", e);
             setResults([]);
             setTruncated(false);
             setSelectedIndex(0);
+            setError(String(e));
           }
         } finally {
           if (alive) setSearching(false);
@@ -140,7 +157,7 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
         alive = false;
         clearTimeout(handle);
       };
-    }, [query, rootPath, showHidden]);
+    }, [query, retryToken, rootPath, showHidden]);
 
     useImperativeHandle(
       ref,
@@ -164,7 +181,13 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
       }
     }, [selectedIndex, results, active]);
 
-    const handleSelect = (hit: SearchHit) => {
+    /** 处理搜索结果点击与 Ctrl/⌘ 多选点击。 */
+    const handleSelect = (hit: SearchHit, multi = false) => {
+      if (multi) {
+        onSelectPath?.(hit.path, true);
+        return;
+      }
+      onSelectPath?.(hit.path, false);
       if (!hit.is_dir) {
         onOpenFile(hit.path);
       }
@@ -227,7 +250,25 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
         {active ? (
           <ScrollArea className="min-h-0 flex-1">
             <div className="py-1" ref={scrollRef}>
-              {searching && results.length === 0 ? (
+              {error ? (
+                <div className="flex flex-col gap-1 px-3 py-2 text-[11px] text-destructive">
+                  <span>{t("Search failed")}</span>
+                  <span className="truncate text-[10px] text-destructive/70" title={error}>
+                    {error}
+                  </span>
+                  <button
+                    type="button"
+                    className="w-fit rounded-sm px-1.5 py-0.5 text-[11px] text-foreground hover:bg-accent"
+                    onClick={() => setRetryToken((v) => v + 1)}
+                  >
+                    {t("Retry")}
+                  </button>
+                </div>
+              ) : query.trim().length < MIN_QUERY_LEN ? (
+                <div className="px-3 py-2 text-[11px] text-muted-foreground">
+                  {t("Type at least 2 characters")}
+                </div>
+              ) : searching && results.length === 0 ? (
                 <div className="px-3 py-2 text-[11px] text-muted-foreground">
                   {t("Searching...")}
                 </div>
@@ -238,14 +279,21 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
               ) : (
                 results.map((hit, index) => {
                   const url = hit.is_dir ? null : fileIconUrl(hit.name);
-                  const isSelected = index === selectedIndex;
+                  const isSelected = selectedPaths.includes(hit.path);
+                  const isActive = index === selectedIndex;
+                  const menuPaths = isSelected ? selectedPaths : [hit.path];
                   return (
                     <ContextMenu key={hit.path}>
                       <ContextMenuTrigger asChild>
                         <button
                           type="button"
                           data-index={index}
-                          onClick={() => handleSelect(hit)}
+                          onClick={(event) =>
+                            handleSelect(hit, event.ctrlKey || event.metaKey)
+                          }
+                          onContextMenu={() => {
+                            if (!isSelected) onSelectPath?.(hit.path, false);
+                          }}
                           onMouseEnter={() => {
                             if (Date.now() - lastKeyboardNavAt.current > 250) {
                               setSelectedIndex(index);
@@ -253,7 +301,7 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
                           }}
                           className={cn(
                             "flex w-full items-center gap-1.5 px-2 py-1 text-left text-xs transition-colors",
-                            isSelected
+                            isSelected || isActive
                               ? "bg-accent text-foreground"
                               : "hover:bg-accent/50 text-foreground/80",
                           )}
@@ -296,18 +344,34 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
                             {t("Open in Terminal")}
                           </ContextMenuItem>
                         )}
+                        {onAddAsRoot && (
+                          <ContextMenuItem
+                            className={COMPACT_ITEM}
+                            onSelect={() =>
+                              onAddAsRoot(
+                                hit.is_dir
+                                  ? hit.path
+                                  : parentOf(hit.path, rootPath),
+                              )
+                            }
+                          >
+                            {t("Add folder to workspace")}
+                          </ContextMenuItem>
+                        )}
                         <ContextMenuItem
                           className={COMPACT_ITEM}
                           onSelect={() => void revealInFinder(hit.path)}
                         >
                           {t("Reveal in Finder")}
                         </ContextMenuItem>
-                        <ContextMenuSeparator />
+                        <ContextMenuSeparator className="my-0.5" />
                         <ContextMenuItem
                           className={COMPACT_ITEM}
-                          onSelect={() => void copyToClipboard(hit.path)}
+                          onSelect={() =>
+                            void copyToClipboard(menuPaths.join("\n"))
+                          }
                         >
-                          {t("Copy Path")}
+                          {t(menuPaths.length > 1 ? "Copy Paths" : "Copy Path")}
                         </ContextMenuItem>
                       </ContextMenuContent>
                     </ContextMenu>

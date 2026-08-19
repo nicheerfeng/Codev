@@ -39,9 +39,6 @@ export type TerminalTab = TabBase & {
   cwd?: string;
   paneTree: PaneNode;
   activeLeafId: number;
-  blocks?: boolean;
-  /** Private terminal does not expose its buffer as workspace context. */
-  private?: boolean;
   /** User-set label that overrides the cwd-derived name. Survives cd. */
   customTitle?: string;
 };
@@ -61,13 +58,6 @@ export type EditorTab = TabBase & {
   overrideLanguage?: string | null;
 };
 
-export type PreviewTab = TabBase & {
-  id: number;
-  kind: "preview";
-  title: string;
-  url: string;
-};
-
 export type MarkdownTab = TabBase & {
   id: number;
   kind: "markdown";
@@ -75,14 +65,13 @@ export type MarkdownTab = TabBase & {
   path: string;
 };
 
-export type Tab = TerminalTab | EditorTab | PreviewTab | MarkdownTab;
+export type Tab = TerminalTab | EditorTab | MarkdownTab;
 
 export type TabPatch = Partial<{
   title: string;
   cwd: string;
   path: string;
   dirty: boolean;
-  url: string;
   /** Empty string resets a terminal tab to its cwd-derived name. */
   customTitle: string;
   overrideLanguage: string | null;
@@ -91,6 +80,7 @@ export type TabPatch = Partial<{
 export type OpenFileTabOptions = {
   spaceId?: string;
   activate?: boolean;
+  allowDuplicate?: boolean;
 };
 
 export type CloseTabsPlan = {
@@ -142,21 +132,24 @@ export function planFileTabOpen(
   pin: boolean,
   spaceId: string,
   allocId: () => number,
+  allowDuplicate = false,
 ): { tabs: Tab[]; tabId: number } {
   if (pin) {
-    const existing = tabs.find(
-      (tab) =>
-        tab.kind === "editor" && tab.spaceId === spaceId && tab.path === path,
-    );
-    if (existing?.kind === "editor") {
-      return {
-        tabs: existing.preview
-          ? tabs.map((tab) =>
-              tab.id === existing.id ? { ...tab, preview: false } : tab,
-            )
-          : tabs,
-        tabId: existing.id,
-      };
+    if (!allowDuplicate) {
+      const existing = tabs.find(
+        (tab) =>
+          tab.kind === "editor" && tab.spaceId === spaceId && tab.path === path,
+      );
+      if (existing?.kind === "editor") {
+        return {
+          tabs: existing.preview
+            ? tabs.map((tab) =>
+                tab.id === existing.id ? { ...tab, preview: false } : tab,
+              )
+            : tabs,
+          tabId: existing.id,
+        };
+      }
     }
 
     const tabId = allocId();
@@ -220,15 +213,6 @@ function basename(path: string): string {
   return parts.length ? parts[parts.length - 1] : path;
 }
 
-function titleFromUrl(url: string): string {
-  try {
-    const u = new URL(url);
-    return u.host || url;
-  } catch {
-    return url || "preview";
-  }
-}
-
 export const DEFAULT_SPACE_ID = "default";
 
 // Returns the tab at position `idx` within the given space, or undefined when
@@ -274,6 +258,31 @@ export function reorderTabsByGap(
   const anchorIdx = next.findIndex((t) => t.id === anchor.id);
   const insertIdx = spaceTarget > spaceFrom ? anchorIdx + 1 : anchorIdx;
   next.splice(insertIdx, 0, moved);
+  return next;
+}
+
+/** 在指定编辑器组的标签槽位内重排文件标签。 */
+export function reorderTabsByGroup(
+  tabs: Tab[],
+  groupIds: number[],
+  fromId: number,
+  toGapIndex: number,
+): Tab[] {
+  const groupSet = new Set(groupIds);
+  const ordered = tabs.filter((tab) => groupSet.has(tab.id));
+  const fromIndex = ordered.findIndex((tab) => tab.id === fromId);
+  if (fromIndex < 0 || ordered.length < 2) return tabs;
+  const target = Math.max(0, Math.min(toGapIndex, ordered.length));
+  const [moved] = ordered.splice(fromIndex, 1);
+  const insertAt = target > fromIndex ? target - 1 : target;
+  ordered.splice(Math.max(0, Math.min(insertAt, ordered.length)), 0, moved);
+  if (ordered.every((tab, index) => tab.id === groupIds[index])) return tabs;
+
+  const next = [...tabs];
+  let cursor = 0;
+  for (let index = 0; index < next.length; index += 1) {
+    if (groupSet.has(next[index].id)) next[index] = ordered[cursor++];
+  }
   return next;
 }
 
@@ -577,53 +586,6 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     return tabId;
   }, []);
 
-  const newBlockTab = useCallback((cwd?: string) => {
-    const tabId = nextIdRef.current++;
-    const leafId = nextIdRef.current++;
-    setTabs((t) => [
-      ...t,
-      {
-        id: tabId,
-        kind: "terminal",
-        spaceId: activeSpaceIdRef.current,
-        title: "blocks",
-        cwd,
-        paneTree: { kind: "leaf", id: leafId, cwd },
-        activeLeafId: leafId,
-        blocks: true,
-      },
-    ]);
-    setActiveId(tabId);
-    return tabId;
-  }, []);
-
-  useEffect(() => {
-    if (!import.meta.env?.DEV || typeof window === "undefined") return;
-    (
-      window as unknown as { __teraxNewBlockTab?: (cwd?: string) => number }
-    ).__teraxNewBlockTab = newBlockTab;
-  }, [newBlockTab]);
-
-  const newPrivateTab = useCallback((cwd?: string) => {
-    const tabId = nextIdRef.current++;
-    const leafId = nextIdRef.current++;
-    setTabs((t) => [
-      ...t,
-      {
-        id: tabId,
-        kind: "terminal",
-        spaceId: activeSpaceIdRef.current,
-        title: "private",
-        cwd,
-        paneTree: { kind: "leaf", id: leafId, cwd },
-        activeLeafId: leafId,
-        private: true,
-      },
-    ]);
-    setActiveId(tabId);
-    return tabId;
-  }, []);
-
   /**
    * Opens a file in an editor tab.
    *
@@ -644,6 +606,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
         pin,
         targetSpaceId,
         () => nextIdRef.current++,
+        options.allowDuplicate ?? false,
       );
       tabsRef.current = plan.tabs;
       setTabs(plan.tabs);
@@ -667,22 +630,6 @@ export function useTabs(initial?: Partial<TerminalTab>) {
         return t;
       }),
     );
-  }, []);
-
-  const newPreviewTab = useCallback((url: string) => {
-    const id = nextIdRef.current++;
-    setTabs((t) => [
-      ...t,
-      {
-        id,
-        kind: "preview",
-        spaceId: activeSpaceIdRef.current,
-        title: titleFromUrl(url),
-        url,
-      },
-    ]);
-    setActiveId(id);
-    return id;
   }, []);
 
   // Mirrors tabsRef like openFileTab instead of using a functional update: a
@@ -760,13 +707,23 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     let toDispose: number[] = [];
     setTabs((curr) => {
       const fallback = nextActiveInSpace(curr, id);
-      if (fallback === null) return curr;
       const target = curr.find((t) => t.id === id);
+      if (
+        fallback === null &&
+        target?.kind !== "editor" &&
+        target?.kind !== "markdown"
+      )
+        return curr;
       if (target?.kind === "terminal") {
         toDispose = leafIds(target.paneTree);
       }
       const next = curr.filter((t) => t.id !== id);
-      setActiveId((active) => (id === active ? fallback : active));
+      const nextId =
+        fallback ??
+        next.find((tab) => tab.spaceId === target?.spaceId)?.id ??
+        next[0]?.id ??
+        -1;
+      setActiveId((active) => (id === active ? nextId : active));
       return next;
     });
     for (const lid of toDispose) disposeSession(lid);
@@ -798,16 +755,6 @@ export function useTabs(initial?: Partial<TerminalTab>) {
             ...(patch.customTitle !== undefined && {
               customTitle:
                 patch.customTitle === "" ? undefined : patch.customTitle,
-            }),
-          };
-        }
-        if (x.kind === "preview") {
-          return {
-            ...x,
-            ...(patch.title !== undefined && { title: patch.title }),
-            ...(patch.url !== undefined && {
-              url: patch.url,
-              title: patch.title ?? titleFromUrl(patch.url),
             }),
           };
         }
@@ -917,7 +864,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
       let newLeafId: number | null = null;
       setTabs((curr) =>
         curr.map((t) => {
-          if (t.id !== tabId || t.kind !== "terminal" || t.blocks) return t;
+          if (t.id !== tabId || t.kind !== "terminal") return t;
           if (leafIds(t.paneTree).length >= MAX_PANES_PER_TAB) return t;
           const splitId = nextIdRef.current++;
           const leafId = nextIdRef.current++;
@@ -1029,6 +976,15 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     setTabs((prev) => reorderTabsByGap(prev, fromId, toGapIndex));
   }, []);
 
+  const reorderTabByGroup = useCallback(
+    (groupIds: number[], fromId: number, toGapIndex: number) => {
+      setTabs((prev) =>
+        reorderTabsByGroup(prev, groupIds, fromId, toGapIndex),
+      );
+    },
+    [],
+  );
+
   return {
     tabs,
     activeId,
@@ -1039,17 +995,15 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     moveTabToSpace,
     reorderTab,
     reorderTabByGap,
+    reorderTabByGroup,
     newTabInSpace,
     removeTabsForSpace,
     markBooted,
     setActiveSpaceForNewTabs,
     setOverrideLanguage,
     newTab,
-    newBlockTab,
-    newPrivateTab,
     openFileTab,
     pinTab,
-    newPreviewTab,
     newMarkdownTab,
     setMarkdownView,
     closeTab,

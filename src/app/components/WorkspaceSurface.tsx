@@ -1,118 +1,77 @@
-import type { ComponentProps } from "react";
-import { cn } from "@/lib/utils";
-import { EditorStack } from "@/modules/editor";
-import { MarkdownStack } from "@/modules/markdown";
-import { PreviewStack } from "@/modules/preview";
+import type { EditorPaneHandle } from "@/modules/editor";
 import type { Tab } from "@/modules/tabs";
-import { TerminalStack } from "@/modules/terminal";
-
-type TerminalStackProps = ComponentProps<typeof TerminalStack>;
-type EditorStackProps = ComponentProps<typeof EditorStack>;
-type PreviewStackProps = ComponentProps<typeof PreviewStack>;
+import { EditorCompareView } from "./EditorCompareView";
 
 type Props = {
-  tabs: Tab[];
-  activeId: number;
-  activeTab: Tab | undefined;
-  registerTerminalHandle: TerminalStackProps["registerHandle"];
-  onSearchReady: TerminalStackProps["onSearchReady"];
-  onCwd: TerminalStackProps["onCwd"];
-  onExit: TerminalStackProps["onExit"];
-  onFocusLeaf: TerminalStackProps["onFocusLeaf"];
-  registerEditorHandle: EditorStackProps["registerHandle"];
-  onEditorDirtyChange: EditorStackProps["onDirtyChange"];
-  registerPreviewHandle: PreviewStackProps["registerHandle"];
-  onPreviewUrlChange: PreviewStackProps["onUrlChange"];
-  onSetMarkdownView: EditorStackProps["onSetMarkdownView"];
+  primaryTabs: Tab[];
+  primaryActiveId: number;
+  secondaryTabs: Tab[];
+  secondaryActiveId: number;
+  workspaceRoots: string[];
+  onSelectPrimary: (id: number) => void;
+  onSelectSecondary: (id: number) => void;
+  onClose: (id: number) => void;
+  onCloseTabsToRight: (groupIds: number[], id: number) => void;
+  onCloseOtherTabs: (groupIds: number[], id: number) => void;
+  onPin: (id: number) => void;
+  onRename: (id: number, title: string) => void;
+  onReorderPrimary: (fromId: number, toGapIndex: number) => void;
+  onReorderSecondary: (fromId: number, toGapIndex: number) => void;
+  onOverrideLanguage: (id: number, lang: string | null) => void;
+  onMoveToGroup: (id: number, group: "primary" | "secondary") => void;
+  registerEditorHandle: (id: number, handle: EditorPaneHandle | null) => void;
+  onEditorDirtyChange: (id: number, dirty: boolean) => void;
+  onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
+  onFocusEditor: (id: number) => void;
 };
 
-/**
- * Stacks every tab-kind surface absolutely on top of each other and toggles
- * visibility off the active tab, so panes keep their mounted state (terminal
- * buffers, editor scroll, ...) when switching tabs.
- */
+/** 渲染中央双编辑器组，并保持两个阅览器的标签与活动状态独立。 */
 export function WorkspaceSurface({
-  tabs,
-  activeId,
-  activeTab,
-  registerTerminalHandle,
-  onSearchReady,
-  onCwd,
-  onExit,
-  onFocusLeaf,
+  primaryTabs,
+  primaryActiveId,
+  secondaryTabs,
+  secondaryActiveId,
+  workspaceRoots,
+  onSelectPrimary,
+  onSelectSecondary,
+  onClose,
+  onCloseTabsToRight,
+  onCloseOtherTabs,
+  onPin,
+  onRename,
+  onReorderPrimary,
+  onReorderSecondary,
+  onOverrideLanguage,
+  onMoveToGroup,
   registerEditorHandle,
   onEditorDirtyChange,
-  registerPreviewHandle,
-  onPreviewUrlChange,
   onSetMarkdownView,
+  onFocusEditor,
 }: Props) {
-  const kind = activeTab?.kind;
-  const isTerminalTab = kind === "terminal";
-  const isEditorTab = kind === "editor";
-  const isPreviewTab = kind === "preview";
-  const isMarkdownTab = kind === "markdown";
-
   return (
     <div className="relative h-full min-h-0">
-      <div
-        className={cn(
-          "absolute inset-0 px-3 pt-2 pb-2",
-          !isTerminalTab && "invisible pointer-events-none",
-        )}
-        aria-hidden={!isTerminalTab}
-      >
-        <TerminalStack
-          tabs={tabs}
-          activeId={activeId}
-          registerHandle={registerTerminalHandle}
-          onSearchReady={onSearchReady}
-          onCwd={onCwd}
-          onExit={onExit}
-          onFocusLeaf={onFocusLeaf}
-        />
-      </div>
-      <div
-        className={cn(
-          "absolute inset-0 px-3 pt-2 pb-2",
-          !isEditorTab && "invisible pointer-events-none",
-        )}
-        aria-hidden={!isEditorTab}
-      >
-        <EditorStack
-          tabs={tabs}
-          activeId={activeId}
-          registerHandle={registerEditorHandle}
-          onDirtyChange={onEditorDirtyChange}
-          onSetMarkdownView={onSetMarkdownView}
-        />
-      </div>
-      <div
-        className={cn(
-          "absolute inset-0 px-3 pt-2 pb-2",
-          !isPreviewTab && "invisible pointer-events-none",
-        )}
-        aria-hidden={!isPreviewTab}
-      >
-        <PreviewStack
-          tabs={tabs}
-          activeId={activeId}
-          registerHandle={registerPreviewHandle}
-          onUrlChange={onPreviewUrlChange}
-        />
-      </div>
-      <div
-        className={cn(
-          "absolute inset-0 px-3 pt-2 pb-2",
-          !isMarkdownTab && "invisible pointer-events-none",
-        )}
-        aria-hidden={!isMarkdownTab}
-      >
-        <MarkdownStack
-          tabs={tabs}
-          activeId={activeId}
-          onSetMarkdownView={onSetMarkdownView}
-        />
-      </div>
+      <EditorCompareView
+        primaryTabs={primaryTabs}
+        primaryActiveId={primaryActiveId}
+        secondaryTabs={secondaryTabs}
+        secondaryActiveId={secondaryActiveId}
+        workspaceRoots={workspaceRoots}
+        onSelectPrimary={onSelectPrimary}
+        onSelectSecondary={onSelectSecondary}
+        onClose={onClose}
+        onCloseTabsToRight={onCloseTabsToRight}
+        onCloseOtherTabs={onCloseOtherTabs}
+        onPin={onPin}
+        onRename={onRename}
+        onReorderPrimary={onReorderPrimary}
+        onReorderSecondary={onReorderSecondary}
+        onOverrideLanguage={onOverrideLanguage}
+        onMoveToGroup={onMoveToGroup}
+        registerEditorHandle={registerEditorHandle}
+        onDirtyChange={onEditorDirtyChange}
+        onSetMarkdownView={onSetMarkdownView}
+        onFocusEditor={onFocusEditor}
+      />
     </div>
   );
 }

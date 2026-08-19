@@ -6,11 +6,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { fmtShortcut, MOD_KEY, SHIFT_KEY } from "@/lib/platform";
+import { fmtShortcut, MOD_KEY } from "@/lib/platform";
 import {
   ComputerTerminal02Icon,
-  Globe02Icon,
-  IncognitoIcon,
   PencilEdit02Icon,
   PlusSignIcon,
 } from "@hugeicons/core-free-icons";
@@ -19,17 +17,11 @@ import { useState } from "react";
 
 type Props = {
   onNew: () => void;
-  onNewBlock: () => void;
-  onNewPrivate: () => void;
-  onNewPreview: () => void;
   onNewEditor: () => void;
 };
 
 export function NewTabMenu({
   onNew,
-  onNewBlock,
-  onNewPrivate,
-  onNewPreview,
   onNewEditor,
 }: Props) {
   const t = useT();
@@ -59,28 +51,6 @@ export function NewTabMenu({
             {fmtShortcut(MOD_KEY, "T")}
           </span>
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onNewBlock}>
-          <HugeiconsIcon
-            icon={ComputerTerminal02Icon}
-            size={14}
-            strokeWidth={1.75}
-          />
-          <span className="flex-1">{t("Blocks")}</span>
-          <span className="text-xs text-muted-foreground">
-            {fmtShortcut(MOD_KEY, SHIFT_KEY, "T")}
-          </span>
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onNewPrivate}>
-          <HugeiconsIcon
-            icon={IncognitoIcon}
-            size={14}
-            strokeWidth={1.75}
-          />
-          <span className="flex-1">{t("Privacy")}</span>
-          <span className="text-xs text-muted-foreground">
-            {fmtShortcut(MOD_KEY, "R")}
-          </span>
-        </DropdownMenuItem>
         <DropdownMenuItem onSelect={onNewEditor}>
           <HugeiconsIcon
             icon={PencilEdit02Icon}
@@ -90,17 +60,6 @@ export function NewTabMenu({
           <span className="flex-1">{t("Editor")}</span>
           <span className="text-xs text-muted-foreground">
             {fmtShortcut(MOD_KEY, "E")}
-          </span>
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onNewPreview}>
-          <HugeiconsIcon
-            icon={Globe02Icon}
-            size={14}
-            strokeWidth={1.75}
-          />
-          <span className="flex-1">{t("Preview")}</span>
-          <span className="text-xs text-muted-foreground">
-            {fmtShortcut(MOD_KEY, "P")}
           </span>
         </DropdownMenuItem>
       </DropdownMenuContent>

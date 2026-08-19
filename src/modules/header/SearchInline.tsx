@@ -1,10 +1,16 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { KEY_SEP } from "@/lib/platform";
+import { useT } from "@/lib/i18n";
 import type { EditorPaneHandle } from "@/modules/editor";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { getBindingTokens, SHORTCUTS } from "@/modules/shortcuts/shortcuts";
-import { Cancel01Icon, Search01Icon } from "@hugeicons/core-free-icons";
+import {
+  ArrowDown01Icon,
+  ArrowUp01Icon,
+  Cancel01Icon,
+  Search01Icon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { SearchAddon } from "@xterm/addon-search";
 import {
@@ -31,6 +37,8 @@ export type SearchTarget =
 
 export type SearchInlineHandle = { focus: () => void };
 
+type SearchStatus = { count: number; index: number };
+
 type Props = {
   target: SearchTarget;
   /** When true, collapse to an icon-only button until the user opens it. */
@@ -39,7 +47,9 @@ type Props = {
 
 export const SearchInline = forwardRef<SearchInlineHandle, Props>(
   function SearchInline({ target, compact }, ref) {
+    const t = useT();
     const [q, setQ] = useState("");
+    const [status, setStatus] = useState<SearchStatus | null>(null);
     // In compact mode the field is hidden behind an icon until activated.
     // In normal mode the field is always present.
     const [openInCompact, setOpenInCompact] = useState(false);
@@ -63,7 +73,9 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
       return tokens.join(KEY_SEP);
     }, [userShortcuts]);
 
-    const placeholder = shortcutText ? `Search (${shortcutText})` : "Search";
+    const placeholder = shortcutText
+      ? `${t("Search")} (${shortcutText})`
+      : t("Search");
     const tooltipTitle = placeholder;
 
     const expanded = !compact || openInCompact;
@@ -78,6 +90,7 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
     useImperativeHandle(ref, () => ({ focus }), [focus]);
 
     const clearTarget = useCallback(() => {
+      setStatus(null);
       if (!target) return;
       if (target.kind === "terminal") target.addon.clearDecorations();
       else target.handle.clearQuery();
@@ -91,8 +104,28 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
     // Target switched (terminal ↔ editor) or removed → drop highlights.
     useEffect(() => clearTarget, [clearTarget]);
 
+    useEffect(() => {
+      if (!target) {
+        setStatus(null);
+        return;
+      }
+      if (target.kind === "terminal") {
+        const unlisten = target.addon.onDidChangeResults((event) => {
+          setStatus({
+            count: event.resultCount,
+            index: event.resultIndex >= 0 ? event.resultIndex + 1 : 0,
+          });
+        });
+        return () => unlisten.dispose();
+      }
+      setStatus(target.handle.getSearchStatus());
+    }, [target]);
+
     const applyIncremental = (next: string) => {
-      if (!target) return;
+      if (!target) {
+        setStatus(next ? { count: 0, index: 0 } : null);
+        return;
+      }
       if (target.kind === "terminal") {
         if (next) {
           target.addon.findNext(next, {
@@ -104,6 +137,7 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
         }
       } else {
         target.handle.setQuery(next);
+        setStatus(next ? target.handle.getSearchStatus() : null);
       }
     };
 
@@ -116,13 +150,23 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
       } else if (target.kind === "editor") {
         if (forward) target.handle.findNext();
         else target.handle.findPrevious();
+        setStatus(target.handle.getSearchStatus());
       }
     };
+
+  const statusLabel = !q
+      ? null
+      : !target
+        ? t("No active editor or terminal")
+        : status
+          ? `${status.index}/${status.count}`
+          : null;
+    const canNavigate = Boolean(q && status && status.count > 0);
 
     return (
       <div
         className="relative h-7 shrink-0 transition-[width] duration-200 ease-out"
-        style={{ width: expanded ? 192 : 28 }}
+        style={{ width: expanded ? 242 : 28 }}
       >
         {expanded ? (
           <div className="absolute inset-0 animate-in fade-in-0 duration-150">
@@ -136,7 +180,7 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
               ref={setInputRef}
               value={q}
               placeholder={placeholder}
-              className="h-7 w-full bg-muted/80 pr-7 pl-7 text-[13px]! placeholder:text-muted-foreground/70 focus-visible:ring-0"
+              className="h-7 w-full bg-muted/80 pr-24 pl-7 text-[13px]! placeholder:text-muted-foreground/70 focus-visible:ring-0"
               onChange={(e) => {
                 const next = e.target.value;
                 setQ(next);
@@ -160,6 +204,38 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
                 }
               }}
             />
+            {statusLabel ? (
+              <span
+                className="pointer-events-none absolute top-1/2 right-18 max-w-18 -translate-y-1/2 truncate text-[10px] text-muted-foreground"
+                title={statusLabel}
+              >
+                {statusLabel}
+              </span>
+            ) : null}
+            {q ? (
+              <div className="absolute top-1/2 right-6 flex -translate-y-1/2 items-center gap-0.5">
+                <button
+                  type="button"
+                  disabled={!canNavigate}
+                  onClick={() => findDirection(false)}
+                  className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
+                  aria-label={t("Previous match")}
+                  title={t("Previous match")}
+                >
+                  <HugeiconsIcon icon={ArrowUp01Icon} size={11} strokeWidth={2} />
+                </button>
+                <button
+                  type="button"
+                  disabled={!canNavigate}
+                  onClick={() => findDirection(true)}
+                  className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
+                  aria-label={t("Next match")}
+                  title={t("Next match")}
+                >
+                  <HugeiconsIcon icon={ArrowDown01Icon} size={11} strokeWidth={2} />
+                </button>
+              </div>
+            ) : null}
             {q && (
               <button
                 type="button"

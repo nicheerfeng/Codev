@@ -29,6 +29,7 @@ pub struct ContentSearchState {
 pub struct GrepHit {
     pub path: String,
     pub rel: String,
+    pub root: String,
     pub line: u64,
     pub text: String,
 }
@@ -147,6 +148,7 @@ fn search_tree(
                     guard.push(GrepHit {
                         path: abs.clone(),
                         rel: rel_clone.clone(),
+                        root: root_display.clone(),
                         line: line_num,
                         text: line_text,
                     });
@@ -215,7 +217,8 @@ pub fn fs_grep(
 pub fn fs_grep_interactive(
     state: tauri::State<'_, ContentSearchState>,
     pattern: String,
-    root: String,
+    root: Option<String>,
+    roots: Option<Vec<String>>,
     max_results: Option<usize>,
     workspace: Option<WorkspaceEnv>,
 ) -> Result<GrepResponse, String> {
@@ -224,11 +227,11 @@ pub fn fs_grep_interactive(
     }
     let my_gen = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
 
-    let workspace = WorkspaceEnv::from_option(workspace);
-    let root_path = resolve_path(&root, &workspace);
-    if !root_path.is_dir() {
-        return Err(format!("not a directory: {root}"));
+    let search_roots = roots.unwrap_or_else(|| root.into_iter().collect::<Vec<_>>());
+    if search_roots.is_empty() {
+        return Err("no workspace root".into());
     }
+    let workspace = WorkspaceEnv::from_option(workspace);
     let cap = max_results
         .unwrap_or(DEFAULT_MAX_RESULTS)
         .clamp(1, HARD_MAX_RESULTS);
@@ -240,15 +243,43 @@ pub fn fs_grep_interactive(
         .map_err(|e| format!("bad pattern: {e}"))?;
 
     let cancel = || state.generation.load(Ordering::SeqCst) != my_gen;
-    Ok(search_tree(
-        &root_path,
-        &root,
-        &workspace,
-        &matcher,
-        &None,
-        cap,
-        &cancel,
-    ))
+    let mut hits = Vec::new();
+    let mut files_scanned = 0;
+    let mut truncated = false;
+    for root_display in search_roots {
+        if cancel() {
+            break;
+        }
+        let root_path = resolve_path(&root_display, &workspace);
+        if !root_path.is_dir() {
+            return Err(format!("not a directory: {root_display}"));
+        }
+        let remaining = cap.saturating_sub(hits.len());
+        if remaining == 0 {
+            truncated = true;
+            break;
+        }
+        let response = search_tree(
+            &root_path,
+            &root_display,
+            &workspace,
+            &matcher,
+            &None,
+            remaining,
+            &cancel,
+        );
+        files_scanned += response.files_scanned;
+        truncated |= response.truncated;
+        hits.extend(response.hits);
+        if truncated {
+            break;
+        }
+    }
+    Ok(GrepResponse {
+        hits,
+        truncated,
+        files_scanned,
+    })
 }
 
 #[derive(Serialize)]

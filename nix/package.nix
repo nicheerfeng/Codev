@@ -68,7 +68,7 @@ stdenv.mkDerivation {
   '';
 
   meta = with lib; {
-    description = "Open-source lightweight cross-platform AI-native terminal (ADE)";
+    description = "Lightweight cross-platform code and document reader with an integrated terminal";
     homepage = "https://terax.app";
     license = licenses.asl20;
     platforms = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" ];

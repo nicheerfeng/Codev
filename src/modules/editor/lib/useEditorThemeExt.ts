@@ -10,6 +10,6 @@ export function useEditorThemeExt(): Extension {
   const { themeId, customThemes, resolvedMode } = useTheme();
   return useMemo(() => {
     const id = resolveEditorThemeId(pref, themeId, customThemes, resolvedMode);
-    return EDITOR_THEME_EXT[id] ?? EDITOR_THEME_EXT.atomone;
+    return EDITOR_THEME_EXT[id] ?? EDITOR_THEME_EXT["codium-dark"];
   }, [pref, themeId, customThemes, resolvedMode]);
 }

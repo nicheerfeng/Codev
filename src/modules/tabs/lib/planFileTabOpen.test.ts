@@ -3,6 +3,7 @@ import {
   type EditorTab,
   planFileTabOpen,
   planMarkdownTabOpen,
+  reorderTabsByGroup,
   type Tab,
   type TerminalTab,
 } from "./useTabs";
@@ -64,6 +65,36 @@ describe("planFileTabOpen", () => {
 
     expect(plan.tabId).toBe(4);
     expect(plan.tabs).toBe(tabs);
+  });
+
+  it("allocates a duplicate editor when a side group requests one", () => {
+    const tabs: Tab[] = [terminal, editor(3, "/repo/main.rs", "one", false)];
+
+    const plan = planFileTabOpen(
+      tabs,
+      "/repo/main.rs",
+      true,
+      "one",
+      () => 5,
+      true,
+    );
+
+    expect(plan.tabId).toBe(5);
+    expect(plan.tabs).toHaveLength(3);
+    expect(plan.tabs.filter((tab) => tab.kind === "editor")).toHaveLength(2);
+  });
+
+  it("reorders only the requested editor group", () => {
+    const tabs: Tab[] = [
+      terminal,
+      editor(3, "/repo/left-a.ts", "one", false),
+      editor(4, "/repo/right-a.ts", "one", false),
+      editor(5, "/repo/left-b.ts", "one", false),
+    ];
+
+    const reordered = reorderTabsByGroup(tabs, [3, 5], 5, 0);
+
+    expect(reordered.map((tab) => tab.id)).toEqual([1, 5, 4, 3]);
   });
 
   it("promotes an existing preview only in the requested space", () => {

@@ -26,13 +26,8 @@ function baseContext(
     searchTarget: "content" as never,
     explorerRoot: "/workspace",
     home: "/home/me",
-    spaces: [],
-    activeSpaceId: null,
     openNewTab: noop,
-    openNewBlock: noop,
-    openNewPrivate: noop,
     openNewEditor: noop,
-    openNewPreview: noop,
     closeActiveTabOrPane: noop,
     splitPaneRight: noop,
     splitPaneDown: noop,
@@ -40,10 +35,6 @@ function baseContext(
     focusExplorerSearch: noop,
     toggleSidebar: noop,
     openSettings: noop,
-    openKeyboardShortcuts: noop,
-    openSpacesOverview: noop,
-    newSpace: noop,
-    switchSpace: noop,
     ...over,
   };
 }
@@ -87,13 +78,5 @@ describe("createCommandItems", () => {
     expect(reasonById({ explorerRoot: null }, "explorer.search")).toBe(
       "No workspace root",
     );
-  });
-
-  it("marks the active space as the current one", () => {
-    const reason = reasonById(
-      { spaces: [{ id: "sp1", name: "One" }], activeSpaceId: "sp1" },
-      "spaces.switch.sp1",
-    );
-    expect(reason).toBe("Current space");
   });
 });

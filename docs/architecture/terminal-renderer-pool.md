@@ -20,7 +20,7 @@ The pool lives in `src/modules/terminal/lib/rendererPool.ts`.
 When a leaf becomes hidden:
 
 1. `parkLeafSlot` sets the host to `display:none`. Rendering pauses but the live buffer keeps receiving bytes.
-2. If the leaf is **busy** (foreground command, agent signal, alt-screen TUI, or block-shell running mode), it keeps the slot parked indefinitely.
+2. If the leaf is **busy** (foreground command or alt-screen TUI), it keeps the slot parked indefinitely.
 3. If the leaf is **idle**, `releaseSlot` is called after `HIDDEN_RELEASE_DELAY_MS`. The slot's `currentLeafId` is cleared and `retainedLeafId` is set so the buffer stays live.
 
 When the leaf becomes visible again, `acquireSlot` looks for:
@@ -36,9 +36,9 @@ When the leaf becomes visible again, `acquireSlot` looks for:
 
 ## The never-serialize-mid-command invariant
 
-This is the most important rule in the pool. A leaf that is in the middle of a command must **never** be serialized. Replaying incremental TUI repaints over a stale snapshot is what used to wipe Claude Code.
+This is the most important rule in the pool. A leaf that is in the middle of a command must **never** be serialized. Replaying incremental TUI repaints over a stale snapshot can corrupt a full-screen TUI.
 
-The code enforces this by checking `isLeafBusy` before eviction and by keeping slots parked (not released) while `commandRunning`, `isAgentActivePty`, or alt-screen is true.
+The code enforces this by checking `isLeafBusy` before eviction and by keeping slots parked (not released) while `commandRunning` or alt-screen is true.
 
 ## Fast path and snapshot replay
 
