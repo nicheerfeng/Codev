@@ -19,6 +19,8 @@ const ZH: Record<string, string> = {
   "Command Palette": "命令面板",
   Contents: "内容",
   "Copy Relative Path": "复制相对路径",
+  Copy: "复制",
+  Cut: "剪切",
   Dark: "深色",
   Delete: "删除",
   Editor: "编辑器",

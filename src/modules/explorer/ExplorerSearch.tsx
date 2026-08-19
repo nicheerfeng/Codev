@@ -48,6 +48,8 @@ type Props = {
   rootPath: string;
   onOpenFile: (path: string) => void;
   onAddAsRoot?: (path: string) => void;
+  onCopyPaths?: (paths: string[]) => void;
+  onCutPaths?: (paths: string[]) => void;
   selectedPaths?: string[];
   onSelectPath?: (path: string, multi: boolean) => void;
   open: boolean;
@@ -73,6 +75,8 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
       rootPath,
       onOpenFile,
       onAddAsRoot,
+      onCopyPaths,
+      onCutPaths,
       selectedPaths = [],
       onSelectPath,
       open,
@@ -253,7 +257,10 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
               {error ? (
                 <div className="flex flex-col gap-1 px-3 py-2 text-[11px] text-destructive">
                   <span>{t("Search failed")}</span>
-                  <span className="truncate text-[10px] text-destructive/70" title={error}>
+                  <span
+                    className="truncate text-[10px] text-destructive/70"
+                    title={error}
+                  >
                     {error}
                   </span>
                   <button
@@ -364,6 +371,22 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
                         >
                           {t("Reveal in Finder")}
                         </ContextMenuItem>
+                        {onCopyPaths && (
+                          <ContextMenuItem
+                            className={COMPACT_ITEM}
+                            onSelect={() => onCopyPaths(menuPaths)}
+                          >
+                            {t("Copy")}
+                          </ContextMenuItem>
+                        )}
+                        {onCutPaths && (
+                          <ContextMenuItem
+                            className={COMPACT_ITEM}
+                            onSelect={() => onCutPaths(menuPaths)}
+                          >
+                            {t("Cut")}
+                          </ContextMenuItem>
+                        )}
                         <ContextMenuSeparator className="my-0.5" />
                         <ContextMenuItem
                           className={COMPACT_ITEM}
