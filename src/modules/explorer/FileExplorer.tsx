@@ -71,8 +71,10 @@ function basename(path: string): string {
 /** 为文件树空白区域提供稳定的添加工作区目录菜单。 */
 function EmptyExplorerContextMenu({
   onAddFolder,
+  onPaste,
 }: {
   onAddFolder: () => void;
+  onPaste?: () => void;
 }) {
   const t = useT();
   return (
@@ -81,6 +83,11 @@ function EmptyExplorerContextMenu({
         <div className="min-h-8 min-w-0 flex-1" data-explorer-empty="" />
       </ContextMenuTrigger>
       <ContextMenuContent className={COMPACT_CONTENT}>
+        {onPaste ? (
+          <ContextMenuItem className={COMPACT_ITEM} onSelect={onPaste}>
+            {t("Paste")}
+          </ContextMenuItem>
+        ) : null}
         <ContextMenuItem className={COMPACT_ITEM} onSelect={onAddFolder}>
           {t("Add folder to workspace")}
         </ContextMenuItem>
@@ -97,6 +104,7 @@ function RootSection({
   onRemove,
   onCopy,
   onAddFolder,
+  onPaste,
   children,
 }: {
   root: string;
@@ -105,6 +113,7 @@ function RootSection({
   onRemove: () => void;
   onCopy: () => void;
   onAddFolder: () => void;
+  onPaste?: () => void;
   children: React.ReactNode;
 }) {
   const t = useT();
@@ -169,6 +178,11 @@ function RootSection({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent className={COMPACT_CONTENT}>
+          {onPaste ? (
+            <ContextMenuItem className={COMPACT_ITEM} onSelect={onPaste}>
+              {t("Paste")}
+            </ContextMenuItem>
+          ) : null}
           <ContextMenuItem className={COMPACT_ITEM} onSelect={onAddFolder}>
             {t("Add folder to workspace")}
           </ContextMenuItem>
@@ -205,12 +219,11 @@ export const FileExplorer = memo(
       paths: string[];
       mode: "copy" | "move";
     } | null>(null);
-    const [pendingCutId, setPendingCutId] = useState<number | null>(null);
     const transfer = useFileTransfer();
     const selectedMeta = useSelectedFileMeta(selectedPaths);
     const containerRef = useRef<HTMLDivElement>(null);
     const treeRefs = useRef<Map<string, RootTreeHandle>>(new Map());
-    const refreshedTransferIds = useRef<Set<number>>(new Set());
+    const refreshedTransferIds = useRef<Set<string>>(new Set());
     const { onPathDeleted } = treeProps;
 
     /** 将文件路径转换为当前文件树内部可执行的父目录。 */
@@ -220,28 +233,31 @@ export const FileExplorer = memo(
     }, []);
 
     /** 将选中路径放入应用内复制剪切板，不写入系统文本剪贴板。 */
-    const copyPaths = useCallback((paths: string[]) => {
-      if (paths.length === 0) return;
-      setClipboard({ paths: [...new Set(paths)], mode: "copy" });
-      toast.success(`已复制 ${paths.length} 项`);
-    }, []);
+    const copyPaths = useCallback(
+      (paths: string[]) => {
+        if (paths.length === 0) return;
+        transfer.clear();
+        setClipboard({ paths: [...new Set(paths)], mode: "copy" });
+        toast.success(`已复制 ${paths.length} 项`);
+      },
+      [transfer.clear],
+    );
 
     /** 将选中路径放入应用内剪切剪贴板。 */
-    const cutPaths = useCallback((paths: string[]) => {
-      if (paths.length === 0) return;
-      setClipboard({ paths: [...new Set(paths)], mode: "move" });
-      toast.success(`已剪切 ${paths.length} 项`);
-    }, []);
+    const cutPaths = useCallback(
+      (paths: string[]) => {
+        if (paths.length === 0) return;
+        transfer.clear();
+        setClipboard({ paths: [...new Set(paths)], mode: "move" });
+        toast.success(`已剪切 ${paths.length} 项`);
+      },
+      [transfer.clear],
+    );
 
     /** 将复制、剪切和拖拽统一提交到后台迁移任务。 */
     const startTransfer = useCallback(
       (sources: string[], toDir: string, copy: boolean) => {
-        void transfer
-          .start(sources, toDir, copy ? "copy" : "move")
-          .then((id) => {
-            if (!copy && id != null) setPendingCutId(id);
-          })
-          .catch((error) => toast.error(`迁移启动失败：${String(error)}`));
+        void transfer.start(sources, toDir, copy ? "copy" : "move");
       },
       [transfer.start],
     );
@@ -274,35 +290,36 @@ export const FileExplorer = memo(
     );
 
     /** 通过 Ctrl+V 将应用内剪切板迁移到当前选中的目录。 */
-    const pasteClipboard = useCallback(async () => {
-      if (!clipboard || clipboard.paths.length === 0) return;
-      const selected = selectedPaths[selectedPaths.length - 1];
-      const destination = selected ?? activeRoot ?? roots[0];
-      if (!destination) return;
-      try {
-        const stat = await invoke<{ kind: "file" | "dir" | "symlink" }>(
-          "fs_stat",
-          { path: destination, workspace: currentWorkspaceEnv() },
-        );
-        const toDir =
-          stat.kind === "dir" ? destination : parentPath(destination);
-        const id = await transfer.start(
-          clipboard.paths,
-          toDir,
-          clipboard.mode === "copy" ? "copy" : "move",
-        );
-        if (clipboard.mode === "move" && id != null) setPendingCutId(id);
-      } catch (error) {
-        toast.error(`迁移启动失败：${String(error)}`);
-      }
-    }, [
-      activeRoot,
-      clipboard,
-      parentPath,
-      roots,
-      selectedPaths,
-      transfer.start,
-    ]);
+    const pasteClipboard = useCallback(
+      async (targetDirectory?: string) => {
+        if (!clipboard || clipboard.paths.length === 0) return;
+        const selected = selectedPaths[selectedPaths.length - 1];
+        const destination =
+          targetDirectory ?? selected ?? activeRoot ?? roots[0];
+        if (!destination) return;
+        try {
+          let toDir = targetDirectory;
+          if (!toDir) {
+            const stat = await invoke<{ kind: "file" | "dir" | "symlink" }>(
+              "fs_stat",
+              { path: destination, workspace: currentWorkspaceEnv() },
+            );
+            toDir = stat.kind === "dir" ? destination : parentPath(destination);
+          }
+          const result = await transfer.start(
+            clipboard.paths,
+            toDir,
+            clipboard.mode === "copy" ? "copy" : "move",
+          );
+          if (clipboard.mode === "move" && result?.status === "completed") {
+            setClipboard(null);
+          }
+        } catch (error) {
+          toast.error(`迁移启动失败：${String(error)}`);
+        }
+      },
+      [activeRoot, clipboard, parentPath, roots, selectedPaths, transfer.start],
+    );
 
     /** 仅在文件树获得焦点时接管复制、剪切、粘贴快捷键。 */
     const handleExplorerKeyDown = useCallback(
@@ -328,17 +345,6 @@ export const FileExplorer = memo(
       },
       [clipboard, copyPaths, cutPaths, pasteClipboard, selectedPaths],
     );
-
-    useEffect(() => {
-      if (
-        pendingCutId != null &&
-        transfer.event?.id === pendingCutId &&
-        transfer.event.status === "completed"
-      ) {
-        setClipboard(null);
-        setPendingCutId(null);
-      }
-    }, [pendingCutId, transfer.event]);
 
     useEffect(() => {
       const current = transfer.event;
@@ -524,6 +530,14 @@ export const FileExplorer = memo(
             </div>
           </ContextMenuTrigger>
           <ContextMenuContent className={COMPACT_CONTENT}>
+            {clipboard && activeRoot ? (
+              <ContextMenuItem
+                className={COMPACT_ITEM}
+                onSelect={() => void pasteClipboard(activeRoot)}
+              >
+                {t("Paste")}
+              </ContextMenuItem>
+            ) : null}
             <ContextMenuItem
               className={COMPACT_ITEM}
               onSelect={requestAddFolder}
@@ -594,6 +608,9 @@ export const FileExplorer = memo(
                 onRemove={() => removeRoot(root)}
                 onCopy={() => void copyToClipboard(root)}
                 onAddFolder={requestAddFolder}
+                onPaste={
+                  clipboard ? () => void pasteClipboard(root) : undefined
+                }
               >
                 <RootTree
                   ref={(h) => {
@@ -613,16 +630,30 @@ export const FileExplorer = memo(
                   onCopyPaths={copyPaths}
                   onCutPaths={cutPaths}
                   onDeletePaths={deletePaths}
+                  clipboardAvailable={clipboard != null}
+                  onPasteTo={(path) => void pasteClipboard(path)}
                   sharedScroll
                 />
               </RootSection>
             ))}
-            <EmptyExplorerContextMenu onAddFolder={requestAddFolder} />
+            <EmptyExplorerContextMenu
+              onAddFolder={requestAddFolder}
+              onPaste={
+                clipboard && activeRoot
+                  ? () => void pasteClipboard(activeRoot)
+                  : undefined
+              }
+            />
           </div>
         )}
         <ExplorerStatusBar
           transfer={transfer.event}
           selectedMeta={selectedMeta}
+          clipboard={
+            clipboard
+              ? { mode: clipboard.mode, count: clipboard.paths.length }
+              : null
+          }
           onCancel={() => void transfer.cancel()}
           onUndo={() => void transfer.undo()}
           onClear={transfer.clear}

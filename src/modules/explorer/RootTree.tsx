@@ -68,6 +68,8 @@ export type RootTreeProps = {
   onCutPaths?: (paths: string[]) => void;
   /** Deletes selected paths through the shared explorer action. */
   onDeletePaths?: (paths: string[]) => void;
+  clipboardAvailable?: boolean;
+  onPasteTo?: (directory: string) => void;
   onRevealInTerminal?: (path: string) => void;
   /** Adds the target folder to the workspace roots (multi-root). */
   onAddAsRoot?: (path: string) => void;
@@ -209,6 +211,8 @@ export const RootTree = memo(
       onCopyPaths,
       onCutPaths,
       onDeletePaths,
+      clipboardAvailable = false,
+      onPasteTo,
       onRevealInTerminal,
       onAddAsRoot,
       onRequestAddRoot,
@@ -658,6 +662,8 @@ export const RootTree = memo(
           onAddAsRoot={onAddAsRoot}
           onCopyPaths={onCopyPaths}
           onCutPaths={onCutPaths}
+          clipboardAvailable={clipboardAvailable}
+          onPasteTo={onPasteTo}
           selectedPaths={selectedPaths}
           onSelectPath={selectPath}
         />
@@ -851,6 +857,14 @@ export const RootTree = memo(
                       {t("Cut")}
                     </ContextMenuItem>
                   )}
+                  {clipboardAvailable && onPasteTo && menuTarget.isDir ? (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={() => onPasteTo(menuTarget.path)}
+                    >
+                      {t("Paste")}
+                    </ContextMenuItem>
+                  ) : null}
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     disabled={menuPaths.length > 1}
@@ -929,6 +943,14 @@ export const RootTree = memo(
                 </>
               ) : (
                 <>
+                  {clipboardAvailable && onPasteTo ? (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={() => onPasteTo(rootPath)}
+                    >
+                      {t("Paste")}
+                    </ContextMenuItem>
+                  ) : null}
                   {onRequestAddRoot && (
                     <ContextMenuItem
                       className={COMPACT_ITEM}

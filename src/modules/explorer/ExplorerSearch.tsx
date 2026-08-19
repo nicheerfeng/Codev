@@ -50,6 +50,8 @@ type Props = {
   onAddAsRoot?: (path: string) => void;
   onCopyPaths?: (paths: string[]) => void;
   onCutPaths?: (paths: string[]) => void;
+  clipboardAvailable?: boolean;
+  onPasteTo?: (directory: string) => void;
   selectedPaths?: string[];
   onSelectPath?: (path: string, multi: boolean) => void;
   open: boolean;
@@ -77,6 +79,8 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
       onAddAsRoot,
       onCopyPaths,
       onCutPaths,
+      clipboardAvailable = false,
+      onPasteTo,
       selectedPaths = [],
       onSelectPath,
       open,
@@ -387,6 +391,14 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
                             {t("Cut")}
                           </ContextMenuItem>
                         )}
+                        {clipboardAvailable && onPasteTo && hit.is_dir ? (
+                          <ContextMenuItem
+                            className={COMPACT_ITEM}
+                            onSelect={() => onPasteTo(hit.path)}
+                          >
+                            {t("Paste")}
+                          </ContextMenuItem>
+                        ) : null}
                         <ContextMenuSeparator className="my-0.5" />
                         <ContextMenuItem
                           className={COMPACT_ITEM}

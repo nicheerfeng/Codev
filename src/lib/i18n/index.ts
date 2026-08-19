@@ -21,6 +21,7 @@ const ZH: Record<string, string> = {
   "Copy Relative Path": "复制相对路径",
   Copy: "复制",
   Cut: "剪切",
+  Paste: "粘贴",
   Dark: "深色",
   Delete: "删除",
   Editor: "编辑器",

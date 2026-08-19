@@ -5,6 +5,7 @@ import { formatFileSize, formatModifiedTime } from "./lib/useSelectedFileMeta";
 type Props = {
   transfer: TransferEvent | null;
   selectedMeta: SelectedFileMeta | null;
+  clipboard: { mode: "copy" | "move"; count: number } | null;
   onCancel: () => void;
   onUndo: () => void;
   onClear: () => void;
@@ -17,18 +18,12 @@ function basename(path: string | null): string {
   return parts[parts.length - 1] ?? path;
 }
 
-/** 将字节或条目进度转换为 0 到 100 的整数百分比。 */
+/** 将已知字节进度转换为 0 到 100 的整数百分比。 */
 function progressOf(transfer: TransferEvent): number | null {
   if (transfer.totalBytes > 0) {
     return Math.min(
       100,
       Math.round((transfer.doneBytes / transfer.totalBytes) * 100),
-    );
-  }
-  if (transfer.totalItems > 0) {
-    return Math.min(
-      100,
-      Math.round((transfer.doneItems / transfer.totalItems) * 100),
     );
   }
   return null;
@@ -38,15 +33,29 @@ function progressOf(transfer: TransferEvent): number | null {
 export function ExplorerStatusBar({
   transfer,
   selectedMeta,
+  clipboard,
   onCancel,
   onUndo,
   onClear,
 }: Props) {
   const active =
-    transfer?.status === "preparing" ||
-    transfer?.status === "running" ||
-    transfer?.status === "cancelling";
+    transfer?.status === "running" || transfer?.status === "cancelling";
   const percent = transfer ? progressOf(transfer) : null;
+  const operation =
+    transfer?.mode === "copy"
+      ? "复制"
+      : transfer?.mode === "move"
+        ? "移动"
+        : "撤销";
+  const activeLabel = transfer
+    ? transfer.status === "cancelling"
+      ? "正在停止"
+      : transfer.phase === "committing"
+        ? `正在提交${operation}`
+        : transfer.phase === "undoing"
+          ? "正在撤销"
+          : `${operation} ${percent == null ? formatFileSize(transfer.doneBytes) : `${percent}%`}`
+    : "";
   const metadata = selectedMeta
     ? `${selectedMeta.count} 项 · ${selectedMeta.fileCount} 个文件 · ${formatFileSize(selectedMeta.countedBytes)} · 最新 ${formatModifiedTime(selectedMeta.latestMtime)}${selectedMeta.skippedLargeCount ? ` · ${selectedMeta.skippedLargeCount} 个大文件未统计` : ""}`
     : "就绪";
@@ -59,13 +68,7 @@ export function ExplorerStatusBar({
       >
         {active ? (
           <span className="inline-flex min-w-0 items-center gap-1.5">
-            <span className="shrink-0 text-foreground">
-              {transfer.status === "preparing"
-                ? "准备迁移"
-                : transfer.status === "cancelling"
-                  ? "正在停止"
-                  : `迁移 ${percent == null ? "…" : `${percent}%`}`}
-            </span>
+            <span className="shrink-0 text-foreground">{activeLabel}</span>
             <span className="truncate">{basename(transfer.currentPath)}</span>
           </span>
         ) : transfer?.status === "failed" ? (
@@ -75,7 +78,12 @@ export function ExplorerStatusBar({
         ) : transfer?.status === "cancelled" ? (
           <span className="text-amber-500">迁移已停止</span>
         ) : transfer?.status === "completed" ? (
-          <span className="text-foreground">迁移完成</span>
+          <span className="text-foreground">{operation}完成</span>
+        ) : clipboard ? (
+          <span className="text-foreground">
+            已{clipboard.mode === "copy" ? "复制" : "剪切"} {clipboard.count}{" "}
+            项，选择目标目录后粘贴
+          </span>
         ) : (
           <span
             title={
@@ -88,7 +96,7 @@ export function ExplorerStatusBar({
           </span>
         )}
       </div>
-      {active ? (
+      {active && transfer.mode !== "undo" && transfer.phase !== "committing" ? (
         <button
           type="button"
           className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-foreground hover:bg-accent"
@@ -105,7 +113,7 @@ export function ExplorerStatusBar({
         >
           撤销
         </button>
-      ) : transfer && transfer.status !== "preparing" ? (
+      ) : transfer && !active ? (
         <button
           type="button"
           className="shrink-0 rounded px-1.5 py-0.5 text-[10px] hover:bg-accent"
