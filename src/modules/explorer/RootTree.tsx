@@ -50,6 +50,7 @@ export type RootTreeHandle = {
   createFile: () => void;
   createFolder: () => void;
   refresh: () => void;
+  refreshPath: (path: string) => void;
 };
 
 export type RootTreeProps = {
@@ -420,6 +421,7 @@ export const RootTree = memo(
         refresh: () => {
           if (rootPath) tree.refresh(rootPath);
         },
+        refreshPath: (path: string) => tree.refresh(path),
       }),
       [
         entryPaths,

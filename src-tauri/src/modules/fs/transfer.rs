@@ -260,14 +260,7 @@ fn execute(
         let name = source
             .file_name()
             .ok_or_else(|| transfer_error("invalid_source", &source, "源路径无效".to_string()))?;
-        let target = destination.join(name);
-        if !names.insert(name.to_string_lossy().to_lowercase()) || target.exists() {
-            return Err(transfer_error(
-                "target_exists",
-                &target,
-                "目标位置已存在同名文件或文件夹".to_string(),
-            ));
-        }
+        let target = allocate_target(&destination, name, mode, &mut names)?;
         if source == target || inside(&target, &source) {
             return Err(transfer_error(
                 "recursive_target",
@@ -367,6 +360,49 @@ fn undo(record: UndoRecord) -> Result<(), TransferError> {
         rename_all(&items)?;
     }
     Ok(())
+}
+
+/// 为复制操作寻找不冲突的 `名称 (1)`、`名称 (2)` 目标名。
+fn allocate_target(
+    destination: &Path,
+    name: &std::ffi::OsStr,
+    mode: TransferMode,
+    names: &mut HashSet<String>,
+) -> Result<PathBuf, TransferError> {
+    let original = destination.join(name);
+    if matches!(mode, TransferMode::Move) {
+        let key = original.to_string_lossy().to_lowercase();
+        if original.exists() || !names.insert(key) {
+            return Err(transfer_error(
+                "target_exists",
+                &original,
+                "目标位置已存在同名文件或文件夹".to_string(),
+            ));
+        }
+        return Ok(original);
+    }
+
+    let stem = Path::new(name).file_stem().unwrap_or(name);
+    let extension = Path::new(name).extension();
+    for index in 0u64.. {
+        let candidate_name = if index == 0 {
+            name.to_os_string()
+        } else {
+            let suffix = format!("{} ({index})", stem.to_string_lossy());
+            let mut candidate = std::ffi::OsString::from(suffix);
+            if let Some(extension) = extension {
+                candidate.push(".");
+                candidate.push(extension);
+            }
+            candidate
+        };
+        let candidate = destination.join(candidate_name);
+        let key = candidate.to_string_lossy().to_lowercase();
+        if !candidate.exists() && names.insert(key) {
+            return Ok(candidate);
+        }
+    }
+    unreachable!("copy name counter exhausted")
 }
 
 /// 批量重命名并在失败时恢复已提交条目。
@@ -633,7 +669,7 @@ mod tests {
             "collision",
             vec![text(&source)],
             text(destination.path()),
-            TransferMode::Copy,
+            TransferMode::Move,
             WorkspaceEnv::from_option(None),
             None,
             &AtomicBool::new(false),
@@ -647,6 +683,35 @@ mod tests {
         assert_eq!(
             fs::read(destination.path().join("same.txt")).unwrap(),
             b"keep"
+        );
+    }
+
+    #[test]
+    fn same_directory_copy_allocates_numbered_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("note.md");
+        fs::write(&source, b"note").unwrap();
+        fs::write(directory.path().join("note (1).md"), b"old").unwrap();
+
+        let entries = execute(
+            "numbered-copy",
+            vec![text(&source)],
+            text(directory.path()),
+            TransferMode::Copy,
+            WorkspaceEnv::from_option(None),
+            None,
+            &AtomicBool::new(false),
+        )
+        .expect("numbered copy");
+
+        assert_eq!(entries[0].target.file_name().unwrap(), "note (2).md");
+        assert_eq!(
+            fs::read(directory.path().join("note (2).md")).unwrap(),
+            b"note"
+        );
+        assert_eq!(
+            fs::read(directory.path().join("note (1).md")).unwrap(),
+            b"old"
         );
     }
 }
