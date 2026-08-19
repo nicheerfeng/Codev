@@ -1,12 +1,11 @@
 pub mod modules;
 
-use modules::{fs, history, lsp, pty, shell, workspace};
+use modules::{fs, history, pty, workspace};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 #[cfg(target_os = "macos")]
 use tauri::{PhysicalPosition, WindowEvent};
-use tauri_plugin_window_state::StateFlags;
 
 /// Drained on first read so HMR / re-mounts can't replay the launch dir.
 #[derive(Default)]
@@ -77,29 +76,23 @@ fn parse_launch_target() -> LaunchTarget {
     resolve_launch_target(entries)
 }
 
+/// 打开并居中单页面设置窗口。
 #[tauri::command]
-async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Result<(), String> {
-    let url_path = match tab.as_deref() {
-        Some(t) if !t.is_empty() => format!("settings.html?tab={}", t),
-        _ => "settings.html".to_string(),
-    };
+async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+    let url_path = "settings.html".to_string();
 
     if let Some(window) = app.get_webview_window("settings") {
         let _ = window.set_always_on_top(true);
         let _ = window.show();
         let _ = window.set_focus();
-        if let Some(t) = tab.as_deref().filter(|s| !s.is_empty()) {
-            // emit() serializes via JSON — no string-escape footgun, unlike
-            // eval() with format!(). Frontend listens via Tauri event API.
-            let _ = window.emit("terax:settings-tab", t);
-        }
+        let _ = window.center();
         return Ok(());
     }
 
     let builder = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App(url_path.into()))
         .title("Settings")
-        .inner_size(900.0, 700.0)
-        .min_inner_size(820.0, 620.0)
+        .inner_size(760.0, 620.0)
+        .min_inner_size(680.0, 500.0)
         .resizable(true)
         .visible(false)
         // Keep settings above the main app window so it doesn't get hidden
@@ -126,7 +119,8 @@ async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Res
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     let builder = builder.decorations(false).transparent(true);
 
-    let _window = builder.build().map_err(|e| e.to_string())?;
+    let window = builder.build().map_err(|e| e.to_string())?;
+    let _ = window.center();
 
     // Some Linux compositors (GNOME/Mutter with CSD-by-default) ignore the
     // builder-time decorations flag — re-assert it after realize.
@@ -165,16 +159,7 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
     builder
-        .plugin(tauri_plugin_process::init())
-        // Skip restoring VISIBLE — frontend calls window.show() after first
-        // paint so the user never sees a transparent window-shadow flash on
-        // Windows/Linux.
-        .plugin(
-            tauri_plugin_window_state::Builder::new()
-                .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
-                .build(),
-        )
-        .plugin(tauri_plugin_autostart::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_os::init())
         .plugin(
@@ -203,10 +188,8 @@ pub fn run() {
             Ok(())
         })
         .manage(pty::PtyState::default())
-        .manage(shell::ShellState::default())
         .manage(fs::watch::FsWatchState::default())
         .manage(history::HistoryState::default())
-        .manage(lsp::LspState::default())
         .manage(fs::grep::ContentSearchState::default())
         .manage({
             let registry = workspace::WorkspaceRegistry::default();
@@ -230,7 +213,6 @@ pub fn run() {
             pty::pty_list_shells,
             fs::tree::list_subdirs,
             fs::tree::fs_read_dir,
-            fs::tree::fs_list_drives,
             fs::file::fs_read_file,
             fs::file::fs_write_file,
             fs::file::fs_stat,
@@ -242,25 +224,11 @@ pub fn run() {
             fs::mutate::fs_copy,
             fs::watch::fs_watch_add,
             fs::watch::fs_watch_remove,
-            lsp::lsp_detect,
-            lsp::lsp_host_pid,
-            lsp::lsp_resolve_root,
-            lsp::lsp_spawn,
-            lsp::lsp_send,
-            lsp::lsp_kill,
             fs::search::fs_search,
             fs::search::fs_list_files,
             fs::grep::fs_grep,
             fs::grep::fs_grep_interactive,
             fs::grep::fs_glob,
-            shell::shell_run_command,
-            shell::shell_session_open,
-            shell::shell_session_run,
-            shell::shell_session_close,
-            shell::shell_bg_spawn,
-            shell::shell_bg_logs,
-            shell::shell_bg_kill,
-            shell::shell_bg_list,
             workspace::wsl_list_distros,
             workspace::wsl_default_distro,
             workspace::wsl_home,
@@ -276,15 +244,8 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
+        .run(|_app, event| {
             match event {
-                // Servers exit on stdin EOF, but destructors are not guaranteed
-                // on process exit; kill explicitly.
-                tauri::RunEvent::Exit => {
-                    if let Some(state) = app.try_state::<lsp::LspState>() {
-                        state.kill_all();
-                    }
-                }
                 // macOS delivers "Open With" files here, not as argv (cold and
                 // warm start, several at once). Seed the drain-once state and
                 // emit; canonicalize so the /tmp -> /private/tmp symlink can't
@@ -303,17 +264,17 @@ pub fn run() {
                         return;
                     }
                     if let Some(dir) = &target.dir {
-                        if let Some(registry) = app.try_state::<workspace::WorkspaceRegistry>() {
+                        if let Some(registry) = _app.try_state::<workspace::WorkspaceRegistry>() {
                             let _ = registry.authorize(dir);
                         }
-                        if let Some(state) = app.try_state::<LaunchDir>() {
+                        if let Some(state) = _app.try_state::<LaunchDir>() {
                             *state.0.lock().expect("LaunchDir mutex poisoned") = Some(dir.clone());
                         }
                     }
-                    if let Some(state) = app.try_state::<LaunchFiles>() {
+                    if let Some(state) = _app.try_state::<LaunchFiles>() {
                         *state.0.lock().expect("LaunchFiles mutex poisoned") = target.files.clone();
                     }
-                    let _ = app.emit("terax:open-file", target.files);
+                    let _ = _app.emit("terax:open-file", target.files);
                 }
                 _ => {}
             }

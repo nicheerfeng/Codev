@@ -1,4 +1,4 @@
-/* Token palette for Lezer `classHighlighter` output (chat code blocks).
+/* Token palette for CodeMirror `classHighlighter` output.
  * Class names follow @lezer/highlight defaults: tok-keyword, tok-string, etc.
  * Light/dark split through the existing `.dark` variant. */
 

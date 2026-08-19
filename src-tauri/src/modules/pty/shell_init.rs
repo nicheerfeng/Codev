@@ -52,18 +52,17 @@ fn fish_init_script() -> &'static str {
 pub fn build_command(
     cwd: Option<String>,
     workspace: WorkspaceEnv,
-    blocks: bool,
     shell: Option<String>,
 ) -> Result<CommandBuilder, String> {
     let shell = sanitize_shell_override(shell);
     #[cfg(unix)]
     {
         let _ = workspace;
-        unix::build(cwd, blocks, shell)
+        unix::build(cwd, shell)
     }
     #[cfg(windows)]
     {
-        windows::build(cwd, workspace, blocks, shell)
+        windows::build(cwd, workspace, shell)
     }
 }
 
@@ -105,8 +104,7 @@ pub fn detect_shell_name() -> String {
 pub struct ShellInfo {
     pub name: String,
     pub path: String,
-    /// True when Terax injects OSC 7/133 integration for this shell (cwd
-    /// tracking, command blocks, agent detection). Others spawn bare.
+    /// True when Terax injects OSC 7/133 integration for this shell.
     pub integrated: bool,
 }
 
@@ -144,14 +142,10 @@ fn ensure_utf8_locale(cmd: &mut CommandBuilder) {
 fn apply_common(
     cmd: &mut CommandBuilder,
     cwd: Option<String>,
-    blocks: bool,
 ) {
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERAX_TERMINAL", "1");
-    if blocks {
-        cmd.env("TERAX_BLOCKS", "1");
-    }
     let appimage_overrides = workspace::appimage_env_overrides();
     for (key, value) in appimage_overrides {
         match value {
@@ -284,12 +278,11 @@ mod unix {
 
     pub fn build(
         cwd: Option<String>,
-        blocks: bool,
         shell_override: Option<String>,
     ) -> Result<CommandBuilder, String> {
         let (shell, shell_path) = Shell::resolve(shell_override);
         let mut cmd = CommandBuilder::new(&shell_path);
-        super::apply_common(&mut cmd, cwd, blocks);
+        super::apply_common(&mut cmd, cwd);
         apply_shell_init(&mut cmd, &shell, &shell_path);
         Ok(cmd)
     }
@@ -512,11 +505,10 @@ mod windows {
     pub fn build(
         cwd: Option<String>,
         workspace: WorkspaceEnv,
-        blocks: bool,
         shell: Option<String>,
     ) -> Result<CommandBuilder, String> {
         if let WorkspaceEnv::Wsl { distro } = workspace {
-            let _ = (blocks, shell);
+            let _ = shell;
             return build_wsl(cwd, distro);
         }
         let shell_path = shell
@@ -534,7 +526,7 @@ mod windows {
         let is_bash = shell_name == "bash.exe";
 
         let mut cmd = CommandBuilder::new(&shell_path);
-        super::apply_common(&mut cmd, cwd, blocks);
+        super::apply_common(&mut cmd, cwd);
 
         if is_powershell {
             match prepare_ps_profile() {
@@ -1095,7 +1087,7 @@ mod tests {
     #[test]
     fn common_env_marks_terax_terminal() {
         let mut command = CommandBuilder::new("shell");
-        apply_common(&mut command, None, false);
+        apply_common(&mut command, None);
 
         assert_eq!(
             command.get_env("TERAX_TERMINAL"),

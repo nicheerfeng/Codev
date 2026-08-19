@@ -1,46 +1,21 @@
 # Security
 
-Terax runs shells, reads/writes files, and talks to AI providers, so security bugs matter. If you find one, please tell us before posting it publicly.
+Terax 运行本地 Shell，并通过 Rust 后端读写用户选择的工作区文件。安全问题请不要直接公开提交。
 
 ## Reporting
 
-Email **security@terax.app**. Include:
+请通过项目维护者提供的私密渠道报告问题，附带版本、系统、复现步骤和最小 PoC。不要把未修复的安全问题直接发布到公开 issue。
 
-- What the issue is and what it lets an attacker do
-- Steps to reproduce (a small PoC is great)
-- Version, OS, arch
+## 主要边界
 
-We'll get back to you within a few days. Once it's fixed, we'll credit you in the release notes - unless you'd rather stay anonymous.
+- 前端不直接访问文件系统或进程，所有主机操作经过 Tauri IPC。
+- 文件和目录命令经过工作区授权注册表，路径在 Rust 边界校验。
+- PTY 只在用户打开终端后创建，窗口关闭时释放；Windows 使用 Job Object 管理子进程。
+- 终端 OSC 7/133 只更新当前目录和命令状态，不把终端输出当作可执行代码。
+- Tauri capability 文件限制 WebView 可调用的插件 API。
 
-Please **don't** open a public GitHub issue for security reports.
+## 不承诺的范围
 
-## Supported versions
+Terax 会按用户输入运行本地 Shell 命令，因此不能替用户判断命令本身是否安全。恶意项目文件、恶意 Shell 配置和已被入侵的系统不在应用层保证范围内。
 
-Until `1.0.0`, only the latest minor gets security fixes. See the current version in `package.json` or on the [Releases page](https://github.com/crynta/terax-ai/releases). 
-
-## What's in scope
-
-- The Rust backend in `src-tauri/` (PTY, FS, IPC, plugins)
-- The frontend in `src/` - anywhere untrusted input lands (terminal output, file content, AI tool results, credentials)
-- Release artifacts on GitHub and `terax.app`
-- The auto-updater
-
-## What's not
-
-- Bugs in upstream deps (Tauri, xterm.js, CodeMirror, AI SDKs…) - report those upstream. We'll ship the fix once it's released.
-- Anything that needs an already-compromised machine or a local attacker with shell access
-- Older versions (`< 0.5`)
-
-## What we do to keep things safe
-
-- **API keys** live in the OS keychain via `keyring` - not on disk, not in `localStorage`, not in logs.
-- **No telemetry.** Terax only talks to the network when you ask it to (AI requests, update checks, web preview).
-- **AI tool approval.** File writes and shell commands from the agent need your OK before they run.
-- **No Node in the renderer.** The frontend only reaches the host through the allow-listed Tauri commands.
-- **Signed releases.** Updates are verified before they're applied.
-
-## What we can't promise
-
-- Terax runs whatever you (or the agent) tell it to run, with your permissions. That's kind of the point of a terminal.
-- AI providers see whatever you send them. Read their retention policies.
-- Local LLM endpoints (LM Studio, OpenAI-compatible) are trusted at the network level - only point Terax at servers you control.
+上游依赖漏洞应同步给对应项目；发布版本和依赖状态以仓库当前配置为准。

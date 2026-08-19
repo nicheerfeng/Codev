@@ -6,12 +6,11 @@ import {
 import type {
   EditorTab,
   MarkdownTab,
-  PreviewTab,
   Tab,
   TerminalTab,
 } from "@/modules/tabs/lib/useTabs";
 
-export type SerializedNode =
+type SerializedNode =
   | { kind: "leaf"; cwd?: string; active?: boolean }
   | { kind: "split"; dir: SplitDir; children: SerializedNode[] };
 
@@ -19,24 +18,14 @@ export type SerializedTab =
   | {
       kind: "terminal";
       tree: SerializedNode;
-      blocks?: boolean;
       customTitle?: string;
     }
   | { kind: "editor"; path: string }
-  | { kind: "preview"; url: string }
   | { kind: "markdown"; path: string };
 
 function basename(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
   return parts.length ? parts[parts.length - 1] : path;
-}
-
-function titleFromUrl(url: string): string {
-  try {
-    return new URL(url).host || url;
-  } catch {
-    return url || "preview";
-  }
 }
 
 function serializeNode(node: PaneNode, activeLeafId: number): SerializedNode {
@@ -57,9 +46,7 @@ function serializeNode(node: PaneNode, activeLeafId: number): SerializedNode {
 export function isSerializableTab(tab: Tab): boolean {
   switch (tab.kind) {
     case "terminal":
-      return !tab.private;
     case "editor":
-    case "preview":
     case "markdown":
       return true;
     default:
@@ -74,13 +61,10 @@ function serializeTab(tab: Tab): SerializedTab | null {
       return {
         kind: "terminal",
         tree: serializeNode(tab.paneTree, tab.activeLeafId),
-        ...(tab.blocks && { blocks: true }),
         ...(tab.customTitle !== undefined && { customTitle: tab.customTitle }),
       };
     case "editor":
       return { kind: "editor", path: tab.path };
-    case "preview":
-      return { kind: "preview", url: tab.url };
     case "markdown":
       return { kind: "markdown", path: tab.path };
     default:
@@ -151,7 +135,7 @@ function hydrateTab(
       const { tree, activeLeafId, firstLeafCwd } = hydrateTree(s.tree, allocId);
       const title =
         s.customTitle ??
-        (firstLeafCwd ? basename(firstLeafCwd) : s.blocks ? "blocks" : "shell");
+        (firstLeafCwd ? basename(firstLeafCwd) : "shell");
       return {
         id: allocId(),
         kind: "terminal",
@@ -161,7 +145,6 @@ function hydrateTab(
         cwd: firstLeafCwd,
         paneTree: tree,
         activeLeafId,
-        ...(s.blocks && { blocks: true }),
         ...(s.customTitle !== undefined && { customTitle: s.customTitle }),
       } satisfies TerminalTab;
     }
@@ -176,15 +159,6 @@ function hydrateTab(
         dirty: false,
         preview: false,
       } satisfies EditorTab;
-    case "preview":
-      return {
-        id: allocId(),
-        kind: "preview",
-        spaceId,
-        cold: true,
-        title: titleFromUrl(s.url),
-        url: s.url,
-      } satisfies PreviewTab;
     case "markdown":
       return {
         id: allocId(),

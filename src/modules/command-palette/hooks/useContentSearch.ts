@@ -10,6 +10,7 @@ const DEBOUNCE_MS = 140;
 export type ContentHit = {
   path: string;
   rel: string;
+  root: string;
   line: number;
   text: string;
 };
@@ -21,26 +22,26 @@ type GrepResponse = {
 };
 
 export function useContentSearch(
-  root: string | null,
+  roots: string[],
   term: string,
   enabled: boolean,
 ): AsyncQueryState<ContentHit> {
   const run = useCallback(
     async (q: string): Promise<ContentHit[]> => {
-      if (!root) return [];
+      if (roots.length === 0) return [];
       const res = await invoke<GrepResponse>("fs_grep_interactive", {
         pattern: q,
-        root,
+        roots,
         maxResults: LIMIT,
         workspace: currentWorkspaceEnv(),
       });
       return res.hits;
     },
-    [root],
+    [roots],
   );
 
   return useAsyncQuery({
-    enabled: enabled && !!root,
+    enabled: enabled && roots.length > 0,
     term,
     minLength: CONTENT_SEARCH_MIN_QUERY,
     debounceMs: DEBOUNCE_MS,

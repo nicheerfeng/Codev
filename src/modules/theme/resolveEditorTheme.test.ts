@@ -5,42 +5,53 @@ import type { Theme } from "./types";
 const custom: Theme = {
   id: "my-theme",
   name: "Mine",
-  editorTheme: { dark: "dracula", light: "github-light" },
+  editorTheme: { dark: "codium-dark", light: "codium-light" },
   variants: { dark: {}, light: {} },
 };
 
 describe("resolveEditorThemeId", () => {
   it("returns an explicit pref unchanged, ignoring app theme", () => {
-    expect(resolveEditorThemeId("nord", "kanagawa", [], "dark")).toBe("nord");
-    expect(resolveEditorThemeId("nord", "kanagawa", [], "light")).toBe("nord");
+    expect(resolveEditorThemeId("codium-dark", "catppuccin", [], "dark")).toBe(
+      "codium-dark",
+    );
+    expect(
+      resolveEditorThemeId("codium-light", "catppuccin", [], "light"),
+    ).toBe("codium-light");
   });
 
   it("auto follows the builtin app theme pairing per mode", () => {
-    expect(resolveEditorThemeId("auto", "kanagawa", [], "dark")).toBe("kanagawa");
-    expect(resolveEditorThemeId("auto", "kanagawa", [], "light")).toBe(
-      "kanagawa-lotus",
+    expect(resolveEditorThemeId("auto", "codium-dark", [], "dark")).toBe(
+      "codium-dark",
+    );
+    expect(resolveEditorThemeId("auto", "codium-dark", [], "light")).toBe(
+      "codium-light",
     );
   });
 
   it("auto falls back to the other mode when a pairing is missing", () => {
-    // Dragon only declares a dark pairing.
-    expect(resolveEditorThemeId("auto", "kanagawa-dragon", [], "light")).toBe(
-      "kanagawa-dragon",
+    const darkOnly: Theme = {
+      id: "dark-only",
+      name: "Dark only",
+      editorTheme: { dark: "codium-dark" },
+      variants: { dark: {} },
+    };
+    expect(resolveEditorThemeId("auto", "dark-only", [darkOnly], "light")).toBe(
+      "codium-dark",
     );
   });
 
   it("auto prefers a matching custom theme over builtins", () => {
     expect(resolveEditorThemeId("auto", "my-theme", [custom], "dark")).toBe(
-      "dracula",
+      "codium-dark",
     );
     expect(resolveEditorThemeId("auto", "my-theme", [custom], "light")).toBe(
-      "github-light",
+      "codium-light",
     );
   });
 
   it("auto with an unknown app theme uses the default theme pairing", () => {
     expect(resolveEditorThemeId("auto", "does-not-exist", [], "dark")).toBe(
-      "atomone",
+      "codium-dark",
     );
   });
 
@@ -51,9 +62,11 @@ describe("resolveEditorThemeId", () => {
       editorTheme: { dark: "not-a-real-theme" },
       variants: { dark: {} },
     };
-    expect(resolveEditorThemeId("auto", "bad", [bad], "dark")).toBe("atomone");
+    expect(resolveEditorThemeId("auto", "bad", [bad], "dark")).toBe(
+      "codium-dark",
+    );
     expect(resolveEditorThemeId("auto", "bad", [bad], "light")).toBe(
-      "github-light",
+      "codium-light",
     );
   });
 });

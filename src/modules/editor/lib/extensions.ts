@@ -1,6 +1,5 @@
 import { detectMonoFontFamily } from "@/lib/fonts";
 import { indentUnit } from "@codemirror/language";
-import { lintGutter } from "@codemirror/lint";
 import { search } from "@codemirror/search";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -8,9 +7,7 @@ import { chromeTheme } from "./chromeTheme";
 
 // Compartments allow runtime reconfiguration without rebuilding state.
 export const languageCompartment = new Compartment();
-export const readOnlyCompartment = new Compartment();
 export const wrapCompartment = new Compartment();
-export const lspCompartment = new Compartment();
 export const indentCompartment = new Compartment();
 
 export function indentExtension(unit: string): Extension {
@@ -48,12 +45,11 @@ export function wordWrapExtension(column: number | null): Extension {
 
 // Only what basicSetup doesn't already cover, to avoid duplicate extensions.
 // basicSetup gives us line numbers, fold gutter, history, indentOnInput,
-// bracketMatching, closeBrackets, autocompletion, highlightActiveLine,
-// highlightSelectionMatches and the search keymap.
+// bracketMatching, closeBrackets, highlightActiveLine, highlightSelectionMatches
+// and the search keymap.
 // Singleton: per-pane instances would inject duplicate style modules.
 const SHARED_EXTENSIONS: readonly Extension[] = Object.freeze([
   search({ top: true }),
-  lintGutter(),
   chromeTheme(),
   EditorView.theme({
     "&, &.cm-editor, &.cm-editor.cm-focused": {
@@ -75,9 +71,6 @@ const SHARED_EXTENSIONS: readonly Extension[] = Object.freeze([
     ".cm-gutters": {
       backgroundColor: "transparent !important",
       color: "var(--muted-foreground)",
-    },
-    ".cm-gutter-lint": {
-      width: "0px",
     },
     ".cm-gutter": { backgroundColor: "transparent !important" },
     ".cm-lineNumbers .cm-gutterElement": {

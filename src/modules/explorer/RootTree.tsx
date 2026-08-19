@@ -47,6 +47,9 @@ export type RootTreeHandle = {
   focus: () => void;
   isFocused: () => boolean;
   focusSearch: () => void;
+  createFile: () => void;
+  createFolder: () => void;
+  refresh: () => void;
 };
 
 export type RootTreeProps = {
@@ -58,7 +61,21 @@ export type RootTreeProps = {
   onRevealInTerminal?: (path: string) => void;
   /** Adds the target folder to the workspace roots (multi-root). */
   onAddAsRoot?: (path: string) => void;
+  /** Opens the folder picker from the tree's blank-area context menu. */
+  onRequestAddRoot?: () => void;
+  /** Shares Ctrl/⌘ selection across all explorer roots. */
+  selectedPaths?: string[];
+  /** Updates the shared explorer selection. */
+  onSelectPath?: (path: string, multi: boolean) => void;
+  /** Activates the root when the user interacts with its visible entries. */
+  onActivateRoot?: () => void;
+  /** Hides the per-root toolbar when FileExplorer owns the workspace toolbar. */
+  showToolbar?: boolean;
+  /** Opens a file in the secondary editor group. */
+  onOpenFileToSide?: (path: string) => void;
   pathDropTarget?: TerminalPathDropTarget;
+  /** Renders this root into the explorer's single continuous scroll flow. */
+  sharedScroll?: boolean;
 };
 
 type Row =
@@ -90,11 +107,6 @@ type Row =
 
 const ROW_HEIGHT = 24;
 const OVERSCAN = 8;
-
-function basename(path: string): string {
-  const parts = path.split(/[\\/]/).filter(Boolean);
-  return parts.length ? parts[parts.length - 1] : path;
-}
 
 function parentOf(path: string, fallback: string): string {
   const i = path.lastIndexOf("/");
@@ -184,13 +196,37 @@ export const RootTree = memo(
       onPathDeleted,
       onRevealInTerminal,
       onAddAsRoot,
+      onRequestAddRoot,
+      selectedPaths: selectedPathsProp,
+      onSelectPath: onSelectPathProp,
+      onActivateRoot,
+      showToolbar = true,
+      onOpenFileToSide,
       pathDropTarget,
+      sharedScroll = false,
     },
     ref,
   ) {
     const t = useT();
     const tree = useFileTree(rootPath, { onPathRenamed, onPathDeleted });
-    const [selectedPath, setSelectedPath] = useState<string | null>(null);
+    const [localSelectedPaths, setLocalSelectedPaths] = useState<string[]>([]);
+    const selectedPaths = selectedPathsProp ?? localSelectedPaths;
+    /** 更新文件树选择，支持跨根目录共享 Ctrl/⌘ 多选状态。 */
+    const selectPath = useCallback(
+      (path: string, multi: boolean) => {
+        if (onSelectPathProp) {
+          onSelectPathProp(path, multi);
+          return;
+        }
+        setLocalSelectedPaths((paths) => {
+          if (!multi) return [path];
+          return paths.includes(path)
+            ? paths.filter((item) => item !== path)
+            : [...paths, path];
+        });
+      },
+      [onSelectPathProp],
+    );
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const [isSearchActive, setIsSearchActive] = useState(false);
     const searchRef = useRef<ExplorerSearchHandle>(null);
@@ -214,6 +250,10 @@ export const RootTree = memo(
       tree.renaming,
       tree.pendingCreate,
     ]);
+
+    const selectedPath = [...selectedPaths]
+      .reverse()
+      .find((path) => entryIndexByPath.has(path)) ?? null;
 
     const rowActions = useMemo<RowActions>(
       () => ({
@@ -276,10 +316,13 @@ export const RootTree = memo(
     }, [dropTargetDir, rootPath, tree.expanded, tree.expand]);
 
     useEffect(() => {
-      if (selectedPath && !entryIndexByPath.has(selectedPath)) {
-        setSelectedPath(null);
+      if (selectedPathsProp) return;
+      if (selectedPaths.some((path) => !entryIndexByPath.has(path))) {
+        setLocalSelectedPaths((paths) =>
+          paths.filter((path) => entryIndexByPath.has(path)),
+        );
       }
-    }, [entryIndexByPath, selectedPath]);
+    }, [entryIndexByPath, selectedPaths, selectedPathsProp]);
 
     const virtualizer = useVirtualizer({
       count: rows.length,
@@ -293,9 +336,16 @@ export const RootTree = memo(
       (path: string) => {
         const index = entryIndexByPath.get(path);
         if (index === undefined) return;
+        if (sharedScroll) {
+          const element = [...(scrollRef.current?.querySelectorAll<HTMLElement>("[data-fs-path]") ?? [])].find(
+            (candidate) => candidate.dataset.fsPath === path,
+          );
+          element?.scrollIntoView({ block: "nearest" });
+          return;
+        }
         virtualizer.scrollToIndex(index, { align: "auto" });
       },
-      [entryIndexByPath, virtualizer],
+      [entryIndexByPath, sharedScroll, virtualizer],
     );
 
     const lastSyncedActivePathRef = useRef<string | null>(null);
@@ -308,9 +358,9 @@ export const RootTree = memo(
       }
       if (!entryIndexByPath.has(activeFilePath)) return;
       lastSyncedActivePathRef.current = activeFilePath;
-      setSelectedPath(activeFilePath);
+      selectPath(activeFilePath, false);
       requestAnimationFrame(() => scrollEntryIntoView(activeFilePath));
-    }, [activeFilePath, entryIndexByPath, scrollEntryIntoView]);
+    }, [activeFilePath, entryIndexByPath, scrollEntryIntoView, selectPath]);
 
     useImperativeHandle(
       ref,
@@ -319,7 +369,7 @@ export const RootTree = memo(
           containerRef.current?.focus();
           if (!selectedPath && entryPaths.length > 0) {
             const first = entryPaths[0];
-            setSelectedPath(first);
+            selectPath(first, false);
             requestAnimationFrame(() => scrollEntryIntoView(first));
           }
         },
@@ -333,8 +383,17 @@ export const RootTree = memo(
           setIsSearchOpen(true);
           searchRef.current?.focus();
         },
+        createFile: () => {
+          if (rootPath) tree.beginCreate(rootPath, "file");
+        },
+        createFolder: () => {
+          if (rootPath) tree.beginCreate(rootPath, "dir");
+        },
+        refresh: () => {
+          if (rootPath) tree.refresh(rootPath);
+        },
       }),
-      [entryPaths, scrollEntryIntoView, selectedPath],
+      [entryPaths, scrollEntryIntoView, selectedPath, selectPath, rootPath, tree.beginCreate, tree.refresh],
     );
 
     useGlobalShortcuts({
@@ -383,7 +442,7 @@ export const RootTree = memo(
       const move = (next: number) => {
         const clamped = Math.max(0, Math.min(entryPaths.length - 1, next));
         const path = entryPaths[clamped];
-        setSelectedPath(path);
+        selectPath(path, false);
         requestAnimationFrame(() => scrollEntryIntoView(path));
       };
 
@@ -422,7 +481,7 @@ export const RootTree = memo(
             tree.toggle(row.path);
           } else {
             const parent = row.path.slice(0, row.path.lastIndexOf("/"));
-            if (parent && parent !== rootPath) setSelectedPath(parent);
+            if (parent && parent !== rootPath) selectPath(parent, false);
           }
           break;
         }
@@ -454,11 +513,13 @@ export const RootTree = memo(
               depth={row.depth}
               actions={rowActions}
               renameInProgress={renameInProgress}
-              isSelected={selectedPath === row.path}
+              isSelected={selectedPaths.includes(row.path)}
               isRenaming={row.kind === "rename"}
               isDropTarget={dropTargetDir === row.path}
               onOpenFile={onOpenFile}
-              onSelectPath={setSelectedPath}
+              onSelectPath={(path, multi) => {
+                selectPath(path, multi);
+              }}
             />
           );
         }
@@ -482,67 +543,75 @@ export const RootTree = memo(
       }
     };
 
+    const menuPaths = selectedPaths.length
+      ? selectedPaths
+      : menuTarget
+        ? [menuTarget.path]
+        : [];
+    const copyPathLabel = menuPaths.length > 1 ? "Copy Paths" : "Copy Path";
+    const visibleRows = sharedScroll
+      ? rows.map((row, index) => ({
+          key: row.key,
+          index,
+          start: index * ROW_HEIGHT,
+          size: ROW_HEIGHT,
+        }))
+      : virtualizer.getVirtualItems();
+
     return (
       <div
         ref={containerRef}
-        className="flex h-full flex-col outline-none"
+        className={cn(
+          "min-w-0 outline-none",
+          !sharedScroll && "flex h-full flex-col",
+        )}
         tabIndex={0}
         onKeyDown={handleKeyDown}
+        onPointerDown={onActivateRoot}
       >
-        <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border/60 px-2">
-          <span
-            className="flex flex-1 items-center truncate text-xs font-medium text-foreground/80"
-            title={rootPath}
-          >
-            <img
-              src={folderIconUrl(basename(rootPath), false)}
-              alt=""
-              height={15}
-              width={15}
-              className="mx-1.5"
-            />
-            {basename(rootPath)}
-          </span>
+        {showToolbar ? (
+          <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border/60 px-2">
+            <span className="flex-1" />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6 text-muted-foreground hover:text-foreground"
+              onClick={() => setIsSearchOpen((v) => !v)}
+              title={t("Search files")}
+              aria-label={t("Search files")}
+            >
+              <HugeiconsIcon icon={Search01Icon} size={13} strokeWidth={2} />
+            </Button>
 
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6 text-muted-foreground hover:text-foreground"
-            onClick={() => setIsSearchOpen((v) => !v)}
-            title={t("Search files")}
-            aria-label={t("Search files")}
-          >
-            <HugeiconsIcon icon={Search01Icon} size={13} strokeWidth={2} />
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6 text-muted-foreground hover:text-foreground"
-            onClick={() => tree.beginCreate(rootPath, "file")}
-            title={t("New file")}
-          >
-            <HugeiconsIcon icon={FileAddIcon} size={13} strokeWidth={2} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6 text-muted-foreground hover:text-foreground"
-            onClick={() => tree.beginCreate(rootPath, "dir")}
-            title={t("New folder")}
-          >
-            <HugeiconsIcon icon={FolderAddIcon} size={13} strokeWidth={2} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6 text-muted-foreground hover:text-foreground"
-            onClick={() => tree.refresh(rootPath)}
-            title={t("Refresh")}
-          >
-            <HugeiconsIcon icon={Refresh01Icon} size={12} strokeWidth={2} />
-          </Button>
-        </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6 text-muted-foreground hover:text-foreground"
+              onClick={() => tree.beginCreate(rootPath, "file")}
+              title={t("New file")}
+            >
+              <HugeiconsIcon icon={FileAddIcon} size={13} strokeWidth={2} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6 text-muted-foreground hover:text-foreground"
+              onClick={() => tree.beginCreate(rootPath, "dir")}
+              title={t("New folder")}
+            >
+              <HugeiconsIcon icon={FolderAddIcon} size={13} strokeWidth={2} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6 text-muted-foreground hover:text-foreground"
+              onClick={() => tree.refresh(rootPath)}
+              title={t("Refresh")}
+            >
+              <HugeiconsIcon icon={Refresh01Icon} size={12} strokeWidth={2} />
+            </Button>
+          </div>
+        ) : null}
 
         <ExplorerSearch
           ref={searchRef}
@@ -552,6 +621,9 @@ export const RootTree = memo(
           onRequestClose={() => setIsSearchOpen(false)}
           onActiveChange={setIsSearchActive}
           onRevealInTerminal={onRevealInTerminal}
+          onAddAsRoot={onAddAsRoot}
+          selectedPaths={selectedPaths}
+          onSelectPath={selectPath}
         />
 
         {!isSearchActive ? (
@@ -565,7 +637,9 @@ export const RootTree = memo(
                 ref={scrollRef}
                 data-explorer-drop=""
                 className={cn(
-                  "min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]",
+                  sharedScroll
+                    ? "min-w-0 overflow-visible"
+                    : "min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]",
                   rootIsDropTarget &&
                     "rounded-sm ring-1 ring-inset ring-primary/50",
                 )}
@@ -579,11 +653,18 @@ export const RootTree = memo(
                   const idx =
                     path != null ? entryIndexByPath.get(path) : undefined;
                   const row = idx !== undefined ? rows[idx] : undefined;
-                  setMenuTarget(
-                    row && row.kind === "entry"
-                      ? { path: row.path, name: row.name, isDir: row.isDir }
-                      : null,
-                  );
+                  if (row && row.kind === "entry") {
+                    if (!selectedPaths.includes(row.path)) {
+                      selectPath(row.path, false);
+                    }
+                    setMenuTarget({
+                      path: row.path,
+                      name: row.name,
+                      isDir: row.isDir,
+                    });
+                  } else {
+                    setMenuTarget(null);
+                  }
                   setDeleteConfirm(false);
                   setMenuNonce((n) => n + 1);
                 }}
@@ -625,27 +706,35 @@ export const RootTree = memo(
                 )}
                 {root?.status === "loaded" ? (
                   <div
-                    style={{
-                      height: virtualizer.getTotalSize(),
-                      position: "relative",
-                      width: "100%",
-                    }}
+                    style={
+                      sharedScroll
+                        ? { width: "100%" }
+                        : {
+                            height: virtualizer.getTotalSize(),
+                            position: "relative",
+                            width: "100%",
+                          }
+                    }
                   >
-                    {virtualizer.getVirtualItems().map((virtualRow) => {
+                    {visibleRows.map((virtualRow) => {
                       const row = rows[virtualRow.index];
                       if (!row) return null;
                       return (
                         <div
                           key={virtualRow.key}
                           data-virtual-row-index={virtualRow.index}
-                          style={{
-                            position: "absolute",
-                            top: 0,
-                            left: 0,
-                            width: "100%",
-                            height: virtualRow.size,
-                            transform: `translateY(${virtualRow.start}px)`,
-                          }}
+                          style={
+                            sharedScroll
+                              ? undefined
+                              : {
+                                  position: "absolute",
+                                  top: 0,
+                                  left: 0,
+                                  width: "100%",
+                                  height: virtualRow.size,
+                                  transform: `translateY(${virtualRow.start}px)`,
+                                }
+                          }
                         >
                           {renderRow(row)}
                         </div>
@@ -672,6 +761,14 @@ export const RootTree = memo(
                       {t("Open")}
                     </ContextMenuItem>
                   )}
+                  {!menuTarget.isDir && onOpenFileToSide && (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={() => onOpenFileToSide(menuTarget.path)}
+                    >
+                      {t("Open in Side")}
+                    </ContextMenuItem>
+                  )}
                   {onRevealInTerminal && (
                     <ContextMenuItem
                       className={COMPACT_ITEM}
@@ -686,12 +783,18 @@ export const RootTree = memo(
                       {t("Open in Terminal")}
                     </ContextMenuItem>
                   )}
-                  {menuTarget.isDir && onAddAsRoot && (
+                  {onAddAsRoot && (
                     <ContextMenuItem
                       className={COMPACT_ITEM}
-                      onSelect={() => onAddAsRoot(menuTarget.path)}
+                      onSelect={() =>
+                        onAddAsRoot(
+                          menuTarget.isDir
+                            ? menuTarget.path
+                            : parentOf(menuTarget.path, rootPath),
+                        )
+                      }
                     >
-                      {t("Add to Workspace Roots")}
+                      {t("Add folder to workspace")}
                     </ContextMenuItem>
                   )}
                   <ContextMenuItem
@@ -700,7 +803,7 @@ export const RootTree = memo(
                   >
                     {t("Reveal in Finder")}
                   </ContextMenuItem>
-                  <ContextMenuSeparator />
+                  <ContextMenuSeparator className="my-0.5" />
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     onSelect={() =>
@@ -727,12 +830,12 @@ export const RootTree = memo(
                   >
                     {t("New folder")}
                   </ContextMenuItem>
-                  <ContextMenuSeparator />
+                  <ContextMenuSeparator className="my-0.5" />
                   <ContextMenuItem
                     className={COMPACT_ITEM}
-                    onSelect={() => void copyToClipboard(menuTarget.path)}
+                    onSelect={() => void copyToClipboard(menuPaths.join("\n"))}
                   >
-                    {t("Copy Path")}
+                    {t(copyPathLabel)}
                   </ContextMenuItem>
                   <ContextMenuItem
                     className={COMPACT_ITEM}
@@ -744,7 +847,7 @@ export const RootTree = memo(
                   >
                     {t("Copy Relative Path")}
                   </ContextMenuItem>
-                  <ContextMenuSeparator />
+                  <ContextMenuSeparator className="my-0.5" />
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     variant="destructive"
@@ -764,6 +867,14 @@ export const RootTree = memo(
                 </>
               ) : (
                 <>
+                  {onRequestAddRoot && (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={onRequestAddRoot}
+                    >
+                      {t("Add folder to workspace")}
+                    </ContextMenuItem>
+                  )}
                   {onRevealInTerminal && (
                     <ContextMenuItem
                       className={COMPACT_ITEM}
@@ -778,7 +889,7 @@ export const RootTree = memo(
                   >
                     {t("Reveal in Finder")}
                   </ContextMenuItem>
-                  <ContextMenuSeparator />
+                  <ContextMenuSeparator className="my-0.5" />
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     onSelect={() => tree.beginCreate(rootPath, "file")}
@@ -791,13 +902,24 @@ export const RootTree = memo(
                   >
                     {t("New folder")}
                   </ContextMenuItem>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem
-                    className={COMPACT_ITEM}
-                    onSelect={() => void copyToClipboard(rootPath)}
-                  >
-                    {t("Copy Path")}
-                  </ContextMenuItem>
+                  <ContextMenuSeparator className="my-0.5" />
+                  {menuPaths.length > 0 ? (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={() =>
+                        void copyToClipboard(menuPaths.join("\n"))
+                      }
+                    >
+                      {t(copyPathLabel)}
+                    </ContextMenuItem>
+                  ) : (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={() => void copyToClipboard(rootPath)}
+                    >
+                      {t("Copy Path")}
+                    </ContextMenuItem>
+                  )}
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     onSelect={() => tree.refresh(rootPath)}

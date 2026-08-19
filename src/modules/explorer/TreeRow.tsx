@@ -24,7 +24,7 @@ export type EntryRowProps = {
   isRenaming: boolean;
   isDropTarget?: boolean;
   onOpenFile: (path: string, pin?: boolean) => void;
-  onSelectPath: (path: string) => void;
+  onSelectPath: (path: string, multi: boolean) => void;
 };
 
 function EntryRowImpl(props: EntryRowProps) {
@@ -67,9 +67,12 @@ function EntryRowImpl(props: EntryRowProps) {
     );
   }
 
-  const handleClick = () => {
+  /** 处理文件树普通点击与 Ctrl/⌘ 多选点击。 */
+  const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
     if (renameInProgress) return;
-    onSelectPath(path);
+    const multi = e.ctrlKey || e.metaKey;
+    onSelectPath(path, multi);
+    if (multi) return;
     if (isDir) actions.toggle(path);
     else onOpenFile(path);
   };

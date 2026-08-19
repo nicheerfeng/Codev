@@ -26,8 +26,6 @@ import {
   Cancel01Icon,
   CancelCircleIcon,
   ComputerTerminal02Icon,
-  Globe02Icon,
-  IncognitoIcon,
   PencilEdit02Icon,
   Tick02Icon,
 } from "@hugeicons/core-free-icons";
@@ -42,17 +40,11 @@ import {
 } from "react";
 import { labelFor } from "./lib/tabLabel";
 import type { EditorTab, Tab } from "./lib/useTabs";
-import { NewTabMenu } from "./NewTabMenu";
 
 type Props = {
   tabs: Tab[];
   activeId: number;
   onSelect: (id: number) => void;
-  onNew: () => void;
-  onNewBlock: () => void;
-  onNewPrivate: () => void;
-  onNewPreview: () => void;
-  onNewEditor: () => void;
   onClose: (id: number) => void;
   /** Chrome-style: close every tab to the right of the given tab. */
   onCloseTabsToRight: (id: number) => void;
@@ -65,18 +57,86 @@ type Props = {
   /** Move a dragged tab to a new position (insertion gap index 0..tabs.length). */
   onReorder: (fromId: number, toGapIndex: number) => void;
   onOverrideLanguage?: (id: number, lang: string | null) => void;
+  workspaceRoots?: string[];
+  labelScopeTabs?: Tab[];
+  groupId?: "primary" | "secondary";
+  onMoveToGroup?: (id: number, group: "primary" | "secondary") => void;
   compact?: boolean;
 };
+
+/** 返回文件所属工作区根目录的可读名称。 */
+function workspaceLabelFor(tab: Tab, roots: string[]): string | null {
+  if (tab.kind !== "editor" && tab.kind !== "markdown") return null;
+  const path = tab.path.replace(/\\/g, "/");
+  const root = roots
+    .map((item) => item.replace(/\\/g, "/").replace(/\/+$/, ""))
+    .filter((item) => path === item || path.startsWith(`${item}/`))
+    .sort((a, b) => b.length - a.length)[0];
+  if (!root) return null;
+  const parts = root.split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? null;
+}
+
+/** 返回文件路径中紧邻文件名的父文件夹名称。 */
+function parentFolderFor(tab: Tab): string | null {
+  if (tab.kind !== "editor" && tab.kind !== "markdown") return null;
+  const parts = tab.path.replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 2] ?? null : null;
+}
+
+/** 仅在窗口内出现同名文件时返回最小必要的标签后缀。 */
+function displaySuffixFor(
+  tab: Tab,
+  scopeTabs: Tab[],
+  roots: string[],
+  groupId?: "primary" | "secondary",
+): string | null {
+  if (tab.kind !== "editor" && tab.kind !== "markdown") return null;
+  const name = labelFor(tab);
+  const peers = scopeTabs.filter(
+    (candidate) =>
+      candidate.id !== tab.id &&
+      (candidate.kind === "editor" || candidate.kind === "markdown") &&
+      labelFor(candidate) === name,
+  );
+  if (peers.length === 0) return null;
+
+  const collision = [tab, ...peers];
+  const parentNames = new Set(
+    collision.map(parentFolderFor).filter((value): value is string => value !== null),
+  );
+  const parent = parentFolderFor(tab);
+  if (parentNames.size > 1 && parent) return parent;
+
+  const root = workspaceLabelFor(tab, roots);
+  const rootNames = new Set(
+    collision
+      .map((candidate) => workspaceLabelFor(candidate, roots))
+      .filter((value): value is string => value !== null),
+  );
+  if (rootNames.size > 1 && root) return root;
+
+  const normalizedPath =
+    tab.kind === "editor" || tab.kind === "markdown"
+      ? tab.path.replace(/\\/g, "/")
+      : "";
+  if (
+    groupId &&
+    collision.some(
+      (candidate) =>
+        (candidate.kind === "editor" || candidate.kind === "markdown") &&
+        candidate.path.replace(/\\/g, "/") === normalizedPath,
+    )
+  ) {
+    return groupId === "secondary" ? "侧边" : "主阅览器";
+  }
+  return parent ?? root;
+}
 
 export function TabBar({
   tabs,
   activeId,
   onSelect,
-  onNew,
-  onNewBlock,
-  onNewPrivate,
-  onNewPreview,
-  onNewEditor,
   onClose,
   onCloseTabsToRight,
   onCloseOtherTabs,
@@ -84,6 +144,10 @@ export function TabBar({
   onRename,
   onReorder,
   onOverrideLanguage,
+  workspaceRoots = [],
+  labelScopeTabs = tabs,
+  groupId,
+  onMoveToGroup,
   compact,
 }: Props) {
   const translate = useT();
@@ -98,6 +162,7 @@ export function TabBar({
     startX: number;
     fromId: number;
     active: boolean;
+    targetGroup: "primary" | "secondary" | null;
   } | null>(null);
 
   // Play the enter animation only for tabs opened after the first paint, never
@@ -228,6 +293,12 @@ export function TabBar({
               const isPreview = t.kind === "editor" && t.preview;
               const isActive = t.id === activeId;
               const isNew = !firstRender && !seen.has(t.id);
+              const displaySuffix = displaySuffixFor(
+                t,
+                labelScopeTabs,
+                workspaceRoots,
+                groupId,
+              );
 
               const srcIndex = tabs.findIndex((x) => x.id === draggingId);
               const showGap = (gap: number) =>
@@ -281,6 +352,7 @@ export function TabBar({
                       startX: e.clientX,
                       fromId: t.id,
                       active: false,
+                      targetGroup: null,
                     };
                     e.currentTarget.setPointerCapture(e.pointerId);
                   }}
@@ -294,11 +366,32 @@ export function TabBar({
                       document.body.style.userSelect = "none";
                     }
                     e.preventDefault();
-                    setDropGap(gapAtX(e.clientX));
+                    const target = document
+                      .elementFromPoint(e.clientX, e.clientY)
+                      ?.closest<HTMLElement>("[data-editor-group]")
+                      ?.dataset.editorGroup;
+                    const targetGroup =
+                      target === "primary" || target === "secondary"
+                        ? target
+                        : null;
+                    if (
+                      onMoveToGroup &&
+                      groupId &&
+                      targetGroup &&
+                      targetGroup !== groupId
+                    ) {
+                      st.targetGroup = targetGroup;
+                      setDropGap(null);
+                    } else {
+                      st.targetGroup = null;
+                      setDropGap(gapAtX(e.clientX));
+                    }
                   }}
                   onPointerUp={(e) => {
                     const st = drag.current;
-                    if (st?.active && dropGap !== null) {
+                    if (st?.active && st.targetGroup && onMoveToGroup) {
+                      onMoveToGroup(st.fromId, st.targetGroup);
+                    } else if (st?.active && dropGap !== null) {
                       onReorder(st.fromId, dropGap);
                     } else if (st && !st.active) {
                       onSelect(t.id);
@@ -452,8 +545,15 @@ export function TabBar({
                     )}
                     {/* Preview tabs use italic to signal the transient state,
                         matching the visual convention from VSCode. */}
-                    <span className={cn("truncate", isPreview && "italic")}>
-                      {labelFor(t)}
+                    <span className="flex min-w-0 items-center gap-1 truncate">
+                      <span className={cn("truncate", isPreview && "italic")}>
+                        {labelFor(t)}
+                      </span>
+                      {displaySuffix && (
+                        <span className="shrink-0 text-[10px] text-muted-foreground/70">
+                          · {displaySuffix}
+                        </span>
+                      )}
                     </span>
                     {t.kind === "editor" && t.dirty ? (
                       <span
@@ -462,7 +562,7 @@ export function TabBar({
                       />
                     ) : null}
                   </span>
-                  {tabs.length > 1 && (
+                  {tabs.length > 0 && (
                     <span
                       role="button"
                       aria-label={translate("Close tab")}
@@ -479,7 +579,7 @@ export function TabBar({
                         e.stopPropagation();
                         onClose(t.id);
                       }}
-                      className="rounded p-0.5 opacity-0 transition-opacity hover:bg-accent hover:opacity-100 group-hover:opacity-60"
+                      className="rounded p-0.5 text-muted-foreground/70 transition-opacity hover:bg-accent hover:text-foreground"
                     >
                       <HugeiconsIcon
                         icon={Cancel01Icon}
@@ -571,13 +671,6 @@ export function TabBar({
             })}
           </TabsList>
         </Tabs>
-        <NewTabMenu
-          onNew={onNew}
-          onNewBlock={onNewBlock}
-          onNewPrivate={onNewPrivate}
-          onNewPreview={onNewPreview}
-          onNewEditor={onNewEditor}
-        />
       </div>
     </div>
   );
@@ -611,26 +704,6 @@ export function TabIcon({ tab }: { tab: Tab }) {
         }}
       />
     ) : null;
-  }
-  if (tab.kind === "preview") {
-    return (
-      <HugeiconsIcon
-        icon={Globe02Icon}
-        size={14}
-        strokeWidth={2}
-        className="shrink-0"
-      />
-    );
-  }
-  if (tab.kind === "terminal" && tab.private) {
-    return (
-      <HugeiconsIcon
-        icon={IncognitoIcon}
-        size={14}
-        strokeWidth={2}
-        className="shrink-0"
-      />
-    );
   }
   return (
     <HugeiconsIcon

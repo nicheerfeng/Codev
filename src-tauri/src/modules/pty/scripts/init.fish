@@ -14,12 +14,6 @@ if set -q __TERAX_HOOKS_LOADED
 end
 set -g __TERAX_HOOKS_LOADED 1
 
-if set -q TERAX_CLI; and test -x "$TERAX_CLI"
-    function terax
-        command "$TERAX_CLI" $argv
-    end
-end
-
 # Terax is a clean terminal; drop fish's default startup greeting. A user who
 # sets their own in config.fish (sourced after this) keeps it.
 function fish_greeting
@@ -62,35 +56,17 @@ end
 function __terax_install_prompt
     # ponytail: cover Conda's named wrapper; generalize if another prompt
     # framework preserves Terax indirectly.
-    if not set -q TERAX_BLOCKS
-        and functions -q __fish_prompt_orig
+    if functions -q __fish_prompt_orig
         and functions fish_prompt | string match -q '*__fish_prompt_orig*'
         and functions __fish_prompt_orig | string match -q '*__terax_user_prompt*'
         return
     end
     __terax_capture_user_prompt
-    if set -q TERAX_BLOCKS
-        function fish_right_prompt
-        end
-        function fish_greeting
-        end
-    end
     function fish_prompt
         set -l __terax_status $status
         printf '\e]133;D;%d\e\\' $__terax_status
         printf '\e]7;file://%s%s\e\\' "$__TERAX_HOST" (__terax_urlencode_path "$PWD")
         printf '\e]133;A\e\\'
-        # Block mode: host renders its own input bar, so suppress the shell prompt
-        # (B marker only) and reserve header/gap rows, mirroring zsh.
-        if set -q TERAX_BLOCKS
-            if set -q __terax_block_seen
-                printf '\n\n'
-            else
-                printf '\n'
-            end
-            printf '\e]133;B\e\\'
-            return
-        end
         __terax_restore_status $__terax_status
         if functions -q __terax_user_prompt
             __terax_user_prompt
@@ -103,7 +79,6 @@ end
 __terax_install_prompt
 
 function __terax_preexec --on-event fish_preexec
-    set -g __terax_block_seen 1
     set -l cmd (string replace -ra '[\x00-\x1f\x7f]' ' ' -- "$argv")
     printf '\e]133;C;%s\e\\' (string sub -l 256 -- "$cmd")
 end

@@ -2,52 +2,23 @@ import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import path from "node:path";
-import { defineConfig, type PluginOption, type UserConfig } from "vite";
-import Inspect from "vite-plugin-inspect";
+import { defineConfig } from "vite";
 
 const host = process.env.TAURI_DEV_HOST;
 const rootDir = import.meta.dirname;
 
-// Bundle/treemap analysis is opt-in: `ANALYZE=true pnpm build` emits stats.html.
-const analyze = process.env.ANALYZE === "true";
-
-// Module-graph inspector is opt-in via `pnpm dev:inspect`; keeps plain
-// `pnpm dev` from paying its transform-tracking overhead on every run.
-const inspectGraph = process.env.INSPECT === "true";
-
 // https://vite.dev/config/
-export default defineConfig(async ({ mode }): Promise<UserConfig> => ({
+export default defineConfig({
   plugins: [
     babel({
       presets: [reactCompilerPreset({ target: "19" })],
     }),
     react(),
     tailwindcss(),
-    // Module-graph inspector at /__inspect (who-imports-what, per-plugin
-    // transforms). Opt-in via `pnpm dev:inspect`, never in a production build.
-    ...(mode === "development" && inspectGraph
-      ? [Inspect() as PluginOption]
-      : []),
-    ...(analyze
-      ? [
-          (await import("rollup-plugin-visualizer")).visualizer({
-            filename: "stats.html",
-            template: "treemap",
-            gzipSize: true,
-            brotliSize: true,
-            open: true,
-          }) as PluginOption,
-        ]
-      : []),
   ],
   resolve: {
     alias: {
       "@": path.resolve(rootDir, "./src"),
-      // Shim keeps the ~117 kB CJS protocol package out of the bundle.
-      "vscode-languageserver-protocol": path.resolve(
-        rootDir,
-        "./src/modules/lsp/lib/protocolShim.ts",
-      ),
     },
   },
   build: {
@@ -90,18 +61,6 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => ({
             id.includes("/class-variance-authority/")
           )
             return "react";
-
-          // Each AI provider SDK in its own chunk so unused providers
-          // don't bloat the initial load (lazy-imported in agent.ts).
-          if (id.includes("@ai-sdk/anthropic")) return "ai-anthropic";
-          if (id.includes("@ai-sdk/google")) return "ai-google";
-          if (id.includes("@ai-sdk/openai-compatible"))
-            return "ai-openai-compat";
-          if (id.includes("@ai-sdk/openai")) return "ai-openai";
-          if (id.includes("@ai-sdk/cerebras")) return "ai-cerebras";
-          if (id.includes("@ai-sdk/groq")) return "ai-groq";
-          if (id.includes("@ai-sdk/xai")) return "ai-xai";
-          if (id.includes("@ai-sdk/")) return "ai-sdk-shared";
 
           if (id.includes("/xterm/") || id.includes("@xterm/")) return "xterm";
           // Lang packs and legacy modes are dynamically imported by
@@ -156,4 +115,4 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => ({
       ignored: ["**/src-tauri/**"],
     },
   },
-}));
+});

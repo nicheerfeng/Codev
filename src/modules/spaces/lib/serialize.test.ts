@@ -25,10 +25,9 @@ function term(over: Partial<Extract<Tab, { kind: "terminal" }>>): Tab {
 }
 
 describe("serializeTabs", () => {
-  it("drops private terminals and transient kinds", () => {
+  it("serializes terminal and editor tabs", () => {
     const tabs: Tab[] = [
       term({ id: 1 }),
-      term({ id: 3, private: true }),
       {
         id: 7,
         kind: "editor",
@@ -64,7 +63,7 @@ describe("serializeTabs", () => {
 });
 
 describe("hydrateTabs", () => {
-  it("round-trips structure, cwd, blocks and active leaf", () => {
+  it("round-trips structure, cwd and active leaf", () => {
     const tree: PaneNode = {
       kind: "split",
       id: 10,
@@ -78,7 +77,6 @@ describe("hydrateTabs", () => {
       term({
         paneTree: tree,
         activeLeafId: 12,
-        blocks: true,
         customTitle: "x",
       }),
     ];
@@ -89,7 +87,6 @@ describe("hydrateTabs", () => {
 
     expect(restored.spaceId).toBe("s2");
     expect(restored.cold).toBe(true);
-    expect(restored.blocks).toBe(true);
     expect(restored.customTitle).toBe("x");
     expect(restored.paneTree.kind).toBe("split");
 
@@ -132,17 +129,15 @@ describe("hydrateTabs", () => {
     ).toEqual([]);
   });
 
-  it("hydrates editor/preview/markdown as cold with derived titles", () => {
+  it("hydrates editor and markdown as cold with derived titles", () => {
     const serialized: SerializedTab[] = [
       { kind: "editor", path: "/a/foo.ts" },
-      { kind: "preview", url: "http://localhost:5173/x" },
       { kind: "markdown", path: "/a/README.md" },
     ];
     const out = hydrateTabs(serialized, "s1", counter());
     expect(out.every((t) => t.cold === true)).toBe(true);
     expect(out.map((t) => t.title)).toEqual([
       "foo.ts",
-      "localhost:5173",
       "README.md",
     ]);
   });

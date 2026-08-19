@@ -23,9 +23,6 @@ import { SurfaceLayer } from "./SurfaceLayer";
 import { getBuiltinTheme, getDefaultTheme } from "./themes";
 import type { Theme } from "./types";
 
-export type { Theme };
-export type ThemeModePref = ThemePref;
-
 type ThemeProviderProps = {
   children: React.ReactNode;
   defaultMode?: ThemePref;

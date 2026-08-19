@@ -1,6 +1,4 @@
-import { lspFormatDocument, useLspExtension } from "@/modules/lsp";
 import { usePreferencesStore } from "@/modules/settings/preferences";
-import { acceptCompletion, startCompletion } from "@codemirror/autocomplete";
 import { redo, undo } from "@codemirror/commands";
 import {
   findNext,
@@ -10,7 +8,6 @@ import {
   SearchQuery,
   setSearchQuery,
 } from "@codemirror/search";
-import { Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
@@ -23,27 +20,16 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
-  useState,
 } from "react";
-import { toast } from "sonner";
-import { diagnosticsReporter } from "./lib/diagnosticsReporter";
-import { useDiagnosticsStore } from "./lib/diagnosticsStore";
 import {
   buildSharedExtensions,
   DEFAULT_INDENT,
   indentCompartment,
   indentExtension,
   languageCompartment,
-  lspCompartment,
   wordWrapExtension,
   wrapCompartment,
 } from "./lib/extensions";
-import {
-  applyFormattedContent,
-  readFileText,
-  resolveFormatter,
-  runExternalFormatter,
-} from "./lib/externalFormat";
 import { detectIndentUnit } from "./lib/indent";
 import { type LanguageResult, resolveLanguage } from "./lib/languageResolver";
 import { FORCE_READ_LIMIT, useDocument } from "./lib/useDocument";
@@ -54,6 +40,7 @@ export type EditorPaneHandle = {
   findNext: () => void;
   findPrevious: () => void;
   clearQuery: () => void;
+  getSearchStatus: () => { count: number; index: number };
   /** Open CodeMirror's find/replace panel. */
   openSearch: () => void;
   focus: () => void;
@@ -66,19 +53,15 @@ export type EditorPaneHandle = {
   /** Apply CodeMirror's undo/redo commands. */
   undo: () => void;
   redo: () => void;
-  /** Open CodeMirror's completion popup. */
-  triggerCodeComplete: () => void;
 };
 
 type Props = {
   path: string;
   overrideLanguage?: string | null;
   onDirtyChange?: (dirty: boolean) => void;
-  onSaved?: () => void;
 };
 
-// Above this, syntax highlighting and LSP are disabled: a multi-MB lezer
-// parse tree and a didOpen of that size cost far more than they give.
+// Above this, syntax highlighting is disabled to keep large-file reading responsive.
 const SYNTAX_MAX_BYTES = 4 * 1024 * 1024;
 
 function formatBytes(n: number): string {
@@ -91,89 +74,25 @@ function formatBytes(n: number): string {
 // skip re-rendering entirely when App re-renders (terminal events, tab churn).
 export const EditorPane = memo(
   forwardRef<EditorPaneHandle, Props>(function EditorPane(props, ref) {
-    const { path, overrideLanguage, onDirtyChange, onSaved } = props;
+    const { path, overrideLanguage, onDirtyChange } = props;
 
-    const { doc, onChange, save, reload, adoptDiskText, openAnyway } =
-      useDocument({
-        path,
-        onDirtyChange,
-      });
+    const { doc, onChange, save, reload, openAnyway } = useDocument({
+      path,
+      onDirtyChange,
+    });
     const reloadRef = useRef(reload);
     reloadRef.current = reload;
-    const adoptDiskTextRef = useRef(adoptDiskText);
-    adoptDiskTextRef.current = adoptDiskText;
     const cmRef = useRef<ReactCodeMirrorRef>(null);
     const themeExt = useEditorThemeExt();
     const wordWrapColumn = usePreferencesStore((s) =>
       s.editorWordWrap ? s.editorWordWrapColumn : null,
     );
-    const languageRef = useRef<string | null>(null);
-    const [langId, setLangId] = useState<string | null>(null);
-
-    // Stabilize save + onSaved via refs so the extensions array never changes
-    // identity — a new identity makes @uiw/react-codemirror reconfigure the
-    // whole state, wiping the language compartment.
+    // Stabilize save so the extensions array keeps its identity across renders.
     const saveRef = useRef(save);
     saveRef.current = save;
-    const onSavedRef = useRef(onSaved);
-    onSavedRef.current = onSaved;
-    const lspActiveRef = useRef(false);
-    const warnedNoLspRef = useRef(false);
-    const warnedNoFormatRef = useRef(false);
 
     const performSave = useCallback(async () => {
-      const view = cmRef.current?.view;
-      const prefs = usePreferencesStore.getState();
-      const formatter = resolveFormatter(languageRef.current, prefs);
-      if (prefs.editorFormatOnSave && formatter === "lsp" && view) {
-        if (lspActiveRef.current) {
-          let res: "done" | "unsupported" = "done";
-          try {
-            res = await lspFormatDocument(view);
-          } catch (e) {
-            toast.error("Language server format failed", {
-              description: String(e),
-            });
-          }
-          if (res === "unsupported" && !warnedNoFormatRef.current) {
-            warnedNoFormatRef.current = true;
-            toast.warning("Format on save skipped", {
-              description:
-                "The active language server has no formatter. Pick an external one in Settings (Ruff for Python, Prettier, rustfmt, ...).",
-            });
-          }
-        } else if (!warnedNoLspRef.current) {
-          warnedNoLspRef.current = true;
-          toast.warning("Format on save skipped", {
-            description:
-              "No active language server for this file. Enable one in the statusbar, or pick an external formatter in Settings.",
-          });
-        }
-      }
-      // Snapshot before save: edits typed during the formatter round-trip
-      // must not be clobbered by the disk read-back.
-      const docAtSave = view?.state.doc;
-      const saved = await saveRef.current();
-      if (!saved) return;
-      if (prefs.editorFormatOnSave && formatter !== "lsp") {
-        const error = await runExternalFormatter(
-          formatter,
-          pathRef.current,
-          prefs.editorCustomFormatCommand,
-        );
-        if (error) {
-          toast.error(`${formatter} format failed`, { description: error });
-        } else {
-          const readBack = await readFileText(pathRef.current);
-          if (readBack !== null && view && view.state.doc === docAtSave) {
-            applyFormattedContent(
-              view,
-              adoptDiskTextRef.current(readBack.text, readBack.mtime),
-            );
-          }
-        }
-      }
-      onSavedRef.current?.();
+      await saveRef.current();
     }, []);
     const performSaveRef = useRef(performSave);
     performSaveRef.current = performSave;
@@ -187,6 +106,7 @@ export const EditorPane = memo(
       focus: boolean;
     } | null>(null);
     const pendingFocusRef = useRef<string | null>(null);
+    const searchQueryRef = useRef("");
     const statusRef = useRef(doc.status);
     useLayoutEffect(() => {
       statusRef.current = doc.status;
@@ -257,9 +177,6 @@ export const EditorPane = memo(
         ...buildSharedExtensions(),
         indentCompartment.of(DEFAULT_INDENT),
         languageCompartment.of([]),
-        lspCompartment.of([]),
-        diagnosticsReporter(() => pathRef.current),
-        Prec.highest(keymap.of([{ key: "Tab", run: acceptCompletion }])),
         keymap.of([
           {
             key: "Mod-s",
@@ -294,21 +211,6 @@ export const EditorPane = memo(
       });
     }, [doc]);
 
-    const lspExt = useLspExtension(path, langId, doc.status === "ready");
-    useEffect(() => {
-      lspActiveRef.current = lspExt !== null;
-      const view = cmRef.current?.view;
-      if (!view) return;
-      view.dispatch({
-        effects: lspCompartment.reconfigure(lspExt ?? []),
-      });
-    }, [lspExt]);
-
-    useEffect(
-      () => () => useDiagnosticsStore.getState().report(pathRef.current, null),
-      [],
-    );
-
     // Warm the language chunk while the file is still being read; the
     // ready-gated effect below then resolves from cache.
     useEffect(() => {
@@ -317,12 +219,8 @@ export const EditorPane = memo(
     }, [path, overrideLanguage]);
 
     useEffect(() => {
-      const ext =
-        overrideLanguage || (path.split(".").pop()?.toLowerCase() ?? null);
-      languageRef.current = ext;
       if (doc.status !== "ready") return;
       if (doc.size > SYNTAX_MAX_BYTES) {
-        setLangId(null);
         const view = cmRef.current?.view;
         view?.dispatch({ effects: languageCompartment.reconfigure([]) });
         return;
@@ -338,8 +236,6 @@ export const EditorPane = memo(
       };
       void resolve().then((result) => {
         if (cancelled) return;
-        if (result.id) languageRef.current = result.id;
-        setLangId(result.id || ext);
         const view = cmRef.current?.view;
         if (!view) return;
         view.dispatch({
@@ -355,6 +251,7 @@ export const EditorPane = memo(
       ref,
       () => ({
         setQuery: (q: string) => {
+          searchQueryRef.current = q;
           const view = cmRef.current?.view;
           if (!view) return;
           view.dispatch({
@@ -373,11 +270,40 @@ export const EditorPane = memo(
           if (view) findPrevious(view);
         },
         clearQuery: () => {
+          searchQueryRef.current = "";
           const view = cmRef.current?.view;
           if (!view) return;
           view.dispatch({
             effects: setSearchQuery.of(new SearchQuery({ search: "" })),
           });
+        },
+        /** 返回当前编辑器搜索命中总数和当前命中位置。 */
+        getSearchStatus: () => {
+          const view = cmRef.current?.view;
+          if (!view) return { count: 0, index: 0 };
+          const queryText = searchQueryRef.current;
+          if (!queryText) return { count: 0, index: 0 };
+          const content = view.state.doc.toString();
+          const haystack = content.toLocaleLowerCase();
+          const needle = queryText.toLocaleLowerCase();
+          const selection = view.state.selection.main;
+          let count = 0;
+          let index = 0;
+          let offset = 0;
+          while (offset <= haystack.length) {
+            const match = haystack.indexOf(needle, offset);
+            if (match < 0) break;
+            count += 1;
+            if (
+              index === 0 &&
+              selection.from >= match &&
+              selection.from <= match + needle.length
+            ) {
+              index = count;
+            }
+            offset = match + Math.max(needle.length, 1);
+          }
+          return { count, index };
         },
         openSearch: () => {
           const view = cmRef.current?.view;
@@ -411,12 +337,6 @@ export const EditorPane = memo(
         redo: () => {
           const view = cmRef.current?.view;
           if (view) redo(view);
-        },
-        triggerCodeComplete: () => {
-          const view = cmRef.current?.view;
-          if (!view) return;
-          view.focus();
-          startCompletion(view);
         },
       }),
       [path, applyPendingFocus, applyPendingGoto],
@@ -538,7 +458,7 @@ export const EditorPane = memo(
             foldGutter: true,
             bracketMatching: true,
             closeBrackets: true,
-            autocompletion: true,
+            autocompletion: false,
             highlightActiveLine: true,
             highlightSelectionMatches: true,
             searchKeymap: true,

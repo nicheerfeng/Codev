@@ -12,12 +12,21 @@ if (USE_CUSTOM_WINDOW_CONTROLS) {
   document.documentElement.dataset.chrome = "borderless";
 }
 
-// Render-instrumentation overlay, opt-in: `VITE_REACT_SCAN=true pnpm dev`.
-// Dev-only dynamic import so it never reaches the production bundle.
-if (import.meta.env.DEV && import.meta.env.VITE_REACT_SCAN === "true") {
-  const { scan } = await import("react-scan");
-  scan({ enabled: true });
+/** 禁止主窗口浏览器右键菜单，同时放行应用菜单与可编辑控件。 */
+function blockNativeContextMenu(event: MouseEvent) {
+  if (event.defaultPrevented) return;
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  if (
+    target.closest('[data-slot="context-menu-trigger"]') ||
+    target.closest("input, textarea, select, [contenteditable='true']")
+  ) {
+    return;
+  }
+  event.preventDefault();
 }
+
+document.addEventListener("contextmenu", blockNativeContextMenu);
 
 // Reap PTY sessions orphaned by a prior webview load before any tab spawns.
 await invoke("pty_close_all").catch(() => {});

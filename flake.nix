@@ -1,5 +1,5 @@
 {
-  description = "Terax - open-source lightweight cross-platform AI-native terminal (ADE)";
+  description = "Terax - lightweight cross-platform code and document reader with an integrated terminal";
 
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
 

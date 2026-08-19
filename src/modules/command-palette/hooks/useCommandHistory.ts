@@ -1,4 +1,4 @@
-import { historyList } from "@/modules/terminal/block/lib/history";
+import { historyList } from "@/modules/terminal/lib/history";
 import { useCallback } from "react";
 import { type AsyncQueryState, useAsyncQuery } from "./useAsyncQuery";
 

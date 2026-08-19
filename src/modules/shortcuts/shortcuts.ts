@@ -8,17 +8,11 @@ export type ShortcutId =
   | "commandPalette.open"
   | "commandPalette.content"
   | "tab.new"
-  | "tab.newBlock"
-  | "tab.newPrivate"
-  | "tab.newPreview"
   | "tab.newEditor"
   | "tab.close"
   | "tab.next"
   | "tab.prev"
   | "tab.selectByIndex"
-  | "space.next"
-  | "space.prev"
-  | "space.overview"
   | "pane.splitRight"
   | "pane.splitDown"
   | "pane.focusNext"
@@ -28,8 +22,6 @@ export type ShortcutId =
   | "pane.swapUp"
   | "pane.swapDown"
   | "terminal.clear"
-  | "blocks.prev"
-  | "blocks.next"
   | "search.focus"
   | "explorer.search"
   | "explorer.focus"
@@ -40,13 +32,11 @@ export type ShortcutId =
   | "settings.open"
   | "sidebar.toggle"
   | "editor.undo"
-  | "editor.redo"
-  | "editor.codeComplete";
+  | "editor.redo";
 
 export type ShortcutGroup =
   | "General"
   | "Tabs"
-  | "Spaces"
   | "Panes"
   | "Terminal"
   | "Search"
@@ -93,25 +83,6 @@ export const SHORTCUTS: Shortcut[] = [
     label: "New tab",
     group: "Tabs",
     defaultBindings: [{ [MOD_PROP]: true, key: "t" }],
-  },
-  {
-    id: "tab.newBlock",
-    label: "New Blocks terminal",
-    group: "Tabs",
-    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "t" }],
-  },
-  {
-    id: "tab.newPrivate",
-    label: "New private terminal",
-    group: "Tabs",
-    defaultBindings: [{ [MOD_PROP]: true, key: "r" }],
-  },
-  {
-    id: "tab.newPreview",
-    label: "New web preview",
-    group: "Tabs",
-    // Cmd/Ctrl+P now opens the command palette, so web preview moves here.
-    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "o" }],
   },
   {
     id: "tab.newEditor",
@@ -183,20 +154,6 @@ export const SHORTCUTS: Shortcut[] = [
     defaultBindings: IS_MAC ? [{ meta: true, key: "k" }] : [],
   },
   {
-    id: "blocks.prev",
-    label: "Previous command block",
-    group: "Terminal",
-    defaultBindings: [{ [MOD_PROP]: true, key: "ArrowUp" }],
-    allowRepeat: true,
-  },
-  {
-    id: "blocks.next",
-    label: "Next command block",
-    group: "Terminal",
-    defaultBindings: [{ [MOD_PROP]: true, key: "ArrowDown" }],
-    allowRepeat: true,
-  },
-  {
     id: "tab.next",
     label: "Next tab",
     group: "Tabs",
@@ -215,24 +172,6 @@ export const SHORTCUTS: Shortcut[] = [
     label: "Jump to tab 1–9",
     group: "Tabs",
     defaultBindings: [{ [MOD_PROP]: true, key: "1" }],
-  },
-  {
-    id: "space.next",
-    label: "Next space",
-    group: "Spaces",
-    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "]" }],
-  },
-  {
-    id: "space.prev",
-    label: "Previous space",
-    group: "Spaces",
-    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "[" }],
-  },
-  {
-    id: "space.overview",
-    label: "Open spaces",
-    group: "Spaces",
-    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "s" }],
   },
   {
     id: "explorer.search",
@@ -300,7 +239,7 @@ export const SHORTCUTS: Shortcut[] = [
   // keys natively. We register them here so the shortcuts dialog can surface
   // them — they don't have App-level handlers, so `useGlobalShortcuts` falls
   // through without `preventDefault`, leaving CodeMirror to handle the event.
-  // Also excluded from the customization UI in ShortcutsSection.
+  // They remain available to the editor without a separate customization UI.
   {
     id: "editor.undo",
     label: "Undo",
@@ -312,12 +251,6 @@ export const SHORTCUTS: Shortcut[] = [
     label: "Redo",
     group: "Editor",
     defaultBindings: [{ [MOD_PROP]: true, key: "y" }],
-  },
-  {
-    id: "editor.codeComplete",
-    label: "Trigger code completion",
-    group: "Editor",
-    defaultBindings: [{ ctrl: true, key: " " }],
   },
 ];
 

@@ -23,8 +23,6 @@ import {
   type SearchInlineHandle,
   type SearchTarget,
 } from "@/modules/header";
-import { setLspNavigator } from "@/modules/lsp";
-import type { PreviewPaneHandle } from "@/modules/preview";
 import { openSettingsWindow } from "@/modules/settings/openSettingsWindow";
 import {
   shouldDisablePaneSwapShortcut,
@@ -35,19 +33,17 @@ import {
 import {
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
-  SidebarRail,
   useSidebarPanel,
 } from "@/modules/sidebar";
 import {
-  SpaceSwitcher,
   useSpacePersistence,
   useSpaces,
   useSpacesBoot,
 } from "@/modules/spaces";
-import { StatusBar } from "@/modules/statusbar";
 import {
   TabSwitcherHud,
   type CloseTabsPlan,
+  type Tab,
   useTabSwitcher,
   useTabs,
   useWindowTitle,
@@ -58,10 +54,8 @@ import { DEFAULT_SPACE_ID } from "@/modules/tabs/lib/useTabs";
 import {
   clearFocusedTerminal,
   disposeSession,
-  findLeafCwd,
   hasLeaf,
   leafIds,
-  navigateFocusedBlocks,
   TerminalPanel,
   type PaneBounds,
   type TerminalPaneHandle,
@@ -69,7 +63,7 @@ import {
   writeToSession,
 } from "@/modules/terminal";
 import { ThemeProvider, useThemeFileEditing } from "@/modules/theme";
-import { useWorkspaceEnvStore, type WorkspaceEnv } from "@/modules/workspace";
+import { useWorkspaceEnvStore } from "@/modules/workspace";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { SearchAddon } from "@xterm/addon-search";
@@ -87,6 +81,12 @@ import { useAppCloseGuard } from "./hooks/useAppCloseGuard";
 import { useTabCloseGuards } from "./hooks/useTabCloseGuards";
 import { useWorkspaceSwitcher } from "./hooks/useWorkspaceSwitcher";
 
+/** 判断文件标签是否对应同一个规范化路径。 */
+function tabPathMatches(tab: Tab, path: string): boolean {
+  if (tab.kind !== "editor" && tab.kind !== "markdown") return false;
+  return tab.path.replace(/\\/g, "/") === path.replace(/\\/g, "/");
+}
+
 export default function App() {
   const {
     tabs,
@@ -95,19 +95,12 @@ export default function App() {
     allocId,
     booted,
     replaceTabs,
-    moveTabToSpace,
-    reorderTab,
-    reorderTabByGap,
-    newTabInSpace,
-    removeTabsForSpace,
+    reorderTabByGroup,
     markBooted,
     setActiveSpaceForNewTabs,
     newTab,
-    newBlockTab,
-    newPrivateTab,
     openFileTab,
     pinTab,
-    newPreviewTab,
     newMarkdownTab,
     setMarkdownView,
     setOverrideLanguage,
@@ -142,9 +135,15 @@ export default function App() {
   const searchInlineRef = useRef<SearchInlineHandle | null>(null);
   const terminalRefs = useRef<Map<number, TerminalPaneHandle>>(new Map());
   const editorRefs = useRef<Map<number, EditorPaneHandle>>(new Map());
-  const previewRefs = useRef<Map<number, PreviewPaneHandle>>(new Map());
   const [activeEditorHandle, setActiveEditorHandle] =
     useState<EditorPaneHandle | null>(null);
+  const [primaryEditorActiveId, setPrimaryEditorActiveId] = useState<
+    number | null
+  >(null);
+  const [secondaryEditorIds, setSecondaryEditorIds] = useState<number[]>([]);
+  const [secondaryEditorActiveId, setSecondaryEditorActiveId] = useState<
+    number | null
+  >(null);
   const { zoomIn, zoomOut, zoomReset } = useZoom();
   useApplyEditorFontSize();
   const terminalPathDropTarget = useTerminalFileDrop();
@@ -159,26 +158,20 @@ export default function App() {
     searchAddons.current.clear();
     terminalRefs.current.clear();
     editorRefs.current.clear();
-    previewRefs.current.clear();
     setActiveSearchAddon(null);
     setActiveEditorHandle(null);
   }, []);
 
   const workspaceEnv = useWorkspaceEnvStore((s) => s.env);
   const setWorkspaceEnv = useWorkspaceEnvStore((s) => s.setEnv);
-  const {
-    home,
-    launchCwd,
-    launchCwdResolved,
-    switchWorkspace,
-    adoptWorkspaceEnv,
-  } = useWorkspaceSwitcher({
-    tabsRef,
-    workspaceEnv,
-    setWorkspaceEnv,
-    resetWorkspace,
-    clearWorkspaceState,
-  });
+  const { home, launchCwd, launchCwdResolved, adoptWorkspaceEnv } =
+    useWorkspaceSwitcher({
+      tabsRef,
+      workspaceEnv,
+      setWorkspaceEnv,
+      resetWorkspace,
+      clearWorkspaceState,
+    });
 
   const activeSpaceId = useSpaces((s) => s.activeId);
   const spacesHydrated = useSpaces((s) => s.hydrated);
@@ -188,16 +181,6 @@ export default function App() {
     activeIdRef.current = activeId;
     activeSpaceIdRef.current = activeSpaceId;
   }, [tabs, activeId, activeSpaceId]);
-
-  const handleWorkspaceChange = useCallback(
-    async (env: WorkspaceEnv) => {
-      const switched = await switchWorkspace(env);
-      if (switched && activeSpaceId) {
-        useSpaces.getState().setEnv(activeSpaceId, env);
-      }
-    },
-    [switchWorkspace, activeSpaceId],
-  );
 
   useSpacesBoot({
     ready: launchCwdResolved,
@@ -243,19 +226,12 @@ export default function App() {
     adoptWorkspaceEnv,
   ]);
 
-  const [switcherOpen, setSwitcherOpen] = useState(false);
-
-  const spaceTabs = useMemo(
-    () => tabs.filter((t) => t.spaceId === (activeSpaceId ?? DEFAULT_SPACE_ID)),
-    [tabs, activeSpaceId],
-  );
+  const workspaceTabs = tabs;
 
   const {
     sidebarRef,
     sidebarWidthRef,
-    sidebarView,
     initialSidebarCollapsed,
-    persistSidebarView,
     persistSidebarCollapsed,
     toggleSidebar,
     persistSidebarWidth,
@@ -277,32 +253,22 @@ export default function App() {
 
   const activeTab = tabs.find((t) => t.id === activeId);
 
-  // Terminal tabs live in the right-side dock panel; file tabs own the header
-  // bar and the main workspace surface. Each side keeps its own "effective
-  // active id" so switching to a terminal does not blank the file area and
-  // vice versa.
+  // Terminal tabs live in the right-side dock panel; file tabs are assigned to
+  // one of the two fixed editor groups in the central workspace.
   const fileTabs = useMemo(
-    () => spaceTabs.filter((t) => t.kind !== "terminal"),
-    [spaceTabs],
+    () => workspaceTabs.filter((t) => t.kind !== "terminal"),
+    [workspaceTabs],
   );
   const terminalTabs = useMemo(
-    () => spaceTabs.filter((t) => t.kind === "terminal"),
-    [spaceTabs],
+    () => workspaceTabs.filter((t) => t.kind === "terminal"),
+    [workspaceTabs],
   );
-  const lastFileTabIdRef = useRef<number | null>(null);
   const lastTerminalTabIdRef = useRef<number | null>(null);
   useEffect(() => {
-    if (activeTab && activeTab.kind !== "terminal") {
-      lastFileTabIdRef.current = activeId;
-    }
     if (activeTab?.kind === "terminal") {
       lastTerminalTabIdRef.current = activeId;
     }
   }, [activeTab, activeId]);
-  const fileActiveId =
-    activeTab && activeTab.kind !== "terminal"
-      ? activeId
-      : (lastFileTabIdRef.current ?? fileTabs[fileTabs.length - 1]?.id ?? -1);
   const terminalActiveId =
     activeTab?.kind === "terminal"
       ? activeId
@@ -310,12 +276,116 @@ export default function App() {
         terminalTabs[terminalTabs.length - 1]?.id ??
         -1);
 
+  const secondaryEditorIdSet = useMemo(
+    () => new Set(secondaryEditorIds),
+    [secondaryEditorIds],
+  );
+  const primaryEditorTabs = useMemo(
+    () => fileTabs.filter((tab) => !secondaryEditorIdSet.has(tab.id)),
+    [fileTabs, secondaryEditorIdSet],
+  );
+  const secondaryEditorTabs = useMemo(
+    () => fileTabs.filter((tab) => secondaryEditorIdSet.has(tab.id)),
+    [fileTabs, secondaryEditorIdSet],
+  );
+  const primaryActiveId = primaryEditorTabs.some(
+    (tab) => tab.id === primaryEditorActiveId,
+  )
+    ? (primaryEditorActiveId ?? -1)
+    : (primaryEditorTabs[primaryEditorTabs.length - 1]?.id ?? -1);
+  const secondaryActiveId = secondaryEditorTabs.some(
+    (tab) => tab.id === secondaryEditorActiveId,
+  )
+    ? (secondaryEditorActiveId ?? -1)
+    : (secondaryEditorTabs[secondaryEditorTabs.length - 1]?.id ?? -1);
+
+  useEffect(() => {
+    const live = new Set(fileTabs.map((tab) => tab.id));
+    setSecondaryEditorIds((ids) => {
+      const next = ids.filter((id) => live.has(id));
+      return next.length === ids.length ? ids : next;
+    });
+  }, [fileTabs]);
+
+  const selectPrimaryEditor = useCallback(
+    (id: number) => {
+      setPrimaryEditorActiveId(id);
+      setActiveId(id);
+    },
+    [setActiveId],
+  );
+
+  const selectSecondaryEditor = useCallback(
+    (id: number) => {
+      setSecondaryEditorActiveId(id);
+      setActiveId(id);
+    },
+    [setActiveId],
+  );
+
+  const focusEditor = useCallback(
+    (id: number) => {
+      if (secondaryEditorIdSet.has(id)) selectSecondaryEditor(id);
+      else selectPrimaryEditor(id);
+    },
+    [secondaryEditorIdSet, selectPrimaryEditor, selectSecondaryEditor],
+  );
+
+  const moveEditorToGroup = useCallback(
+    (id: number, group: "primary" | "secondary") => {
+      if (group === "secondary") {
+        setSecondaryEditorIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
+        setSecondaryEditorActiveId(id);
+        setActiveId(id);
+        return;
+      }
+      setSecondaryEditorIds((ids) => ids.filter((item) => item !== id));
+      setPrimaryEditorActiveId(id);
+      setActiveId(id);
+    },
+    [setActiveId],
+  );
+
+  const reorderPrimaryEditors = useCallback(
+    (fromId: number, toGapIndex: number) => {
+      reorderTabByGroup(
+        primaryEditorTabs.map((tab) => tab.id),
+        fromId,
+        toGapIndex,
+      );
+    },
+    [primaryEditorTabs, reorderTabByGroup],
+  );
+
+  const reorderSecondaryEditors = useCallback(
+    (fromId: number, toGapIndex: number) => {
+      reorderTabByGroup(
+        secondaryEditorTabs.map((tab) => tab.id),
+        fromId,
+        toGapIndex,
+      );
+    },
+    [reorderTabByGroup, secondaryEditorTabs],
+  );
+
   const terminalPanelRef = useRef<PanelImperativeHandle>(null);
+  const [terminalPanelCollapsed, setTerminalPanelCollapsed] = useState(false);
+  const previousTerminalCountRef = useRef(0);
   useEffect(() => {
     const panel = terminalPanelRef.current;
     if (!panel) return;
-    if (terminalTabs.length > 0) panel.expand();
-    else panel.collapse();
+    if (terminalTabs.length === 0) {
+      panel.collapse();
+      previousTerminalCountRef.current = 0;
+      return;
+    }
+    if (
+      previousTerminalCountRef.current === 0 ||
+      terminalTabs.length > previousTerminalCountRef.current
+    ) {
+      panel.expand();
+    }
+    previousTerminalCountRef.current = terminalTabs.length;
   }, [terminalTabs.length]);
   const isTerminalTab = activeTab?.kind === "terminal";
   const isEditorTab = activeTab?.kind === "editor";
@@ -363,7 +433,6 @@ export default function App() {
       // the effect below as the pane tree changes; only the tab-id-keyed
       // handles need explicit cleanup here.
       editorRefs.current.delete(id);
-      previewRefs.current.delete(id);
       closeTab(id);
     },
     [closeTab],
@@ -374,7 +443,6 @@ export default function App() {
       const closedIds = closeTabs(anchorId, plan);
       for (const id of closedIds) {
         editorRefs.current.delete(id);
-        previewRefs.current.delete(id);
       }
     },
     [closeTabs],
@@ -387,8 +455,8 @@ export default function App() {
     pendingCloseMany,
     closeManyConfirming,
     handleClose,
-    handleCloseTabsToRight,
-    handleCloseOtherTabs,
+    handleCloseTabsToRightInGroup,
+    handleCloseOtherTabsInGroup,
     confirmClose,
     cancelClose,
     confirmTerminalClose,
@@ -440,15 +508,12 @@ export default function App() {
   }, [tabs]);
 
   const getSwitcherOrder = useCallback(() => {
-    const space = activeSpaceId ?? DEFAULT_SPACE_ID;
-    const inSpace = tabsRef.current
-      .filter((t) => t.spaceId === space)
-      .map((t) => t.id);
+    const inSpace = tabsRef.current.map((t) => t.id);
     const present = new Set(inSpace);
     const ordered = mruRef.current.filter((id) => present.has(id));
     for (const id of inSpace) if (!ordered.includes(id)) ordered.push(id);
     return [activeId, ...ordered.filter((id) => id !== activeId)];
-  }, [activeId, activeSpaceId]);
+  }, [activeId]);
 
   const { state: switcherState, step: stepSwitcher } = useTabSwitcher({
     getOrder: getSwitcherOrder,
@@ -457,36 +522,9 @@ export default function App() {
     },
   });
 
-  const cycleSpace = useCallback((delta: 1 | -1) => {
-    const { spaces, activeId: sid, setActive } = useSpaces.getState();
-    if (spaces.length < 2) return;
-    const idx = spaces.findIndex((s) => s.id === sid);
-    const next = (idx + delta + spaces.length) % spaces.length;
-    setActive(spaces[next].id);
-  }, []);
-
   const openNewTab = useCallback(() => {
     newTab(inheritedCwdForNewTab());
   }, [newTab, inheritedCwdForNewTab]);
-
-  const openNewPrivateTab = useCallback(() => {
-    newPrivateTab(inheritedCwdForNewTab());
-  }, [newPrivateTab, inheritedCwdForNewTab]);
-
-  const openNewBlockTab = useCallback(() => {
-    newBlockTab(inheritedCwdForNewTab());
-  }, [newBlockTab, inheritedCwdForNewTab]);
-
-  const sendCd = useCallback(
-    (path: string) => {
-      if (activeLeafId === null) return;
-      const term = terminalRefs.current.get(activeLeafId);
-      if (!term) return;
-      term.write(`cd ${quoteShellArg(path)}\r`);
-      term.focus();
-    },
-    [activeLeafId],
-  );
 
   const cdInNewTab = useCallback(
     (path: string) => {
@@ -505,13 +543,41 @@ export default function App() {
 
   const handleOpenFile = useCallback(
     (path: string, pin?: boolean) => {
-      // Markdown opens in its rendered view by default; a per-tab toggle flips
-      // it to the raw editor. Other files default to preview (pin=false);
-      // explicit actions like context-menu "Open" pass pin=true to persist.
-      if (isMarkdownPath(path)) newMarkdownTab(path);
-      else openFileTab(path, pin ?? false);
+      // Markdown keeps its rendered view; every ordinary file open persists a
+      // tab so one file does not replace the previous non-Markdown file.
+      const id = isMarkdownPath(path)
+        ? newMarkdownTab(path)
+        : openFileTab(path, pin ?? true);
+      if (secondaryEditorIdSet.has(id)) selectSecondaryEditor(id);
+      else selectPrimaryEditor(id);
+      return id;
     },
-    [openFileTab, newMarkdownTab],
+    [
+      newMarkdownTab,
+      openFileTab,
+      secondaryEditorIdSet,
+      selectPrimaryEditor,
+      selectSecondaryEditor,
+    ],
+  );
+
+  const handleOpenFileToSide = useCallback(
+    (path: string) => {
+      const existing = secondaryEditorTabs.find((tab) =>
+        tabPathMatches(tab, path),
+      );
+      const id =
+        existing?.id ??
+        openFileTab(path, true, {
+          activate: false,
+          allowDuplicate: true,
+        });
+      setSecondaryEditorIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
+      setSecondaryEditorActiveId(id);
+      setActiveId(id);
+      return id;
+    },
+    [openFileTab, secondaryEditorTabs, setActiveId],
   );
 
   const openLaunchFiles = useCallback(
@@ -574,33 +640,10 @@ export default function App() {
     [tabs, updateTab],
   );
 
-  const activeTerminalLeafCwd =
-    activeTab?.kind === "terminal"
-      ? (findLeafCwd(activeTab.paneTree, activeTab.activeLeafId) ??
-        activeTab.cwd ??
-        null)
-      : null;
-
-  const activeFilePath = (() => {
-    if (activeTab?.kind === "editor") return activeTab.path;
-    return null;
-  })();
   const explorerActiveFilePath =
     activeTab?.kind === "editor" || activeTab?.kind === "markdown"
       ? activeTab.path
       : null;
-
-  const openPreviewTab = useCallback(
-    (url: string) => {
-      const id = newPreviewTab(url);
-      // Focus the address bar if the URL is empty so the user can type.
-      if (!url) {
-        setTimeout(() => previewRefs.current.get(id)?.focusAddressBar(), 0);
-      }
-      return id;
-    },
-    [newPreviewTab],
-  );
 
   const splitActivePaneInActiveTab = useCallback(
     (dir: "row" | "col") => {
@@ -649,21 +692,11 @@ export default function App() {
       "commandPalette.open": () => openCommandPalette("commands"),
       "commandPalette.content": () => openCommandPalette("content"),
       "tab.new": openNewTab,
-      "tab.newBlock": openNewBlockTab,
-      "tab.newPrivate": openNewPrivateTab,
-      "tab.newPreview": () => openPreviewTab(""),
       "tab.newEditor": () => setNewEditorOpen(true),
       "tab.close": handleCloseTabOrPane,
       "tab.next": () => stepSwitcher(1),
       "tab.prev": () => stepSwitcher(-1),
-      "tab.selectByIndex": (e) =>
-        selectByIndex(
-          parseInt(e.key, 10) - 1,
-          activeSpaceId ?? DEFAULT_SPACE_ID,
-        ),
-      "space.next": () => cycleSpace(1),
-      "space.prev": () => cycleSpace(-1),
-      "space.overview": () => setSwitcherOpen(true),
+      "tab.selectByIndex": (e) => selectByIndex(parseInt(e.key, 10) - 1),
       "pane.splitRight": () => splitActivePaneInActiveTab("row"),
       "pane.splitDown": () => splitActivePaneInActiveTab("col"),
       "pane.focusNext": () => focusNextPaneInTab(activeId, 1),
@@ -675,8 +708,6 @@ export default function App() {
       "terminal.clear": () => {
         clearFocusedTerminal();
       },
-      "blocks.prev": () => navigateFocusedBlocks(-1),
-      "blocks.next": () => navigateFocusedBlocks(1),
       "search.focus": () => {
         const editor = editorRefs.current.get(activeId);
         if (editor) editor.openSearch();
@@ -691,20 +722,13 @@ export default function App() {
       "view.zenMode": () => setZenMode((v) => !v),
       "editor.undo": () => editorRefs.current.get(activeId)?.undo(),
       "editor.redo": () => editorRefs.current.get(activeId)?.redo(),
-      "editor.codeComplete": () =>
-        editorRefs.current.get(activeId)?.triggerCodeComplete(),
     }),
     [
       activeId,
       openCommandPalette,
       stepSwitcher,
-      cycleSpace,
       handleCloseTabOrPane,
       openNewTab,
-      openNewBlockTab,
-      openNewPrivateTab,
-      openPreviewTab,
-      activeSpaceId,
       selectByIndex,
       splitActivePaneInActiveTab,
       focusNextPaneInTab,
@@ -724,11 +748,7 @@ export default function App() {
           ? leafIds(activeTab.paneTree).length
           : null;
       if (shouldDisablePaneSwapShortcut(id, terminalPaneCount)) return true;
-      if (
-        id === "editor.undo" ||
-        id === "editor.redo" ||
-        id === "editor.codeComplete"
-      ) {
+      if (id === "editor.undo" || id === "editor.redo") {
         return activeTab?.kind !== "editor";
       }
       if (id === "terminal.clear") {
@@ -737,9 +757,6 @@ export default function App() {
         const target =
           (e.target as HTMLElement | null) ?? document.activeElement;
         return !(target as HTMLElement | null)?.closest?.(".xterm");
-      }
-      if (id === "blocks.prev" || id === "blocks.next") {
-        return !(activeTab?.kind === "terminal" && activeTab.blocks === true);
       }
       if (id === "sidebar.toggle") {
         // Ctrl+B is also Claude Code's "run in background" key. While a terminal
@@ -785,19 +802,6 @@ export default function App() {
       if (id === activeId) setActiveEditorHandle(h);
     },
     [activeId],
-  );
-
-  const registerPreviewHandle = useCallback(
-    (id: number, h: PreviewPaneHandle | null) => {
-      if (h) previewRefs.current.set(id, h);
-      else previewRefs.current.delete(id);
-    },
-    [],
-  );
-
-  const handlePreviewUrl = useCallback(
-    (id: number, url: string) => updateTab(id, { url }),
-    [updateTab],
   );
 
   const handleTerminalCwd = useCallback(
@@ -859,89 +863,6 @@ export default function App() {
     activeEditorHandle,
   ]);
 
-  const activeCwd = activeTerminalLeafCwd;
-
-  const handleNewSpace = useCallback(() => {
-    const { spaces, create, setActive } = useSpaces.getState();
-    const meta = create({
-      name: `Space ${spaces.length + 1}`,
-      root: activeCwd ?? home ?? null,
-      env: workspaceEnv,
-    });
-    setActiveSpaceForNewTabs(meta.id);
-    newTab(activeCwd ?? undefined);
-    setActive(meta.id);
-    return meta.id;
-  }, [activeCwd, home, workspaceEnv, newTab, setActiveSpaceForNewTabs]);
-
-  const handleDeleteSpace = useCallback(
-    (id: string) => {
-      const nextSpaceId = useSpaces.getState().remove(id);
-      if (!nextSpaceId) return;
-      const root = useSpaces
-        .getState()
-        .spaces.find((s) => s.id === nextSpaceId)?.root;
-      removeTabsForSpace(id, nextSpaceId, root ?? undefined);
-    },
-    [removeTabsForSpace],
-  );
-
-  const handleMoveTab = useCallback(
-    (tabId: number, targetSpaceId: string) => {
-      if (moveTabToSpace(tabId, targetSpaceId)) {
-        useSpaces.getState().setActive(targetSpaceId);
-      }
-    },
-    [moveTabToSpace],
-  );
-
-  const handleReorderTab = useCallback(
-    (tabId: number, targetTabId: number, edge: "top" | "bottom") => {
-      if (reorderTab(tabId, targetTabId, edge)) {
-        const target = tabsRef.current.find((x) => x.id === targetTabId);
-        if (target) useSpaces.getState().setActive(target.spaceId);
-      }
-    },
-    [reorderTab],
-  );
-
-  const handleNewTabInSpace = useCallback(
-    (spaceId: string) => {
-      const root = useSpaces
-        .getState()
-        .spaces.find((s) => s.id === spaceId)?.root;
-      newTabInSpace(spaceId, root ?? undefined);
-    },
-    [newTabInSpace],
-  );
-
-  const jumpToTab = useCallback(
-    (tabId: number) => {
-      const t = tabsRef.current.find((x) => x.id === tabId);
-      if (!t) return;
-      setActiveId(tabId);
-      useSpaces.getState().setActive(t.spaceId);
-      setSwitcherOpen(false);
-    },
-    [setActiveId],
-  );
-
-  const spaceSwitcher = (
-    <SpaceSwitcher
-      open={switcherOpen}
-      onOpenChange={setSwitcherOpen}
-      tabs={tabs}
-      onNewSpace={() => void handleNewSpace()}
-      onDeleteSpace={handleDeleteSpace}
-      onNewTabInSpace={handleNewTabInSpace}
-      onJumpTab={jumpToTab}
-      onCloseTab={handleClose}
-      onMoveTabToSpace={handleMoveTab}
-      onReorderTab={handleReorderTab}
-      onReorderSpaces={(ids) => useSpaces.getState().reorder(ids)}
-    />
-  );
-
   const commandPaletteItems = useMemo(
     () =>
       commandPaletteOpen
@@ -952,10 +873,7 @@ export default function App() {
             explorerRoot,
             home,
             openNewTab,
-            openNewBlock: openNewBlockTab,
-            openNewPrivate: openNewPrivateTab,
             openNewEditor: () => setNewEditorOpen(true),
-            openNewPreview: () => openPreviewTab(""),
             closeActiveTabOrPane: handleCloseTabOrPane,
             splitPaneRight: () => splitActivePaneInActiveTab("row"),
             splitPaneDown: () => splitActivePaneInActiveTab("col"),
@@ -963,12 +881,6 @@ export default function App() {
             focusExplorerSearch: () => explorerRef.current?.focusSearch(),
             toggleSidebar,
             openSettings: () => void openSettingsWindow(),
-            openKeyboardShortcuts: () => void openSettingsWindow("shortcuts"),
-            spaces: useSpaces.getState().spaces,
-            activeSpaceId,
-            openSpacesOverview: () => setSwitcherOpen(true),
-            newSpace: () => void handleNewSpace(),
-            switchSpace: (id) => useSpaces.getState().setActive(id),
           })
         : [],
     [
@@ -979,14 +891,9 @@ export default function App() {
       explorerRoot,
       home,
       openNewTab,
-      openNewBlockTab,
-      openNewPrivateTab,
-      openPreviewTab,
       handleCloseTabOrPane,
       splitActivePaneInActiveTab,
       toggleSidebar,
-      activeSpaceId,
-      handleNewSpace,
     ],
   );
 
@@ -995,19 +902,14 @@ export default function App() {
   >(new Map());
   const openContentHit = useCallback(
     (path: string, line: number) => {
-      const id = openFileTab(path, true);
+      const id = handleOpenFile(path, true);
       if (id == null) return;
       const h = editorRefs.current.get(id);
       if (h) h.gotoLine(line);
       else pendingEditorNavigation.current.set(id, { line, focus: true });
     },
-    [openFileTab],
+    [handleOpenFile],
   );
-
-  useEffect(() => {
-    setLspNavigator({ openFile: openContentHit });
-    return () => setLspNavigator(null);
-  }, [openContentHit]);
 
   const insertHistoryCommand = useMemo(
     () =>
@@ -1026,27 +928,17 @@ export default function App() {
         <div className="relative flex h-screen flex-col overflow-hidden bg-background text-foreground">
           {!zenMode && (
             <Header
-              tabs={fileTabs}
-              activeId={fileActiveId}
-              onSelect={setActiveId}
-              onNew={openNewTab}
-              onNewBlock={openNewBlockTab}
-              onNewPrivate={openNewPrivateTab}
-              onNewPreview={() => openPreviewTab("")}
-              onNewEditor={() => setNewEditorOpen(true)}
-              onClose={handleClose}
-              onCloseTabsToRight={handleCloseTabsToRight}
-              onCloseOtherTabs={handleCloseOtherTabs}
-              onPin={pinTab}
-              onRename={handleRenameTab}
-              onReorder={reorderTabByGap}
               onToggleSidebar={toggleSidebar}
-              onOpenCommandPalette={() => openCommandPalette("commands")}
               onOpenSettings={() => void openSettingsWindow()}
-              spaceSwitcher={spaceSwitcher}
+              terminalPanelCollapsed={terminalPanelCollapsed}
+              onToggleTerminalPanel={() => {
+                if (terminalTabs.length === 0) openNewTab();
+                else if (terminalPanelCollapsed)
+                  terminalPanelRef.current?.expand();
+                else terminalPanelRef.current?.collapse();
+              }}
               searchTarget={searchTarget}
               searchRef={searchInlineRef}
-              onOverrideLanguage={setOverrideLanguage}
             />
           )}
 
@@ -1076,31 +968,23 @@ export default function App() {
                 }}
               >
                 <div className="flex h-full min-h-0 flex-col border-r border-border/60 bg-card">
-                  <div
-                    key={sidebarView}
-                    className="min-h-0 flex-1 terax-panel-in"
-                  >
-                    {sidebarView === "explorer" && (
-                      <FileExplorer
-                        ref={explorerRef}
-                        roots={workspaceRoots}
-                        activeRoot={activeRoot}
-                        onAddRoot={(p) => void addRoot(p)}
-                        onRemoveRoot={(p) => void removeRoot(p)}
-                        onSetActiveRoot={(p) => void setActiveRoot(p)}
-                        activeFilePath={explorerActiveFilePath}
-                        onOpenFile={handleOpenFile}
-                        onPathRenamed={handlePathRenamed}
-                        onPathDeleted={handlePathDeleted}
-                        onRevealInTerminal={cdInNewTab}
-                        pathDropTarget={terminalPathDropTarget}
-                      />
-                    )}
+                  <div className="min-h-0 flex-1 terax-panel-in">
+                    <FileExplorer
+                      ref={explorerRef}
+                      roots={workspaceRoots}
+                      activeRoot={activeRoot}
+                      onAddRoot={(p) => void addRoot(p)}
+                      onRemoveRoot={(p) => void removeRoot(p)}
+                      onSetActiveRoot={(p) => void setActiveRoot(p)}
+                      activeFilePath={explorerActiveFilePath}
+                      onOpenFile={handleOpenFile}
+                      onOpenFileToSide={handleOpenFileToSide}
+                      onPathRenamed={handlePathRenamed}
+                      onPathDeleted={handlePathDeleted}
+                      onRevealInTerminal={cdInNewTab}
+                      pathDropTarget={terminalPathDropTarget}
+                    />
                   </div>
-                  <SidebarRail
-                    activeView={sidebarView}
-                    onSelectView={persistSidebarView}
-                  />
                 </div>
               </ResizablePanel>
               <ResizableHandle withHandle />
@@ -1111,26 +995,29 @@ export default function App() {
                     defaultSize={terminalTabs.length > 0 ? 70 : 100}
                     minSize="30%"
                   >
-                    <div className="flex h-full min-h-0 flex-col">
-                      <div className="relative min-h-0 flex-1">
-                        <WorkspaceSurface
-                          tabs={fileTabs}
-                          activeId={fileActiveId}
-                          activeTab={fileTabs.find(
-                            (t) => t.id === fileActiveId,
-                          )}
-                          registerTerminalHandle={registerTerminalHandle}
-                          onSearchReady={handleSearchReady}
-                          onCwd={handleTerminalCwd}
-                          onExit={handleLeafExit}
-                          onFocusLeaf={handleFocusLeaf}
-                          registerEditorHandle={registerEditorHandle}
-                          onEditorDirtyChange={handleEditorDirty}
-                          registerPreviewHandle={registerPreviewHandle}
-                          onPreviewUrlChange={handlePreviewUrl}
-                          onSetMarkdownView={setMarkdownView}
-                        />
-                      </div>
+                    <div className="relative h-full min-h-0">
+                      <WorkspaceSurface
+                        primaryTabs={primaryEditorTabs}
+                        primaryActiveId={primaryActiveId}
+                        secondaryTabs={secondaryEditorTabs}
+                        secondaryActiveId={secondaryActiveId}
+                        workspaceRoots={workspaceRoots}
+                        onSelectPrimary={selectPrimaryEditor}
+                        onSelectSecondary={selectSecondaryEditor}
+                        onClose={handleClose}
+                        onCloseTabsToRight={handleCloseTabsToRightInGroup}
+                        onCloseOtherTabs={handleCloseOtherTabsInGroup}
+                        onPin={pinTab}
+                        onRename={handleRenameTab}
+                        onReorderPrimary={reorderPrimaryEditors}
+                        onReorderSecondary={reorderSecondaryEditors}
+                        onOverrideLanguage={setOverrideLanguage}
+                        onMoveToGroup={moveEditorToGroup}
+                        registerEditorHandle={registerEditorHandle}
+                        onEditorDirtyChange={handleEditorDirty}
+                        onSetMarkdownView={setMarkdownView}
+                        onFocusEditor={focusEditor}
+                      />
                     </div>
                   </ResizablePanel>
                   <ResizableHandle withHandle />
@@ -1141,6 +1028,9 @@ export default function App() {
                     minSize="10%"
                     collapsible
                     collapsedSize={0}
+                    onResize={(size) => {
+                      setTerminalPanelCollapsed(size.inPixels <= 1);
+                    }}
                   >
                     <TerminalPanel
                       tabs={terminalTabs}
@@ -1149,7 +1039,6 @@ export default function App() {
                       onClose={handleClose}
                       onNew={openNewTab}
                       onRename={handleRenameTab}
-                      onCollapse={() => terminalPanelRef.current?.collapse()}
                       registerHandle={registerTerminalHandle}
                       onSearchReady={handleSearchReady}
                       onCwd={handleTerminalCwd}
@@ -1162,20 +1051,10 @@ export default function App() {
             </ResizablePanelGroup>
           </main>
 
-          {!zenMode && (
-            <StatusBar
-              cwd={activeCwd}
-              filePath={activeFilePath}
-              home={home}
-              onCd={sendCd}
-              onWorkspaceChange={handleWorkspaceChange}
-            />
-          )}
-
           <Toaster position="bottom-right" />
 
           {switcherState && (
-            <TabSwitcherHud tabs={spaceTabs} state={switcherState} />
+            <TabSwitcherHud tabs={tabs} state={switcherState} />
           )}
 
           <CommandPalette
@@ -1183,7 +1062,7 @@ export default function App() {
             onOpenChange={setCommandPaletteOpen}
             initialMode={paletteInitialMode}
             commandItems={commandPaletteItems}
-            workspaceRoot={explorerRoot}
+            workspaceRoots={workspaceRoots}
             onOpenContentHit={openContentHit}
             insertCommand={insertHistoryCommand}
           />

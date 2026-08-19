@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
   normalizeWorkspaceRoot,
+  normalizeWorkspaceRoots,
   setActiveWorkspaceRoot,
   setWorkspaceRoots,
 } from "@/modules/settings/store";
@@ -24,8 +25,14 @@ export function useWorkspaceRoots() {
       await setActiveWorkspaceRoot(norm);
       return;
     }
-    await setWorkspaceRoots([...current, norm]);
-    await setActiveWorkspaceRoot(norm);
+    const next = normalizeWorkspaceRoots([...current, norm]);
+    await setWorkspaceRoots(next);
+    const active =
+      next.find(
+        (root) =>
+          norm === root || norm.toLowerCase().startsWith(`${root.toLowerCase()}/`),
+      ) ?? norm;
+    await setActiveWorkspaceRoot(active);
   }, []);
 
   const removeRoot = useCallback(async (path: string) => {

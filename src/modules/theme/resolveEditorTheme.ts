@@ -8,8 +8,8 @@ import { getBuiltinTheme, getDefaultTheme } from "./themes";
 import type { Theme } from "./types";
 
 const FALLBACK: Record<"light" | "dark", EditorThemeId> = {
-  light: "github-light",
-  dark: "atomone",
+  light: "codium-light",
+  dark: "codium-dark",
 };
 
 /**
