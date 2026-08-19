@@ -58,6 +58,16 @@ export type RootTreeProps = {
   onOpenFile: (path: string, pin?: boolean) => void;
   onPathRenamed?: (from: string, to: string) => void;
   onPathDeleted?: (path: string) => void;
+  /** Starts a unified copy or move task for selected paths. */
+  onTransfer?: (sources: string[], toDir: string, copy: boolean) => void;
+  /** Starts a unified copy task for files dropped from the operating system. */
+  onExternalCopy?: (sources: string[], toDir: string) => void;
+  /** Copies selected paths into the internal explorer clipboard. */
+  onCopyPaths?: (paths: string[]) => void;
+  /** Cuts selected paths into the internal explorer clipboard. */
+  onCutPaths?: (paths: string[]) => void;
+  /** Deletes selected paths through the shared explorer action. */
+  onDeletePaths?: (paths: string[]) => void;
   onRevealInTerminal?: (path: string) => void;
   /** Adds the target folder to the workspace roots (multi-root). */
   onAddAsRoot?: (path: string) => void;
@@ -194,6 +204,11 @@ export const RootTree = memo(
       onOpenFile,
       onPathRenamed,
       onPathDeleted,
+      onTransfer,
+      onExternalCopy,
+      onCopyPaths,
+      onCutPaths,
+      onDeletePaths,
       onRevealInTerminal,
       onAddAsRoot,
       onRequestAddRoot,
@@ -251,9 +266,9 @@ export const RootTree = memo(
       tree.pendingCreate,
     ]);
 
-    const selectedPath = [...selectedPaths]
-      .reverse()
-      .find((path) => entryIndexByPath.has(path)) ?? null;
+    const selectedPath =
+      [...selectedPaths].reverse().find((path) => entryIndexByPath.has(path)) ??
+      null;
 
     const rowActions = useMemo<RowActions>(
       () => ({
@@ -295,14 +310,21 @@ export const RootTree = memo(
     const dnd = useExplorerDnd({
       rootPath: rootPath ?? "",
       isDir: isDirAt,
-      onMove: tree.movePath,
+      selectedPaths,
+      onMove: (sources, toDir, copy) => {
+        if (onTransfer) onTransfer(sources, toDir, copy);
+        else if (!copy && sources[0]) void tree.movePath(sources[0], toDir);
+      },
       pathDropTarget,
     });
 
     const fileDrop = useExplorerFileDrop({
       rootPath,
       isDir: isDirAt,
-      onCopied: tree.refresh,
+      onTransfer: (sources, toDir) => {
+        if (onExternalCopy) onExternalCopy(sources, toDir);
+        else if (rootPath) void tree.refresh(rootPath);
+      },
     });
 
     const dropTargetDir = dnd.dropTargetDir ?? fileDrop.externalTargetDir;
@@ -337,9 +359,11 @@ export const RootTree = memo(
         const index = entryIndexByPath.get(path);
         if (index === undefined) return;
         if (sharedScroll) {
-          const element = [...(scrollRef.current?.querySelectorAll<HTMLElement>("[data-fs-path]") ?? [])].find(
-            (candidate) => candidate.dataset.fsPath === path,
-          );
+          const element = [
+            ...(scrollRef.current?.querySelectorAll<HTMLElement>(
+              "[data-fs-path]",
+            ) ?? []),
+          ].find((candidate) => candidate.dataset.fsPath === path);
           element?.scrollIntoView({ block: "nearest" });
           return;
         }
@@ -393,7 +417,15 @@ export const RootTree = memo(
           if (rootPath) tree.refresh(rootPath);
         },
       }),
-      [entryPaths, scrollEntryIntoView, selectedPath, selectPath, rootPath, tree.beginCreate, tree.refresh],
+      [
+        entryPaths,
+        scrollEntryIntoView,
+        selectedPath,
+        selectPath,
+        rootPath,
+        tree.beginCreate,
+        tree.refresh,
+      ],
     );
 
     useGlobalShortcuts({
@@ -561,6 +593,8 @@ export const RootTree = memo(
     return (
       <div
         ref={containerRef}
+        data-fs-path={rootPath ?? undefined}
+        data-fs-kind="dir"
         className={cn(
           "min-w-0 outline-none",
           !sharedScroll && "flex h-full flex-col",
@@ -622,6 +656,8 @@ export const RootTree = memo(
           onActiveChange={setIsSearchActive}
           onRevealInTerminal={onRevealInTerminal}
           onAddAsRoot={onAddAsRoot}
+          onCopyPaths={onCopyPaths}
+          onCutPaths={onCutPaths}
           selectedPaths={selectedPaths}
           onSelectPath={selectPath}
         />
@@ -687,7 +723,9 @@ export const RootTree = memo(
                     <InlineInput
                       initial=""
                       placeholder={
-                        pendingAtRoot.kind === "dir" ? t("New folder") : t("New file")
+                        pendingAtRoot.kind === "dir"
+                          ? t("New folder")
+                          : t("New file")
                       }
                       onCommit={tree.commitCreate}
                       onCancel={tree.cancelCreate}
@@ -797,6 +835,29 @@ export const RootTree = memo(
                       {t("Add folder to workspace")}
                     </ContextMenuItem>
                   )}
+                  {onCopyPaths && (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={() => onCopyPaths(menuPaths)}
+                    >
+                      {t("Copy")}
+                    </ContextMenuItem>
+                  )}
+                  {onCutPaths && (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={() => onCutPaths(menuPaths)}
+                    >
+                      {t("Cut")}
+                    </ContextMenuItem>
+                  )}
+                  <ContextMenuItem
+                    className={COMPACT_ITEM}
+                    disabled={menuPaths.length > 1}
+                    onSelect={() => tree.beginRename(menuTarget.path)}
+                  >
+                    {t("Rename")}
+                  </ContextMenuItem>
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     onSelect={() => void revealInFinder(menuTarget.path)}
@@ -853,7 +914,8 @@ export const RootTree = memo(
                     variant="destructive"
                     onSelect={(e) => {
                       if (deleteConfirm) {
-                        void tree.deletePath(menuTarget.path);
+                        if (onDeletePaths) onDeletePaths(menuPaths);
+                        else void tree.deletePath(menuTarget.path);
                       } else {
                         // Keep the menu open on the first click so the user
                         // can confirm; let it close normally on the second.

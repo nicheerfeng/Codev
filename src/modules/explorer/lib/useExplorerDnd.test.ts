@@ -90,6 +90,8 @@ describe("finishExplorerDrag", () => {
     finishExplorerDrag(
       true,
       "/repo/file.ts",
+      ["/repo/file.ts"],
+      false,
       100,
       200,
       null,

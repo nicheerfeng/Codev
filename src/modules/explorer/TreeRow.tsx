@@ -27,6 +27,7 @@ export type EntryRowProps = {
   onSelectPath: (path: string, multi: boolean) => void;
 };
 
+/** 渲染文件树条目并处理单选、多选、展开和重命名。 */
 function EntryRowImpl(props: EntryRowProps) {
   const {
     path,
@@ -81,6 +82,7 @@ function EntryRowImpl(props: EntryRowProps) {
     <button
       type="button"
       data-fs-path={path}
+      data-fs-kind={isDir ? "dir" : "file"}
       onClick={handleClick}
       onDoubleClick={() => !isDir && actions.beginRename(path)}
       className={cn(

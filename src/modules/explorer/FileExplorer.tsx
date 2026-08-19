@@ -15,25 +15,28 @@ import {
   Search01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { toast } from "sonner";
 import {
   forwardRef,
   memo,
   useCallback,
+  useEffect,
   useImperativeHandle,
   useRef,
   useState,
 } from "react";
 import { useT } from "@/lib/i18n";
+import { currentWorkspaceEnv } from "@/modules/workspace";
 import { cn } from "@/lib/utils";
 import { copyToClipboard } from "./lib/contextActions";
 import { COMPACT_CONTENT, COMPACT_ITEM } from "./lib/menuItemClass";
-import {
-  RootTree,
-  type RootTreeHandle,
-  type RootTreeProps,
-} from "./RootTree";
+import { RootTree, type RootTreeHandle, type RootTreeProps } from "./RootTree";
 import { folderIconUrl } from "./lib/iconResolver";
+import { useFileTransfer } from "./lib/useFileTransfer";
+import { useSelectedFileMeta } from "./lib/useSelectedFileMeta";
+import { ExplorerStatusBar } from "./ExplorerStatusBar";
 
 export type FileExplorerHandle = {
   focus: () => void;
@@ -59,13 +62,18 @@ type Props = Omit<
   onSetActiveRoot: (path: string | null) => void;
 };
 
+/** 提取工作区根目录的最后一级名称。 */
 function basename(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
   return parts.length ? parts[parts.length - 1] : path;
 }
 
 /** 为文件树空白区域提供稳定的添加工作区目录菜单。 */
-function EmptyExplorerContextMenu({ onAddFolder }: { onAddFolder: () => void }) {
+function EmptyExplorerContextMenu({
+  onAddFolder,
+}: {
+  onAddFolder: () => void;
+}) {
   const t = useT();
   return (
     <ContextMenu>
@@ -102,7 +110,12 @@ function RootSection({
   const t = useT();
   const [open, setOpen] = useState(true);
   return (
-    <div className="flex min-w-0 flex-col">
+    <div
+      className="flex min-w-0 flex-col"
+      data-explorer-drop=""
+      data-fs-path={root}
+      data-fs-kind="dir"
+    >
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
@@ -188,8 +201,159 @@ export const FileExplorer = memo(
   ) {
     const t = useT();
     const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+    const [clipboard, setClipboard] = useState<{
+      paths: string[];
+      mode: "copy" | "move";
+    } | null>(null);
+    const [pendingCutId, setPendingCutId] = useState<number | null>(null);
+    const transfer = useFileTransfer();
+    const selectedMeta = useSelectedFileMeta(selectedPaths);
     const containerRef = useRef<HTMLDivElement>(null);
     const treeRefs = useRef<Map<string, RootTreeHandle>>(new Map());
+    const refreshedTransferIds = useRef<Set<number>>(new Set());
+    const { onPathDeleted } = treeProps;
+
+    /** 将文件路径转换为当前文件树内部可执行的父目录。 */
+    const parentPath = useCallback((path: string): string => {
+      const index = path.lastIndexOf("/");
+      return index > 0 ? path.slice(0, index) : path;
+    }, []);
+
+    /** 将选中路径放入应用内复制剪切板，不写入系统文本剪贴板。 */
+    const copyPaths = useCallback((paths: string[]) => {
+      if (paths.length === 0) return;
+      setClipboard({ paths: [...new Set(paths)], mode: "copy" });
+      toast.success(`已复制 ${paths.length} 项`);
+    }, []);
+
+    /** 将选中路径放入应用内剪切剪贴板。 */
+    const cutPaths = useCallback((paths: string[]) => {
+      if (paths.length === 0) return;
+      setClipboard({ paths: [...new Set(paths)], mode: "move" });
+      toast.success(`已剪切 ${paths.length} 项`);
+    }, []);
+
+    /** 将复制、剪切和拖拽统一提交到后台迁移任务。 */
+    const startTransfer = useCallback(
+      (sources: string[], toDir: string, copy: boolean) => {
+        void transfer
+          .start(sources, toDir, copy ? "copy" : "move")
+          .then((id) => {
+            if (!copy && id != null) setPendingCutId(id);
+          })
+          .catch((error) => toast.error(`迁移启动失败：${String(error)}`));
+      },
+      [transfer.start],
+    );
+
+    /** 处理系统文件拖入，统一作为复制任务执行。 */
+    const startExternalCopy = useCallback(
+      (sources: string[], toDir: string) => {
+        startTransfer(sources, toDir, true);
+      },
+      [startTransfer],
+    );
+
+    /** 删除当前右键选中的文件或目录，并同步编辑器路径状态。 */
+    const deletePaths = useCallback(
+      async (paths: string[]) => {
+        for (const path of paths) {
+          try {
+            await invoke("fs_delete", {
+              path,
+              workspace: currentWorkspaceEnv(),
+            });
+            onPathDeleted?.(path);
+          } catch (error) {
+            toast.error(`删除失败：${String(error)}`);
+          }
+        }
+        setSelectedPaths([]);
+      },
+      [onPathDeleted],
+    );
+
+    /** 通过 Ctrl+V 将应用内剪切板迁移到当前选中的目录。 */
+    const pasteClipboard = useCallback(async () => {
+      if (!clipboard || clipboard.paths.length === 0) return;
+      const selected = selectedPaths[selectedPaths.length - 1];
+      const destination = selected ?? activeRoot ?? roots[0];
+      if (!destination) return;
+      try {
+        const stat = await invoke<{ kind: "file" | "dir" | "symlink" }>(
+          "fs_stat",
+          { path: destination, workspace: currentWorkspaceEnv() },
+        );
+        const toDir =
+          stat.kind === "dir" ? destination : parentPath(destination);
+        const id = await transfer.start(
+          clipboard.paths,
+          toDir,
+          clipboard.mode === "copy" ? "copy" : "move",
+        );
+        if (clipboard.mode === "move" && id != null) setPendingCutId(id);
+      } catch (error) {
+        toast.error(`迁移启动失败：${String(error)}`);
+      }
+    }, [
+      activeRoot,
+      clipboard,
+      parentPath,
+      roots,
+      selectedPaths,
+      transfer.start,
+    ]);
+
+    /** 仅在文件树获得焦点时接管复制、剪切、粘贴快捷键。 */
+    const handleExplorerKeyDown = useCallback(
+      (event: React.KeyboardEvent<HTMLDivElement>) => {
+        const target = event.target as HTMLElement;
+        if (
+          target.closest("input, textarea, [contenteditable='true']") ||
+          !(event.ctrlKey || event.metaKey)
+        ) {
+          return;
+        }
+        const key = event.key.toLowerCase();
+        if (key === "c" && selectedPaths.length > 0) {
+          event.preventDefault();
+          copyPaths(selectedPaths);
+        } else if (key === "x" && selectedPaths.length > 0) {
+          event.preventDefault();
+          cutPaths(selectedPaths);
+        } else if (key === "v" && clipboard) {
+          event.preventDefault();
+          void pasteClipboard();
+        }
+      },
+      [clipboard, copyPaths, cutPaths, pasteClipboard, selectedPaths],
+    );
+
+    useEffect(() => {
+      if (
+        pendingCutId != null &&
+        transfer.event?.id === pendingCutId &&
+        transfer.event.status === "completed"
+      ) {
+        setClipboard(null);
+        setPendingCutId(null);
+      }
+    }, [pendingCutId, transfer.event]);
+
+    useEffect(() => {
+      const current = transfer.event;
+      if (
+        !current ||
+        (current.status !== "completed" &&
+          current.status !== "failed" &&
+          current.status !== "cancelled") ||
+        refreshedTransferIds.current.has(current.id)
+      ) {
+        return;
+      }
+      refreshedTransferIds.current.add(current.id);
+      for (const tree of treeRefs.current.values()) tree.refresh();
+    }, [transfer.event]);
 
     /** 直接打开系统目录选择器并把所选目录加入工作区。 */
     const requestAddFolder = useCallback(() => {
@@ -256,8 +420,7 @@ export const FileExplorer = memo(
       ref,
       () => ({
         focus: () => {
-          getActiveTree()?.focus() ??
-            containerRef.current?.focus();
+          getActiveTree()?.focus() ?? containerRef.current?.focus();
         },
         isFocused: () => {
           const c = containerRef.current;
@@ -275,6 +438,8 @@ export const FileExplorer = memo(
         ref={containerRef}
         className="flex h-full flex-col outline-none"
         tabIndex={0}
+        role="tree"
+        onKeyDown={handleExplorerKeyDown}
       >
         <ContextMenu>
           <ContextMenuTrigger asChild>
@@ -394,7 +559,7 @@ export const FileExplorer = memo(
         {roots.length === 0 ? (
           <ContextMenu>
             <ContextMenuTrigger asChild>
-              <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
+              <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
                 <HugeiconsIcon
                   icon={Folder01Icon}
                   size={24}
@@ -410,7 +575,10 @@ export const FileExplorer = memo(
               </div>
             </ContextMenuTrigger>
             <ContextMenuContent className={COMPACT_CONTENT}>
-              <ContextMenuItem className={COMPACT_ITEM} onSelect={requestAddFolder}>
+              <ContextMenuItem
+                className={COMPACT_ITEM}
+                onSelect={requestAddFolder}
+              >
                 {t("Add folder to workspace")}
               </ContextMenuItem>
             </ContextMenuContent>
@@ -440,6 +608,11 @@ export const FileExplorer = memo(
                   onActivateRoot={() => onSetActiveRoot(root)}
                   showToolbar={false}
                   {...treeProps}
+                  onTransfer={startTransfer}
+                  onExternalCopy={startExternalCopy}
+                  onCopyPaths={copyPaths}
+                  onCutPaths={cutPaths}
+                  onDeletePaths={deletePaths}
                   sharedScroll
                 />
               </RootSection>
@@ -447,6 +620,13 @@ export const FileExplorer = memo(
             <EmptyExplorerContextMenu onAddFolder={requestAddFolder} />
           </div>
         )}
+        <ExplorerStatusBar
+          transfer={transfer.event}
+          selectedMeta={selectedMeta}
+          onCancel={() => void transfer.cancel()}
+          onUndo={() => void transfer.undo()}
+          onClear={transfer.clear}
+        />
       </div>
     );
   }),
