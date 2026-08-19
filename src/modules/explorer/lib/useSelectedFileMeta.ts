@@ -19,54 +19,54 @@ export type SelectedFileMeta = {
   latestMtime: number;
 };
 
-/** 读取选中文件的轻量元信息，不读取内容也不递归统计目录大小。 */
-export function useSelectedFileMeta(paths: string[]): SelectedFileMeta | null {
+/** 读取当前阅读文件的轻量元信息，不读取内容也不递归统计目录大小。 */
+export function useSelectedFileMeta(
+  path: string | null,
+): SelectedFileMeta | null {
   const [meta, setMeta] = useState<SelectedFileMeta | null>(null);
 
   useEffect(() => {
-    if (paths.length === 0) {
+    if (!path) {
       setMeta(null);
       return;
     }
     let alive = true;
-    void Promise.all(
-      paths.map((path) =>
-        invoke<FileStat>("fs_stat", {
-          path,
-          workspace: currentWorkspaceEnv(),
-        }).catch(() => null),
-      ),
-    ).then((stats) => {
-      if (!alive) return;
-      let fileCount = 0;
-      let directoryCount = 0;
-      let countedBytes = 0;
-      let skippedLargeCount = 0;
-      let latestMtime = 0;
-      for (const stat of stats) {
-        if (!stat) continue;
-        latestMtime = Math.max(latestMtime, stat.mtime);
-        if (stat.kind === "dir") {
-          directoryCount += 1;
-        } else {
-          fileCount += 1;
-          if (stat.size > MAX_COUNTED_FILE_BYTES) skippedLargeCount += 1;
-          else countedBytes += stat.size;
+    void invoke<FileStat>("fs_stat", {
+      path,
+      workspace: currentWorkspaceEnv(),
+    })
+      .catch(() => null)
+      .then((stat) => {
+        if (!alive) return;
+        if (!stat) {
+          setMeta(null);
+          return;
         }
-      }
-      setMeta({
-        count: paths.length,
-        fileCount,
-        directoryCount,
-        countedBytes,
-        skippedLargeCount,
-        latestMtime,
+        let fileCount = 0;
+        let directoryCount = 0;
+        let countedBytes = 0;
+        let skippedLargeCount = 0;
+        let latestMtime = 0;
+        latestMtime = stat.mtime;
+        if (stat.kind === "dir") directoryCount = 1;
+        else {
+          fileCount = 1;
+          if (stat.size > MAX_COUNTED_FILE_BYTES) skippedLargeCount = 1;
+          else countedBytes = stat.size;
+        }
+        setMeta({
+          count: 1,
+          fileCount,
+          directoryCount,
+          countedBytes,
+          skippedLargeCount,
+          latestMtime,
+        });
       });
-    });
     return () => {
       alive = false;
     };
-  }, [paths]);
+  }, [path]);
 
   return meta;
 }

@@ -77,9 +77,7 @@ export function ExplorerStatusBar({
           </span>
         ) : transfer?.status === "cancelled" ? (
           <span className="text-amber-500">迁移已停止</span>
-        ) : transfer?.status === "completed" ? (
-          <span className="text-foreground">{operation}完成</span>
-        ) : clipboard ? (
+        ) : !selectedMeta && clipboard ? (
           <span className="text-foreground">
             已{clipboard.mode === "copy" ? "复制" : "剪切"} {clipboard.count}{" "}
             项，选择目标目录后粘贴

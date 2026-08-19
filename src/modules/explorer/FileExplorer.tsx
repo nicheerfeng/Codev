@@ -220,7 +220,7 @@ export const FileExplorer = memo(
       mode: "copy" | "move";
     } | null>(null);
     const transfer = useFileTransfer();
-    const selectedMeta = useSelectedFileMeta(selectedPaths);
+    const selectedMeta = useSelectedFileMeta(treeProps.activeFilePath ?? null);
     const containerRef = useRef<HTMLDivElement>(null);
     const treeRefs = useRef<Map<string, RootTreeHandle>>(new Map());
     const refreshedTransferIds = useRef<Set<string>>(new Set());
@@ -280,13 +280,20 @@ export const FileExplorer = memo(
               workspace: currentWorkspaceEnv(),
             });
             onPathDeleted?.(path);
+            const parent = parentPath(path);
+            for (const [root, tree] of treeRefs.current) {
+              if (parent === root || parent.startsWith(`${root}/`)) {
+                tree.refreshPath(parent);
+                break;
+              }
+            }
           } catch (error) {
             toast.error(`删除失败：${String(error)}`);
           }
         }
         setSelectedPaths([]);
       },
-      [onPathDeleted],
+      [onPathDeleted, parentPath],
     );
 
     /** 通过 Ctrl+V 将应用内剪切板迁移到当前选中的目录。 */
