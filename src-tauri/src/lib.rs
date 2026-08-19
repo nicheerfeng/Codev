@@ -223,7 +223,7 @@ pub fn run() {
             fs::mutate::fs_rename,
             fs::mutate::fs_delete,
             fs::mutate::fs_copy,
-            fs::transfer::fs_transfer_start,
+            fs::transfer::fs_transfer_execute,
             fs::transfer::fs_transfer_cancel,
             fs::transfer::fs_transfer_undo,
             fs::watch::fs_watch_add,
