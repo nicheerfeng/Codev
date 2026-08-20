@@ -52,6 +52,7 @@ pub struct FileStat {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TextWindow {
     pub content: String,
     pub offset: u64,
