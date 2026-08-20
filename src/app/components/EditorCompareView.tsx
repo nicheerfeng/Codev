@@ -195,6 +195,30 @@ export function EditorCompareView({
     />
   );
 
+  const secondary = (
+    <EditorGroup
+      groupId="secondary"
+      tabs={secondaryTabs}
+      activeId={secondaryActiveId}
+      workspaceRoots={workspaceRoots}
+      labelScopeTabs={labelScopeTabs}
+      onSelect={onSelectSecondary}
+      onClose={onClose}
+      onCloseTabsToRight={onCloseTabsToRight}
+      onCloseOtherTabs={onCloseOtherTabs}
+      onPin={onPin}
+      onRename={onRename}
+      onReorder={onReorderSecondary}
+      onOverrideLanguage={onOverrideLanguage}
+      onMoveToGroup={onMoveToGroup}
+      registerEditorHandle={registerEditorHandle}
+      onDirtyChange={onDirtyChange}
+      onSetMarkdownView={onSetMarkdownView}
+      onFocusEditor={onFocusEditor}
+    />
+  );
+
+  if (primaryTabs.length === 0) return secondary;
   if (secondaryTabs.length === 0) return primary;
 
   return (
@@ -207,26 +231,7 @@ export function EditorCompareView({
       </ResizablePanel>
       <ResizableHandle withHandle />
       <ResizablePanel id="editor-right" defaultSize="50%" minSize="30%">
-        <EditorGroup
-          groupId="secondary"
-          tabs={secondaryTabs}
-          activeId={secondaryActiveId}
-          workspaceRoots={workspaceRoots}
-          labelScopeTabs={labelScopeTabs}
-          onSelect={onSelectSecondary}
-          onClose={onClose}
-          onCloseTabsToRight={onCloseTabsToRight}
-          onCloseOtherTabs={onCloseOtherTabs}
-          onPin={onPin}
-          onRename={onRename}
-          onReorder={onReorderSecondary}
-          onOverrideLanguage={onOverrideLanguage}
-          onMoveToGroup={onMoveToGroup}
-          registerEditorHandle={registerEditorHandle}
-          onDirtyChange={onDirtyChange}
-          onSetMarkdownView={onSetMarkdownView}
-          onFocusEditor={onFocusEditor}
-        />
+        {secondary}
       </ResizablePanel>
     </ResizablePanelGroup>
   );

@@ -172,7 +172,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   editorFontSize: EDITOR_FONT_SIZE_DEFAULT,
   editorWordWrap: false,
   editorWordWrapColumn: EDITOR_WORD_WRAP_COLUMN_DEFAULT,
-  showHidden: false,
+  showHidden: true,
   workspaceRoots: [],
   activeWorkspaceRoot: null,
   terminalWebglEnabled: true,

@@ -62,6 +62,8 @@ type Props = Omit<
   onSetActiveRoot: (path: string | null) => void;
 };
 
+type ClipboardKind = "files" | "directories" | "mixed";
+
 /** 提取工作区根目录的最后一级名称。 */
 function basename(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
@@ -218,6 +220,7 @@ export const FileExplorer = memo(
     const [clipboard, setClipboard] = useState<{
       paths: string[];
       mode: "copy" | "move";
+      kind: ClipboardKind;
     } | null>(null);
     const transfer = useFileTransfer();
     const selectedMeta = useSelectedFileMeta(treeProps.activeFilePath ?? null);
@@ -232,26 +235,45 @@ export const FileExplorer = memo(
       return index > 0 ? path.slice(0, index) : path;
     }, []);
 
+    /** 判断应用内剪切板内容是否全部为文件。 */
+    const detectClipboardKind = useCallback(async (paths: string[]) => {
+      const stats = await Promise.all(
+        paths.map((path) =>
+          invoke<{ kind: "file" | "dir" | "symlink" }>("fs_stat", {
+            path,
+            workspace: currentWorkspaceEnv(),
+          }).catch(() => null),
+        ),
+      );
+      if (stats.every((stat) => stat?.kind === "file")) return "files";
+      if (stats.every((stat) => stat?.kind === "dir")) return "directories";
+      return "mixed";
+    }, []);
+
     /** 将选中路径放入应用内复制剪切板，不写入系统文本剪贴板。 */
     const copyPaths = useCallback(
-      (paths: string[]) => {
-        if (paths.length === 0) return;
+      async (paths: string[]) => {
+        const uniquePaths = [...new Set(paths)];
+        if (uniquePaths.length === 0) return;
+        const kind = await detectClipboardKind(uniquePaths);
         transfer.clear();
-        setClipboard({ paths: [...new Set(paths)], mode: "copy" });
-        toast.success(`已复制 ${paths.length} 项`);
+        setClipboard({ paths: uniquePaths, mode: "copy", kind });
+        toast.success(`已复制 ${uniquePaths.length} 项`);
       },
-      [transfer.clear],
+      [detectClipboardKind, transfer.clear],
     );
 
     /** 将选中路径放入应用内剪切剪贴板。 */
     const cutPaths = useCallback(
-      (paths: string[]) => {
-        if (paths.length === 0) return;
+      async (paths: string[]) => {
+        const uniquePaths = [...new Set(paths)];
+        if (uniquePaths.length === 0) return;
+        const kind = await detectClipboardKind(uniquePaths);
         transfer.clear();
-        setClipboard({ paths: [...new Set(paths)], mode: "move" });
-        toast.success(`已剪切 ${paths.length} 项`);
+        setClipboard({ paths: uniquePaths, mode: "move", kind });
+        toast.success(`已剪切 ${uniquePaths.length} 项`);
       },
-      [transfer.clear],
+      [detectClipboardKind, transfer.clear],
     );
 
     /** 将复制、剪切和拖拽统一提交到后台迁移任务。 */
@@ -646,7 +668,7 @@ export const FileExplorer = memo(
             <EmptyExplorerContextMenu
               onAddFolder={requestAddFolder}
               onPaste={
-                clipboard && activeRoot
+                clipboard?.kind === "files" && activeRoot
                   ? () => void pasteClipboard(activeRoot)
                   : undefined
               }
