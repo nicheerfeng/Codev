@@ -3,7 +3,11 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import type { PanelImperativeHandle } from "react-resizable-panels";
+import type {
+  Layout,
+  LayoutChangedMeta,
+  PanelImperativeHandle,
+} from "react-resizable-panels";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { consumeLaunchFiles, getLaunchDir } from "@/lib/launchDir";
@@ -946,7 +950,10 @@ export default function App() {
             <ResizablePanelGroup
               orientation="horizontal"
               className="min-h-0 flex-1"
-              onLayoutChanged={(_, { isUserInteraction }) => {
+              onLayoutChanged={(
+                _: Layout,
+                { isUserInteraction }: LayoutChangedMeta,
+              ) => {
                 const width = sidebarRef.current?.getSize().inPixels ?? 0;
                 persistSidebarWidth(width, isUserInteraction);
               }}
