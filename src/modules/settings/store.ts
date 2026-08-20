@@ -82,7 +82,6 @@ export type Preferences = {
   /** Multi-root workspace: imported folder roots (forward-slash paths). */
   workspaceRoots: string[];
   activeWorkspaceRoot: string | null;
-  terminalWebglEnabled: boolean;
   terminalCursorBlink: boolean;
   terminalCursorStyle: TerminalCursorStyle;
   terminalFontFamily: string;
@@ -117,7 +116,6 @@ const LEGACY_KEY_SHOW_HIDDEN_DIRS = "showHiddenDirectories";
 const KEY_WORKSPACE_ROOTS = "workspaceRoots";
 const KEY_ACTIVE_WORKSPACE_ROOT = "activeWorkspaceRoot";
 const KEY_WORKSPACE_HISTORY_RESET_VERSION = "workspaceHistoryResetVersion";
-const KEY_TERMINAL_WEBGL_ENABLED = "terminalWebglEnabled";
 const KEY_TERMINAL_CURSOR_BLINK = "terminalCursorBlink";
 const KEY_TERMINAL_CURSOR_STYLE = "terminalCursorStyle";
 const KEY_TERMINAL_FONT_FAMILY = "terminalFontFamily";
@@ -175,7 +173,6 @@ export const DEFAULT_PREFERENCES: Preferences = {
   showHidden: true,
   workspaceRoots: [],
   activeWorkspaceRoot: null,
-  terminalWebglEnabled: true,
   terminalCursorBlink: false,
   terminalCursorStyle: "bar",
   terminalFontFamily: "",
@@ -298,9 +295,6 @@ export async function loadPreferences(): Promise<Preferences> {
       DEFAULT_PREFERENCES.showHidden,
     workspaceRoots,
     activeWorkspaceRoot,
-    terminalWebglEnabled:
-      get<boolean>(KEY_TERMINAL_WEBGL_ENABLED) ??
-      DEFAULT_PREFERENCES.terminalWebglEnabled,
     terminalCursorBlink:
       get<boolean>(KEY_TERMINAL_CURSOR_BLINK) ??
       DEFAULT_PREFERENCES.terminalCursorBlink,
@@ -492,10 +486,6 @@ export async function setShowHidden(value: boolean): Promise<void> {
   await writePref(KEY_SHOW_HIDDEN, value);
 }
 
-export async function setTerminalWebglEnabled(value: boolean): Promise<void> {
-  await writePref(KEY_TERMINAL_WEBGL_ENABLED, value);
-}
-
 export async function setTerminalCursorBlink(value: boolean): Promise<void> {
   await writePref(KEY_TERMINAL_CURSOR_BLINK, value);
 }
@@ -622,7 +612,6 @@ export async function onPreferencesChange(
     [KEY_SHOW_HIDDEN]: "showHidden",
     [KEY_WORKSPACE_ROOTS]: "workspaceRoots",
     [KEY_ACTIVE_WORKSPACE_ROOT]: "activeWorkspaceRoot",
-    [KEY_TERMINAL_WEBGL_ENABLED]: "terminalWebglEnabled",
     [KEY_TERMINAL_CURSOR_BLINK]: "terminalCursorBlink",
     [KEY_TERMINAL_CURSOR_STYLE]: "terminalCursorStyle",
     [KEY_TERMINAL_FONT_FAMILY]: "terminalFontFamily",

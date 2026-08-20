@@ -1,8 +1,7 @@
-# Local build tuning: keep peak memory within ~12GB on 16GB dev machines.
-# 20-core parallel rustc easily exceeds 16GB RAM (each rustc needs 1-3GB),
-# which made dev machines swap and freeze during the initial compile.
+# Local build tuning: keep disk and memory pressure low while other work runs.
+# Two rustc jobs avoid saturating the D: drive with concurrent object writes.
 [build]
-jobs = 6
+jobs = 2
 
 # Dev builds skip debug info: much lower memory + faster compile.
 # Release profile is untouched (stays fully optimized).

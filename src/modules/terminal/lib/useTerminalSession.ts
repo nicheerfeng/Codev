@@ -26,7 +26,6 @@ import {
   applyTerminalFont,
   applyTheme as applyPoolTheme,
   applyScrollback,
-  applyWebglPreference,
   configureRendererPool,
   discardRetainedSlot,
   disposeLeafSlot,
@@ -684,11 +683,6 @@ export function useTerminalSession({
   useEffect(() => {
     applyScrollback(scrollback);
   }, [scrollback]);
-
-  const webglPref = usePreferencesStore((p) => p.terminalWebglEnabled);
-  useEffect(() => {
-    applyWebglPreference(webglPref);
-  }, [webglPref]);
 
   const cursorBlink = usePreferencesStore((p) => p.terminalCursorBlink);
   useEffect(() => {
