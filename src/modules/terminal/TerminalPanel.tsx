@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from "react";
 import { TerminalStack } from "./TerminalStack";
 import type { TerminalPaneHandle } from "./TerminalPane";
 import { COMPACT_CONTENT, COMPACT_ITEM } from "../explorer/lib/menuItemClass";
+import { leafIds } from "./lib/panes";
 
 type Props = {
   /** Terminal tabs only (filtered upstream). */
@@ -65,7 +66,21 @@ export function TerminalPanel({
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [navCollapsed, setNavCollapsed] = useState(false);
+  const [runningLeaves, setRunningLeaves] = useState<Set<number>>(
+    () => new Set(),
+  );
   const renameInputRef = useRef<HTMLInputElement>(null);
+
+  /** 更新终端子面板的命令运行态。 */
+  const handleCommandState = (leafId: number, running: boolean) => {
+    setRunningLeaves((current) => {
+      if (running === current.has(leafId)) return current;
+      const next = new Set(current);
+      if (running) next.add(leafId);
+      else next.delete(leafId);
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (renamingId === null) return;
@@ -126,6 +141,7 @@ export function TerminalPanel({
               onSearchReady={onSearchReady}
               onCwd={onCwd}
               onExit={onExit}
+              onCommandState={handleCommandState}
               onFocusLeaf={onFocusLeaf}
             />
           </div>
@@ -146,6 +162,11 @@ export function TerminalPanel({
               const isActive = tab.id === activeId;
               const isRenaming = tab.id === renamingId;
               const cwd = tab.kind === "terminal" ? tab.cwd : null;
+              const running =
+                tab.kind === "terminal" &&
+                leafIds(tab.paneTree).some((leafId) =>
+                  runningLeaves.has(leafId),
+                );
               return (
                 <ContextMenu key={tab.id}>
                   <ContextMenuTrigger asChild>
@@ -196,7 +217,17 @@ export function TerminalPanel({
                         />
                       ) : (
                         <div className="flex min-w-0 flex-1 items-center gap-1">
-                          <TabIcon tab={tab} />
+                          <span
+                            data-terminal-running={running ? "true" : "false"}
+                            className={cn(
+                              "flex size-3.5 shrink-0 items-center justify-center transition-colors",
+                              running
+                                ? "animate-pulse text-primary"
+                                : "text-muted-foreground",
+                            )}
+                          >
+                            <TabIcon tab={tab} />
+                          </span>
                           {!navCollapsed && (
                             <span className="min-w-0 flex-1 truncate text-[11px] leading-4">
                               {labelFor(tab)} · {cwd ? cwdLabel(cwd) : t("No current directory")}

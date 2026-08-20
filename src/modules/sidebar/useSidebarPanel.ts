@@ -41,9 +41,10 @@ function readSidebarWidth(): number {
 
 function readSidebarCollapsed(): boolean {
   try {
-    return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
+    const stored = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
+    return stored === null ? true : stored === "1";
   } catch {
-    return false;
+    return true;
   }
 }
 
