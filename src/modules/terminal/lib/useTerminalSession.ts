@@ -45,6 +45,7 @@ type Callbacks = {
   onSearchReady?: (addon: SearchAddon) => void;
   onExit?: (code: number) => void;
   onCwd?: (cwd: string) => void;
+  onCommandState?: (running: boolean) => void;
 };
 
 type Session = {
@@ -164,6 +165,7 @@ function onLeafCommandState(leafId: number, running: boolean): void {
   const s = sessions.get(leafId);
   if (!s || s.commandRunning === running) return;
   s.commandRunning = running;
+  s.callbacks.onCommandState?.(running);
   if (!running) {
     scheduleHiddenRelease(leafId, s);
     return;
@@ -343,7 +345,9 @@ async function openPtyForSession(
         s.shellExited = true;
         s.pty = null;
         s.pendingInput = "";
+        const wasRunning = s.commandRunning;
         s.commandRunning = false;
+        if (wasRunning) s.callbacks.onCommandState?.(false);
         const slot = getSlotForLeaf(leafId);
         if (slot) slot.term.options.disableStdin = true;
         scheduleHiddenRelease(leafId, s);
@@ -435,6 +439,7 @@ function attachSession(
   if (!s || s.disposed) return;
   s.callbacks = callbacks;
   s.container = container;
+  s.callbacks.onCommandState?.(s.commandRunning);
 
   if (s.visibleNow) bindLeafToSlot(leafId, s);
 
@@ -561,6 +566,7 @@ type Options = {
   onSearchReady?: (addon: SearchAddon) => void;
   onExit?: (code: number) => void;
   onCwd?: (cwd: string) => void;
+  onCommandState?: (running: boolean) => void;
 };
 
 export function useTerminalSession({
@@ -572,9 +578,10 @@ export function useTerminalSession({
   onSearchReady,
   onExit,
   onCwd,
+  onCommandState,
 }: Options) {
-  const cbRef = useRef({ onSearchReady, onExit, onCwd });
-  cbRef.current = { onSearchReady, onExit, onCwd };
+  const cbRef = useRef({ onSearchReady, onExit, onCwd, onCommandState });
+  cbRef.current = { onSearchReady, onExit, onCwd, onCommandState };
 
   // initialCwd seeds the first PTY spawn only. It must NOT be an effect dep:
   // OSC 7 updates the leaf cwd on every `cd`, and re-running the bind effect
@@ -593,6 +600,7 @@ export function useTerminalSession({
         onSearchReady: (a) => cbRef.current.onSearchReady?.(a),
         onExit: (c) => cbRef.current.onExit?.(c),
         onCwd: (c) => cbRef.current.onCwd?.(c),
+        onCommandState: (running) => cbRef.current.onCommandState?.(running),
       });
       if (s.visibleNow && s.focusedNow) focusSlot(leafId);
     });
