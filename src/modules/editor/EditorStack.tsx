@@ -2,7 +2,8 @@ import { cn, isMarkdownPath } from "@/lib/utils";
 import { MarkdownViewToggle } from "@/modules/markdown";
 import type { EditorTab, Tab } from "@/modules/tabs";
 import { useEffect, useRef } from "react";
-import { EditorPane, type EditorPaneHandle } from "./EditorPane";
+import type { EditorPaneHandle } from "./EditorPane";
+import { FileViewer } from "./FileViewer";
 
 type Props = {
   tabs: Tab[];
@@ -22,6 +23,8 @@ export function EditorStack({
   const editors = tabs.filter(
     (t): t is EditorTab => t.kind === "editor" && !t.cold,
   );
+  // 仅保留当前文件和未保存文件的编辑器实例，干净后台标签重新激活时再加载。
+  const mountedEditors = editors.filter((t) => t.id === activeId || t.dirty);
 
   // Stable per-tab callbacks. Inline arrows in `ref` and `onDirtyChange`
   // change identity every render, which makes React detach+reattach the ref
@@ -73,7 +76,7 @@ export function EditorStack({
   if (editors.length === 0) return null;
   return (
     <div className="relative h-full w-full">
-      {editors.map((t) => {
+      {mountedEditors.map((t) => {
         const visible = t.id === activeId;
         return (
           <div
@@ -93,7 +96,7 @@ export function EditorStack({
                   renderedHint="Save to preview"
                 />
               )}
-              <EditorPane
+              <FileViewer
                 ref={getRefCallback(t.id)}
                 path={t.path}
                 overrideLanguage={t.overrideLanguage}
