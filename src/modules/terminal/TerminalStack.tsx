@@ -14,7 +14,7 @@ type Props = {
   onSearchReady: (leafId: number, addon: SearchAddon) => void;
   onCwd: (leafId: number, cwd: string) => void;
   onExit: (leafId: number, code: number) => void;
-  onCommandState: (leafId: number, running: boolean) => void;
+  onActivity: (leafId: number, active: boolean) => void;
   onFocusLeaf: (tabId: number, leafId: number) => void;
 };
 
@@ -23,7 +23,7 @@ type Bundle = {
   onSearchReady: (leafId: number, addon: SearchAddon) => void;
   onCwd: (leafId: number, cwd: string) => void;
   onExit: (leafId: number, code: number) => void;
-  onCommandState: (leafId: number, running: boolean) => void;
+  onActivity: (leafId: number, active: boolean) => void;
 };
 
 export function TerminalStack({
@@ -33,7 +33,7 @@ export function TerminalStack({
   onSearchReady,
   onCwd,
   onExit,
-  onCommandState,
+  onActivity,
   onFocusLeaf,
 }: Props) {
   const terminals = useMemo(() => selectLiveTerminals(tabs), [tabs]);
@@ -42,7 +42,7 @@ export function TerminalStack({
   const searchReadyRef = useRef(onSearchReady);
   const cwdRef = useRef(onCwd);
   const exitRef = useRef(onExit);
-  const commandStateRef = useRef(onCommandState);
+  const activityRef = useRef(onActivity);
   useEffect(() => {
     registerRef.current = registerHandle;
   }, [registerHandle]);
@@ -56,8 +56,8 @@ export function TerminalStack({
     exitRef.current = onExit;
   }, [onExit]);
   useEffect(() => {
-    commandStateRef.current = onCommandState;
-  }, [onCommandState]);
+    activityRef.current = onActivity;
+  }, [onActivity]);
 
   const bundles = useRef(new Map<number, Bundle>());
   const getBundle = (leafId: number): Bundle => {
@@ -68,7 +68,7 @@ export function TerminalStack({
         onSearchReady: (id, addon) => searchReadyRef.current(id, addon),
         onCwd: (id, cwd) => cwdRef.current(id, cwd),
         onExit: (id, code) => exitRef.current(id, code),
-        onCommandState: (id, running) => commandStateRef.current(id, running),
+        onActivity: (id, active) => activityRef.current(id, active),
       };
       bundles.current.set(leafId, b);
     }

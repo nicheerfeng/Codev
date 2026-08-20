@@ -45,7 +45,7 @@ type Callbacks = {
   onSearchReady?: (addon: SearchAddon) => void;
   onExit?: (code: number) => void;
   onCwd?: (cwd: string) => void;
-  onCommandState?: (running: boolean) => void;
+  onActivity?: (active: boolean) => void;
 };
 
 type Session = {
@@ -75,6 +75,9 @@ type Session = {
   // OSC 133 C..D window: a foreground process owns the terminal, so the leaf
   // must keep its live grid while hidden.
   commandRunning: boolean;
+  outputActive: boolean;
+  lastOutputAt: number;
+  outputIdleTimer: ReturnType<typeof setTimeout> | null;
   hiddenReleaseTimer: ReturnType<typeof setTimeout> | null;
   spawnFailed: boolean;
 };
@@ -82,6 +85,7 @@ type Session = {
 const sessions = new Map<number, Session>();
 
 const PENDING_INPUT_MAX = 256 * 1024;
+const OUTPUT_ACTIVITY_IDLE_MS = 1500;
 
 // Input typed before the pty attaches is queued and flushed on attach. Cap the
 // queue so a large paste into a still-spawning pane can't grow it without bound.
@@ -165,7 +169,6 @@ function onLeafCommandState(leafId: number, running: boolean): void {
   const s = sessions.get(leafId);
   if (!s || s.commandRunning === running) return;
   s.commandRunning = running;
-  s.callbacks.onCommandState?.(running);
   if (!running) {
     scheduleHiddenRelease(leafId, s);
     return;
@@ -182,6 +185,51 @@ function onLeafCommandState(leafId: number, running: boolean): void {
       parkLeafSlot(leafId);
     }, 0);
   }
+}
+
+/** 在终端缓冲区停止变化后结束轻量活动提示。 */
+function settleLeafOutputActivity(leafId: number): void {
+  const s = sessions.get(leafId);
+  if (!s || s.disposed) return;
+  const remaining = OUTPUT_ACTIVITY_IDLE_MS - (Date.now() - s.lastOutputAt);
+  if (remaining > 0) {
+    s.outputIdleTimer = setTimeout(
+      () => settleLeafOutputActivity(leafId),
+      remaining,
+    );
+    return;
+  }
+  s.outputIdleTimer = null;
+  if (!s.outputActive) return;
+  s.outputActive = false;
+  s.callbacks.onActivity?.(false);
+}
+
+/** 记录一次已解析的终端缓冲区变化。 */
+function markLeafOutputActivity(leafId: number): void {
+  const s = sessions.get(leafId);
+  if (!s || s.disposed) return;
+  s.lastOutputAt = Date.now();
+  if (!s.outputActive) {
+    s.outputActive = true;
+    s.callbacks.onActivity?.(true);
+  }
+  if (s.outputIdleTimer === null) {
+    s.outputIdleTimer = setTimeout(
+      () => settleLeafOutputActivity(leafId),
+      OUTPUT_ACTIVITY_IDLE_MS,
+    );
+  }
+}
+
+/** 清除终端活动计时并同步静止状态。 */
+function clearLeafOutputActivity(s: Session): void {
+  if (s.outputIdleTimer !== null) clearTimeout(s.outputIdleTimer);
+  s.outputIdleTimer = null;
+  s.lastOutputAt = 0;
+  if (!s.outputActive) return;
+  s.outputActive = false;
+  s.callbacks.onActivity?.(false);
 }
 
 configureRendererPool({
@@ -271,6 +319,9 @@ function ensureSession(
     hasSlot: false,
     altScreenAtRelease: false,
     commandRunning: false,
+    outputActive: false,
+    lastOutputAt: 0,
+    outputIdleTimer: null,
     hiddenReleaseTimer: null,
     spawnFailed: false,
   };
@@ -345,9 +396,8 @@ async function openPtyForSession(
         s.shellExited = true;
         s.pty = null;
         s.pendingInput = "";
-        const wasRunning = s.commandRunning;
         s.commandRunning = false;
-        if (wasRunning) s.callbacks.onCommandState?.(false);
+        clearLeafOutputActivity(s);
         const slot = getSlotForLeaf(leafId);
         if (slot) slot.term.options.disableStdin = true;
         scheduleHiddenRelease(leafId, s);
@@ -406,7 +456,10 @@ function bindLeafToSlot(leafId: number, s: Session): void {
         shellState,
       );
       const osc52 = registerOsc52ClipboardHandler(term);
-      return [prompt.dispose, cwd, osc52];
+      const activity = term.onWriteParsed(() =>
+        markLeafOutputActivity(leafId),
+      );
+      return [prompt.dispose, cwd, osc52, () => activity.dispose()];
     },
     onSearchReady: (addon) => s.callbacks.onSearchReady?.(addon),
   });
@@ -439,7 +492,7 @@ function attachSession(
   if (!s || s.disposed) return;
   s.callbacks = callbacks;
   s.container = container;
-  s.callbacks.onCommandState?.(s.commandRunning);
+  s.callbacks.onActivity?.(s.outputActive);
 
   if (s.visibleNow) bindLeafToSlot(leafId, s);
 
@@ -489,6 +542,7 @@ async function respawnSession(
   s.pendingInput = "";
   s.altScreenAtRelease = false;
   s.commandRunning = false;
+  clearLeafOutputActivity(s);
   s.spawnFailed = false;
   cancelHiddenRelease(s);
 
@@ -548,6 +602,7 @@ export function disposeSession(leafId: number): void {
   if (!s) return;
   s.disposed = true;
   cancelHiddenRelease(s);
+  clearLeafOutputActivity(s);
   disposeLeafSlot(leafId);
   s.hasSlot = false;
   s.snapshot = null;
@@ -566,7 +621,7 @@ type Options = {
   onSearchReady?: (addon: SearchAddon) => void;
   onExit?: (code: number) => void;
   onCwd?: (cwd: string) => void;
-  onCommandState?: (running: boolean) => void;
+  onActivity?: (active: boolean) => void;
 };
 
 export function useTerminalSession({
@@ -578,10 +633,10 @@ export function useTerminalSession({
   onSearchReady,
   onExit,
   onCwd,
-  onCommandState,
+  onActivity,
 }: Options) {
-  const cbRef = useRef({ onSearchReady, onExit, onCwd, onCommandState });
-  cbRef.current = { onSearchReady, onExit, onCwd, onCommandState };
+  const cbRef = useRef({ onSearchReady, onExit, onCwd, onActivity });
+  cbRef.current = { onSearchReady, onExit, onCwd, onActivity };
 
   // initialCwd seeds the first PTY spawn only. It must NOT be an effect dep:
   // OSC 7 updates the leaf cwd on every `cd`, and re-running the bind effect
@@ -600,7 +655,7 @@ export function useTerminalSession({
         onSearchReady: (a) => cbRef.current.onSearchReady?.(a),
         onExit: (c) => cbRef.current.onExit?.(c),
         onCwd: (c) => cbRef.current.onCwd?.(c),
-        onCommandState: (running) => cbRef.current.onCommandState?.(running),
+        onActivity: (active) => cbRef.current.onActivity?.(active),
       });
       if (s.visibleNow && s.focusedNow) focusSlot(leafId);
     });

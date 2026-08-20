@@ -66,17 +66,17 @@ export function TerminalPanel({
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [navCollapsed, setNavCollapsed] = useState(false);
-  const [runningLeaves, setRunningLeaves] = useState<Set<number>>(
+  const [activeLeaves, setActiveLeaves] = useState<Set<number>>(
     () => new Set(),
   );
   const renameInputRef = useRef<HTMLInputElement>(null);
 
-  /** 更新终端子面板的命令运行态。 */
-  const handleCommandState = (leafId: number, running: boolean) => {
-    setRunningLeaves((current) => {
-      if (running === current.has(leafId)) return current;
+  /** 更新终端子面板的近期输出活动态。 */
+  const handleActivity = (leafId: number, active: boolean) => {
+    setActiveLeaves((current) => {
+      if (active === current.has(leafId)) return current;
       const next = new Set(current);
-      if (running) next.add(leafId);
+      if (active) next.add(leafId);
       else next.delete(leafId);
       return next;
     });
@@ -141,7 +141,7 @@ export function TerminalPanel({
               onSearchReady={onSearchReady}
               onCwd={onCwd}
               onExit={onExit}
-              onCommandState={handleCommandState}
+              onActivity={handleActivity}
               onFocusLeaf={onFocusLeaf}
             />
           </div>
@@ -162,10 +162,10 @@ export function TerminalPanel({
               const isActive = tab.id === activeId;
               const isRenaming = tab.id === renamingId;
               const cwd = tab.kind === "terminal" ? tab.cwd : null;
-              const running =
+              const active =
                 tab.kind === "terminal" &&
                 leafIds(tab.paneTree).some((leafId) =>
-                  runningLeaves.has(leafId),
+                  activeLeaves.has(leafId),
                 );
               return (
                 <ContextMenu key={tab.id}>
@@ -218,10 +218,10 @@ export function TerminalPanel({
                       ) : (
                         <div className="flex min-w-0 flex-1 items-center gap-1">
                           <span
-                            data-terminal-running={running ? "true" : "false"}
+                            data-terminal-active={active ? "true" : "false"}
                             className={cn(
                               "flex size-3.5 shrink-0 items-center justify-center transition-colors",
-                              running
+                              active
                                 ? "animate-pulse text-primary"
                                 : "text-muted-foreground",
                             )}
