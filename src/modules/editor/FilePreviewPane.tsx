@@ -16,7 +16,7 @@ type Props = {
   onDirtyChange?: (dirty: boolean) => void;
 };
 
-type PreviewKind = "asset" | "csv" | "jsonl" | "text";
+type PreviewKind = "asset" | "text";
 
 type TextWindow = {
   content: string;
@@ -26,18 +26,9 @@ type TextWindow = {
   hasMore: boolean;
 };
 
-type CsvWindow = {
-  headers: string[];
-  rows: string[][];
-  offset: number;
-  nextOffset: number;
-  totalBytes: number;
-  hasMore: boolean;
-};
-
-type LoadState<T> =
+type LoadState =
   | { kind: "loading" }
-  | { kind: "ready"; value: T }
+  | { kind: "ready"; value: TextWindow }
   | { kind: "error"; message: string };
 
 const ASSET_EXTENSIONS = new Set([
@@ -61,17 +52,22 @@ const ASSET_EXTENSIONS = new Set([
   "aac",
   "m4a",
 ]);
-const CSV_EXTENSIONS = new Set(["csv", "tsv"]);
-const JSONL_EXTENSIONS = new Set(["jsonl", "ndjson"]);
-const LOG_EXTENSIONS = new Set(["log", "out", "err", "trace"]);
+const TEXT_PREVIEW_EXTENSIONS = new Set([
+  "jsonl",
+  "ndjson",
+  "csv",
+  "tsv",
+  "log",
+  "out",
+  "err",
+  "trace",
+]);
 
-// 根据扩展名选择不读取完整文件的专用预览器。
+// 根据扩展名选择媒体直读或纯文本窗口预览。
 export function getPreviewKind(path: string): PreviewKind | null {
   const extension = path.split(".").pop()?.toLowerCase() ?? "";
   if (ASSET_EXTENSIONS.has(extension)) return "asset";
-  if (CSV_EXTENSIONS.has(extension)) return "csv";
-  if (JSONL_EXTENSIONS.has(extension)) return "jsonl";
-  if (LOG_EXTENSIONS.has(extension)) return "text";
+  if (TEXT_PREVIEW_EXTENSIONS.has(extension)) return "text";
   return null;
 }
 
@@ -87,7 +83,7 @@ function formatBytes(size: number): string {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
-// 渲染有界预览器共用的前后翻页栏。
+// 渲染纯文本预览共用的前后翻页栏。
 function PageControls({
   offset,
   totalBytes,
@@ -128,13 +124,11 @@ function PageControls({
   );
 }
 
-// 以单页文本窗口预览日志，内存中仅保留当前 512 KB、300 行以内的内容。
-function TextWindowPreview({ path, jsonl }: { path: string; jsonl: boolean }) {
+// 以单页纯文本预览 JSONL、CSV、TSV 和日志，保持原文可选中复制。
+function TextWindowPreview({ path }: { path: string }) {
   const [offset, setOffset] = useState(0);
   const [history, setHistory] = useState<number[]>([]);
-  const [state, setState] = useState<LoadState<TextWindow>>({
-    kind: "loading",
-  });
+  const [state, setState] = useState<LoadState>({ kind: "loading" });
 
   useEffect(() => {
     let cancelled = false;
@@ -157,7 +151,7 @@ function TextWindowPreview({ path, jsonl }: { path: string; jsonl: boolean }) {
     };
   }, [path, offset]);
 
-  // 回到已访问窗口，避免在前端保留任何额外文件内容。
+  // 返回已访问的文本窗口，只保存偏移量而不保存额外文件内容。
   const goBack = useCallback(() => {
     const previous = history[history.length - 1];
     if (previous === undefined) return;
@@ -165,7 +159,7 @@ function TextWindowPreview({ path, jsonl }: { path: string; jsonl: boolean }) {
     setOffset(previous);
   }, [history]);
 
-  // 只记录偏移量，下一页由后端重新按需读取。
+  // 请求下一页原始文本，避免前端构造表格或 JSON 对象。
   const goForward = useCallback(() => {
     if (state.kind !== "ready" || !state.value.hasMore) return;
     setHistory((entries) => [...entries, offset]);
@@ -194,162 +188,16 @@ function TextWindowPreview({ path, jsonl }: { path: string; jsonl: boolean }) {
             onBack={goBack}
             onForward={goForward}
           />
-          {jsonl ? (
-            <JsonlContent content={state.value.content} />
-          ) : (
-            <pre className="min-h-0 flex-1 overflow-auto p-3 font-mono text-[12px] leading-5 whitespace-pre-wrap text-foreground">
-              {state.value.content}
-            </pre>
-          )}
+          <pre className="min-h-0 flex-1 select-text overflow-auto p-3 font-mono text-[12px] leading-5 whitespace-pre text-foreground">
+            {state.value.content}
+          </pre>
         </>
       )}
     </div>
   );
 }
 
-// 将当前 JSONL 页面逐行折叠展示，只解析已读取的有限文本窗口。
-function JsonlContent({ content }: { content: string }) {
-  const lines = content.split(/\r?\n/).filter((line) => line.trim().length > 0);
-  return (
-    <div className="min-h-0 flex-1 overflow-auto p-2 text-[12px]">
-      {lines.map((line) => {
-        let valid = true;
-        try {
-          JSON.parse(line);
-        } catch {
-          valid = false;
-        }
-        return (
-          <details key={line} className="border-b border-border/40 py-1">
-            <summary className="cursor-pointer truncate font-mono text-muted-foreground hover:text-foreground">
-              {valid ? "JSON" : "格式异常"} · {line.slice(0, 180)}
-              {line.length > 180 ? "…" : ""}
-            </summary>
-            <pre className="max-h-72 overflow-auto pt-1 font-mono leading-5 whitespace-pre-wrap text-foreground">
-              {line}
-            </pre>
-          </details>
-        );
-      })}
-      {lines.length === 0 && (
-        <p className="p-2 text-xs text-muted-foreground">
-          当前页面没有 JSONL 记录。
-        </p>
-      )}
-    </div>
-  );
-}
-
-// 以有限行列的表格预览 CSV 或 TSV，翻页时仅请求下一批记录。
-function CsvPreview({ path }: { path: string }) {
-  const [offset, setOffset] = useState(0);
-  const [history, setHistory] = useState<number[]>([]);
-  const [state, setState] = useState<LoadState<CsvWindow>>({ kind: "loading" });
-  const delimiter = path.toLowerCase().endsWith(".tsv") ? 9 : 44;
-
-  useEffect(() => {
-    let cancelled = false;
-    setState({ kind: "loading" });
-    invoke<CsvWindow>("fs_read_csv_window", {
-      path,
-      offset,
-      maxRows: 100,
-      delimiter,
-      workspace: currentWorkspaceEnv(),
-    })
-      .then((value) => {
-        if (!cancelled) setState({ kind: "ready", value });
-      })
-      .catch((error) => {
-        if (!cancelled) setState({ kind: "error", message: String(error) });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [delimiter, offset, path]);
-
-  // 回到上一批表格记录，仅复用已保存的字节偏移。
-  const goBack = useCallback(() => {
-    const previous = history[history.length - 1];
-    if (previous === undefined) return;
-    setHistory((entries) => entries.slice(0, -1));
-    setOffset(previous);
-  }, [history]);
-
-  // 请求下一批 CSV 行，避免同时保留整张表和完整 DOM。
-  const goForward = useCallback(() => {
-    if (state.kind !== "ready" || !state.value.hasMore) return;
-    setHistory((entries) => [...entries, offset]);
-    setOffset(state.value.nextOffset);
-  }, [offset, state]);
-
-  return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
-      {state.kind === "loading" && (
-        <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-          正在读取当前页面…
-        </div>
-      )}
-      {state.kind === "error" && (
-        <div className="flex h-full items-center justify-center px-6 text-center text-xs text-destructive">
-          预览失败：{state.message}
-        </div>
-      )}
-      {state.kind === "ready" && (
-        <>
-          <PageControls
-            offset={state.value.offset}
-            totalBytes={state.value.totalBytes}
-            hasMore={state.value.hasMore}
-            canGoBack={history.length > 0}
-            onBack={goBack}
-            onForward={goForward}
-          />
-          <div className="min-h-0 flex-1 overflow-auto">
-            <table className="min-w-full border-collapse font-mono text-[12px]">
-              <thead className="sticky top-0 bg-muted/95 text-left text-muted-foreground">
-                <tr>
-                  {(state.value.headers.length > 0
-                    ? state.value.headers
-                    : ["值"]
-                  ).map((header) => (
-                    <th
-                      key={header || "未命名列"}
-                      className="border-b border-r border-border/60 px-2 py-1.5 font-medium whitespace-nowrap"
-                    >
-                      {header || "未命名列"}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {state.value.rows.map((row) => (
-                  <tr key={row.join("\u0000")} className="hover:bg-muted/50">
-                    {row.map((cell) => (
-                      <td
-                        key={`${row.join("\u0000")}:${cell}`}
-                        className="max-w-96 border-b border-r border-border/40 px-2 py-1 align-top whitespace-pre-wrap"
-                      >
-                        {cell}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {state.value.rows.length === 0 && (
-              <p className="p-3 text-xs text-muted-foreground">
-                当前页面没有表格记录。
-              </p>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// 直接交给 WebView 解码本地媒体或 PDF，跳过通用全文读取路径。
+// 直接交给 WebView 解码媒体或 PDF，并为超宽图片提供原始尺寸滚动阅读。
 function AssetPreview({ path }: { path: string }) {
   const extension = path.split(".").pop()?.toLowerCase() ?? "";
   const source = convertFileSrc(path);
@@ -367,53 +215,109 @@ function AssetPreview({ path }: { path: string }) {
   const isVideo = ["mp4", "webm", "ogg", "mov"].includes(extension);
   const isAudio = ["mp3", "wav", "flac", "aac", "m4a"].includes(extension);
   const isPdf = extension === "pdf";
+  const [fit, setFit] = useState(false);
+  const [zoom, setZoom] = useState(100);
+  const [naturalWidth, setNaturalWidth] = useState<number | null>(null);
+
+  // 限制图片缩放范围，避免误操作创建过大的布局。
+  const changeZoom = useCallback((delta: number) => {
+    setFit(false);
+    setZoom((value) => Math.min(400, Math.max(25, value + delta)));
+  }, []);
 
   return (
-    <div className="flex h-full min-h-0 flex-col items-center justify-center overflow-auto bg-background p-4">
+    <div className="flex h-full min-h-0 flex-col bg-background">
       {isImage && (
-        <img
-          src={source}
-          loading="lazy"
-          decoding="async"
-          className="max-h-full max-w-full rounded-md border border-border object-contain shadow-sm"
-          style={{
-            backgroundImage:
-              "conic-gradient(var(--muted) 0.25turn, transparent 0.25turn 0.5turn, var(--muted) 0.5turn 0.75turn, transparent 0.75turn)",
-            backgroundSize: "20px 20px",
-          }}
-          alt={filenameFromPath(path)}
-        />
+        <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border/60 px-2 text-[11px] text-muted-foreground">
+          <button
+            type="button"
+            className="rounded px-1.5 py-0.5 hover:bg-accent"
+            onClick={() => setFit(true)}
+          >
+            适合窗口
+          </button>
+          <button
+            type="button"
+            className="rounded px-1.5 py-0.5 hover:bg-accent"
+            onClick={() => {
+              setFit(false);
+              setZoom(100);
+            }}
+          >
+            原始 100%
+          </button>
+          <button
+            type="button"
+            className="rounded px-1.5 py-0.5 hover:bg-accent"
+            onClick={() => changeZoom(-25)}
+            disabled={fit}
+          >
+            −
+          </button>
+          <button
+            type="button"
+            className="rounded px-1.5 py-0.5 hover:bg-accent"
+            onClick={() => changeZoom(25)}
+            disabled={fit}
+          >
+            ＋
+          </button>
+          <span className="ml-auto">{fit ? "适合窗口" : `${zoom}%`}</span>
+        </div>
       )}
-      {isVideo && (
-        // biome-ignore lint/a11y/useMediaCaption: local file preview has no predictable caption track
-        <video
-          controls
-          preload="metadata"
-          className="max-h-full max-w-full"
-          src={source}
-        />
-      )}
-      {isAudio && (
-        // biome-ignore lint/a11y/useMediaCaption: local file preview has no predictable caption track
-        <audio
-          controls
-          preload="metadata"
-          className="w-full max-w-md"
-          src={source}
-        />
-      )}
-      {isPdf && (
-        <iframe
-          src={source}
-          className="h-full w-full border-0"
-          title={filenameFromPath(path)}
-        />
-      )}
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        {isImage && (
+          <img
+            src={source}
+            loading="lazy"
+            decoding="async"
+            onLoad={(event) =>
+              setNaturalWidth(event.currentTarget.naturalWidth)
+            }
+            className={
+              fit
+                ? "mx-auto max-h-full max-w-full rounded-md border border-border object-contain shadow-sm"
+                : "rounded-md border border-border object-contain shadow-sm"
+            }
+            style={
+              fit || naturalWidth === null
+                ? undefined
+                : { width: `${Math.max(1, (naturalWidth * zoom) / 100)}px` }
+            }
+            alt={filenameFromPath(path)}
+          />
+        )}
+        {isVideo && (
+          // biome-ignore lint/a11y/useMediaCaption: local file preview has no predictable caption track
+          <video
+            controls
+            preload="metadata"
+            className="max-h-full max-w-full"
+            src={source}
+          />
+        )}
+        {isAudio && (
+          // biome-ignore lint/a11y/useMediaCaption: local file preview has no predictable caption track
+          <audio
+            controls
+            preload="metadata"
+            className="w-full max-w-md"
+            src={source}
+          />
+        )}
+        {isPdf && (
+          <iframe
+            src={source}
+            className="h-full min-h-[32rem] w-full border-0"
+            title={filenameFromPath(path)}
+          />
+        )}
+      </div>
     </div>
   );
 }
 
-// 提供只读预览器的编辑器句柄，保持标签、搜索和刷新接口稳定。
+// 提供只读预览器的编辑器句柄，保持标签和刷新接口稳定。
 export const FilePreviewPane = memo(
   forwardRef<EditorPaneHandle, Props>(function FilePreviewPane(
     { path, onDirtyChange },
@@ -458,18 +362,8 @@ export const FilePreviewPane = memo(
         {previewKind === "asset" && (
           <AssetPreview key={`${path}:${reloadKey}`} path={path} />
         )}
-        {previewKind === "csv" && (
-          <CsvPreview key={`${path}:${reloadKey}`} path={path} />
-        )}
-        {previewKind === "jsonl" && (
-          <TextWindowPreview key={`${path}:${reloadKey}`} path={path} jsonl />
-        )}
         {previewKind === "text" && (
-          <TextWindowPreview
-            key={`${path}:${reloadKey}`}
-            path={path}
-            jsonl={false}
-          />
+          <TextWindowPreview key={`${path}:${reloadKey}`} path={path} />
         )}
       </div>
     );
