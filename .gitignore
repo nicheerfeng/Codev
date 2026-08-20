@@ -30,3 +30,6 @@ stats.html
 # Target-suffixed Tauri sidecars generated during local builds
 src-tauri/binaries/
 src-tauri/target
+
+# Local installer and portable deliverables
+artifacts/
