@@ -14,7 +14,7 @@ type LeafBundle = {
   onSearchReady: (leafId: number, addon: SearchAddon) => void;
   onCwd: (leafId: number, cwd: string) => void;
   onExit: (leafId: number, code: number) => void;
-  onCommandState: (leafId: number, running: boolean) => void;
+  onActivity: (leafId: number, active: boolean) => void;
 };
 
 type Props = {
@@ -53,7 +53,7 @@ export function PaneTreeView(props: Props) {
           onSearchReady={b.onSearchReady}
           onCwd={b.onCwd}
           onExit={b.onExit}
-          onCommandState={b.onCommandState}
+          onActivity={b.onActivity}
         />
         <DropOverlay leafId={node.id} />
       </div>
