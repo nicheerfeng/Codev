@@ -18,6 +18,7 @@ const BINARY_SNIFF_BYTES: usize = 8 * 1024;
 const PREVIEW_MAX_BYTES: u64 = 512 * 1024;
 const PREVIEW_MAX_LINES: u64 = 300;
 const SEARCH_MAX_MATCHES: usize = 2_000;
+const ASSET_MAX_READ_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -150,6 +151,24 @@ pub async fn fs_read_file(
 ) -> Result<ReadResult, String> {
     let workspace = WorkspaceEnv::from_option(workspace);
     read_file_sync(&resolve_path(&path, &workspace), force.unwrap_or(false))
+}
+
+/// 读取有限大小的图片字节，绕过 WebView 外部 asset URL 的路径解析差异。
+#[tauri::command]
+pub async fn fs_read_asset_bytes(
+    path: String,
+    workspace: Option<WorkspaceEnv>,
+) -> Result<Vec<u8>, String> {
+    let workspace = WorkspaceEnv::from_option(workspace);
+    let target = resolve_path(&path, &workspace);
+    let size = fs::metadata(&target).map_err(|e| e.to_string())?.len();
+    if size > ASSET_MAX_READ_BYTES {
+        return Err(format!(
+            "图片超过 {} MB，暂不读取",
+            ASSET_MAX_READ_BYTES / 1024 / 1024
+        ));
+    }
+    fs::read(&target).map_err(|e| e.to_string())
 }
 
 /// 按页返回大文本的局部内容，供日志和 JSONL 预览使用。

@@ -4,9 +4,14 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useEffect, useRef } from "react";
 
 export type ReaderFileDropGroup = "primary" | "secondary";
+export type ReaderFileDropKind = "file" | "dir";
 
 type ReaderFileDropOptions = {
-  onOpen: (path: string, group: ReaderFileDropGroup) => void;
+  onOpen: (
+    path: string,
+    group: ReaderFileDropGroup,
+    kind: ReaderFileDropKind,
+  ) => void;
 };
 
 /** 将 Tauri 的物理坐标转换为当前 WebView 的逻辑坐标。 */
@@ -25,7 +30,7 @@ function readerGroupAt(x: number, y: number): ReaderFileDropGroup | null {
   return value === "primary" || value === "secondary" ? value : null;
 }
 
-/** 读取外部拖入文件并交给指定阅览器临时打开，不执行文件迁移。 */
+/** 读取外部拖入文件或目录并交给当前阅览器处理。 */
 export function useReaderFileDrop({ onOpen }: ReaderFileDropOptions): void {
   const onOpenRef = useRef(onOpen);
   onOpenRef.current = onOpen;
@@ -50,12 +55,14 @@ export function useReaderFileDrop({ onOpen }: ReaderFileDropOptions): void {
               "fs_stat",
               { path, workspace: currentWorkspaceEnv() },
             ).catch(() => null);
-            return stat?.kind === "file" ? path : null;
+            return stat?.kind === "file" || stat?.kind === "dir"
+              ? { path, kind: stat.kind }
+              : null;
           }),
         ).then((paths) => {
           if (disposed) return;
-          for (const path of paths) {
-            if (path) onOpenRef.current(path, group);
+          for (const item of paths) {
+            if (item) onOpenRef.current(item.path, group, item.kind);
           }
         });
       })
