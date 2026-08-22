@@ -54,6 +54,11 @@ function EditorGroup({
   onFocusEditor,
 }: EditorGroupProps) {
   const activeTab = tabs.find((tab) => tab.id === activeId);
+  const showEditorStack =
+    activeTab?.kind === "editor" ||
+    (activeTab?.kind === "markdown" && activeTab.viewMode === "raw");
+  const showMarkdownStack =
+    activeTab?.kind === "markdown" && activeTab.viewMode === "rendered";
 
   return (
     <div
@@ -99,9 +104,7 @@ function EditorGroup({
         <div
           className={cn(
             "absolute inset-0",
-            activeTab?.kind === "editor"
-              ? "pointer-events-auto"
-              : "pointer-events-none",
+            showEditorStack ? "pointer-events-auto" : "pointer-events-none",
           )}
         >
           <EditorStack
@@ -115,9 +118,7 @@ function EditorGroup({
         <div
           className={cn(
             "absolute inset-0",
-            activeTab?.kind === "markdown"
-              ? "pointer-events-auto"
-              : "pointer-events-none",
+            showMarkdownStack ? "pointer-events-auto" : "pointer-events-none",
           )}
         >
           <MarkdownStack

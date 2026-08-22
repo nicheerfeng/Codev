@@ -81,7 +81,7 @@ function workspaceLabelFor(tab: Tab, roots: string[]): string | null {
 function parentFolderFor(tab: Tab): string | null {
   if (tab.kind !== "editor" && tab.kind !== "markdown") return null;
   const parts = tab.path.replace(/\\/g, "/").split("/").filter(Boolean);
-  return parts.length > 1 ? parts[parts.length - 2] ?? null : null;
+  return parts.length > 1 ? (parts[parts.length - 2] ?? null) : null;
 }
 
 /** 仅在窗口内出现同名文件时返回最小必要的标签后缀。 */
@@ -103,7 +103,9 @@ function displaySuffixFor(
 
   const collision = [tab, ...peers];
   const parentNames = new Set(
-    collision.map(parentFolderFor).filter((value): value is string => value !== null),
+    collision
+      .map(parentFolderFor)
+      .filter((value): value is string => value !== null),
   );
   const parent = parentFolderFor(tab);
   if (parentNames.size > 1 && parent) return parent;
@@ -555,7 +557,7 @@ export function TabBar({
                         </span>
                       )}
                     </span>
-                    {t.kind === "editor" && t.dirty ? (
+                    {t.kind !== "terminal" && t.dirty ? (
                       <span
                         aria-label={translate("Unsaved changes")}
                         className="size-1.5 shrink-0 rounded-full bg-foreground/70"
@@ -625,7 +627,9 @@ export function TabBar({
                                 size={13}
                                 strokeWidth={1.75}
                               />
-                              <span className="flex-1">{translate("Close")}</span>
+                              <span className="flex-1">
+                                {translate("Close")}
+                              </span>
                             </ContextMenuItem>
                           </>
                         )}
@@ -641,7 +645,9 @@ export function TabBar({
                         size={13}
                         strokeWidth={1.75}
                       />
-                      <span className="flex-1">{translate("Close tabs to the right")}</span>
+                      <span className="flex-1">
+                        {translate("Close tabs to the right")}
+                      </span>
                     </ContextMenuItem>
                     <ContextMenuItem
                       className="gap-2 rounded-xl px-2.5 py-1.5 text-[13px]"
@@ -653,7 +659,9 @@ export function TabBar({
                         size={13}
                         strokeWidth={1.75}
                       />
-                      <span className="flex-1">{translate("Close other tabs")}</span>
+                      <span className="flex-1">
+                        {translate("Close other tabs")}
+                      </span>
                     </ContextMenuItem>
                   </ContextMenuContent>
                 </ContextMenu>

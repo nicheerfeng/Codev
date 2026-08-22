@@ -68,7 +68,11 @@ export function useTabCloseGuards({
         t?.kind !== "markdown"
       )
         return;
-      if (t?.kind === "editor" && t.dirty) {
+      if (
+        (t?.kind === "editor" ||
+          (t?.kind === "markdown" && t.viewMode === "raw")) &&
+        t.dirty
+      ) {
         setPendingCloseTab(id);
         return;
       }
@@ -90,7 +94,12 @@ export function useTabCloseGuards({
     const affected = tabsRef.current.filter((tab) => close.has(tab.id));
     return {
       dirtyIds: affected
-        .filter((tab) => tab.kind === "editor" && tab.dirty)
+        .filter(
+          (tab) =>
+            (tab.kind === "editor" ||
+              (tab.kind === "markdown" && tab.viewMode === "raw")) &&
+            tab.dirty,
+        )
         .map((tab) => tab.id),
       leafIds: affected
         .filter((tab) => tab.kind === "terminal")
@@ -129,11 +138,7 @@ export function useTabCloseGuards({
   );
 
   const handleCloseMany = useCallback(
-    async (
-      kind: CloseManyKind,
-      anchorId: number,
-      scopeIds?: number[],
-    ) => {
+    async (kind: CloseManyKind, anchorId: number, scopeIds?: number[]) => {
       const plan = planCloseMany(kind, anchorId, scopeIds);
       if (plan.closeIds.length === 0) return;
       const requestId = ++closeManyRequestRef.current;
@@ -236,7 +241,7 @@ export function useTabCloseGuards({
     (path: string) => {
       const dirty: number[] = [];
       for (const t of tabs) {
-        if (t.kind !== "editor") continue;
+        if (t.kind === "terminal") continue;
         if (t.path !== path && !t.path.startsWith(`${path}/`)) continue;
         if (t.dirty) {
           dirty.push(t.id);

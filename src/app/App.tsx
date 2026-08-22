@@ -556,8 +556,7 @@ export default function App() {
 
   const handleOpenFile = useCallback(
     (path: string, pin?: boolean) => {
-      // Markdown keeps its rendered view; every ordinary file open persists a
-      // tab so one file does not replace the previous non-Markdown file.
+      // Markdown tabs keep their own view mode; new Markdown files start rendered.
       const id = isMarkdownPath(path)
         ? newMarkdownTab(path)
         : openFileTab(path, pin ?? true);
@@ -1159,7 +1158,7 @@ export default function App() {
             open={newEditorOpen}
             onOpenChange={setNewEditorOpen}
             rootPath={explorerRoot ?? home}
-            onCreated={(path) => openFileTab(path)}
+            onCreated={(path) => handleOpenFile(path)}
           />
 
           <CloseDialogs

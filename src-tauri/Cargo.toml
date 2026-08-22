@@ -29,6 +29,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [features]
 # Release builds enable this feature so Tauri embeds dist instead of using devUrl.
 custom-protocol = ["tauri/custom-protocol"]
+opaque-window = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

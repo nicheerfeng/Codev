@@ -16,7 +16,8 @@ export function MarkdownStack({
   onSetMarkdownView,
 }: Props) {
   const markdowns = tabs.filter(
-    (t): t is MarkdownTab => t.kind === "markdown" && !t.cold,
+    (t): t is MarkdownTab =>
+      t.kind === "markdown" && t.viewMode === "rendered" && !t.cold,
   );
   const activeMarkdown = markdowns.find((tab) => tab.id === activeId);
   if (!activeMarkdown) return null;

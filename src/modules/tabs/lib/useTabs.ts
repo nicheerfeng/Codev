@@ -1,4 +1,3 @@
-import { isMarkdownPath } from "@/lib/utils";
 import {
   findLeafCwd,
   hasLeaf,
@@ -58,11 +57,16 @@ export type EditorTab = TabBase & {
   overrideLanguage?: string | null;
 };
 
+export type MarkdownViewMode = "rendered" | "raw";
+
 export type MarkdownTab = TabBase & {
   id: number;
   kind: "markdown";
   title: string;
   path: string;
+  viewMode: MarkdownViewMode;
+  dirty: boolean;
+  overrideLanguage?: string | null;
 };
 
 export type Tab = TerminalTab | EditorTab | MarkdownTab;
@@ -120,6 +124,8 @@ export function planMarkdownTabOpen(
         spaceId,
         title: basename(path),
         path,
+        viewMode: "rendered",
+        dirty: false,
       },
     ],
     tabId,
@@ -664,44 +670,20 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     );
   }, []);
 
-  const setMarkdownView = useCallback(
-    (id: number, mode: "rendered" | "raw") => {
-      setTabs((curr) =>
-        curr.map((t) => {
-          if (
-            t.id !== id ||
-            !isMarkdownPath((t as { path?: string }).path ?? "")
-          )
-            return t;
-          if (mode === "raw" && t.kind === "markdown") {
-            return {
-              ...t,
-              kind: "editor" as const,
-              dirty: false,
-              preview: false,
-              overrideLanguage:
-                (t as { overrideLanguage?: string | null }).overrideLanguage ??
-                null,
-            };
-          }
-          if (mode === "rendered" && t.kind === "editor") {
-            if (t.dirty) return t;
-            return {
-              id: t.id,
-              kind: "markdown" as const,
-              spaceId: t.spaceId,
-              cold: t.cold,
-              title: t.title,
-              path: t.path,
-              overrideLanguage: t.overrideLanguage ?? null,
-            };
-          }
-          return t;
-        }),
-      );
-    },
-    [],
-  );
+  const setMarkdownView = useCallback((id: number, mode: MarkdownViewMode) => {
+    const curr = tabsRef.current;
+    let changed = false;
+    const next = curr.map((t) => {
+      if (t.id !== id || t.kind !== "markdown") return t;
+      if (mode === "rendered" && t.dirty) return t;
+      if (t.viewMode === mode) return t;
+      changed = true;
+      return { ...t, viewMode: mode };
+    });
+    if (!changed) return;
+    tabsRef.current = next;
+    setTabs(next);
+  }, []);
 
   const closeTab = useCallback((id: number) => {
     let toDispose: number[] = [];
@@ -762,6 +744,10 @@ export function useTabs(initial?: Partial<TerminalTab>) {
           return {
             ...x,
             ...(patch.title !== undefined && { title: patch.title }),
+            ...(patch.dirty !== undefined && { dirty: patch.dirty }),
+            ...(patch.overrideLanguage !== undefined && {
+              overrideLanguage: patch.overrideLanguage,
+            }),
           };
         }
         // editor tab: auto-promote from preview the moment the file becomes dirty.
@@ -978,9 +964,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
 
   const reorderTabByGroup = useCallback(
     (groupIds: number[], fromId: number, toGapIndex: number) => {
-      setTabs((prev) =>
-        reorderTabsByGroup(prev, groupIds, fromId, toGapIndex),
-      );
+      setTabs((prev) => reorderTabsByGroup(prev, groupIds, fromId, toGapIndex));
     },
     [],
   );

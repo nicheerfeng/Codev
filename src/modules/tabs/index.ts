@@ -1,8 +1,6 @@
 export { TabBar, TabIcon } from "./TabBar";
 export { TabSwitcherHud } from "./TabSwitcherHud";
-export {
-  useTabSwitcher,
-} from "./lib/useTabSwitcher";
+export { useTabSwitcher } from "./lib/useTabSwitcher";
 export { labelFor } from "./lib/tabLabel";
 export {
   MAX_PANES_PER_TAB,
@@ -14,6 +12,7 @@ export {
   type Tab,
   type EditorTab,
   type MarkdownTab,
+  type MarkdownViewMode,
 } from "./lib/useTabs";
 export { useWorkspaceCwd } from "./lib/useWorkspaceCwd";
 export { useWorkspaceRoots } from "./lib/useWorkspaceRoots";
