@@ -4,7 +4,6 @@ import {
   findNext,
   findPrevious,
   gotoLine,
-  openSearchPanel,
   SearchQuery,
   setSearchQuery,
 } from "@codemirror/search";
@@ -33,16 +32,16 @@ import {
 import { detectIndentUnit } from "./lib/indent";
 import { type LanguageResult, resolveLanguage } from "./lib/languageResolver";
 import { FORCE_READ_LIMIT, useDocument } from "./lib/useDocument";
+import {
+  findLiteralMatches,
+  replaceLiteralMatch,
+  type TextSearchHandle,
+  type TextSearchOptions,
+  type TextSearchStatus,
+} from "./lib/textSearch";
 import { useEditorThemeExt } from "./lib/useEditorThemeExt";
 
-export type EditorPaneHandle = {
-  setQuery: (q: string) => void;
-  findNext: () => void;
-  findPrevious: () => void;
-  clearQuery: () => void;
-  getSearchStatus: () => { count: number; index: number };
-  /** Open CodeMirror's find/replace panel. */
-  openSearch: () => void;
+export type EditorPaneHandle = TextSearchHandle & {
   focus: () => void;
   getSelection: () => string | null;
   getPath: () => string;
@@ -107,6 +106,12 @@ export const EditorPane = memo(
     } | null>(null);
     const pendingFocusRef = useRef<string | null>(null);
     const searchQueryRef = useRef("");
+    const searchOptionsRef = useRef<TextSearchOptions>({
+      caseSensitive: false,
+    });
+    const searchListenersRef = useRef<Set<(status: TextSearchStatus) => void>>(
+      new Set(),
+    );
     const statusRef = useRef(doc.status);
     useLayoutEffect(() => {
       statusRef.current = doc.status;
@@ -247,67 +252,150 @@ export const EditorPane = memo(
       };
     }, [path, doc.status, overrideLanguage]);
 
+    /** 计算当前 CodeMirror 文档的字面量搜索状态。 */
+    const getSearchStatus = useCallback((): TextSearchStatus => {
+      const view = cmRef.current?.view;
+      const query = searchQueryRef.current;
+      if (!view || !query) return { count: 0, index: 0 };
+      const matches = findLiteralMatches(
+        view.state.doc.toString(),
+        query,
+        searchOptionsRef.current,
+      );
+      const selection = view.state.selection.main;
+      const current = matches.findIndex(
+        (offset) =>
+          selection.from >= offset && selection.from <= offset + query.length,
+      );
+      return {
+        count: matches.length,
+        index: current >= 0 ? current + 1 : matches.length > 0 ? 1 : 0,
+      };
+    }, []);
+
+    /** 通知 Header 当前文件的搜索命中状态已经变化。 */
+    const emitSearchStatus = useCallback(() => {
+      const status = getSearchStatus();
+      for (const listener of searchListenersRef.current) listener(status);
+    }, [getSearchStatus]);
+
+    useEffect(() => {
+      if (doc.status !== "ready") return;
+      const query = searchQueryRef.current;
+      const view = cmRef.current?.view;
+      if (!query || !view) return;
+      view.dispatch({
+        effects: setSearchQuery.of(
+          new SearchQuery({
+            search: query,
+            caseSensitive: searchOptionsRef.current.caseSensitive,
+            regexp: false,
+          }),
+        ),
+      });
+      findNext(view);
+      emitSearchStatus();
+    }, [doc.status, emitSearchStatus]);
+
     useImperativeHandle(
       ref,
       () => ({
-        setQuery: (q: string) => {
-          searchQueryRef.current = q;
+        setQuery: (query: string, options = { caseSensitive: false }) => {
+          searchQueryRef.current = query;
+          searchOptionsRef.current = options;
           const view = cmRef.current?.view;
-          if (!view) return;
-          view.dispatch({
-            effects: setSearchQuery.of(
-              new SearchQuery({ search: q, caseSensitive: false }),
-            ),
-          });
-          if (q) findNext(view);
+          if (view) {
+            view.dispatch({
+              effects: setSearchQuery.of(
+                new SearchQuery({
+                  search: query,
+                  caseSensitive: options.caseSensitive,
+                  regexp: false,
+                }),
+              ),
+            });
+            if (query) findNext(view);
+          }
+          emitSearchStatus();
         },
         findNext: () => {
           const view = cmRef.current?.view;
           if (view) findNext(view);
+          emitSearchStatus();
         },
         findPrevious: () => {
           const view = cmRef.current?.view;
           if (view) findPrevious(view);
+          emitSearchStatus();
         },
         clearQuery: () => {
           searchQueryRef.current = "";
           const view = cmRef.current?.view;
-          if (!view) return;
-          view.dispatch({
-            effects: setSearchQuery.of(new SearchQuery({ search: "" })),
-          });
+          if (view)
+            view.dispatch({
+              effects: setSearchQuery.of(new SearchQuery({ search: "" })),
+            });
+          emitSearchStatus();
         },
-        /** 返回当前编辑器搜索命中总数和当前命中位置。 */
-        getSearchStatus: () => {
+        getSearchStatus,
+        subscribeSearchStatus: (listener) => {
+          searchListenersRef.current.add(listener);
+          listener(getSearchStatus());
+          return () => searchListenersRef.current.delete(listener);
+        },
+        replaceCurrent: async (replacement: string) => {
           const view = cmRef.current?.view;
-          if (!view) return { count: 0, index: 0 };
-          const queryText = searchQueryRef.current;
-          if (!queryText) return { count: 0, index: 0 };
+          const query = searchQueryRef.current;
+          if (!view || !query) return 0;
           const content = view.state.doc.toString();
-          const haystack = content.toLocaleLowerCase();
-          const needle = queryText.toLocaleLowerCase();
+          const matches = findLiteralMatches(
+            content,
+            query,
+            searchOptionsRef.current,
+          );
           const selection = view.state.selection.main;
-          let count = 0;
-          let index = 0;
-          let offset = 0;
-          while (offset <= haystack.length) {
-            const match = haystack.indexOf(needle, offset);
-            if (match < 0) break;
-            count += 1;
-            if (
-              index === 0 &&
-              selection.from >= match &&
-              selection.from <= match + needle.length
-            ) {
-              index = count;
-            }
-            offset = match + Math.max(needle.length, 1);
+          const index = matches.findIndex(
+            (offset) =>
+              selection.from >= offset &&
+              selection.from <= offset + query.length,
+          );
+          if (index < 0) return 0;
+          const result = replaceLiteralMatch(
+            content,
+            query,
+            replacement,
+            searchOptionsRef.current,
+            index,
+          );
+          if (result.count > 0) {
+            const from = matches[index];
+            view.dispatch({
+              changes: { from, to: from + query.length, insert: replacement },
+            });
           }
-          return { count, index };
+          emitSearchStatus();
+          return result.count;
         },
-        openSearch: () => {
+        replaceAll: async (replacement: string) => {
           const view = cmRef.current?.view;
-          if (view) openSearchPanel(view);
+          const query = searchQueryRef.current;
+          if (!view || !query) return 0;
+          const content = view.state.doc.toString();
+          const matches = findLiteralMatches(
+            content,
+            query,
+            searchOptionsRef.current,
+          );
+          if (matches.length === 0) return 0;
+          view.dispatch({
+            changes: matches.map((from) => ({
+              from,
+              to: from + query.length,
+              insert: replacement,
+            })),
+          });
+          emitSearchStatus();
+          return matches.length;
         },
         focus: () => {
           pendingFocusRef.current = path;
@@ -339,7 +427,13 @@ export const EditorPane = memo(
           if (view) redo(view);
         },
       }),
-      [path, applyPendingFocus, applyPendingGoto],
+      [
+        path,
+        applyPendingFocus,
+        applyPendingGoto,
+        emitSearchStatus,
+        getSearchStatus,
+      ],
     );
 
     if (doc.status === "loading") {
@@ -461,7 +555,7 @@ export const EditorPane = memo(
             autocompletion: false,
             highlightActiveLine: true,
             highlightSelectionMatches: true,
-            searchKeymap: true,
+            searchKeymap: false,
           }}
         />
       </div>

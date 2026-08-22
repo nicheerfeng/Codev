@@ -68,10 +68,16 @@ function EditorGroup({
             onSelect={onSelect}
             onClose={onClose}
             onCloseTabsToRight={(id) =>
-              onCloseTabsToRight(tabs.map((tab) => tab.id), id)
+              onCloseTabsToRight(
+                tabs.map((tab) => tab.id),
+                id,
+              )
             }
             onCloseOtherTabs={(id) =>
-              onCloseOtherTabs(tabs.map((tab) => tab.id), id)
+              onCloseOtherTabs(
+                tabs.map((tab) => tab.id),
+                id,
+              )
             }
             onPin={onPin}
             onRename={onRename}
@@ -117,6 +123,7 @@ function EditorGroup({
           <MarkdownStack
             tabs={tabs}
             activeId={activeId}
+            registerHandle={registerEditorHandle}
             onSetMarkdownView={onSetMarkdownView}
           />
         </div>

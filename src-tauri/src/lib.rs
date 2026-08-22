@@ -15,6 +15,16 @@ struct LaunchDir(Mutex<Option<String>>);
 #[derive(Default)]
 struct LaunchFiles(Mutex<Vec<String>>);
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenTargetPayload {
+    dir: Option<String>,
+    files: Vec<String>,
+}
+
+#[derive(Default)]
+struct PendingOpenTargets(Mutex<Vec<OpenTargetPayload>>);
+
 #[tauri::command]
 fn get_launch_dir(state: State<'_, LaunchDir>) -> Option<String> {
     state.0.lock().expect("LaunchDir mutex poisoned").take()
@@ -23,6 +33,12 @@ fn get_launch_dir(state: State<'_, LaunchDir>) -> Option<String> {
 #[tauri::command]
 fn get_launch_files(state: State<'_, LaunchFiles>) -> Vec<String> {
     std::mem::take(&mut *state.0.lock().expect("LaunchFiles mutex poisoned"))
+}
+
+/// 取出单实例转发期间暂存的外部打开请求。
+#[tauri::command]
+fn get_pending_open_targets(state: State<'_, PendingOpenTargets>) -> Vec<OpenTargetPayload> {
+    std::mem::take(&mut *state.0.lock().expect("PendingOpenTargets mutex poisoned"))
 }
 
 enum LaunchEntry {
@@ -59,9 +75,13 @@ fn resolve_launch_target(entries: Vec<LaunchEntry>) -> LaunchTarget {
     LaunchTarget { dir, files }
 }
 
-fn parse_launch_target() -> LaunchTarget {
-    let entries = std::env::args()
-        .skip(1)
+/// 将一组外部启动参数解析为目录和文件目标。
+fn parse_launch_target_args<I>(args: I) -> LaunchTarget
+where
+    I: IntoIterator<Item = String>,
+{
+    let entries = args
+        .into_iter()
         .filter(|arg| !arg.starts_with('-'))
         .filter_map(|arg| std::fs::canonicalize(arg).ok())
         .filter_map(|path| {
@@ -74,6 +94,34 @@ fn parse_launch_target() -> LaunchTarget {
         })
         .collect();
     resolve_launch_target(entries)
+}
+
+/// 解析当前进程首次启动时收到的外部路径。
+fn parse_launch_target() -> LaunchTarget {
+    parse_launch_target_args(std::env::args().skip(1))
+}
+
+/// 将外部打开请求交给已有主窗口，避免资源管理器重复创建实例。
+fn queue_open_target(app: &tauri::AppHandle, target: LaunchTarget) {
+    if target.dir.is_none() && target.files.is_empty() {
+        return;
+    }
+    let payload = OpenTargetPayload {
+        dir: target.dir,
+        files: target.files,
+    };
+    if let Some(state) = app.try_state::<PendingOpenTargets>() {
+        state
+            .0
+            .lock()
+            .expect("PendingOpenTargets mutex poisoned")
+            .push(payload);
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+    let _ = app.emit("terax:open-target", ());
 }
 
 /// 打开并居中单页面设置窗口。
@@ -156,6 +204,11 @@ pub fn run() {
     workspace::init_launch_cwd(cli_dir.as_deref());
 
     let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        let target = parse_launch_target_args(argv.into_iter().skip(1));
+        queue_open_target(app, target);
+    }));
     #[cfg(target_os = "linux")]
     let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
     builder
@@ -192,6 +245,7 @@ pub fn run() {
         .manage(fs::transfer::TransferState::default())
         .manage(history::HistoryState::default())
         .manage(fs::grep::ContentSearchState::default())
+        .manage(PendingOpenTargets::default())
         .manage({
             let registry = workspace::WorkspaceRegistry::default();
             workspace::bootstrap_registry(&registry);
@@ -217,6 +271,9 @@ pub fn run() {
             fs::clipboard::fs_get_file_clipboard,
             fs::file::fs_read_file,
             fs::file::fs_read_text_window,
+            fs::file::fs_find_text,
+            fs::file::fs_replace_text,
+            fs::file::fs_allow_asset,
             fs::file::fs_write_file,
             fs::file::fs_stat,
             fs::file::fs_canonicalize,
@@ -242,6 +299,7 @@ pub fn run() {
             workspace::workspace_current_dir,
             get_launch_dir,
             get_launch_files,
+            get_pending_open_targets,
             open_settings_window,
             history::history_suggest,
             history::history_commands,
@@ -262,25 +320,18 @@ pub fn run() {
                         .iter()
                         .filter_map(|u| u.to_file_path().ok())
                         .filter_map(|p| std::fs::canonicalize(p).ok())
-                        .filter(|p| p.is_file())
-                        .map(LaunchEntry::File)
+                        .filter_map(|p| {
+                            if p.is_dir() {
+                                Some(LaunchEntry::Dir(p))
+                            } else if p.is_file() {
+                                Some(LaunchEntry::File(p))
+                            } else {
+                                None
+                            }
+                        })
                         .collect();
                     let target = resolve_launch_target(entries);
-                    if target.files.is_empty() {
-                        return;
-                    }
-                    if let Some(dir) = &target.dir {
-                        if let Some(registry) = _app.try_state::<workspace::WorkspaceRegistry>() {
-                            let _ = registry.authorize(dir);
-                        }
-                        if let Some(state) = _app.try_state::<LaunchDir>() {
-                            *state.0.lock().expect("LaunchDir mutex poisoned") = Some(dir.clone());
-                        }
-                    }
-                    if let Some(state) = _app.try_state::<LaunchFiles>() {
-                        *state.0.lock().expect("LaunchFiles mutex poisoned") = target.files.clone();
-                    }
-                    let _ = _app.emit("terax:open-file", target.files);
+                    queue_open_target(_app, target);
                 }
                 _ => {}
             }

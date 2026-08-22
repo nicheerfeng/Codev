@@ -10,7 +10,13 @@ import type {
 } from "react-resizable-panels";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { consumeLaunchFiles, getLaunchDir } from "@/lib/launchDir";
+import {
+  consumeLaunchFiles,
+  consumePendingOpenTargets,
+  getExplicitLaunchDir,
+  getLaunchDir,
+  type OpenTargetPayload,
+} from "@/lib/launchDir";
 import { isMarkdownPath } from "@/lib/utils";
 import { useZoom } from "@/lib/useZoom";
 import { quoteShellArg } from "@/lib/shellQuote";
@@ -18,6 +24,7 @@ import { CommandPalette, createCommandItems } from "@/modules/command-palette";
 import {
   type EditorPaneHandle,
   NewEditorDialog,
+  useReaderFileDrop,
   useApplyEditorFontSize,
   useEditorFileSync,
 } from "@/modules/editor";
@@ -392,7 +399,8 @@ export default function App() {
     previousTerminalCountRef.current = terminalTabs.length;
   }, [terminalTabs.length]);
   const isTerminalTab = activeTab?.kind === "terminal";
-  const isEditorTab = activeTab?.kind === "editor";
+  const isSearchableDocumentTab =
+    activeTab?.kind === "editor" || activeTab?.kind === "markdown";
 
   useEditorFileSync({ tabs, tabsRef, editorRefs });
   useThemeFileEditing({ tabsRef, openFileTab });
@@ -584,12 +592,78 @@ export default function App() {
     [openFileTab, secondaryEditorTabs, setActiveId],
   );
 
+  /** 在指定阅览器中以临时标签打开外部拖入文件。 */
+  const openDroppedFile = useCallback(
+    (path: string, group: "primary" | "secondary") => {
+      const id = isMarkdownPath(path)
+        ? newMarkdownTab(path)
+        : openFileTab(path, false, {
+            activate: group === "primary",
+          });
+      if (group === "secondary") {
+        setSecondaryEditorIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
+        setSecondaryEditorActiveId(id);
+      } else {
+        setPrimaryEditorActiveId(id);
+      }
+      setActiveId(id);
+    },
+    [newMarkdownTab, openFileTab, setActiveId],
+  );
+
+  useReaderFileDrop({ onOpen: openDroppedFile });
+
   const openLaunchFiles = useCallback(
     (paths: string[]) => {
       for (const path of paths) handleOpenFile(path, true);
     },
     [handleOpenFile],
   );
+
+  /** 将外部目录加入当前工作区，并打开同次传入的文件。 */
+  const applyOpenTarget = useCallback(
+    async (target: OpenTargetPayload) => {
+      if (target.dir) await addRoot(target.dir.replace(/\\/g, "/"));
+      for (const path of target.files) handleOpenFile(path, true);
+    },
+    [addRoot, handleOpenFile],
+  );
+
+  const launchRootAppliedRef = useRef(false);
+  useEffect(() => {
+    const dir = getExplicitLaunchDir();
+    if (!booted || launchRootAppliedRef.current || !dir) return;
+    launchRootAppliedRef.current = true;
+    void addRoot(dir);
+  }, [addRoot, booted]);
+
+  useEffect(() => {
+    if (!booted) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    const drainPendingTargets = async () => {
+      const targets = await consumePendingOpenTargets();
+      if (disposed) return;
+      for (const target of targets) await applyOpenTarget(target);
+    };
+
+    void listen("terax:open-target", () => {
+      void drainPendingTargets();
+    }).then((off) => {
+      if (disposed) off();
+      else {
+        unlisten = off;
+        void drainPendingTargets();
+      }
+    });
+    void drainPendingTargets();
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [applyOpenTarget, booted]);
 
   // Warm start: the backend emits once the window already exists. Attach on
   // mount so an "Open With" that lands mid-restore isn't dropped — the backend
@@ -713,9 +787,7 @@ export default function App() {
         clearFocusedTerminal();
       },
       "search.focus": () => {
-        const editor = editorRefs.current.get(activeId);
-        if (editor) editor.openSearch();
-        else searchInlineRef.current?.focus();
+        searchInlineRef.current?.focus();
       },
       "settings.open": () => void openSettingsWindow(),
       "sidebar.toggle": toggleSidebar,
@@ -852,7 +924,7 @@ export default function App() {
         addon: activeSearchAddon,
         focus: () => terminalRefs.current.get(activeLeafId)?.focus(),
       };
-    if (isEditorTab && activeEditorHandle)
+    if (isSearchableDocumentTab && activeEditorHandle)
       return {
         kind: "editor",
         handle: activeEditorHandle,
@@ -861,7 +933,7 @@ export default function App() {
     return null;
   }, [
     isTerminalTab,
-    isEditorTab,
+    isSearchableDocumentTab,
     activeLeafId,
     activeSearchAddon,
     activeEditorHandle,

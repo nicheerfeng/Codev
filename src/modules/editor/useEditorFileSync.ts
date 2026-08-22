@@ -27,7 +27,11 @@ export function useEditorFileSync({ tabs, tabsRef, editorRefs }: Params) {
       getCurrentWebviewWindow().listen<FileWrittenPayload>(
         "fs:file-written",
         (event) => {
-          if (event.payload.source === "editor") return;
+          if (
+            event.payload.source === "editor" ||
+            event.payload.source === "search"
+          )
+            return;
           const normalizedPath = event.payload.path.replace(/\\/g, "/");
           const currentTabs = tabsRef.current;
           for (const t of currentTabs) {
