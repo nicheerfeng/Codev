@@ -212,7 +212,7 @@ const ZH: Record<string, string> = {
   "Wrap column": "换行列数",
   "Theme, background image, and customization.": "主题、背景图片与自定义设置。",
   Theme: "主题",
-  "Terax Default": "Terax 默认",
+  "Codev Default": "Codev 默认",
   "Codium Dark": "Codium 深色",
   Catppuccin: "Catppuccin",
   Create: "创建",

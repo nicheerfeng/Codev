@@ -1,6 +1,6 @@
 # Two-process model and IPC command reference
 
-Terax 由 Rust 后端和前端 WebView 组成。Rust 负责文件、目录、PTY、Shell 和工作区状态；前端负责界面、编辑器、文件树、Markdown 视图和终端渲染。
+Codev 由 Rust 后端和前端 WebView 组成。Rust 负责文件、目录、PTY、Shell 和工作区状态；前端负责界面、编辑器、文件树、Markdown 视图和终端渲染。
 
 前端不直接访问文件系统或创建进程，所有主机操作都通过 `invoke()` 调用 `src-tauri/src/lib.rs` 注册的命令。
 

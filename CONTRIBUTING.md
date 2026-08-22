@@ -1,6 +1,6 @@
-# Contributing to Terax
+# Contributing to Codev
 
-Terax 采用小核心、低依赖的产品方向。贡献应围绕多项目工作区、文件树、代码/文档阅读器和集成终端展开。
+Codev 采用小核心、低依赖的产品方向。贡献应围绕多项目工作区、文件树、代码/文档阅读器和集成终端展开。
 
 ## Quick start
 

@@ -1,13 +1,13 @@
 <div align="center">
-  <img src="public/logo.png" width="144" height="144" alt="Terax" />
-  <h1>Terax</h1>
+  <img src="public/logo.png" width="144" height="144" alt="Codev" />
+  <h1>Codev</h1>
   <p><strong>轻量级多项目代码与文档阅读器</strong></p>
   <p>文件树 · 编辑器 · Markdown 阅读 · 集成终端</p>
 </div>
 
 ---
 
-Terax 是一个基于 Tauri 2、Rust 和 React 的极简开发阅读器。它围绕多项目工作区、文件树、文本编辑/阅读、Markdown 原文与渲染视图，以及集成终端组织功能。
+Codev 是一个基于 Tauri 2、Rust 和 React 的极简开发阅读器。它围绕多项目工作区、文件树、文本编辑/阅读、Markdown 原文与渲染视图，以及集成终端组织功能。
 
 产品边界明确：不提供扩展系统、LSP、代码诊断、自动格式化、网页预览或常驻后台服务。语法高亮仅用于阅读，不承担代码检查职责。
 
@@ -81,4 +81,4 @@ Tauri 2、Rust、`portable-pty`、React 19、TypeScript、Vite、xterm.js、Code
 
 ## License
 
-Terax 使用 Apache-2.0 License，详见 [LICENSE](LICENSE)。
+Codev 使用 Apache-2.0 License，详见 [LICENSE](LICENSE)。

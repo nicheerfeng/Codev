@@ -4,7 +4,7 @@ This guide elaborates on `TERAX.md`. If anything here conflicts with `TERAX.md`,
 
 ## Why a pool exists
 
-Terminal tabs are kept mounted and hidden on switch so PTYs and dev servers keep streaming in the background. Creating an unbounded number of live xterm + WebGL renderer instances would blow the memory budget, so Terax pools renderer slots.
+Terminal tabs are kept mounted and hidden on switch so PTYs and dev servers keep streaming in the background. Creating an unbounded number of live xterm + WebGL renderer instances would blow the memory budget, so Codev pools renderer slots.
 
 The pool lives in `src/modules/terminal/lib/rendererPool.ts`.
 

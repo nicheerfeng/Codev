@@ -1,6 +1,6 @@
-# Terax project memory
+# Codev project memory
 
-Terax 是一个基于 Tauri 2 + Rust + React 的极简代码和文档阅读器。产品核心只有四层：多项目工作区、文件树、代码/Markdown 阅读器、集成终端。
+Codev 是一个基于 Tauri 2 + Rust + React 的极简代码和文档阅读器。产品核心只有四层：多项目工作区、文件树、代码/Markdown 阅读器、集成终端。
 
 ## Product boundary
 

@@ -1,6 +1,6 @@
 # Security model
 
-Terax 的安全重点是文件、Shell、PTY 和前端 IPC 边界。项目没有网络代理、密钥服务或 AI 工具运行时，安全模型保持在本地工作区范围内。
+Codev 的安全重点是文件、Shell、PTY 和前端 IPC 边界。项目没有网络代理、密钥服务或 AI 工具运行时，安全模型保持在本地工作区范围内。
 
 ## Boundaries
 

@@ -1,4 +1,4 @@
-# Terax contributor documentation
+# Codev contributor documentation
 
 这些文档服务于当前最小产品：多项目工作区、文件树、代码/文档阅读器和集成终端。
 

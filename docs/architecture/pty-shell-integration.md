@@ -39,9 +39,9 @@ Integration scripts live in `src-tauri/src/modules/pty/scripts/`:
 - `bashrc.bash` for bash
 - `init.fish` for fish, installed to `~/.config/fish/conf.d/terax.fish`
 
-Zsh is launched with `ZDOTDIR` pointing at a temp directory that sources our scripts and then the user's real configs. Bash uses `--rcfile` with a wrapper that sources the user's `~/.bashrc` after Terax's. Fish uses `conf.d` so no user file is replaced.
+Zsh is launched with `ZDOTDIR` pointing at a temp directory that sources our scripts and then the user's real configs. Bash uses `--rcfile` with a wrapper that sources the user's `~/.bashrc` after Codev's. Fish uses `conf.d` so no user file is replaced.
 
-All integrated shells emit **OSC 7** (cwd) and **OSC 133 A/B/C/D** (prompt boundaries and exit code) so Terax can track cwd and detect command boundaries without parsing the user's prompt.
+All integrated shells emit **OSC 7** (cwd) and **OSC 133 A/B/C/D** (prompt boundaries and exit code) so Codev can track cwd and detect command boundaries without parsing the user's prompt.
 
 ### Windows
 
@@ -61,7 +61,7 @@ The profile wraps the user's existing `prompt` function to emit OSC 7 + OSC 133 
 
 ### Fish 4.0+
 
-Fish 4.0 writes its own OSC 133 prompt markers. To avoid doubling, Terax sets `fish_features=no-mark-prompt` and re-asserts its own prompt via `-C` after `config.fish` runs.
+Fish 4.0 writes its own OSC 133 prompt markers. To avoid doubling, Codev sets `fish_features=no-mark-prompt` and re-asserts its own prompt via `-C` after `config.fish` runs.
 
 ## Concurrency and process lifetime on Windows
 
@@ -71,7 +71,7 @@ Fish 4.0 writes its own OSC 133 prompt markers. To avoid doubling, Terax sets `f
 
 ### Job Object
 
-Each ConPTY child is assigned to a Windows Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (`job.rs:34`). When the Job HANDLE drops - clean shutdown, panic, or even a SIGKILL'd Terax process - the kernel kills every descendant of the shell. Without this, `TerminateProcess` only kills the immediate child and `npm run dev` started inside pwsh would be orphaned.
+Each ConPTY child is assigned to a Windows Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (`job.rs:34`). When the Job HANDLE drops - clean shutdown, panic, or even a SIGKILL'd Codev process - the kernel kills every descendant of the shell. Without this, `TerminateProcess` only kills the immediate child and `npm run dev` started inside pwsh would be orphaned.
 
 On macOS and Linux, `Drop for Session` calls `killer.kill()`. Dev `Ctrl-C` of `cargo run` can still leave orphans because destructors may not run; that is acceptable for development only.
 
