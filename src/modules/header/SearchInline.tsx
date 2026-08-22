@@ -2,7 +2,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { KEY_SEP } from "@/lib/platform";
 import { useT } from "@/lib/i18n";
-import type { EditorPaneHandle } from "@/modules/editor";
+import type {
+  EditorPaneHandle,
+  TextSearchOptions,
+  TextSearchStatus,
+} from "@/modules/editor";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { getBindingTokens, SHORTCUTS } from "@/modules/shortcuts/shortcuts";
 import {
@@ -37,7 +41,7 @@ export type SearchTarget =
 
 export type SearchInlineHandle = { focus: () => void };
 
-type SearchStatus = { count: number; index: number };
+type SearchStatus = TextSearchStatus;
 
 type Props = {
   target: SearchTarget;
@@ -49,6 +53,8 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
   function SearchInline({ target, compact }, ref) {
     const t = useT();
     const [q, setQ] = useState("");
+    const [replacement, setReplacement] = useState("");
+    const [replaceOpen, setReplaceOpen] = useState(false);
     const [status, setStatus] = useState<SearchStatus | null>(null);
     // In compact mode the field is hidden behind an icon until activated.
     // In normal mode the field is always present.
@@ -104,12 +110,18 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
     // Target switched (terminal ↔ editor) or removed → drop highlights.
     useEffect(() => clearTarget, [clearTarget]);
 
+    const searchOptions = useMemo<TextSearchOptions>(
+      () => ({ caseSensitive: false }),
+      [],
+    );
+
     useEffect(() => {
       if (!target) {
         setStatus(null);
         return;
       }
       if (target.kind === "terminal") {
+        if (q) target.addon.findNext(q, { decorations: TERM_DECORATIONS });
         const unlisten = target.addon.onDidChangeResults((event) => {
           setStatus({
             count: event.resultCount,
@@ -118,7 +130,14 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
         });
         return () => unlisten.dispose();
       }
+      if (q) target.handle.setQuery(q, searchOptions);
+      const unsubscribe = target.handle.subscribeSearchStatus(setStatus);
       setStatus(target.handle.getSearchStatus());
+      return unsubscribe;
+    }, [q, searchOptions, target]);
+
+    useEffect(() => {
+      if (target?.kind !== "editor") setReplaceOpen(false);
     }, [target]);
 
     const applyIncremental = (next: string) => {
@@ -136,7 +155,7 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
           target.addon.clearDecorations();
         }
       } else {
-        target.handle.setQuery(next);
+        target.handle.setQuery(next, searchOptions);
         setStatus(next ? target.handle.getSearchStatus() : null);
       }
     };
@@ -154,101 +173,170 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
       }
     };
 
-  const statusLabel = !q
+    const runReplace = async (all: boolean) => {
+      if (!target || target.kind !== "editor" || !q) return;
+      const count = all
+        ? await target.handle.replaceAll(replacement)
+        : await target.handle.replaceCurrent(replacement);
+      setStatus(target.handle.getSearchStatus());
+      if (count > 0) restoreTargetFocus();
+    };
+
+    const statusLabel = !q
       ? null
       : !target
         ? t("No active editor or terminal")
-        : status
-          ? `${status.index}/${status.count}`
-          : null;
+        : status?.busy
+          ? t("Searching...")
+          : status
+            ? `${status.index}/${status.count}${status.truncated ? "+" : ""}`
+            : null;
     const canNavigate = Boolean(q && status && status.count > 0);
+    const canReplace = Boolean(
+      q && status && status.count > 0 && target?.kind === "editor",
+    );
 
     return (
       <div
         className="relative h-7 shrink-0 transition-[width] duration-200 ease-out"
-        style={{ width: expanded ? 242 : 28 }}
+        style={{ width: expanded ? (replaceOpen ? 474 : 242) : 28 }}
       >
         {expanded ? (
-          <div className="absolute inset-0 animate-in fade-in-0 duration-150">
-            <HugeiconsIcon
-              icon={Search01Icon}
-              size={13}
-              strokeWidth={1.75}
-              className="pointer-events-none absolute top-1/2 left-2 -translate-y-1/2 text-muted-foreground"
-            />
-            <Input
-              ref={setInputRef}
-              value={q}
-              placeholder={placeholder}
-              className="h-7 w-full bg-muted/80 pr-24 pl-7 text-[13px]! placeholder:text-muted-foreground/70 focus-visible:ring-0"
-              onChange={(e) => {
-                const next = e.target.value;
-                setQ(next);
-                applyIncremental(next);
-              }}
-              onBlur={() => {
-                if (compact && !q) setOpenInCompact(false);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  findDirection(!e.shiftKey);
-                } else if (e.key === "Escape") {
-                  e.preventDefault();
-                  clearTarget();
-                  setQ("");
-                  if (compact) {
-                    setOpenInCompact(false);
-                  }
-                  restoreTargetFocus();
-                }
-              }}
-            />
-            {statusLabel ? (
-              <span
-                className="pointer-events-none absolute top-1/2 right-18 max-w-18 -translate-y-1/2 truncate text-[10px] text-muted-foreground"
-                title={statusLabel}
-              >
-                {statusLabel}
-              </span>
-            ) : null}
-            {q ? (
-              <div className="absolute top-1/2 right-6 flex -translate-y-1/2 items-center gap-0.5">
-                <button
-                  type="button"
-                  disabled={!canNavigate}
-                  onClick={() => findDirection(false)}
-                  className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
-                  aria-label={t("Previous match")}
-                  title={t("Previous match")}
-                >
-                  <HugeiconsIcon icon={ArrowUp01Icon} size={11} strokeWidth={2} />
-                </button>
-                <button
-                  type="button"
-                  disabled={!canNavigate}
-                  onClick={() => findDirection(true)}
-                  className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
-                  aria-label={t("Next match")}
-                  title={t("Next match")}
-                >
-                  <HugeiconsIcon icon={ArrowDown01Icon} size={11} strokeWidth={2} />
-                </button>
-              </div>
-            ) : null}
-            {q && (
-              <button
-                type="button"
-                onClick={() => {
-                  setQ("");
-                  clearTarget();
-                  inputRef.current?.focus();
+          <div className="absolute inset-0 flex gap-1 animate-in fade-in-0 duration-150">
+            <div
+              className={`relative min-w-0 ${replaceOpen ? "w-[190px] shrink-0" : "flex-1"}`}
+            >
+              <HugeiconsIcon
+                icon={Search01Icon}
+                size={13}
+                strokeWidth={1.75}
+                className="pointer-events-none absolute top-1/2 left-2 -translate-y-1/2 text-muted-foreground"
+              />
+              <Input
+                ref={setInputRef}
+                value={q}
+                placeholder={placeholder}
+                className="h-7 w-full bg-muted/80 pr-20 pl-7 text-[13px]! placeholder:text-muted-foreground/70 focus-visible:ring-0"
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setQ(next);
+                  applyIncremental(next);
                 }}
-                className="absolute top-1/2 right-1.5 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                aria-label="Clear search"
-              >
-                <HugeiconsIcon icon={Cancel01Icon} size={11} strokeWidth={2} />
-              </button>
+                onBlur={() => {
+                  if (compact && !q) setOpenInCompact(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    findDirection(!e.shiftKey);
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    clearTarget();
+                    setQ("");
+                    setReplaceOpen(false);
+                    if (compact) setOpenInCompact(false);
+                    restoreTargetFocus();
+                  }
+                }}
+              />
+              {statusLabel ? (
+                <span
+                  className="pointer-events-none absolute top-1/2 right-14 max-w-14 -translate-y-1/2 truncate text-[10px] text-muted-foreground"
+                  title={statusLabel}
+                >
+                  {statusLabel}
+                </span>
+              ) : null}
+              {q ? (
+                <div className="absolute top-1/2 right-5 flex -translate-y-1/2 items-center gap-0.5">
+                  <button
+                    type="button"
+                    disabled={!canNavigate}
+                    onClick={() => findDirection(false)}
+                    className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
+                    aria-label={t("Previous match")}
+                    title={t("Previous match")}
+                  >
+                    <HugeiconsIcon
+                      icon={ArrowUp01Icon}
+                      size={11}
+                      strokeWidth={2}
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canNavigate}
+                    onClick={() => findDirection(true)}
+                    className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
+                    aria-label={t("Next match")}
+                    title={t("Next match")}
+                  >
+                    <HugeiconsIcon
+                      icon={ArrowDown01Icon}
+                      size={11}
+                      strokeWidth={2}
+                    />
+                  </button>
+                </div>
+              ) : null}
+              {q && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQ("");
+                    clearTarget();
+                    inputRef.current?.focus();
+                  }}
+                  className="absolute top-1/2 right-1 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  aria-label={t("Clear search")}
+                >
+                  <HugeiconsIcon
+                    icon={Cancel01Icon}
+                    size={11}
+                    strokeWidth={2}
+                  />
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              disabled={!target || target.kind !== "editor"}
+              onClick={() => setReplaceOpen((open) => !open)}
+              className="size-7 shrink-0 rounded-md bg-muted/80 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
+              aria-label={t("Replace")}
+              title={t("Replace")}
+            >
+              ⇄
+            </button>
+            {replaceOpen && (
+              <div className="flex h-7 min-w-0 flex-1 items-center gap-1">
+                <Input
+                  value={replacement}
+                  placeholder={t("Replace")}
+                  className="h-7 min-w-0 flex-1 bg-muted/80 text-xs focus-visible:ring-0"
+                  onChange={(event) => setReplacement(event.target.value)}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 shrink-0 px-2 text-[11px]"
+                  disabled={!canReplace}
+                  onClick={() => void runReplace(false)}
+                >
+                  {t("Replace Current")}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 shrink-0 px-2 text-[11px]"
+                  disabled={!canReplace}
+                  onClick={() => void runReplace(true)}
+                >
+                  {t("Replace All")}
+                </Button>
+              </div>
             )}
           </div>
         ) : (

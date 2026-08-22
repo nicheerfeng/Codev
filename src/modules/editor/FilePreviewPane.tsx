@@ -10,6 +10,11 @@ import {
   useState,
 } from "react";
 import type { EditorPaneHandle } from "./EditorPane";
+import type {
+  TextSearchHandle,
+  TextSearchOptions,
+  TextSearchStatus,
+} from "./lib/textSearch";
 
 type Props = {
   path: string;
@@ -24,6 +29,19 @@ type TextWindow = {
   nextOffset: number;
   totalBytes: number;
   hasMore: boolean;
+};
+
+type TextMatch = {
+  offset: number;
+  lineStart: number;
+  line: number;
+  column: number;
+};
+
+type TextSearchResult = {
+  matches: TextMatch[];
+  total: number;
+  truncated: boolean;
 };
 
 type LoadState =
@@ -125,82 +143,249 @@ function PageControls({
 }
 
 // 以单页纯文本预览 JSONL、CSV、TSV 和日志，保持原文可选中复制。
-function TextWindowPreview({ path }: { path: string }) {
-  const [offset, setOffset] = useState(0);
-  const [history, setHistory] = useState<number[]>([]);
-  const [state, setState] = useState<LoadState>({ kind: "loading" });
+const TextWindowPreview = forwardRef<
+  TextSearchHandle,
+  { path: string; reloadKey: number }
+>(function TextWindowPreview({ path, reloadKey }, ref) {
+    const [offset, setOffset] = useState(0);
+    const [history, setHistory] = useState<number[]>([]);
+    const [state, setState] = useState<LoadState>({ kind: "loading" });
+    const queryRef = useRef("");
+    const optionsRef = useRef<TextSearchOptions>({ caseSensitive: false });
+    const matchesRef = useRef<TextMatch[]>([]);
+    const totalMatchesRef = useRef(0);
+    const truncatedRef = useRef(false);
+    const currentMatchRef = useRef(-1);
+    const searchBusyRef = useRef(false);
+    const searchGenerationRef = useRef(0);
+    const searchListenersRef = useRef<Set<(status: TextSearchStatus) => void>>(
+      new Set(),
+    );
 
-  useEffect(() => {
-    let cancelled = false;
-    setState({ kind: "loading" });
-    invoke<TextWindow>("fs_read_text_window", {
-      path,
-      offset,
-      maxBytes: 512 * 1024,
-      maxLines: 300,
-      workspace: currentWorkspaceEnv(),
-    })
-      .then((value) => {
-        if (!cancelled) setState({ kind: "ready", value });
+    /** 计算大文本预览的当前搜索状态。 */
+    const getSearchStatus = useCallback(
+      (): TextSearchStatus => ({
+        count: totalMatchesRef.current,
+        index: currentMatchRef.current >= 0 ? currentMatchRef.current + 1 : 0,
+        truncated: truncatedRef.current,
+        busy: searchBusyRef.current,
+      }),
+      [],
+    );
+
+    /** 通知 Header 大文本检索状态已经更新。 */
+    const emitSearchStatus = useCallback(() => {
+      const status = getSearchStatus();
+      for (const listener of searchListenersRef.current) listener(status);
+    }, [getSearchStatus]);
+
+    useEffect(() => {
+      let cancelled = false;
+      setState({ kind: "loading" });
+      invoke<TextWindow>("fs_read_text_window", {
+        path,
+        offset,
+        maxBytes: 512 * 1024,
+        maxLines: 300,
+        workspace: currentWorkspaceEnv(),
       })
-      .catch((error) => {
-        if (!cancelled) setState({ kind: "error", message: String(error) });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [path, offset]);
+        .then((value) => {
+          if (!cancelled) setState({ kind: "ready", value });
+        })
+        .catch((error) => {
+          if (!cancelled) setState({ kind: "error", message: String(error) });
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, [path, offset, reloadKey]);
 
-  // 返回已访问的文本窗口，只保存偏移量而不保存额外文件内容。
-  const goBack = useCallback(() => {
-    const previous = history[history.length - 1];
-    if (previous === undefined) return;
-    setHistory((entries) => entries.slice(0, -1));
-    setOffset(previous);
-  }, [history]);
+    /** 根据当前命中位置切换到对应文本页。 */
+    const moveToMatch = useCallback(
+      (index: number) => {
+        const match = matchesRef.current[index];
+        if (!match) return;
+        currentMatchRef.current = index;
+        setHistory([]);
+        setOffset(match.lineStart);
+        emitSearchStatus();
+      },
+      [emitSearchStatus],
+    );
 
-  // 请求下一页原始文本，避免前端构造表格或 JSON 对象。
-  const goForward = useCallback(() => {
-    if (state.kind !== "ready" || !state.value.hasMore) return;
-    setHistory((entries) => [...entries, offset]);
-    setOffset(state.value.nextOffset);
-  }, [offset, state]);
+    /** 发起大文本字面量搜索，并把首个命中页定位到阅读器。 */
+    const setSearchQuery = useCallback(
+      (
+        query: string,
+        options: TextSearchOptions = { caseSensitive: false },
+      ) => {
+        const generation = searchGenerationRef.current + 1;
+        searchGenerationRef.current = generation;
+        queryRef.current = query;
+        optionsRef.current = options;
+        matchesRef.current = [];
+        totalMatchesRef.current = 0;
+        truncatedRef.current = false;
+        currentMatchRef.current = -1;
+        if (!query) {
+          searchBusyRef.current = false;
+          setOffset(0);
+          emitSearchStatus();
+          return;
+        }
+        searchBusyRef.current = true;
+        emitSearchStatus();
+        void invoke<TextSearchResult>("fs_find_text", {
+          path,
+          query,
+          caseSensitive: options.caseSensitive,
+          maxMatches: 2000,
+          workspace: currentWorkspaceEnv(),
+        })
+          .then((result) => {
+            if (generation !== searchGenerationRef.current) return;
+            matchesRef.current = result.matches;
+            totalMatchesRef.current = result.total;
+            truncatedRef.current = result.truncated;
+            currentMatchRef.current = result.matches.length > 0 ? 0 : -1;
+            searchBusyRef.current = false;
+            setHistory([]);
+            setOffset(result.matches[0]?.lineStart ?? 0);
+            emitSearchStatus();
+          })
+          .catch(() => {
+            if (generation !== searchGenerationRef.current) return;
+            searchBusyRef.current = false;
+            emitSearchStatus();
+          });
+      },
+      [emitSearchStatus, path],
+    );
 
-  return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
-      {state.kind === "loading" && (
-        <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-          正在读取当前页面…
-        </div>
-      )}
-      {state.kind === "error" && (
-        <div className="flex h-full items-center justify-center px-6 text-center text-xs text-destructive">
-          预览失败：{state.message}
-        </div>
-      )}
-      {state.kind === "ready" && (
-        <>
-          <PageControls
-            offset={state.value.offset}
-            totalBytes={state.value.totalBytes}
-            hasMore={state.value.hasMore}
-            canGoBack={history.length > 0}
-            onBack={goBack}
-            onForward={goForward}
-          />
-          <pre className="min-h-0 flex-1 select-text overflow-auto p-3 font-mono text-[12px] leading-5 whitespace-pre text-foreground">
-            {state.value.content}
-          </pre>
-        </>
-      )}
-    </div>
-  );
-}
+    useImperativeHandle(
+      ref,
+      () => ({
+        setQuery: setSearchQuery,
+        findNext: () => {
+          if (matchesRef.current.length === 0) return;
+          moveToMatch(
+            (currentMatchRef.current + 1) % matchesRef.current.length,
+          );
+        },
+        findPrevious: () => {
+          if (matchesRef.current.length === 0) return;
+          moveToMatch(
+            (currentMatchRef.current - 1 + matchesRef.current.length) %
+              matchesRef.current.length,
+          );
+        },
+        clearQuery: () => {
+          searchGenerationRef.current += 1;
+          queryRef.current = "";
+          matchesRef.current = [];
+          totalMatchesRef.current = 0;
+          currentMatchRef.current = -1;
+          searchBusyRef.current = false;
+          setOffset(0);
+          emitSearchStatus();
+        },
+        getSearchStatus,
+        subscribeSearchStatus: (listener) => {
+          searchListenersRef.current.add(listener);
+          listener(getSearchStatus());
+          return () => searchListenersRef.current.delete(listener);
+        },
+        replaceCurrent: async (replacement: string) => {
+          const match = matchesRef.current[currentMatchRef.current];
+          const query = queryRef.current;
+          if (!match || !query) return 0;
+          const replaced = await invoke<number>("fs_replace_text", {
+            path,
+            query,
+            replacement,
+            caseSensitive: optionsRef.current.caseSensitive,
+            matchOffset: match.offset,
+            replaceAll: false,
+            workspace: currentWorkspaceEnv(),
+          });
+          if (replaced > 0) {
+            setOffset(0);
+            setSearchQuery(query, optionsRef.current);
+          }
+          return replaced;
+        },
+        replaceAll: async (replacement: string) => {
+          const query = queryRef.current;
+          if (!query) return 0;
+          const replaced = await invoke<number>("fs_replace_text", {
+            path,
+            query,
+            replacement,
+            caseSensitive: optionsRef.current.caseSensitive,
+            matchOffset: null,
+            replaceAll: true,
+            workspace: currentWorkspaceEnv(),
+          });
+          if (replaced > 0) {
+            setOffset(0);
+            setSearchQuery(query, optionsRef.current);
+          }
+          return replaced;
+        },
+      }),
+      [emitSearchStatus, getSearchStatus, moveToMatch, path, setSearchQuery],
+    );
+
+    // 返回已访问的文本窗口，只保存偏移量而不保存额外文件内容。
+    const goBack = useCallback(() => {
+      const previous = history[history.length - 1];
+      if (previous === undefined) return;
+      setHistory((entries) => entries.slice(0, -1));
+      setOffset(previous);
+    }, [history]);
+
+    // 请求下一页原始文本，避免前端构造表格或 JSON 对象。
+    const goForward = useCallback(() => {
+      if (state.kind !== "ready" || !state.value.hasMore) return;
+      setHistory((entries) => [...entries, offset]);
+      setOffset(state.value.nextOffset);
+    }, [offset, state]);
+
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-background">
+        {state.kind === "loading" && (
+          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+            正在读取当前页面…
+          </div>
+        )}
+        {state.kind === "error" && (
+          <div className="flex h-full items-center justify-center px-6 text-center text-xs text-destructive">
+            预览失败：{state.message}
+          </div>
+        )}
+        {state.kind === "ready" && (
+          <>
+            <PageControls
+              offset={state.value.offset}
+              totalBytes={state.value.totalBytes}
+              hasMore={state.value.hasMore}
+              canGoBack={history.length > 0}
+              onBack={goBack}
+              onForward={goForward}
+            />
+            <pre className="min-h-0 flex-1 select-text overflow-auto p-3 font-mono text-[12px] leading-5 whitespace-pre text-foreground">
+              {state.value.content}
+            </pre>
+          </>
+        )}
+      </div>
+    );
+  },
+);
 
 // 直接交给 WebView 解码媒体或 PDF，并为超宽图片提供原始尺寸滚动阅读。
 function AssetPreview({ path }: { path: string }) {
   const extension = path.split(".").pop()?.toLowerCase() ?? "";
-  const source = convertFileSrc(path);
   const isImage = [
     "png",
     "jpg",
@@ -218,6 +403,24 @@ function AssetPreview({ path }: { path: string }) {
   const [fit, setFit] = useState(false);
   const [zoom, setZoom] = useState(100);
   const [naturalWidth, setNaturalWidth] = useState<number | null>(null);
+  const [source, setSource] = useState<string | null>(null);
+  const [assetError, setAssetError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSource(null);
+    setAssetError(null);
+    void invoke("fs_allow_asset", { path })
+      .then(() => {
+        if (!cancelled) setSource(convertFileSrc(path));
+      })
+      .catch((error) => {
+        if (!cancelled) setAssetError(String(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [path]);
 
   // 限制图片缩放范围，避免误操作创建过大的布局。
   const changeZoom = useCallback((delta: number) => {
@@ -266,7 +469,12 @@ function AssetPreview({ path }: { path: string }) {
         </div>
       )}
       <div className="min-h-0 flex-1 overflow-auto p-4">
-        {isImage && (
+        {!source && (
+          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+            {assetError ? `媒体加载失败：${assetError}` : "正在加载媒体…"}
+          </div>
+        )}
+        {source && isImage && (
           <img
             src={source}
             loading="lazy"
@@ -287,7 +495,7 @@ function AssetPreview({ path }: { path: string }) {
             alt={filenameFromPath(path)}
           />
         )}
-        {isVideo && (
+        {source && isVideo && (
           // biome-ignore lint/a11y/useMediaCaption: local file preview has no predictable caption track
           <video
             controls
@@ -296,7 +504,7 @@ function AssetPreview({ path }: { path: string }) {
             src={source}
           />
         )}
-        {isAudio && (
+        {source && isAudio && (
           // biome-ignore lint/a11y/useMediaCaption: local file preview has no predictable caption track
           <audio
             controls
@@ -305,7 +513,7 @@ function AssetPreview({ path }: { path: string }) {
             src={source}
           />
         )}
-        {isPdf && (
+        {source && isPdf && (
           <iframe
             src={source}
             className="h-full min-h-[32rem] w-full border-0"
@@ -324,6 +532,7 @@ export const FilePreviewPane = memo(
     ref,
   ) {
     const rootRef = useRef<HTMLDivElement>(null);
+    const textSearchRef = useRef<TextSearchHandle | null>(null);
     const [reloadKey, setReloadKey] = useState(0);
     const previewKind = getPreviewKind(path);
 
@@ -340,12 +549,20 @@ export const FilePreviewPane = memo(
     useImperativeHandle(
       ref,
       () => ({
-        setQuery: () => {},
-        findNext: () => {},
-        findPrevious: () => {},
-        clearQuery: () => {},
-        getSearchStatus: () => ({ count: 0, index: 0 }),
-        openSearch: () => {},
+        setQuery: (query, options) =>
+          textSearchRef.current?.setQuery(query, options),
+        findNext: () => textSearchRef.current?.findNext(),
+        findPrevious: () => textSearchRef.current?.findPrevious(),
+        clearQuery: () => textSearchRef.current?.clearQuery(),
+        getSearchStatus: () =>
+          textSearchRef.current?.getSearchStatus() ?? { count: 0, index: 0 },
+        subscribeSearchStatus: (listener) =>
+          textSearchRef.current?.subscribeSearchStatus(listener) ?? (() => {}),
+        replaceCurrent: (replacement) =>
+          textSearchRef.current?.replaceCurrent(replacement) ??
+          Promise.resolve(0),
+        replaceAll: (replacement) =>
+          textSearchRef.current?.replaceAll(replacement) ?? Promise.resolve(0),
         focus: () => rootRef.current?.focus(),
         getSelection: () => null,
         getPath: () => path,
@@ -363,7 +580,11 @@ export const FilePreviewPane = memo(
           <AssetPreview key={`${path}:${reloadKey}`} path={path} />
         )}
         {previewKind === "text" && (
-          <TextWindowPreview key={`${path}:${reloadKey}`} path={path} />
+          <TextWindowPreview
+            ref={textSearchRef}
+            path={path}
+            reloadKey={reloadKey}
+          />
         )}
       </div>
     );

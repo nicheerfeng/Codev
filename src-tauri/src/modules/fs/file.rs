@@ -2,11 +2,11 @@ use std::path::Path;
 use std::time::UNIX_EPOCH;
 use std::{
     fs,
-    io::{Read, Seek, SeekFrom, Write},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
 };
 
 use serde::Serialize;
-use tauri::Emitter;
+use tauri::{AppHandle, Emitter, Manager};
 use tempfile::NamedTempFile;
 
 use crate::modules::workspace::{resolve_path, WorkspaceEnv};
@@ -17,6 +17,7 @@ const FORCE_MAX_READ_BYTES: u64 = 50 * 1024 * 1024;
 const BINARY_SNIFF_BYTES: usize = 8 * 1024;
 const PREVIEW_MAX_BYTES: u64 = 512 * 1024;
 const PREVIEW_MAX_LINES: u64 = 300;
+const SEARCH_MAX_MATCHES: usize = 2_000;
 
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -59,6 +60,23 @@ pub struct TextWindow {
     pub next_offset: u64,
     pub total_bytes: u64,
     pub has_more: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextMatch {
+    pub offset: u64,
+    pub line_start: u64,
+    pub line: u64,
+    pub column: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextSearchResult {
+    pub matches: Vec<TextMatch>,
+    pub total: u64,
+    pub truncated: bool,
 }
 
 fn mtime_millis(meta: &fs::Metadata) -> u64 {
@@ -152,6 +170,83 @@ pub async fn fs_read_text_window(
     )
 }
 
+/// 返回单个文本文件的字面量命中位置，按行流式读取以限制内存占用。
+#[tauri::command]
+pub async fn fs_find_text(
+    path: String,
+    query: String,
+    case_sensitive: Option<bool>,
+    max_matches: Option<usize>,
+    workspace: Option<WorkspaceEnv>,
+) -> Result<TextSearchResult, String> {
+    if query.is_empty() {
+        return Ok(TextSearchResult {
+            matches: Vec::new(),
+            total: 0,
+            truncated: false,
+        });
+    }
+    if query.contains(['\n', '\r']) {
+        return Err("跨行搜索暂不支持".to_string());
+    }
+    let workspace = WorkspaceEnv::from_option(workspace);
+    find_text_sync(
+        &resolve_path(&path, &workspace),
+        &query,
+        case_sensitive.unwrap_or(false),
+        max_matches.unwrap_or(SEARCH_MAX_MATCHES).clamp(1, SEARCH_MAX_MATCHES),
+    )
+}
+
+/// 对单个文本文件执行字面量替换，使用临时文件完成原子更新。
+#[tauri::command]
+pub async fn fs_replace_text(
+    path: String,
+    query: String,
+    replacement: String,
+    case_sensitive: Option<bool>,
+    match_offset: Option<u64>,
+    replace_all: Option<bool>,
+    workspace: Option<WorkspaceEnv>,
+    app: tauri::AppHandle,
+) -> Result<u64, String> {
+    if query.is_empty() {
+        return Ok(0);
+    }
+    if query.contains(['\n', '\r']) {
+        return Err("跨行替换暂不支持".to_string());
+    }
+    let workspace = WorkspaceEnv::from_option(workspace);
+    let target_path = resolve_path(&path, &workspace);
+    let replaced = replace_text_sync(
+        &target_path,
+        &query,
+        &replacement,
+        case_sensitive.unwrap_or(false),
+        match_offset,
+        replace_all.unwrap_or(false),
+    )?;
+    if replaced == 0 {
+        return Ok(0);
+    }
+    let _ = app.emit(
+        "fs:file-written",
+        FileWrittenEvent {
+            path,
+            source: Some("search".to_string()),
+        },
+    );
+    Ok(replaced)
+}
+
+/// 将当前外部媒体文件加入 asset scope，供图片、PDF 和音视频直接读取。
+#[tauri::command]
+pub fn fs_allow_asset(path: String, app: AppHandle) -> Result<(), String> {
+    app.asset_protocol_scope()
+        .allow_file(Path::new(&path))
+        .map_err(|error| error.to_string())
+}
+
 fn read_file_sync(p: &Path, force: bool) -> Result<ReadResult, String> {
     let meta = std::fs::metadata(p).map_err(|e| {
         log::debug!("fs_read_file stat({}) failed: {e}", p.display());
@@ -188,6 +283,137 @@ fn read_file_sync(p: &Path, force: bool) -> Result<ReadResult, String> {
         }),
         Err(_) => Ok(ReadResult::Binary { size }),
     }
+}
+
+/// 查找一行中的普通字面量位置，大小写忽略只折叠 ASCII 以保持字节偏移稳定。
+fn literal_positions(line: &str, query: &str, case_sensitive: bool) -> Vec<usize> {
+    if case_sensitive {
+        return line.match_indices(query).map(|(offset, _)| offset).collect();
+    }
+    let folded_line = line.to_ascii_lowercase();
+    let folded_query = query.to_ascii_lowercase();
+    folded_line
+        .match_indices(&folded_query)
+        .map(|(offset, _)| offset)
+        .collect()
+}
+
+/// 流式扫描文本文件并返回有限数量的命中位置。
+fn find_text_sync(
+    path: &Path,
+    query: &str,
+    case_sensitive: bool,
+    max_matches: usize,
+) -> Result<TextSearchResult, String> {
+    let file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut reader = BufReader::with_capacity(64 * 1024, file);
+    let mut line_bytes = Vec::with_capacity(8 * 1024);
+    let mut line_start = 0_u64;
+    let mut line_number = 1_u64;
+    let mut total = 0_u64;
+    let mut matches = Vec::with_capacity(max_matches.min(128));
+
+    loop {
+        line_bytes.clear();
+        let read = reader
+            .read_until(b'\n', &mut line_bytes)
+            .map_err(|e| e.to_string())?;
+        if read == 0 {
+            break;
+        }
+        let line = std::str::from_utf8(&line_bytes)
+            .map_err(|_| "该文件不是 UTF-8 文本，无法搜索".to_string())?;
+        for offset in literal_positions(line, query, case_sensitive) {
+            total += 1;
+            if matches.len() < max_matches {
+                matches.push(TextMatch {
+                    offset: line_start + offset as u64,
+                    line_start,
+                    line: line_number,
+                    column: line[..offset].chars().count() as u64 + 1,
+                });
+            }
+        }
+        line_start += read as u64;
+        line_number += 1;
+    }
+
+    Ok(TextSearchResult {
+        matches,
+        total,
+        truncated: total as usize > max_matches,
+    })
+}
+
+/// 流式替换单个或全部字面量命中，并保留原文件权限。
+fn replace_text_sync(
+    target: &Path,
+    query: &str,
+    replacement: &str,
+    case_sensitive: bool,
+    match_offset: Option<u64>,
+    replace_all: bool,
+) -> Result<u64, String> {
+    let original_permissions = fs::metadata(target).ok().map(|m| m.permissions());
+    let file = fs::File::open(target).map_err(|e| e.to_string())?;
+    let mut reader = BufReader::with_capacity(64 * 1024, file);
+    let parent = target
+        .parent()
+        .ok_or_else(|| "path has no parent".to_string())?;
+    let mut temp = NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+    let mut line_bytes = Vec::with_capacity(8 * 1024);
+    let mut line_start = 0_u64;
+    let mut replaced = 0_u64;
+
+    loop {
+        line_bytes.clear();
+        let read = reader
+            .read_until(b'\n', &mut line_bytes)
+            .map_err(|e| e.to_string())?;
+        if read == 0 {
+            break;
+        }
+        let line = std::str::from_utf8(&line_bytes)
+            .map_err(|_| "该文件不是 UTF-8 文本，无法替换".to_string())?;
+        let positions = literal_positions(line, query, case_sensitive);
+        let mut cursor = 0_usize;
+        let mut output = Vec::with_capacity(line.len());
+        for offset in &positions {
+            let absolute = line_start + *offset as u64;
+            let selected = match match_offset {
+                Some(target_offset) => target_offset == absolute,
+                None => replaced == 0,
+            };
+            if !replace_all && !selected {
+                continue;
+            }
+            output.extend_from_slice(&line.as_bytes()[cursor..*offset]);
+            output.extend_from_slice(replacement.as_bytes());
+            cursor = *offset + query.len();
+            replaced += 1;
+            if !replace_all {
+                break;
+            }
+        }
+        if replaced == 0 && positions.is_empty() {
+            temp.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+        } else {
+            output.extend_from_slice(&line.as_bytes()[cursor..]);
+            temp.write_all(&output).map_err(|e| e.to_string())?;
+        }
+        line_start += read as u64;
+    }
+
+    if replaced == 0 {
+        return Ok(0);
+    }
+    drop(reader);
+    temp.as_file_mut().sync_all().map_err(|e| e.to_string())?;
+    temp.persist(target).map_err(|e| e.error.to_string())?;
+    if let Some(permissions) = original_permissions {
+        let _ = fs::set_permissions(target, permissions);
+    }
+    Ok(replaced)
 }
 
 #[derive(Serialize, Clone)]
@@ -362,6 +588,42 @@ mod tests {
 
         let second = read_text_window_sync(&file, first.next_offset, 1024, 1).unwrap();
         assert_eq!(second.content, "second\n");
+    }
+
+    /// 校验字面量搜索返回稳定的字节偏移和行号。
+    #[test]
+    fn finds_literal_text_without_regex() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("service.log");
+        std::fs::write(&file, "Start\nrestart service\nrestart again\n").unwrap();
+
+        let result = find_text_sync(&file, "restart", false, SEARCH_MAX_MATCHES).unwrap();
+        assert_eq!(result.total, 2);
+        assert_eq!(result.matches[0].line, 2);
+        assert_eq!(result.matches[1].line, 3);
+        assert!(!result.truncated);
+    }
+
+    /// 校验单项替换和全部替换都通过原子文件更新完成。
+    #[test]
+    fn replaces_current_or_all_literal_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("service.log");
+        std::fs::write(&file, "restart\nrestart\n").unwrap();
+
+        let first = find_text_sync(&file, "restart", false, SEARCH_MAX_MATCHES)
+            .unwrap()
+            .matches[0]
+            .offset;
+        assert_eq!(
+            replace_text_sync(&file, "restart", "start", false, Some(first), false).unwrap(),
+            1
+        );
+        assert_eq!(
+            replace_text_sync(&file, "restart", "start", false, None, true).unwrap(),
+            1
+        );
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "start\nstart\n");
     }
 
     #[cfg(unix)]
