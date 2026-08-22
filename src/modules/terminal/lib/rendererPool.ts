@@ -1,5 +1,6 @@
 import { openExternalUrl } from "@/lib/external-link";
 import { resolveFontFamily } from "@/lib/fonts";
+import { IS_WINDOWS } from "@/lib/platform";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import type { TerminalCursorStyle } from "@/modules/settings/store";
 import { buildTerminalTheme } from "@/styles/terminalTheme";
@@ -67,6 +68,7 @@ export type Slot = {
   observer: ResizeObserver | null;
   fitTimer: ReturnType<typeof setTimeout> | null;
   ptyTimer: ReturnType<typeof setTimeout> | null;
+  imeResizeRaf: number | null;
   slotReapTimer: ReturnType<typeof setTimeout> | null;
   unhideRaf: number | null;
   lastCols: number;
@@ -75,6 +77,7 @@ export type Slot = {
   lastH: number;
   lastUsedAt: number;
   imeState: ImeBridgeState;
+  imeComposing: boolean;
 };
 
 const slots: Slot[] = [];
@@ -164,6 +167,7 @@ function termOptions() {
     cursorInactiveStyle: "outline" as const,
     scrollback: prefs.terminalScrollback,
     allowProposedApi: true,
+    windowsPty: IS_WINDOWS ? { backend: "conpty" as const } : undefined,
     minimumContrastRatio: bgActive(prefs) ? MCR_BG_ACTIVE : MCR_BG_INACTIVE,
   };
 }
@@ -215,6 +219,7 @@ function createSlot(): Slot {
     observer: null,
     fitTimer: null,
     ptyTimer: null,
+    imeResizeRaf: null,
     slotReapTimer: null,
     unhideRaf: null,
     lastCols: term.cols,
@@ -223,14 +228,35 @@ function createSlot(): Slot {
     lastH: 0,
     lastUsedAt: 0,
     imeState: createImeBridgeState(),
+    imeComposing: false,
   };
 
-  // Some WKWebView builds bypass xterm's composition events. The pure bridge
-  // repairs that path and stands down when native composition is observed.
-  if (IS_MAC) {
-    const ta = slot.term.textarea;
-    if (ta) {
-      const imeState = slot.imeState;
+  const ta = slot.term.textarea;
+  if (ta) {
+    const imeState = slot.imeState;
+    ta.addEventListener("compositionstart", () => {
+      slot.imeComposing = true;
+      if (IS_MAC) noteNativeComposition(imeState);
+      cancelImeResize(slot);
+      if (slot.fitTimer) clearTimeout(slot.fitTimer);
+      if (slot.ptyTimer) clearTimeout(slot.ptyTimer);
+      slot.fitTimer = null;
+      slot.ptyTimer = null;
+    });
+    ta.addEventListener("compositionend", () => {
+      slot.imeComposing = false;
+      if (IS_MAC) resetImeBridge(imeState);
+      scheduleImeResize(slot);
+    });
+    ta.addEventListener("blur", () => {
+      slot.imeComposing = false;
+      resetImeBridge(imeState);
+      scheduleImeResize(slot);
+    });
+
+    // Some WKWebView builds bypass xterm's composition events. The pure bridge
+    // repairs that path and stands down when native composition is observed.
+    if (IS_MAC) {
       term.onKey(({ key }) => {
         const leafId = slot.currentLeafId;
         if (leafId !== null) noteXtermKeyData(imeState, leafId, key);
@@ -255,12 +281,6 @@ function createSlot(): Slot {
         );
         if (out) adapter?.resolveLeaf(slot.currentLeafId)?.writeToPty(out);
       });
-      // Native composition means xterm owns this slot's IME delivery.
-      ta.addEventListener("compositionstart", () =>
-        noteNativeComposition(imeState),
-      );
-      ta.addEventListener("compositionend", () => resetImeBridge(imeState));
-      ta.addEventListener("blur", () => resetImeBridge(imeState));
     }
   }
 
@@ -581,6 +601,40 @@ function rewireSlot(slot: Slot, p: AcquireParams): void {
   p.onSearchReady(slot.searchAddon);
 }
 
+// 取消输入法提交后的延迟终端尺寸同步。
+function cancelImeResize(slot: Slot): void {
+  if (slot.imeResizeRaf === null) return;
+  cancelAnimationFrame(slot.imeResizeRaf);
+  slot.imeResizeRaf = null;
+}
+
+// 在输入法组合结束后等待两帧，再执行一次 Fit 和 PTY 尺寸同步。
+function scheduleImeResize(slot: Slot): void {
+  cancelImeResize(slot);
+  slot.imeResizeRaf = requestAnimationFrame(() => {
+    slot.imeResizeRaf = requestAnimationFrame(() => {
+      slot.imeResizeRaf = null;
+      if (slot.imeComposing || slot.parked || slot.currentLeafId === null)
+        return;
+      const container = slot.host.parentElement;
+      if (!container) return;
+      const width = container.clientWidth;
+      const height = container.clientHeight;
+      if (width === slot.lastW && height === slot.lastH) return;
+      slot.lastW = width;
+      slot.lastH = height;
+      slot.fitAddon.fit();
+      if (slot.term.cols === slot.lastCols && slot.term.rows === slot.lastRows)
+        return;
+      slot.lastCols = slot.term.cols;
+      slot.lastRows = slot.term.rows;
+      adapter
+        ?.resolveLeaf(slot.currentLeafId)
+        ?.resizePty(slot.lastCols, slot.lastRows);
+    });
+  });
+}
+
 function setupResizeObserver(slot: Slot, p: AcquireParams): void {
   slot.observer?.disconnect();
   if (slot.fitTimer) clearTimeout(slot.fitTimer);
@@ -591,7 +645,7 @@ function setupResizeObserver(slot: Slot, p: AcquireParams): void {
   const container = p.container;
   const flushPty = () => {
     slot.ptyTimer = null;
-    if (slot.currentLeafId !== p.leafId) return;
+    if (slot.currentLeafId !== p.leafId || slot.imeComposing) return;
     if (slot.term.cols === slot.lastCols && slot.term.rows === slot.lastRows)
       return;
     slot.lastCols = slot.term.cols;
@@ -600,11 +654,12 @@ function setupResizeObserver(slot: Slot, p: AcquireParams): void {
   };
 
   slot.observer = new ResizeObserver(() => {
-    if (slot.parked) return;
+    if (slot.parked || slot.imeComposing) return;
     if (slot.fitTimer) clearTimeout(slot.fitTimer);
     slot.fitTimer = setTimeout(() => {
       slot.fitTimer = null;
-      if (slot.currentLeafId !== p.leafId || slot.parked) return;
+      if (slot.currentLeafId !== p.leafId || slot.parked || slot.imeComposing)
+        return;
       const w = container.clientWidth;
       const h = container.clientHeight;
       if (w === slot.lastW && h === slot.lastH) return;
@@ -673,9 +728,11 @@ function detachSlotFromLeaf(slot: Slot, retain: boolean): void {
   slot.ptyTimer = null;
 
   cancelPendingUnhide(slot);
+  cancelImeResize(slot);
   slot.host.style.visibility = "";
 
   slot.currentLeafId = null;
+  slot.imeComposing = false;
   slot.lastUsedAt = performance.now();
   transitionImeBridgeOwner(slot.imeState, null);
   scheduleSlotReap(slot);
@@ -726,6 +783,7 @@ function reapIdleSlot(slot: Slot): void {
 function disposeSlot(slot: Slot): void {
   cancelSlotReap(slot);
   cancelPendingUnhide(slot);
+  cancelImeResize(slot);
   if (slot.fitTimer) clearTimeout(slot.fitTimer);
   if (slot.ptyTimer) clearTimeout(slot.ptyTimer);
   slot.fitTimer = null;
@@ -757,8 +815,9 @@ const IDLE_SLOTS_KEEP_WARM = 1;
 // Parked and retained slots can't be measured (display:none); poison lastW
 // so the refit happens on unpark/rebind instead.
 function refitSlot(slot: Slot): void {
-  if (slot.parked || slot.currentLeafId === null) {
+  if (slot.parked || slot.currentLeafId === null || slot.imeComposing) {
     slot.lastW = -1;
+    slot.lastH = -1;
     return;
   }
   slot.fitAddon.fit();
@@ -869,6 +928,11 @@ export function refreshLeafSlot(leafId: number): void {
   const slot = slots.find((s) => s.currentLeafId === leafId);
   if (!slot) return;
   unparkSlotHost(slot);
+  if (slot.imeComposing) {
+    slot.lastW = -1;
+    slot.lastH = -1;
+    return;
+  }
   // The observer skips parked slots; catch up on container resizes here.
   const container = slot.host.parentElement;
   if (
