@@ -42,7 +42,7 @@ export function PaneTreeView(props: Props) {
           if (!focused) onFocusLeaf(node.id);
         }}
         data-pane-leaf={node.id}
-        className="relative h-full w-full"
+        className="relative h-full w-full min-w-0 overflow-hidden"
       >
         <TerminalPane
           leafId={node.id}

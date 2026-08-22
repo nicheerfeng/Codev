@@ -84,7 +84,7 @@ export const TerminalPane = memo(
     return (
       <div
         ref={containerRef}
-        className="zoom-exempt h-full w-full"
+        className="zoom-exempt h-full w-full min-w-0 overflow-hidden"
         style={hideStyle}
       />
     );

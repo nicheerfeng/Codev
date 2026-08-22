@@ -85,14 +85,14 @@ export function TerminalStack({
   }, [terminals]);
 
   return (
-    <div className="relative h-full w-full">
+    <div className="relative h-full w-full min-w-0 overflow-hidden">
       {terminals.map((t) => {
         const tabVisible = t.id === activeId;
         return (
           <div
             key={t.id}
             data-terminal-tab={t.id}
-            className="absolute inset-0"
+            className="absolute inset-0 min-w-0 overflow-hidden"
             style={{
               visibility: tabVisible ? "visible" : "hidden",
               pointerEvents: tabVisible ? "auto" : "none",

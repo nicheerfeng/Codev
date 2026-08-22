@@ -226,6 +226,15 @@ html[data-chrome="borderless"] #settings-root {
 .xterm.focus {
   outline: none !important;
 }
+.xterm,
+.xterm .xterm-screen {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+.xterm .xterm-helpers {
+  max-width: 100%;
+}
 
 .cm-editor,
 .cm-scroller {
