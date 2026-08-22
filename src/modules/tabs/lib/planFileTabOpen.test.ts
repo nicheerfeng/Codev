@@ -136,6 +136,34 @@ describe("planFileTabOpen", () => {
 });
 
 describe("planMarkdownTabOpen", () => {
+  it("appends a new markdown tab beside a raw markdown tab", () => {
+    const tabs: Tab[] = [
+      terminal,
+      {
+        id: 3,
+        kind: "markdown",
+        spaceId: "one",
+        title: "README.md",
+        path: "/repo/README.md",
+        viewMode: "raw",
+        dirty: false,
+      },
+    ];
+
+    const plan = planMarkdownTabOpen(tabs, "/repo/guide.md", "one", () => 4);
+
+    expect(plan.tabs).toHaveLength(3);
+    expect(plan.tabs).toContain(tabs[1]);
+    expect(plan.tabs).toContainEqual(
+      expect.objectContaining({
+        id: 4,
+        kind: "markdown",
+        path: "/repo/guide.md",
+        viewMode: "rendered",
+      }),
+    );
+  });
+
   it("reuses markdown tabs only within the requested space", () => {
     const tabs: Tab[] = [
       terminal,
@@ -145,6 +173,8 @@ describe("planMarkdownTabOpen", () => {
         spaceId: "two",
         title: "README.md",
         path: "/repo/README.md",
+        viewMode: "raw",
+        dirty: false,
       },
     ];
 
@@ -201,6 +231,8 @@ describe("planMarkdownTabOpen", () => {
         spaceId: "one",
         title: "README.md",
         path: "C:\\repo\\README.md",
+        viewMode: "rendered",
+        dirty: false,
       },
     ];
 

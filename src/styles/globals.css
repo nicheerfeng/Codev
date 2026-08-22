@@ -183,6 +183,10 @@ html[data-chrome="borderless"],
 html[data-chrome="borderless"] body {
   background: transparent !important;
 }
+html[data-window-opacity="opaque"],
+html[data-window-opacity="opaque"] body {
+  background: var(--background) !important;
+}
 html[data-chrome="borderless"] #root,
 html[data-chrome="borderless"] #settings-root {
   height: 100%;
@@ -260,6 +264,17 @@ textarea,
 .select-text * {
   -webkit-user-select: text;
   user-select: text;
+}
+
+::selection {
+  background-color: color-mix(in srgb, var(--primary) 34%, transparent);
+  color: var(--foreground);
+}
+
+.select-text ::selection,
+.select-text::selection {
+  background-color: color-mix(in srgb, var(--primary) 34%, transparent);
+  color: var(--foreground);
 }
 
 .cm-color-swatch {

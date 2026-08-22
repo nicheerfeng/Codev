@@ -3,9 +3,11 @@ import {
   type PaneNode,
   type SplitDir,
 } from "@/modules/terminal/lib/panes";
+import { isMarkdownPath } from "@/lib/utils";
 import type {
   EditorTab,
   MarkdownTab,
+  MarkdownViewMode,
   Tab,
   TerminalTab,
 } from "@/modules/tabs/lib/useTabs";
@@ -21,7 +23,7 @@ export type SerializedTab =
       customTitle?: string;
     }
   | { kind: "editor"; path: string }
-  | { kind: "markdown"; path: string };
+  | { kind: "markdown"; path: string; viewMode?: MarkdownViewMode };
 
 function basename(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
@@ -66,7 +68,11 @@ function serializeTab(tab: Tab): SerializedTab | null {
     case "editor":
       return { kind: "editor", path: tab.path };
     case "markdown":
-      return { kind: "markdown", path: tab.path };
+      return {
+        kind: "markdown",
+        path: tab.path,
+        ...(tab.viewMode === "raw" && { viewMode: "raw" }),
+      };
     default:
       return null;
   }
@@ -134,8 +140,7 @@ function hydrateTab(
     case "terminal": {
       const { tree, activeLeafId, firstLeafCwd } = hydrateTree(s.tree, allocId);
       const title =
-        s.customTitle ??
-        (firstLeafCwd ? basename(firstLeafCwd) : "shell");
+        s.customTitle ?? (firstLeafCwd ? basename(firstLeafCwd) : "shell");
       return {
         id: allocId(),
         kind: "terminal",
@@ -149,6 +154,18 @@ function hydrateTab(
       } satisfies TerminalTab;
     }
     case "editor":
+      if (isMarkdownPath(s.path)) {
+        return {
+          id: allocId(),
+          kind: "markdown",
+          spaceId,
+          cold: true,
+          title: basename(s.path),
+          path: s.path,
+          viewMode: "raw",
+          dirty: false,
+        } satisfies MarkdownTab;
+      }
       return {
         id: allocId(),
         kind: "editor",
@@ -167,6 +184,8 @@ function hydrateTab(
         cold: true,
         title: basename(s.path),
         path: s.path,
+        viewMode: s.viewMode ?? "rendered",
+        dirty: false,
       } satisfies MarkdownTab;
     default:
       return null;

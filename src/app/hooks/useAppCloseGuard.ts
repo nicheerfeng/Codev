@@ -1,5 +1,11 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import type { Tab } from "@/modules/tabs";
 import { leafHasForegroundProcess, leafIds } from "@/modules/terminal";
@@ -45,7 +51,10 @@ export function useAppCloseGuard(tabsRef: RefObject<Tab[]>) {
           (await anyTerminalBusy(tabsRef.current));
         // Count after the await so edits made during the IPC check are seen.
         const dirtyEditors = tabsRef.current.filter(
-          (t) => t.kind === "editor" && t.dirty,
+          (t) =>
+            (t.kind === "editor" ||
+              (t.kind === "markdown" && t.viewMode === "raw")) &&
+            t.dirty,
         ).length;
         if (dirtyEditors > 0 || busyTerminal) {
           setPendingAppClose({ dirtyEditors, busyTerminal });

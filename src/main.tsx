@@ -8,8 +8,11 @@ import App from "./app/App";
 import { initLaunchDir } from "./lib/launchDir";
 import { USE_CUSTOM_WINDOW_CONTROLS } from "./lib/platform";
 
+const OPAQUE_WINDOW = import.meta.env.VITE_CODEV_OPAQUE_WINDOW === "1";
+
 if (USE_CUSTOM_WINDOW_CONTROLS) {
   document.documentElement.dataset.chrome = "borderless";
+  if (OPAQUE_WINDOW) document.documentElement.dataset.windowOpacity = "opaque";
 }
 
 /** 禁止主窗口浏览器右键菜单，同时放行应用菜单与可编辑控件。 */

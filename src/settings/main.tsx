@@ -6,8 +6,11 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import ReactDOM from "react-dom/client";
 import { SettingsApp } from "./SettingsApp";
 
+const OPAQUE_WINDOW = import.meta.env.VITE_CODEV_OPAQUE_WINDOW === "1";
+
 if (USE_CUSTOM_WINDOW_CONTROLS) {
   document.documentElement.dataset.chrome = "borderless";
+  if (OPAQUE_WINDOW) document.documentElement.dataset.windowOpacity = "opaque";
 }
 
 ReactDOM.createRoot(

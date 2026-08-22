@@ -60,6 +60,32 @@ describe("serializeTabs", () => {
       expect(node.tree.children[0]).not.toHaveProperty("active");
     }
   });
+
+  it("persists a markdown tab's raw view without changing its tab kind", () => {
+    const [serialized] = serializeTabs([
+      {
+        id: 7,
+        kind: "markdown",
+        spaceId: "s1",
+        title: "README.md",
+        path: "/a/README.md",
+        viewMode: "raw",
+        dirty: false,
+      },
+    ]);
+
+    expect(serialized).toEqual({
+      kind: "markdown",
+      path: "/a/README.md",
+      viewMode: "raw",
+    });
+    const [restored] = hydrateTabs([serialized], "s1", counter());
+    expect(restored).toMatchObject({
+      kind: "markdown",
+      viewMode: "raw",
+      dirty: false,
+    });
+  });
 });
 
 describe("hydrateTabs", () => {
@@ -136,9 +162,6 @@ describe("hydrateTabs", () => {
     ];
     const out = hydrateTabs(serialized, "s1", counter());
     expect(out.every((t) => t.cold === true)).toBe(true);
-    expect(out.map((t) => t.title)).toEqual([
-      "foo.ts",
-      "README.md",
-    ]);
+    expect(out.map((t) => t.title)).toEqual(["foo.ts", "README.md"]);
   });
 });

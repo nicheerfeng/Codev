@@ -82,7 +82,12 @@ export function useWorkspaceSwitcher({
       ) {
         return false;
       }
-      const dirty = tabsRef.current.some((t) => t.kind === "editor" && t.dirty);
+      const dirty = tabsRef.current.some(
+        (t) =>
+          (t.kind === "editor" ||
+            (t.kind === "markdown" && t.viewMode === "raw")) &&
+          t.dirty,
+      );
       if (dirty) {
         window.alert(
           "Save or close unsaved editor tabs before switching workspace.",

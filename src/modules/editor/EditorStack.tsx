@@ -1,6 +1,6 @@
 import { cn, isMarkdownPath } from "@/lib/utils";
 import { MarkdownViewToggle } from "@/modules/markdown";
-import type { EditorTab, Tab } from "@/modules/tabs";
+import type { EditorTab, MarkdownTab, Tab } from "@/modules/tabs";
 import { useEffect, useRef } from "react";
 import type { EditorPaneHandle } from "./EditorPane";
 import { FileViewer } from "./FileViewer";
@@ -21,7 +21,9 @@ export function EditorStack({
   onSetMarkdownView,
 }: Props) {
   const editors = tabs.filter(
-    (t): t is EditorTab => t.kind === "editor" && !t.cold,
+    (t): t is EditorTab | MarkdownTab =>
+      !t.cold &&
+      (t.kind === "editor" || (t.kind === "markdown" && t.viewMode === "raw")),
   );
   // 仅保留当前文件和未保存文件的编辑器实例，干净后台标签重新激活时再加载。
   const mountedEditors = editors.filter((t) => t.id === activeId || t.dirty);
@@ -90,7 +92,7 @@ export function EditorStack({
             <div className="relative h-full overflow-hidden rounded-md border border-border/60 bg-background">
               {isMarkdownPath(t.path) && (
                 <MarkdownViewToggle
-                  mode="raw"
+                  mode={t.kind === "markdown" ? t.viewMode : "raw"}
                   onChange={(mode) => onSetMarkdownView(t.id, mode)}
                   renderedDisabled={t.dirty}
                   renderedHint="Save to preview"
