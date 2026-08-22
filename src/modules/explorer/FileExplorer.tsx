@@ -36,6 +36,7 @@ import { RootTree, type RootTreeHandle, type RootTreeProps } from "./RootTree";
 import { folderIconUrl } from "./lib/iconResolver";
 import { useFileTransfer } from "./lib/useFileTransfer";
 import { useSelectedFileMeta } from "./lib/useSelectedFileMeta";
+import { useWorkspaceFolderDrop } from "./lib/useWorkspaceFolderDrop";
 import { ExplorerStatusBar } from "./ExplorerStatusBar";
 
 export type FileExplorerHandle = {
@@ -321,6 +322,16 @@ export const FileExplorer = memo(
       [startTransfer],
     );
 
+    /** 将外部拖入的目录直接登记为新的工作区根目录。 */
+    const addDroppedRoots = useCallback(
+      (paths: string[]) => {
+        for (const path of paths) onAddRoot(path.replace(/\\/g, "/"));
+      },
+      [onAddRoot],
+    );
+
+    useWorkspaceFolderDrop({ onAddRoot: addDroppedRoots });
+
     /** 删除当前右键选中的文件或目录，并同步编辑器路径状态。 */
     const deletePaths = useCallback(
       async (paths: string[]) => {
@@ -529,7 +540,10 @@ export const FileExplorer = memo(
       >
         <ContextMenu>
           <ContextMenuTrigger asChild>
-            <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border/60 px-2">
+            <div
+              className="flex h-8 shrink-0 items-center gap-1 border-b border-border/60 px-2"
+              data-workspace-folder-drop=""
+            >
               <span className="flex min-w-0 flex-1 items-center truncate text-xs font-medium text-foreground/80">
                 {t("Workspace")}
               </span>
@@ -653,7 +667,10 @@ export const FileExplorer = memo(
         {roots.length === 0 ? (
           <ContextMenu>
             <ContextMenuTrigger asChild>
-              <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+              <div
+                className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center"
+                data-workspace-folder-drop=""
+              >
                 <HugeiconsIcon
                   icon={Folder01Icon}
                   size={24}

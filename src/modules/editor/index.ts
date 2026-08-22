@@ -4,6 +4,7 @@ export { useApplyEditorFontSize } from "./lib/useApplyEditorFontSize";
 export {
   useReaderFileDrop,
   type ReaderFileDropGroup,
+  type ReaderFileDropKind,
 } from "./lib/useReaderFileDrop";
 export type {
   TextSearchHandle,

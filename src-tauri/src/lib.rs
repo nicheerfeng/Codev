@@ -270,6 +270,7 @@ pub fn run() {
             fs::tree::fs_read_dir,
             fs::clipboard::fs_get_file_clipboard,
             fs::file::fs_read_file,
+            fs::file::fs_read_asset_bytes,
             fs::file::fs_read_text_window,
             fs::file::fs_find_text,
             fs::file::fs_replace_text,

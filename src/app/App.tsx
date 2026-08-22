@@ -24,6 +24,7 @@ import { CommandPalette, createCommandItems } from "@/modules/command-palette";
 import {
   type EditorPaneHandle,
   NewEditorDialog,
+  type ReaderFileDropKind,
   useReaderFileDrop,
   useApplyEditorFontSize,
   useEditorFileSync,
@@ -594,7 +595,15 @@ export default function App() {
 
   /** 在指定阅览器中以临时标签打开外部拖入文件。 */
   const openDroppedFile = useCallback(
-    (path: string, group: "primary" | "secondary") => {
+    (
+      path: string,
+      group: "primary" | "secondary",
+      kind: ReaderFileDropKind,
+    ) => {
+      if (kind === "dir") {
+        void addRoot(path);
+        return;
+      }
       const id = isMarkdownPath(path)
         ? newMarkdownTab(path)
         : openFileTab(path, false, {
@@ -608,7 +617,7 @@ export default function App() {
       }
       setActiveId(id);
     },
-    [newMarkdownTab, openFileTab, setActiveId],
+    [addRoot, newMarkdownTab, openFileTab, setActiveId],
   );
 
   useReaderFileDrop({ onOpen: openDroppedFile });
