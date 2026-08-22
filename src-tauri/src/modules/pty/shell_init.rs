@@ -104,7 +104,7 @@ pub fn detect_shell_name() -> String {
 pub struct ShellInfo {
     pub name: String,
     pub path: String,
-    /// True when Terax injects OSC 7/133 integration for this shell.
+    /// True when Codev injects OSC 7/133 integration for this shell.
     pub integrated: bool,
 }
 
@@ -292,7 +292,7 @@ mod unix {
             Shell::Zsh => {
                 match prepare_zdotdir() {
                     Ok(zdotdir) => {
-                        // Guard against Terax-in-Terax :)
+                        // Guard against Codev-in-Codev :)
                         if let Ok(user_zd) = std::env::var("ZDOTDIR") {
                             if Path::new(&user_zd) != zdotdir.as_path() {
                                 cmd.env("TERAX_USER_ZDOTDIR", user_zd);

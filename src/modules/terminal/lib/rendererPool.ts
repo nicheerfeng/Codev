@@ -234,7 +234,7 @@ function createSlot(): Slot {
   const ta = slot.term.textarea;
   if (ta) {
     const imeState = slot.imeState;
-    // 在 xterm 同步真实光标后冻结 Terax 的尺寸回写，避免 ConPTY 重绘抖动。
+    // 在 xterm 同步真实光标后冻结 Codev 的尺寸回写，避免 ConPTY 重绘抖动。
     ta.addEventListener("compositionstart", () => {
       slot.imeComposing = true;
       if (IS_MAC) noteNativeComposition(imeState);

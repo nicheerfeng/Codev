@@ -43,9 +43,9 @@ jobs:
         run: |
           gh release download "$TAG" \
             --repo crynta/terax-ai \
-            --pattern "Terax_${VERSION}_amd64.deb" \
-            --pattern "Terax_x64.app.tar.gz" \
-            --pattern "Terax_aarch64.app.tar.gz"
+            --pattern "Codev_${VERSION}_amd64.deb" \
+            --pattern "Codev_x64.app.tar.gz" \
+            --pattern "Codev_aarch64.app.tar.gz"
 
       - name: Compute SRI hashes
         id: hashes
@@ -56,9 +56,9 @@ jobs:
             openssl dgst -sha256 -binary "$1" | base64 | tr -d '\n'
           }
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "linux=sha256-$(hash_sri "Terax_${VERSION}_amd64.deb")" >> "$GITHUB_OUTPUT"
-          echo "x64-darwin=sha256-$(hash_sri "Terax_x64.app.tar.gz")" >> "$GITHUB_OUTPUT"
-          echo "aarch64-darwin=sha256-$(hash_sri "Terax_aarch64.app.tar.gz")" >> "$GITHUB_OUTPUT"
+          echo "linux=sha256-$(hash_sri "Codev_${VERSION}_amd64.deb")" >> "$GITHUB_OUTPUT"
+          echo "x64-darwin=sha256-$(hash_sri "Codev_x64.app.tar.gz")" >> "$GITHUB_OUTPUT"
+          echo "aarch64-darwin=sha256-$(hash_sri "Codev_aarch64.app.tar.gz")" >> "$GITHUB_OUTPUT"
 
       - name: Update nix/sources.json
         run: |

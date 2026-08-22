@@ -1,5 +1,5 @@
 {
-  description = "Terax - lightweight cross-platform code and document reader with an integrated terminal";
+  description = "Codev - lightweight cross-platform code and document reader with an integrated terminal";
 
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
 

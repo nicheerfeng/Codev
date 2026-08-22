@@ -1,10 +1,10 @@
 # terax-shell-integration (fish)
 # Emits OSC 7 (cwd) + OSC 133 A/B/C/D so the host tracks cwd and prompt
 # boundaries without re-parsing the prompt. fish 4.0+ writes its own OSC 133
-# A/B (the `mark-prompt` feature); Terax disables it at spawn via
+# A/B (the `mark-prompt` feature); Codev disables it at spawn via
 # fish_features=no-mark-prompt so these markers aren't emitted twice.
 
-# Installed into conf.d, which every fish session sources; only Terax-spawned
+# Installed into conf.d, which every fish session sources; only Codev-spawned
 # shells (TERAX_TERMINAL=1) may get their prompt wrapped.
 if not set -q TERAX_TERMINAL
     exit 0
@@ -14,7 +14,7 @@ if set -q __TERAX_HOOKS_LOADED
 end
 set -g __TERAX_HOOKS_LOADED 1
 
-# Terax is a clean terminal; drop fish's default startup greeting. A user who
+# Codev is a clean terminal; drop fish's default startup greeting. A user who
 # sets their own in config.fish (sourced after this) keeps it.
 function fish_greeting
 end
@@ -55,7 +55,7 @@ end
 # and drop our markers.
 function __terax_install_prompt
     # ponytail: cover Conda's named wrapper; generalize if another prompt
-    # framework preserves Terax indirectly.
+    # framework preserves Codev indirectly.
     if functions -q __fish_prompt_orig
         and functions fish_prompt | string match -q '*__fish_prompt_orig*'
         and functions __fish_prompt_orig | string match -q '*__terax_user_prompt*'
