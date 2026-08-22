@@ -78,7 +78,6 @@ export type Slot = {
   lastUsedAt: number;
   imeState: ImeBridgeState;
   imeComposing: boolean;
-  imeAnchor: { left: number; top: number } | null;
 };
 
 const slots: Slot[] = [];
@@ -230,41 +229,31 @@ function createSlot(): Slot {
     lastUsedAt: 0,
     imeState: createImeBridgeState(),
     imeComposing: false,
-    imeAnchor: null,
   };
 
   const ta = slot.term.textarea;
   if (ta) {
     const imeState = slot.imeState;
-    ta.addEventListener(
-      "compositionstart",
-      () => {
-        slot.imeAnchor = IS_WINDOWS ? captureImeAnchor(slot) : null;
-        slot.imeComposing = true;
-        if (IS_MAC) noteNativeComposition(imeState);
-        cancelImeResize(slot);
-        if (slot.fitTimer) clearTimeout(slot.fitTimer);
-        if (slot.ptyTimer) clearTimeout(slot.ptyTimer);
-        slot.fitTimer = null;
-        slot.ptyTimer = null;
-      },
-      true,
-    );
-    ta.addEventListener("compositionstart", () => restoreImeAnchor(slot));
-    ta.addEventListener("compositionupdate", () => restoreImeAnchor(slot));
+    // 在 xterm 同步真实光标后冻结 Terax 的尺寸回写，避免 ConPTY 重绘抖动。
+    ta.addEventListener("compositionstart", () => {
+      slot.imeComposing = true;
+      if (IS_MAC) noteNativeComposition(imeState);
+      cancelImeResize(slot);
+      if (slot.fitTimer) clearTimeout(slot.fitTimer);
+      if (slot.ptyTimer) clearTimeout(slot.ptyTimer);
+      slot.fitTimer = null;
+      slot.ptyTimer = null;
+    });
     ta.addEventListener("compositionend", () => {
       slot.imeComposing = false;
-      slot.imeAnchor = null;
       if (IS_MAC) resetImeBridge(imeState);
       scheduleImeResize(slot);
     });
     ta.addEventListener("blur", () => {
       slot.imeComposing = false;
-      slot.imeAnchor = null;
       resetImeBridge(imeState);
       scheduleImeResize(slot);
     });
-    term.onRender(() => restoreImeAnchor(slot));
 
     // Some WKWebView builds bypass xterm's composition events. The pure bridge
     // repairs that path and stands down when native composition is observed.
@@ -620,48 +609,6 @@ function cancelImeResize(slot: Slot): void {
   slot.imeResizeRaf = null;
 }
 
-// 读取组词开始前 xterm 已经维护好的可见输入光标位置。
-function captureImeAnchor(slot: Slot): { left: number; top: number } | null {
-  const textarea = slot.term.textarea;
-  const screen = slot.host.querySelector<HTMLElement>(".xterm-screen");
-  if (
-    !textarea ||
-    !screen ||
-    screen.clientWidth <= 0 ||
-    screen.clientHeight <= 0
-  )
-    return null;
-  const left = Number.parseFloat(textarea.style.left);
-  const top = Number.parseFloat(textarea.style.top);
-  if (
-    !Number.isFinite(left) ||
-    !Number.isFinite(top) ||
-    left < 0 ||
-    top < 0 ||
-    left >= screen.clientWidth ||
-    top >= screen.clientHeight
-  )
-    return null;
-  return { left, top };
-}
-
-// 在组词期间恢复开始前的光标锚点，避免动态 TUI 将候选窗推到最右侧。
-function restoreImeAnchor(slot: Slot): void {
-  if (!slot.imeComposing || !slot.imeAnchor) return;
-  const textarea = slot.term.textarea;
-  const screen = slot.host.querySelector<HTMLElement>(".xterm-screen");
-  const composition = slot.host.querySelector<HTMLElement>(".composition-view");
-  if (!textarea || !screen || !composition) return;
-  const { left, top } = slot.imeAnchor;
-  const maxWidth = Math.max(1, screen.clientWidth - left);
-  composition.style.left = `${left}px`;
-  composition.style.top = `${top}px`;
-  composition.style.maxWidth = `${maxWidth}px`;
-  textarea.style.left = `${left}px`;
-  textarea.style.top = `${top}px`;
-  textarea.style.width = `${Math.max(1, composition.getBoundingClientRect().width)}px`;
-}
-
 // 在输入法组合结束后等待两帧，再执行一次 Fit 和 PTY 尺寸同步。
 function scheduleImeResize(slot: Slot): void {
   cancelImeResize(slot);
@@ -787,7 +734,6 @@ function detachSlotFromLeaf(slot: Slot, retain: boolean): void {
 
   slot.currentLeafId = null;
   slot.imeComposing = false;
-  slot.imeAnchor = null;
   slot.lastUsedAt = performance.now();
   transitionImeBridgeOwner(slot.imeState, null);
   scheduleSlotReap(slot);
