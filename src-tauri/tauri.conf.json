@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Terax",
+  "productName": "Codev",
   "version": "0.8.6",
   "identifier": "app.crynta.terax",
   "build": {
@@ -13,7 +13,7 @@
   "app": {
     "windows": [
       {
-        "title": "Terax",
+        "title": "Codev",
         "width": 800,
         "height": 600,
         "minWidth": 420,
@@ -35,9 +35,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "copyright": "Copyright 2026 Crynta",
+    "copyright": "Copyright 2026 Teague Codev",
     "license": "Apache-2.0",
-    "publisher": "Crynta",
+    "publisher": "Teague",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -83,10 +83,10 @@
     },
     "category": "DeveloperTool",
     "shortDescription": "Minimal code and document reader",
-    "longDescription": "Terax — a lightweight multi-project code and document reader with a file tree, editor, Markdown view, and integrated terminal.",
+    "longDescription": "Codev — a lightweight multi-project code and document reader with a file tree, editor, Markdown view, and integrated terminal.",
     "fileAssociations": [
       {
-        "name": "Terax Document",
+        "name": "Codev Document",
         "role": "Editor",
         "mimeType": "text/plain",
         "ext": [
