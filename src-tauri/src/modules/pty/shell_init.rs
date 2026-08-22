@@ -527,6 +527,8 @@ mod windows {
 
         let mut cmd = CommandBuilder::new(&shell_path);
         super::apply_common(&mut cmd, cwd);
+        // Pi 的 Windows 输入法候选框需要可见硬件光标作为稳定锚点。
+        cmd.env("PI_HARDWARE_CURSOR", "1");
 
         if is_powershell {
             match prepare_ps_profile() {
