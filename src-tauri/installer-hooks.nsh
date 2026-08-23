@@ -31,6 +31,16 @@
 
   ; Refresh file associations and Explorer's icon cache immediately.
   !insertmacro UPDATEFILEASSOC
+
+  ; The built-in NSIS shortcut updater skips a .lnk when its target is already
+  ; terax.exe, which preserves the old cached icon. Refresh only an existing
+  ; desktop shortcut so an opted-out shortcut is never created implicitly.
+  IfFileExists "$DESKTOP\Codev.lnk" codev_refresh_desktop_icon codev_desktop_icon_done
+codev_refresh_desktop_icon:
+  Delete "$DESKTOP\Codev.lnk"
+  CreateShortcut "$DESKTOP\Codev.lnk" "$INSTDIR\terax.exe" "" "$INSTDIR\terax.exe" 0
+  !insertmacro SetLnkAppUserModelId "$DESKTOP\Codev.lnk"
+codev_desktop_icon_done:
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
