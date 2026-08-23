@@ -138,6 +138,7 @@
 }
 
 :root {
+  --text-selection-background: rgba(86, 116, 145, 0.62);
   --terminal-background: var(--background);
   --terminal-foreground: var(--foreground);
   --terminal-cursor: var(--foreground);
@@ -267,13 +268,13 @@ textarea,
 }
 
 ::selection {
-  background-color: color-mix(in srgb, var(--primary) 34%, transparent);
+  background-color: var(--text-selection-background);
   color: var(--foreground);
 }
 
 .select-text ::selection,
 .select-text::selection {
-  background-color: color-mix(in srgb, var(--primary) 34%, transparent);
+  background-color: var(--text-selection-background);
   color: var(--foreground);
 }
 

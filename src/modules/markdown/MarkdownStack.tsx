@@ -5,7 +5,11 @@ import { MarkdownPreviewPane } from "./MarkdownPreviewPane";
 type Props = {
   tabs: Tab[];
   activeId: number;
-  registerHandle: (id: number, handle: EditorPaneHandle | null) => void;
+  registerHandle: (
+    id: number,
+    handle: EditorPaneHandle | null,
+    owner: "editor" | "markdown",
+  ) => void;
   onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
 };
 
@@ -25,7 +29,7 @@ export function MarkdownStack({
     <div className="relative h-full w-full">
       <MarkdownPreviewPane
         key={activeMarkdown.id}
-        ref={(handle) => registerHandle(activeMarkdown.id, handle)}
+        ref={(handle) => registerHandle(activeMarkdown.id, handle, "markdown")}
         path={activeMarkdown.path}
         visible
         onSetView={(mode) => onSetMarkdownView(activeMarkdown.id, mode)}

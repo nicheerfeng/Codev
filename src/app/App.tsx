@@ -147,6 +147,9 @@ export default function App() {
   const searchInlineRef = useRef<SearchInlineHandle | null>(null);
   const terminalRefs = useRef<Map<number, TerminalPaneHandle>>(new Map());
   const editorRefs = useRef<Map<number, EditorPaneHandle>>(new Map());
+  const editorHandleOwners = useRef<Map<number, "editor" | "markdown">>(
+    new Map(),
+  );
   const [activeEditorHandle, setActiveEditorHandle] =
     useState<EditorPaneHandle | null>(null);
   const [primaryEditorActiveId, setPrimaryEditorActiveId] = useState<
@@ -170,6 +173,7 @@ export default function App() {
     searchAddons.current.clear();
     terminalRefs.current.clear();
     editorRefs.current.clear();
+    editorHandleOwners.current.clear();
     setActiveSearchAddon(null);
     setActiveEditorHandle(null);
   }, []);
@@ -446,6 +450,7 @@ export default function App() {
       // the effect below as the pane tree changes; only the tab-id-keyed
       // handles need explicit cleanup here.
       editorRefs.current.delete(id);
+      editorHandleOwners.current.delete(id);
       closeTab(id);
     },
     [closeTab],
@@ -456,6 +461,7 @@ export default function App() {
       const closedIds = closeTabs(anchorId, plan);
       for (const id of closedIds) {
         editorRefs.current.delete(id);
+        editorHandleOwners.current.delete(id);
       }
     },
     [closeTabs],
@@ -871,19 +877,22 @@ export default function App() {
   );
 
   const registerEditorHandle = useCallback(
-    (id: number, h: EditorPaneHandle | null) => {
+    (id: number, h: EditorPaneHandle | null, owner: "editor" | "markdown") => {
       if (h) {
         editorRefs.current.set(id, h);
+        editorHandleOwners.current.set(id, owner);
         const pending = pendingEditorNavigation.current.get(id);
         if (pending != null) {
           pendingEditorNavigation.current.delete(id);
           if (pending.line === undefined) h.focus();
           else h.gotoLine(pending.line, { focus: pending.focus });
         }
-      } else {
+        if (id === activeId) setActiveEditorHandle(h);
+      } else if (editorHandleOwners.current.get(id) === owner) {
         editorRefs.current.delete(id);
+        editorHandleOwners.current.delete(id);
+        if (id === activeId) setActiveEditorHandle(null);
       }
-      if (id === activeId) setActiveEditorHandle(h);
     },
     [activeId],
   );

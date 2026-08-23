@@ -26,7 +26,11 @@ type EditorGroupProps = {
   onReorder: (fromId: number, toGapIndex: number) => void;
   onOverrideLanguage: (id: number, lang: string | null) => void;
   onMoveToGroup: (id: number, group: EditorGroupId) => void;
-  registerEditorHandle: (id: number, handle: EditorPaneHandle | null) => void;
+  registerEditorHandle: (
+    id: number,
+    handle: EditorPaneHandle | null,
+    owner: "editor" | "markdown",
+  ) => void;
   onDirtyChange: (id: number, dirty: boolean) => void;
   onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
   onFocusEditor: (id: number) => void;
@@ -150,7 +154,11 @@ type Props = {
   onReorderSecondary: (fromId: number, toGapIndex: number) => void;
   onOverrideLanguage: (id: number, lang: string | null) => void;
   onMoveToGroup: (id: number, group: EditorGroupId) => void;
-  registerEditorHandle: (id: number, handle: EditorPaneHandle | null) => void;
+  registerEditorHandle: (
+    id: number,
+    handle: EditorPaneHandle | null,
+    owner: "editor" | "markdown",
+  ) => void;
   onDirtyChange: (id: number, dirty: boolean) => void;
   onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
   onFocusEditor: (id: number) => void;

@@ -19,7 +19,11 @@ type Props = {
   onReorderSecondary: (fromId: number, toGapIndex: number) => void;
   onOverrideLanguage: (id: number, lang: string | null) => void;
   onMoveToGroup: (id: number, group: "primary" | "secondary") => void;
-  registerEditorHandle: (id: number, handle: EditorPaneHandle | null) => void;
+  registerEditorHandle: (
+    id: number,
+    handle: EditorPaneHandle | null,
+    owner: "editor" | "markdown",
+  ) => void;
   onEditorDirtyChange: (id: number, dirty: boolean) => void;
   onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
   onFocusEditor: (id: number) => void;

@@ -1,12 +1,13 @@
 import "../styles/globals.css";
 
-import { USE_CUSTOM_WINDOW_CONTROLS } from "@/lib/platform";
+import { IS_WINDOWS, USE_CUSTOM_WINDOW_CONTROLS } from "@/lib/platform";
 import { ThemeProvider } from "@/modules/theme";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ReactDOM from "react-dom/client";
 import { SettingsApp } from "./SettingsApp";
 
-const OPAQUE_WINDOW = import.meta.env.VITE_CODEV_OPAQUE_WINDOW === "1";
+const OPAQUE_WINDOW =
+  IS_WINDOWS || import.meta.env.VITE_CODEV_OPAQUE_WINDOW === "1";
 
 if (USE_CUSTOM_WINDOW_CONTROLS) {
   document.documentElement.dataset.chrome = "borderless";

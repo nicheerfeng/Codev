@@ -9,7 +9,11 @@ type Props = {
   tabs: Tab[];
   activeId: number;
   onDirtyChange: (id: number, dirty: boolean) => void;
-  registerHandle: (id: number, handle: EditorPaneHandle | null) => void;
+  registerHandle: (
+    id: number,
+    handle: EditorPaneHandle | null,
+    owner: "editor" | "markdown",
+  ) => void;
   onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
 };
 
@@ -50,7 +54,7 @@ export function EditorStack({
   const getRefCallback = (id: number) => {
     let cb = refCallbacks.current.get(id);
     if (!cb) {
-      cb = (h: EditorPaneHandle | null) => registerRef.current(id, h);
+      cb = (h: EditorPaneHandle | null) => registerRef.current(id, h, "editor");
       refCallbacks.current.set(id, cb);
     }
     return cb;
