@@ -162,15 +162,12 @@ async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true);
 
-    // On Linux we keep the transparent custom chrome; Windows has an explicit
-    // opaque build flavor for the GPU composition A/B test.
+    // Linux keeps the transparent custom chrome; Windows stays opaque so the
+    // installed and portable builds use the same low-composition path.
     #[cfg(target_os = "linux")]
     let builder = builder.decorations(false).transparent(true);
 
-    #[cfg(all(target_os = "windows", not(feature = "opaque-window")))]
-    let builder = builder.decorations(false).transparent(true);
-
-    #[cfg(all(target_os = "windows", feature = "opaque-window"))]
+    #[cfg(target_os = "windows")]
     let builder = builder.decorations(false);
 
     let window = builder.build().map_err(|e| e.to_string())?;

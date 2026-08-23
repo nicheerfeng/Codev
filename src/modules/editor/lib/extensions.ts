@@ -96,14 +96,12 @@ const SHARED_EXTENSIONS: readonly Extension[] = Object.freeze([
     },
     ".cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection":
       {
-        backgroundColor:
-          "color-mix(in srgb, var(--primary) 34%, transparent) !important",
+        backgroundColor: "var(--text-selection-background) !important",
       },
     ".cm-selectionMatch": {
       backgroundColor:
         "color-mix(in srgb, var(--primary) 24%, transparent) !important",
-      outline:
-        "1px solid color-mix(in srgb, var(--primary) 42%, transparent)",
+      outline: "1px solid color-mix(in srgb, var(--primary) 42%, transparent)",
     },
     ".cm-panels": {
       backgroundColor: "var(--popover)",

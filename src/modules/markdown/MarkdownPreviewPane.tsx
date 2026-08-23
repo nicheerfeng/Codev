@@ -37,6 +37,50 @@ type Props = {
   onSetView: (mode: "rendered" | "raw") => void;
 };
 
+type TextSpan = { node: Text; start: number; end: number };
+
+/** 收集渲染 Markdown 中的文本节点，建立可定位的连续文本坐标。 */
+function collectRenderedText(root: HTMLElement): {
+  text: string;
+  spans: TextSpan[];
+} {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const spans: TextSpan[] = [];
+  const chunks: string[] = [];
+  let cursor = 0;
+  let current = walker.nextNode();
+  while (current) {
+    const node = current as Text;
+    const value = node.nodeValue ?? "";
+    if (value) {
+      spans.push({ node, start: cursor, end: cursor + value.length });
+      chunks.push(value);
+      cursor += value.length;
+    }
+    current = walker.nextNode();
+  }
+  return { text: chunks.join(""), spans };
+}
+
+/** 将渲染文本偏移转换为 DOM Range 可用的文本节点位置。 */
+function resolveTextPoint(
+  spans: TextSpan[],
+  offset: number,
+): { node: Text; offset: number } | null {
+  if (spans.length === 0) return null;
+  const target = Math.max(0, offset);
+  for (const span of spans) {
+    if (target <= span.end) {
+      return {
+        node: span.node,
+        offset: Math.min(target - span.start, span.node.data.length),
+      };
+    }
+  }
+  const last = spans[spans.length - 1];
+  return { node: last.node, offset: last.node.data.length };
+}
+
 const components = { a: MarkdownLink };
 
 export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
@@ -44,6 +88,7 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
     const [status, setStatus] = useState<Status>({ kind: "loading" });
     const [reloadKey, setReloadKey] = useState(0);
     const rootRef = useRef<HTMLDivElement>(null);
+    const contentRootRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef("");
     const queryRef = useRef("");
     const optionsRef = useRef<TextSearchOptions>({ caseSensitive: false });
@@ -68,21 +113,35 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
       for (const listener of searchListenersRef.current) listener(value);
     }, [getSearchStatus]);
 
-    /** 在渲染后的 Markdown 页面中选中并滚动到下一处文本命中。 */
-    const selectRenderedMatch = useCallback((backwards: boolean) => {
+    /** 在渲染后的 Markdown 页面中定位当前文本命中并滚动到可视区域。 */
+    const selectRenderedMatch = useCallback(() => {
       const query = queryRef.current;
-      const finder = (
-        window as Window & {
-          find?: (
-            text: string,
-            caseSensitive?: boolean,
-            backwards?: boolean,
-            wrapAround?: boolean,
-          ) => boolean;
+      const root = contentRootRef.current;
+      if (!query || !root) return;
+      const rendered = collectRenderedText(root);
+      const renderedMatches = findLiteralMatches(
+        rendered.text,
+        query,
+        optionsRef.current,
+      );
+      if (renderedMatches.length > 0) {
+        const index = currentMatchRef.current % renderedMatches.length;
+        const from = renderedMatches[index];
+        const start = resolveTextPoint(rendered.spans, from);
+        const end = resolveTextPoint(rendered.spans, from + query.length);
+        if (start && end) {
+          const range = document.createRange();
+          range.setStart(start.node, start.offset);
+          range.setEnd(end.node, end.offset);
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+          start.node.parentElement?.scrollIntoView({
+            block: "nearest",
+            inline: "nearest",
+          });
+          return;
         }
-      ).find;
-      if (query && finder) {
-        finder(query, optionsRef.current.caseSensitive, backwards, true);
       }
     }, []);
 
@@ -129,7 +188,7 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
         );
         currentMatchRef.current = matchesRef.current.length > 0 ? 0 : -1;
         emitSearchStatus();
-        requestAnimationFrame(() => selectRenderedMatch(false));
+        requestAnimationFrame(selectRenderedMatch);
       },
       [emitSearchStatus, selectRenderedMatch],
     );
@@ -148,7 +207,7 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
           if (matchesRef.current.length === 0) return;
           currentMatchRef.current =
             (currentMatchRef.current + 1) % matchesRef.current.length;
-          selectRenderedMatch(false);
+          selectRenderedMatch();
           emitSearchStatus();
         },
         findPrevious: () => {
@@ -156,7 +215,7 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
           currentMatchRef.current =
             (currentMatchRef.current - 1 + matchesRef.current.length) %
             matchesRef.current.length;
-          selectRenderedMatch(true);
+          selectRenderedMatch();
           emitSearchStatus();
         },
         clearQuery: () => {
@@ -241,7 +300,7 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
       >
         <MarkdownViewToggle mode="rendered" onChange={onSetView} />
         <div className="flex-1 overflow-auto">
-          <div className="px-8 py-6">
+          <div ref={contentRootRef} className="px-8 py-6">
             {status.kind === "loading" && (
               <p className="text-[12px] text-muted-foreground">Loading…</p>
             )}
