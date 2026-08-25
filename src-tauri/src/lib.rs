@@ -1,7 +1,7 @@
 pub mod modules;
 
 use modules::{fs, history, pty, workspace};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 #[cfg(target_os = "macos")]
@@ -121,7 +121,7 @@ fn queue_open_target(app: &tauri::AppHandle, target: LaunchTarget) {
         let _ = main.show();
         let _ = main.set_focus();
     }
-    let _ = app.emit("terax:open-target", ());
+    let _ = app.emit("codev:open-target", ());
 }
 
 /// 打开并居中单页面设置窗口。
@@ -200,6 +200,63 @@ async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 将旧 Terax 运行时目录中的用户状态迁移到 Codev 命名空间。
+fn migrate_legacy_directory(legacy: &Path, current: &Path) -> Result<(), String> {
+    if legacy == current || !legacy.exists() {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(current).map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(legacy).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let source = entry.path();
+        let name = entry.file_name();
+        let target_name = match name.to_str() {
+            Some("terax-settings.json") => "codev-settings.json",
+            Some("terax-spaces.json") => "codev-spaces.json",
+            Some("terax-custom-themes.json") => "codev-custom-themes.json",
+            _ => name.to_str().unwrap_or_default(),
+        };
+        if target_name.is_empty() {
+            continue;
+        }
+        let target = current.join(target_name);
+        if target.exists() {
+            continue;
+        }
+        if let Err(error) = std::fs::rename(&source, &target) {
+            log::warn!("[Codev] legacy item migration skipped: {error}");
+        }
+    }
+
+    if std::fs::read_dir(legacy)
+        .map_err(|e| e.to_string())?
+        .next()
+        .is_none()
+    {
+        let _ = std::fs::remove_dir(legacy);
+    }
+    Ok(())
+}
+
+/// 将安装升级前的本地缓存和配置目录迁移到新的 Codev 标识符。
+fn migrate_legacy_runtime_data(app: &tauri::AppHandle) -> Result<(), String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let local_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| e.to_string())?;
+    let legacy_config = dirs::config_dir()
+        .ok_or_else(|| "legacy config directory unavailable".to_string())?
+        .join("app.crynta.terax");
+    let legacy_local = dirs::data_local_dir()
+        .ok_or_else(|| "legacy local data directory unavailable".to_string())?
+        .join("app.crynta.terax");
+
+    migrate_legacy_directory(&legacy_config, &config_dir)?;
+    migrate_legacy_directory(&legacy_local, &local_dir)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let launch = parse_launch_target();
@@ -225,6 +282,9 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .setup(move |_app| {
+            if let Err(error) = migrate_legacy_runtime_data(_app.handle()) {
+                log::warn!("[Codev] legacy data migration skipped: {error}");
+            }
             // macOS skips parent() for the settings window, so tie its lifecycle
             // to the main window here instead. Other platforms keep parent().
             #[cfg(target_os = "macos")]

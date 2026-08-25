@@ -71,7 +71,7 @@ export function useReaderFileDrop({ onOpen }: ReaderFileDropOptions): void {
         else unlisten = fn;
       })
       .catch((error) =>
-        console.error("[terax] reader drag-drop listen failed:", error),
+        console.error("[Codev] reader drag-drop listen failed:", error),
       );
 
     return () => {

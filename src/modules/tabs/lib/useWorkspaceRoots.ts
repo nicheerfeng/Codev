@@ -20,19 +20,17 @@ export function useWorkspaceRoots() {
     const norm = normalizeWorkspaceRoot(path);
     if (!norm) return;
     const current = usePreferencesStore.getState().workspaceRoots;
-    if (current.includes(norm)) {
+    const existing = current.find(
+      (root) => root.toLowerCase() === norm.toLowerCase(),
+    );
+    if (existing) {
       // Already imported: just focus it.
-      await setActiveWorkspaceRoot(norm);
+      await setActiveWorkspaceRoot(existing);
       return;
     }
     const next = normalizeWorkspaceRoots([...current, norm]);
     await setWorkspaceRoots(next);
-    const active =
-      next.find(
-        (root) =>
-          norm === root || norm.toLowerCase().startsWith(`${root.toLowerCase()}/`),
-      ) ?? norm;
-    await setActiveWorkspaceRoot(active);
+    await setActiveWorkspaceRoot(norm);
   }, []);
 
   const removeRoot = useCallback(async (path: string) => {

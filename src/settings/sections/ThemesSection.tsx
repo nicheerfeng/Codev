@@ -20,7 +20,7 @@ export function ThemesSection() {
       description={t("Choose the app and editor color palette.")}
       className="items-center"
     >
-      <div className="flex max-w-[300px] flex-wrap justify-end gap-1.5">
+      <div className="flex w-max max-w-none flex-nowrap justify-end gap-1.5">
         {themes.map((theme) => {
           const variant =
             theme.variants[resolvedMode] ??

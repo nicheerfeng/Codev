@@ -662,7 +662,7 @@ export default function App() {
       for (const target of targets) await applyOpenTarget(target);
     };
 
-    void listen("terax:open-target", () => {
+    void listen("codev:open-target", () => {
       void drainPendingTargets();
     }).then((off) => {
       if (disposed) off();
@@ -686,7 +686,7 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     let disposed = false;
     (async () => {
-      const off = await listen<string[]>("terax:open-file", (e) => {
+      const off = await listen<string[]>("codev:open-file", (e) => {
         openLaunchFiles(e.payload);
       });
       if (disposed) off();
@@ -1064,7 +1064,7 @@ export default function App() {
                 }}
               >
                 <div className="flex h-full min-h-0 flex-col border-r border-border/60 bg-card">
-                  <div className="min-h-0 flex-1 terax-panel-in">
+                  <div className="min-h-0 flex-1 codev-panel-in">
                     <FileExplorer
                       ref={explorerRef}
                       roots={workspaceRoots}

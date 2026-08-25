@@ -1,11 +1,11 @@
 [package]
-name = "terax"
+name = "codev"
 version = "0.8.6"
 description = "Codev — a minimal code and document reader with an integrated terminal"
 authors = ["teague"]
 license = "Apache-2.0"
 edition = "2021"
-default-run = "terax"
+default-run = "codev"
 
 [workspace]
 members = []
@@ -23,7 +23,7 @@ license = "Apache-2.0"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "terax_lib"
+name = "codev_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]

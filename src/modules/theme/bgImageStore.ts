@@ -1,4 +1,4 @@
-const DB_NAME = "terax-bg-images";
+const DB_NAME = "codev-bg-images";
 const STORE = "images";
 const VERSION = 1;
 

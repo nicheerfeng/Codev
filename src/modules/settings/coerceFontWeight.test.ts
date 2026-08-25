@@ -42,7 +42,7 @@ describe("normalizeWorkspaceRoots", () => {
     ).toEqual(["D:/projects"]);
   });
 
-  it("removes nested roots when their parent is already imported", () => {
+  it("preserves nested roots as independent projects", () => {
     expect(
       normalizeWorkspaceRoots([
         "C:/workspace",
@@ -50,6 +50,21 @@ describe("normalizeWorkspaceRoots", () => {
         "C:/workspace/assets/icons",
         "D:/other",
       ]),
-    ).toEqual(["C:/workspace", "D:/other"]);
+    ).toEqual([
+      "C:/workspace",
+      "C:/workspace/src",
+      "C:/workspace/assets/icons",
+      "D:/other",
+    ]);
+  });
+
+  it("deduplicates the same root without merging parent and child roots", () => {
+    expect(
+      normalizeWorkspaceRoots([
+        "D:/other",
+        "d:/OTHER",
+        "D:/other/src",
+      ]),
+    ).toEqual(["D:/other", "D:/other/src"]);
   });
 });

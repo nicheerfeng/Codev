@@ -76,7 +76,7 @@ export function useExplorerFileDrop({ rootPath, isDir, onTransfer }: Options) {
         else unlisten = fn;
       })
       .catch((err) =>
-        console.error("[terax] explorer drop listen failed:", err),
+        console.error("[Codev] explorer drop listen failed:", err),
       );
 
     return () => {

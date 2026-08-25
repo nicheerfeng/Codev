@@ -468,7 +468,7 @@ export const EditorPane = memo(
       if (isImage || isVideo || isAudio || isPdf) {
         const assetUrl = convertFileSrc(path);
         return (
-          <div className="flex h-full min-h-0 flex-col items-center justify-center bg-background p-4 overflow-auto">
+          <div className="reader-scrollbar flex h-full min-h-0 flex-col items-center justify-center overflow-auto bg-background p-4">
             {isImage && (
               <img
                 src={assetUrl}
@@ -545,8 +545,9 @@ export const EditorPane = memo(
           theme={themeExt}
           extensions={extensions}
           height="100%"
-          className="flex-1 min-h-0 overflow-hidden"
+          className="reader-scrollbar flex-1 min-h-0 overflow-hidden"
           basicSetup={{
+            drawSelection: false,
             lineNumbers: true,
             highlightActiveLineGutter: true,
             foldGutter: true,
@@ -554,7 +555,7 @@ export const EditorPane = memo(
             closeBrackets: true,
             autocompletion: false,
             highlightActiveLine: true,
-            highlightSelectionMatches: true,
+            highlightSelectionMatches: false,
             searchKeymap: false,
           }}
         />

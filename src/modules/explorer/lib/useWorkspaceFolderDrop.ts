@@ -59,7 +59,7 @@ export function useWorkspaceFolderDrop({ onAddRoot }: Options): void {
         else unlisten = fn;
       })
       .catch((error) =>
-        console.error("[terax] workspace folder drop failed:", error),
+        console.error("[Codev] workspace folder drop failed:", error),
       );
 
     return () => {

@@ -46,6 +46,7 @@ const DEBOUNCE_MS = 300;
 
 type Props = {
   rootPath: string;
+  searchRoots?: string[];
   onOpenFile: (path: string) => void;
   onAddAsRoot?: (path: string) => void;
   onCopyPaths?: (paths: string[]) => void;
@@ -75,6 +76,7 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
   function ExplorerSearch(
     {
       rootPath,
+      searchRoots,
       onOpenFile,
       onAddAsRoot,
       onCopyPaths,
@@ -138,7 +140,7 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
       const handle = setTimeout(async () => {
         try {
           const res = await invoke<SearchResult>("fs_search", {
-            root: rootPath,
+            roots: searchRoots?.length ? searchRoots : [rootPath],
             query: q,
             limit: 200,
             showHidden,
@@ -165,7 +167,7 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
         alive = false;
         clearTimeout(handle);
       };
-    }, [query, retryToken, rootPath, showHidden]);
+    }, [query, retryToken, rootPath, searchRoots, showHidden]);
 
     useImperativeHandle(
       ref,

@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use tempfile::TempDir;
-use terax_lib::modules::fs::to_canon;
+use codev_lib::modules::fs::to_canon;
 
 pub struct FsFixture {
     pub root: PathBuf,

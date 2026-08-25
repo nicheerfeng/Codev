@@ -1,9 +1,9 @@
 mod common;
 
 use common::FsFixture;
-use terax_lib::modules::fs::grep::{fs_glob, fs_grep};
-use terax_lib::modules::fs::search::{fs_list_files, fs_search};
-use terax_lib::modules::fs::tree::{fs_read_dir, list_subdirs, EntryKind};
+use codev_lib::modules::fs::grep::{fs_glob, fs_grep};
+use codev_lib::modules::fs::search::{fs_list_files, fs_search};
+use codev_lib::modules::fs::tree::{fs_read_dir, list_subdirs, EntryKind};
 
 #[test]
 fn grep_finds_matches_and_returns_relative_paths() {
@@ -152,7 +152,7 @@ fn search_substring_matches_filename() {
     fx.write("src/lib.rs", "");
     fx.write("docs/main.md", "");
 
-    let res = fs_search(fx.root_str(), "main".into(), None, None, None).expect("search");
+    let res = fs_search(vec![fx.root_str()], "main".into(), None, None, None).expect("search");
     let rels: Vec<&str> = res.hits.iter().map(|h| h.rel.as_str()).collect();
     assert!(rels.contains(&"src/main.rs"));
     assert!(rels.contains(&"docs/main.md"));
@@ -163,7 +163,7 @@ fn search_substring_matches_filename() {
 fn search_is_case_insensitive() {
     let fx = FsFixture::new();
     fx.write("README.md", "");
-    let res = fs_search(fx.root_str(), "readme".into(), None, None, None).expect("search");
+    let res = fs_search(vec![fx.root_str()], "readme".into(), None, None, None).expect("search");
     assert_eq!(res.hits.len(), 1);
 }
 
@@ -171,21 +171,21 @@ fn search_is_case_insensitive() {
 fn search_empty_query_returns_empty() {
     let fx = FsFixture::new();
     fx.write("a.txt", "");
-    let res = fs_search(fx.root_str(), "   ".into(), None, None, None).expect("search");
+    let res = fs_search(vec![fx.root_str()], "   ".into(), None, None, None).expect("search");
     assert!(res.hits.is_empty());
     assert!(!res.truncated);
 }
 
 #[test]
-fn search_prunes_node_modules() {
+fn search_includes_nested_generated_directories() {
     let fx = FsFixture::new();
     fx.write("node_modules/lodash/index.js", "");
     fx.write("src/index.js", "");
 
-    let res = fs_search(fx.root_str(), "index".into(), None, None, None).expect("search");
+    let res = fs_search(vec![fx.root_str()], "index".into(), None, None, None).expect("search");
     let rels: Vec<&str> = res.hits.iter().map(|h| h.rel.as_str()).collect();
     assert!(rels.iter().any(|r| r.starts_with("src/")));
-    assert!(!rels.iter().any(|r| r.starts_with("node_modules")));
+    assert!(rels.iter().any(|r| r.starts_with("node_modules/")));
 }
 
 #[test]
@@ -194,7 +194,7 @@ fn search_ranks_filename_hits_before_path_hits() {
     fx.write("zeta/inner.txt", "");
     fx.write("beta/zeta.txt", "");
 
-    let res = fs_search(fx.root_str(), "zeta".into(), None, None, None).expect("search");
+    let res = fs_search(vec![fx.root_str()], "zeta".into(), None, None, None).expect("search");
     let zeta_file = res
         .hits
         .iter()

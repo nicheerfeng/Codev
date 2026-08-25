@@ -19,7 +19,7 @@ export function indentExtension(unit: string): Extension {
 
 export const DEFAULT_INDENT: Extension = indentExtension("  ");
 
-const WORD_WRAP_COLUMN_VAR = "--terax-editor-wrap-column";
+const WORD_WRAP_COLUMN_VAR = "--codev-editor-wrap-column";
 const WORD_WRAP_COLUMN_THEME = EditorView.theme({
   ".cm-content.cm-lineWrapping": {
     maxWidth: `var(${WORD_WRAP_COLUMN_VAR})`,
@@ -45,8 +45,9 @@ export function wordWrapExtension(column: number | null): Extension {
 
 // Only what basicSetup doesn't already cover, to avoid duplicate extensions.
 // basicSetup gives us line numbers, fold gutter, history, indentOnInput,
-// bracketMatching, closeBrackets, highlightActiveLine, highlightSelectionMatches
-// and the search keymap.
+// bracketMatching, closeBrackets, highlightActiveLine and the search keymap.
+// EditorPane deliberately disables same-word selection matches so only the
+// actual selected range receives the selection background.
 // Singleton: per-pane instances would inject duplicate style modules.
 const SHARED_EXTENSIONS: readonly Extension[] = Object.freeze([
   search({ top: true }),
@@ -94,10 +95,6 @@ const SHARED_EXTENSIONS: readonly Extension[] = Object.freeze([
     ".cm-cursor, .cm-dropCursor": {
       borderLeftColor: "var(--foreground)",
     },
-    ".cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection":
-      {
-        backgroundColor: "var(--text-selection-background) !important",
-      },
     ".cm-selectionMatch": {
       backgroundColor:
         "color-mix(in srgb, var(--primary) 24%, transparent) !important",

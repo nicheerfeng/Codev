@@ -71,8 +71,6 @@ const ASSET_EXTENSIONS = new Set([
   "m4a",
 ]);
 const TEXT_PREVIEW_EXTENSIONS = new Set([
-  "jsonl",
-  "ndjson",
   "csv",
   "tsv",
   "log",
@@ -159,7 +157,7 @@ function PageControls({
   );
 }
 
-// 以单页纯文本预览 JSONL、CSV、TSV 和日志，保持原文可选中复制。
+// 以单页纯文本预览 CSV、TSV 和日志，保持原文可选中复制。
 const TextWindowPreview = forwardRef<
   TextSearchHandle,
   { path: string; reloadKey: number }
@@ -385,7 +383,7 @@ const TextWindowPreview = forwardRef<
             onBack={goBack}
             onForward={goForward}
           />
-          <pre className="min-h-0 flex-1 select-text overflow-auto p-3 font-mono text-[12px] leading-5 whitespace-pre text-foreground">
+          <pre className="reader-scrollbar min-h-0 flex-1 select-text overflow-auto p-3 font-mono text-[12px] leading-5 whitespace-pre text-foreground">
             {state.value.content}
           </pre>
         </>
@@ -497,7 +495,7 @@ function AssetPreview({ path }: { path: string }) {
           <span className="ml-auto">{fit ? "适合窗口" : `${zoom}%`}</span>
         </div>
       )}
-      <div className="min-h-0 flex-1 overflow-auto p-4">
+      <div className="reader-scrollbar min-h-0 flex-1 overflow-auto p-4">
         {!source && (
           <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
             {assetError ? `媒体加载失败：${assetError}` : "正在加载媒体…"}

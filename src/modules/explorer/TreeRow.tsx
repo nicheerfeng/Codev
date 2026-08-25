@@ -5,6 +5,9 @@ import { memo } from "react";
 import { InlineInput } from "./InlineInput";
 import { fileIconUrl, folderIconUrl } from "./lib/iconResolver";
 
+const TREE_BASE_INDENT = 12;
+const TREE_DEPTH_INDENT = 12;
+
 export type RowActions = {
   toggle: (path: string) => void;
   beginRename: (path: string) => void;
@@ -45,7 +48,7 @@ function EntryRowImpl(props: EntryRowProps) {
   } = props;
 
   const iconUrl = isDir ? folderIconUrl(name, isExpanded) : fileIconUrl(name);
-  const paddingLeft = 6 + depth * 12;
+  const paddingLeft = TREE_BASE_INDENT + depth * TREE_DEPTH_INDENT;
 
   if (isRenaming) {
     return (
@@ -130,7 +133,9 @@ export function PendingRow({
   return (
     <div
       className="flex h-6 w-full min-w-0 items-center gap-2 px-1.5 text-[13px]"
-      style={{ paddingLeft: 6 + depth * 12 }}
+      style={{
+        paddingLeft: TREE_BASE_INDENT + depth * TREE_DEPTH_INDENT,
+      }}
     >
       <span className="size-3.5 shrink-0" />
       <img
@@ -165,7 +170,9 @@ export function StatusRow({
         "h-6 truncate px-2 text-[11px] leading-6",
         tone === "error" ? "text-destructive" : "text-muted-foreground",
       )}
-      style={{ paddingLeft: 6 + depth * 12 + 18 }}
+      style={{
+        paddingLeft: TREE_BASE_INDENT + depth * TREE_DEPTH_INDENT + 18,
+      }}
     >
       {message}
     </div>

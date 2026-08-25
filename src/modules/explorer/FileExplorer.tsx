@@ -38,6 +38,7 @@ import { useFileTransfer } from "./lib/useFileTransfer";
 import { useSelectedFileMeta } from "./lib/useSelectedFileMeta";
 import { useWorkspaceFolderDrop } from "./lib/useWorkspaceFolderDrop";
 import { ExplorerStatusBar } from "./ExplorerStatusBar";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 export type FileExplorerHandle = {
   focus: () => void;
@@ -80,16 +81,16 @@ function basename(path: string): string {
 function EmptyExplorerContextMenu({
   onAddFolder,
   onPaste,
+  children,
 }: {
   onAddFolder: () => void;
   onPaste?: () => void;
+  children: React.ReactNode;
 }) {
   const t = useT();
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div className="min-h-8 min-w-0 flex-1" data-explorer-empty="" />
-      </ContextMenuTrigger>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent className={COMPACT_CONTENT}>
         {onPaste ? (
           <ContextMenuItem className={COMPACT_ITEM} onSelect={onPaste}>
@@ -211,7 +212,7 @@ function RootSection({
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
-      {open ? <div className="min-w-0">{children}</div> : null}
+      {open ? <div className="min-w-0 pt-1">{children}</div> : null}
     </div>
   );
 }
@@ -463,7 +464,7 @@ export const FileExplorer = memo(
           if (typeof result === "string") onAddRoot(result.replace(/\\/g, "/"));
         })
         .catch((cause) => {
-          console.error("[terax] folder picker failed:", cause);
+          console.error("[Codev] folder picker failed:", cause);
         });
     }, [onAddRoot, t]);
 
@@ -695,58 +696,69 @@ export const FileExplorer = memo(
             </ContextMenuContent>
           </ContextMenu>
         ) : (
-          <div className="min-h-0 min-w-0 flex flex-1 flex-col overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]">
-            {roots.map((root) => (
-              <RootSection
-                key={root}
-                root={root}
-                active={root === activeRoot}
-                onActivate={() => onSetActiveRoot(root)}
-                onRemove={() => removeRoot(root)}
-                onCopy={() => void copyToClipboard(root)}
-                onAddFolder={requestAddFolder}
-                onOpenTerminal={
-                  treeProps.onRevealInTerminal
-                    ? () => treeProps.onRevealInTerminal?.(root)
-                    : undefined
-                }
-                onPaste={
-                  pasteAvailable ? () => void pasteClipboard(root) : undefined
-                }
-              >
-                <RootTree
-                  ref={(h) => {
-                    if (h) treeRefs.current.set(root, h);
-                    else treeRefs.current.delete(root);
-                  }}
-                  rootPath={root}
-                  onAddAsRoot={onAddRoot}
-                  onRequestAddRoot={requestAddFolder}
-                  selectedPaths={selectedPaths}
-                  onSelectPath={selectPath}
-                  onActivateRoot={() => onSetActiveRoot(root)}
-                  showToolbar={false}
-                  {...treeProps}
-                  onTransfer={startTransfer}
-                  onExternalCopy={startExternalCopy}
-                  onCopyPaths={copyPaths}
-                  onCutPaths={cutPaths}
-                  onDeletePaths={deletePaths}
-                  clipboardAvailable={pasteAvailable}
-                  onPasteTo={(path) => void pasteClipboard(path)}
-                  sharedScroll
-                />
-              </RootSection>
-            ))}
-            <EmptyExplorerContextMenu
-              onAddFolder={requestAddFolder}
-              onPaste={
-                pasteAvailable && activeRoot
-                  ? () => void pasteClipboard(activeRoot)
-                  : undefined
-              }
-            />
-          </div>
+          <EmptyExplorerContextMenu
+            onAddFolder={requestAddFolder}
+            onPaste={
+              pasteAvailable && activeRoot
+                ? () => void pasteClipboard(activeRoot)
+                : undefined
+            }
+          >
+            <div
+              className="min-h-0 min-w-0 flex-1"
+              data-explorer-empty=""
+            >
+              <ScrollArea className="h-full min-h-0 min-w-0">
+                <div className="min-w-0">
+                  {roots.map((root) => (
+                    <RootSection
+                      key={root}
+                      root={root}
+                      active={root === activeRoot}
+                      onActivate={() => onSetActiveRoot(root)}
+                      onRemove={() => removeRoot(root)}
+                      onCopy={() => void copyToClipboard(root)}
+                      onAddFolder={requestAddFolder}
+                      onOpenTerminal={
+                        treeProps.onRevealInTerminal
+                          ? () => treeProps.onRevealInTerminal?.(root)
+                          : undefined
+                      }
+                      onPaste={
+                        pasteAvailable
+                          ? () => void pasteClipboard(root)
+                          : undefined
+                      }
+                    >
+                      <RootTree
+                        ref={(h) => {
+                          if (h) treeRefs.current.set(root, h);
+                          else treeRefs.current.delete(root);
+                        }}
+                        rootPath={root}
+                        onAddAsRoot={onAddRoot}
+                        onRequestAddRoot={requestAddFolder}
+                        selectedPaths={selectedPaths}
+                        onSelectPath={selectPath}
+                        onActivateRoot={() => onSetActiveRoot(root)}
+                        showToolbar={false}
+                        {...treeProps}
+                        searchRoots={roots}
+                        onTransfer={startTransfer}
+                        onExternalCopy={startExternalCopy}
+                        onCopyPaths={copyPaths}
+                        onCutPaths={cutPaths}
+                        onDeletePaths={deletePaths}
+                        clipboardAvailable={pasteAvailable}
+                        onPasteTo={(path) => void pasteClipboard(path)}
+                        sharedScroll
+                      />
+                    </RootSection>
+                  ))}
+                </div>
+              </ScrollArea>
+            </div>
+          </EmptyExplorerContextMenu>
         )}
         <ExplorerStatusBar
           transfer={transfer.event}

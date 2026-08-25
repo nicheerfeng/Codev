@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "identifier": "app.crynta.terax.portable",
+  "identifier": "app.teague.codev.portable",
   "app": {
     "windows": [
       {

@@ -89,6 +89,8 @@ export type RootTreeProps = {
   pathDropTarget?: TerminalPathDropTarget;
   /** Renders this root into the explorer's single continuous scroll flow. */
   sharedScroll?: boolean;
+  /** Searches every currently imported workspace root from this tree. */
+  searchRoots?: string[];
 };
 
 type Row =
@@ -224,6 +226,7 @@ export const RootTree = memo(
       onOpenFileToSide,
       pathDropTarget,
       sharedScroll = false,
+      searchRoots,
     },
     ref,
   ) {
@@ -656,6 +659,7 @@ export const RootTree = memo(
         <ExplorerSearch
           ref={searchRef}
           rootPath={rootPath}
+          searchRoots={searchRoots}
           onOpenFile={onOpenFile}
           open={isSearchOpen}
           onRequestClose={() => setIsSearchOpen(false)}

@@ -37,7 +37,6 @@ function build(p: Palette): Extension {
       background: p.bg,
       foreground: p.fg,
       caret: p.caret,
-      selection: p.selection,
       selectionMatch: p.selection,
       lineHighlight: p.lineHighlight,
       gutterBackground: p.bg,

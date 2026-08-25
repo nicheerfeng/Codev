@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use ignore::WalkBuilder;
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
@@ -10,7 +12,7 @@ use crate::modules::workspace::{resolve_path, WorkspaceEnv};
 pub struct SearchHit {
     /// Absolute path of the matched file.
     pub path: String,
-    /// Path relative to the search root, for display.
+    /// Path relative to the search root; multiple roots include the root name.
     pub rel: String,
     /// File name only.
     pub name: String,
@@ -46,7 +48,7 @@ const PRUNE_DIRS: &[&str] = &[
 
 #[tauri::command]
 pub fn fs_search(
-    root: String,
+    roots: Vec<String>,
     query: String,
     limit: Option<usize>,
     workspace: Option<WorkspaceEnv>,
@@ -62,61 +64,88 @@ pub fn fs_search(
     let cap = limit.unwrap_or(200).min(1000);
     let show_hidden = show_hidden.unwrap_or(false);
     let workspace = WorkspaceEnv::from_option(workspace);
-    let root_path = resolve_path(&root, &workspace);
-    if !root_path.is_dir() {
-        return Err(format!("not a directory: {root}"));
+    let root_inputs: Vec<String> = roots
+        .into_iter()
+        .map(|root| root.trim().to_string())
+        .filter(|root| !root.is_empty())
+        .collect();
+    if root_inputs.is_empty() {
+        return Err("no search roots".to_string());
+    }
+
+    let multi_root = root_inputs.len() > 1;
+    let mut resolved_roots = Vec::with_capacity(root_inputs.len());
+    for root_display in root_inputs {
+        let root_path = resolve_path(&root_display, &workspace);
+        if !root_path.is_dir() {
+            return Err(format!("not a directory: {root_display}"));
+        }
+        let root_label = root_display
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .filter(|label| !label.is_empty())
+            .unwrap_or(root_display.as_str())
+            .to_string();
+        resolved_roots.push((root_display, root_path, root_label));
     }
 
     let mut cands: Vec<SearchHit> = Vec::new();
     let mut scanned: usize = 0;
     let mut truncated = false;
+    let mut seen_paths = HashSet::new();
 
-    let walker = WalkBuilder::new(&root_path)
-        .hidden(!show_hidden)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .ignore(true)
-        .parents(true)
-        .follow_links(false)
-        .filter_entry(|dent| {
-            // Prune known-heavy dirs even when no .gitignore is present (e.g.
-            // searching from $HOME).
-            if dent.depth() == 0 {
-                return true;
-            }
-            match dent.file_name().to_str() {
-                Some(name) => !PRUNE_DIRS.contains(&name),
-                None => true,
-            }
-        })
-        .build();
+    for (root_display, root_path, root_label) in resolved_roots {
+        let walker = WalkBuilder::new(&root_path)
+            .hidden(!show_hidden)
+            // Filename search follows the visible file tree, including files
+            // under ignored or commonly generated directories.
+            .git_ignore(false)
+            .git_global(false)
+            .git_exclude(false)
+            .ignore(false)
+            .parents(true)
+            .follow_links(false)
+            .build();
 
-    for dent in walker.flatten() {
-        scanned += 1;
-        if scanned > MAX_SCANNED {
-            truncated = true;
+        for dent in walker.flatten() {
+            scanned += 1;
+            if scanned > MAX_SCANNED {
+                truncated = true;
+                break;
+            }
+            let path = dent.path();
+            if path == root_path {
+                continue;
+            }
+            let absolute = to_canon(path);
+            if !seen_paths.insert(absolute) {
+                continue;
+            }
+            let rel_inside = match path.strip_prefix(&root_path) {
+                Ok(r) => to_canon(r),
+                Err(_) => continue,
+            };
+            let rel = if multi_root {
+                format!("{root_label}/{rel_inside}")
+            } else {
+                rel_inside
+            };
+            let name = path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let is_dir = dent.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            cands.push(SearchHit {
+                path: display_path(path, &root_path, &root_display, &workspace),
+                rel,
+                name,
+                is_dir,
+            });
+        }
+        if truncated {
             break;
         }
-        let path = dent.path();
-        if path == root_path {
-            continue;
-        }
-        let rel = match path.strip_prefix(&root_path) {
-            Ok(r) => to_canon(r),
-            Err(_) => continue,
-        };
-        let name = path
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let is_dir = dent.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        cands.push(SearchHit {
-            path: display_path(path, &root_path, &root, &workspace),
-            rel,
-            name,
-            is_dir,
-        });
     }
 
     let hits = rank_fuzzy(cands, q, cap);

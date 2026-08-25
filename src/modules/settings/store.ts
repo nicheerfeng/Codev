@@ -99,7 +99,7 @@ export type Preferences = {
   editorAutoSaveDelay: number;
 };
 
-const STORE_PATH = "terax-settings.json";
+const STORE_PATH = "codev-settings.json";
 const KEY_LOCALE = "locale";
 const KEY_THEME = "theme";
 const KEY_THEME_ID = "themeId";
@@ -191,7 +191,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
 };
 
 const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: 200 });
-const staleSessionStore = new LazyStore("terax-spaces.json", {
+const staleSessionStore = new LazyStore("codev-spaces.json", {
   defaults: {},
   autoSave: 500,
 });
@@ -201,7 +201,7 @@ const WORKSPACE_HISTORY_RESET_VERSION = 1;
 // page lives in a separate webview, so writes there never reach the main
 // window's subscribers. Mirror every setter through a Tauri event so any
 // window can listen.
-const PREFS_CHANGED_EVENT = "terax://prefs-changed";
+const PREFS_CHANGED_EVENT = "codev://prefs-changed";
 
 async function writePref<T>(key: string, value: T): Promise<void> {
   await store.set(key, value);
@@ -404,19 +404,13 @@ export function normalizeWorkspaceRoots(
   const out: string[] = [];
   for (const r of raw) {
     const n = normalizeWorkspaceRoot(r);
-    if (n && !isBareDriveRoot(n) && !seen.has(n)) {
-      seen.add(n);
+    const key = n?.toLowerCase();
+    if (n && !isBareDriveRoot(n) && key && !seen.has(key)) {
+      seen.add(key);
       out.push(n);
     }
   }
-  return out.filter(
-    (path) =>
-      !out.some(
-        (parent) =>
-          parent !== path &&
-          path.toLowerCase().startsWith(`${parent.toLowerCase()}/`),
-      ),
-  );
+  return out;
 }
 
 export async function setBackgroundKind(value: BackgroundKind): Promise<void> {

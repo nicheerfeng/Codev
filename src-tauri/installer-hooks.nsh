@@ -15,32 +15,41 @@
   DeleteRegKey HKCU "Software\Classes\Drive\shell\OpenInCodev"
 
   WriteRegStr HKCU "Software\Classes\Directory\shell\OpenInCodev" "" "Open in Codev"
-  WriteRegStr HKCU "Software\Classes\Directory\shell\OpenInCodev" "Icon" '"$INSTDIR\terax.exe",0'
+  WriteRegStr HKCU "Software\Classes\Directory\shell\OpenInCodev" "Icon" '"$INSTDIR\codev.exe",0'
   WriteRegStr HKCU "Software\Classes\Directory\shell\OpenInCodev" "NoWorkingDirectory" ""
-  WriteRegStr HKCU "Software\Classes\Directory\shell\OpenInCodev\command" "" '"$INSTDIR\terax.exe" "%V"'
+  WriteRegStr HKCU "Software\Classes\Directory\shell\OpenInCodev\command" "" '"$INSTDIR\codev.exe" "%V"'
 
   WriteRegStr HKCU "Software\Classes\Directory\Background\shell\OpenInCodev" "" "Open in Codev"
-  WriteRegStr HKCU "Software\Classes\Directory\Background\shell\OpenInCodev" "Icon" '"$INSTDIR\terax.exe",0'
+  WriteRegStr HKCU "Software\Classes\Directory\Background\shell\OpenInCodev" "Icon" '"$INSTDIR\codev.exe",0'
   WriteRegStr HKCU "Software\Classes\Directory\Background\shell\OpenInCodev" "NoWorkingDirectory" ""
-  WriteRegStr HKCU "Software\Classes\Directory\Background\shell\OpenInCodev\command" "" '"$INSTDIR\terax.exe" "%V"'
+  WriteRegStr HKCU "Software\Classes\Directory\Background\shell\OpenInCodev\command" "" '"$INSTDIR\codev.exe" "%V"'
 
   WriteRegStr HKCU "Software\Classes\Drive\shell\OpenInCodev" "" "Open in Codev"
-  WriteRegStr HKCU "Software\Classes\Drive\shell\OpenInCodev" "Icon" '"$INSTDIR\terax.exe",0'
+  WriteRegStr HKCU "Software\Classes\Drive\shell\OpenInCodev" "Icon" '"$INSTDIR\codev.exe",0'
   WriteRegStr HKCU "Software\Classes\Drive\shell\OpenInCodev" "NoWorkingDirectory" ""
-  WriteRegStr HKCU "Software\Classes\Drive\shell\OpenInCodev\command" "" '"$INSTDIR\terax.exe" "%V"'
+  WriteRegStr HKCU "Software\Classes\Drive\shell\OpenInCodev\command" "" '"$INSTDIR\codev.exe" "%V"'
 
   ; Refresh file associations and Explorer's icon cache immediately.
   !insertmacro UPDATEFILEASSOC
 
-  ; The built-in NSIS shortcut updater skips a .lnk when its target is already
-  ; terax.exe, which preserves the old cached icon. Refresh only an existing
-  ; desktop shortcut so an opted-out shortcut is never created implicitly.
+  ; Remove the obsolete binary before refreshing shortcuts so Windows cannot
+  ; keep resolving its historical icon.
+  Delete "$INSTDIR\terax.exe"
+
+  ; Refresh only existing shortcuts so an opted-out shortcut is never created
+  ; implicitly.
   IfFileExists "$DESKTOP\Codev.lnk" codev_refresh_desktop_icon codev_desktop_icon_done
 codev_refresh_desktop_icon:
   Delete "$DESKTOP\Codev.lnk"
-  CreateShortcut "$DESKTOP\Codev.lnk" "$INSTDIR\terax.exe" "" "$INSTDIR\terax.exe" 0
+  CreateShortcut "$DESKTOP\Codev.lnk" "$INSTDIR\codev.exe" "" "$INSTDIR\codev.exe" 0
   !insertmacro SetLnkAppUserModelId "$DESKTOP\Codev.lnk"
 codev_desktop_icon_done:
+  IfFileExists "$SMPROGRAMS\Codev.lnk" codev_refresh_start_menu_icon codev_start_menu_icon_done
+codev_refresh_start_menu_icon:
+  Delete "$SMPROGRAMS\Codev.lnk"
+  CreateShortcut "$SMPROGRAMS\Codev.lnk" "$INSTDIR\codev.exe" "" "$INSTDIR\codev.exe" 0
+  !insertmacro SetLnkAppUserModelId "$SMPROGRAMS\Codev.lnk"
+codev_start_menu_icon_done:
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
