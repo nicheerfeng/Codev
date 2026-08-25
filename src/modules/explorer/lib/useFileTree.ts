@@ -284,6 +284,23 @@ export function useFileTree(rootPath: string | null, options?: Options) {
     [fetchChildren, addWatch],
   );
 
+  /** 展开根目录到目标目录的必要祖先链，并加载目标目录内容。 */
+  const revealPath = useCallback(
+    (path: string) => {
+      if (!rootPath) return;
+      const root = rootPath.replace(/\\/g, "/").replace(/\/+$/, "");
+      const target = path.replace(/\\/g, "/").replace(/\/+$/, "");
+      if (target !== root && !target.startsWith(`${root}/`)) return;
+      const parts = target.slice(root.length).split("/").filter(Boolean);
+      let current = root;
+      for (const part of parts) {
+        current = joinPath(current, part);
+        expand(current);
+      }
+    },
+    [expand, rootPath],
+  );
+
   const refresh = useCallback(
     (path: string) => {
       void fetchChildren(path);
@@ -423,6 +440,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
     renaming,
     toggle,
     expand,
+    revealPath,
     refresh,
     beginCreate,
     cancelCreate,

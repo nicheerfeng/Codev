@@ -74,6 +74,9 @@ type Session = {
   // OSC 133 C..D window: a foreground process owns the terminal, so the leaf
   // must keep its live grid while hidden.
   commandRunning: boolean;
+  interruptPending: boolean;
+  interruptTimer: ReturnType<typeof setTimeout> | null;
+  interruptGeneration: number;
   outputActive: boolean;
   lastOutputAt: number;
   outputIdleTimer: ReturnType<typeof setTimeout> | null;
@@ -85,6 +88,7 @@ const sessions = new Map<number, Session>();
 
 const PENDING_INPUT_MAX = 256 * 1024;
 const OUTPUT_ACTIVITY_IDLE_MS = 1500;
+const INTERRUPT_CHECKPOINTS_MS = [300, 1000, 2500] as const;
 
 // Input typed before the pty attaches is queued and flushed on attach. Cap the
 // queue so a large paste into a still-spawning pane can't grow it without bound.
@@ -122,6 +126,74 @@ export function clearFocusedTerminal(): boolean {
 
 function leafBusy(s: Session): boolean {
   return s.commandRunning;
+}
+
+/** 取消 Ctrl+C 后的有限次前台进程校正。 */
+function cancelInterruptReconcile(s: Session): void {
+  s.interruptGeneration += 1;
+  s.interruptPending = false;
+  if (s.interruptTimer !== null) {
+    clearTimeout(s.interruptTimer);
+    s.interruptTimer = null;
+  }
+}
+
+/** 在 Ctrl+C 后查询前台进程，进程结束时校正命令结束态。 */
+async function reconcileInterrupt(
+  leafId: number,
+  generation: number,
+  attempt: number,
+): Promise<void> {
+  const current = sessions.get(leafId);
+  if (
+    !current ||
+    current.disposed ||
+    current.interruptGeneration !== generation ||
+    !current.interruptPending
+  ) {
+    return;
+  }
+  const running = await leafHasForegroundProcess(leafId);
+  const latest = sessions.get(leafId);
+  if (
+    !latest ||
+    latest.disposed ||
+    latest.interruptGeneration !== generation ||
+    !latest.interruptPending
+  ) {
+    return;
+  }
+  if (!running) {
+    latest.interruptPending = false;
+    onLeafCommandState(leafId, false);
+    return;
+  }
+  if (attempt + 1 >= INTERRUPT_CHECKPOINTS_MS.length) {
+    latest.interruptPending = false;
+    return;
+  }
+  latest.interruptTimer = setTimeout(() => {
+    latest.interruptTimer = null;
+    void reconcileInterrupt(leafId, generation, attempt + 1);
+  },
+  INTERRUPT_CHECKPOINTS_MS[attempt + 1] -
+    INTERRUPT_CHECKPOINTS_MS[attempt]);
+}
+
+/** 标记 Ctrl+C 待校正状态，并安排最多三次轻量进程检查。 */
+function markInterruptPending(leafId: number): void {
+  const s = sessions.get(leafId);
+  if (!s || s.disposed || s.shellExited || !s.pty) return;
+  cancelInterruptReconcile(s);
+  s.interruptGeneration += 1;
+  const generation = s.interruptGeneration;
+  s.interruptPending = true;
+  s.commandRunning = true;
+  cancelHiddenRelease(s);
+  s.interruptTimer = setTimeout(() => {
+    s.interruptTimer = null;
+    void reconcileInterrupt(leafId, generation, 0);
+  }, INTERRUPT_CHECKPOINTS_MS[0]);
 }
 
 const HIDDEN_RELEASE_DELAY_MS = 300;
@@ -166,7 +238,9 @@ async function leafHasForegroundJob(leafId: number): Promise<boolean> {
 
 function onLeafCommandState(leafId: number, running: boolean): void {
   const s = sessions.get(leafId);
-  if (!s || s.commandRunning === running) return;
+  if (!s) return;
+  if (!running || s.interruptPending) cancelInterruptReconcile(s);
+  if (s.commandRunning === running) return;
   s.commandRunning = running;
   if (!running) {
     scheduleHiddenRelease(leafId, s);
@@ -245,6 +319,7 @@ configureRendererPool({
         if (s.pty) void s.pty.write(data);
         else queuePendingInput(s, data);
       },
+      interrupt: () => markInterruptPending(leafId),
       resizePty: (cols, rows) => {
         s.cols = cols;
         s.rows = rows;
@@ -318,6 +393,9 @@ function ensureSession(
     hasSlot: false,
     altScreenAtRelease: false,
     commandRunning: false,
+    interruptPending: false,
+    interruptTimer: null,
+    interruptGeneration: 0,
     outputActive: false,
     lastOutputAt: 0,
     outputIdleTimer: null,
@@ -395,6 +473,7 @@ async function openPtyForSession(
         s.shellExited = true;
         s.pty = null;
         s.pendingInput = "";
+        cancelInterruptReconcile(s);
         s.commandRunning = false;
         clearLeafOutputActivity(s);
         const slot = getSlotForLeaf(leafId);
@@ -540,6 +619,7 @@ async function respawnSession(
   s.pendingExit = null;
   s.pendingInput = "";
   s.altScreenAtRelease = false;
+  cancelInterruptReconcile(s);
   s.commandRunning = false;
   clearLeafOutputActivity(s);
   s.spawnFailed = false;
@@ -600,6 +680,7 @@ export function disposeSession(leafId: number): void {
   const s = sessions.get(leafId);
   if (!s) return;
   s.disposed = true;
+  cancelInterruptReconcile(s);
   cancelHiddenRelease(s);
   clearLeafOutputActivity(s);
   disposeLeafSlot(leafId);

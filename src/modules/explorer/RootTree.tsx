@@ -51,12 +51,14 @@ export type RootTreeHandle = {
   createFolder: () => void;
   refresh: () => void;
   refreshPath: (path: string) => void;
+  revealPath: (path: string) => void;
 };
 
 export type RootTreeProps = {
   rootPath: string | null;
   activeFilePath?: string | null;
   onOpenFile: (path: string, pin?: boolean) => void;
+  onRevealDirectory?: (path: string) => void;
   onPathRenamed?: (from: string, to: string) => void;
   onPathDeleted?: (path: string) => void;
   /** Starts a unified copy or move task for selected paths. */
@@ -207,6 +209,7 @@ export const RootTree = memo(
       rootPath,
       activeFilePath,
       onOpenFile,
+      onRevealDirectory,
       onPathRenamed,
       onPathDeleted,
       onTransfer,
@@ -380,6 +383,34 @@ export const RootTree = memo(
       [entryIndexByPath, sharedScroll, virtualizer],
     );
 
+    const pendingRevealPathRef = useRef<string | null>(null);
+    /** 展开并在目录数据加载完成后滚动到搜索命中的目录。 */
+    const queueRevealPath = useCallback(
+      (path: string) => {
+        pendingRevealPathRef.current = path;
+        tree.revealPath(path);
+      },
+      [tree.revealPath],
+    );
+
+    useEffect(() => {
+      const path = pendingRevealPathRef.current;
+      if (!path || !entryIndexByPath.has(path)) return;
+      pendingRevealPathRef.current = null;
+      requestAnimationFrame(() => scrollEntryIntoView(path));
+    }, [entryIndexByPath, scrollEntryIntoView]);
+
+    /** 关闭搜索并把目录结果交回对应文件树展开。 */
+    const revealSearchDirectory = useCallback(
+      (path: string) => {
+        selectPath(path, false);
+        setIsSearchOpen(false);
+        if (onRevealDirectory) onRevealDirectory(path);
+        else queueRevealPath(path);
+      },
+      [onRevealDirectory, queueRevealPath, selectPath],
+    );
+
     const lastSyncedActivePathRef = useRef<string | null>(null);
     useEffect(() => {
       if (
@@ -425,6 +456,7 @@ export const RootTree = memo(
           if (rootPath) tree.refresh(rootPath);
         },
         refreshPath: (path: string) => tree.refresh(path),
+        revealPath: queueRevealPath,
       }),
       [
         entryPaths,
@@ -434,6 +466,7 @@ export const RootTree = memo(
         rootPath,
         tree.beginCreate,
         tree.refresh,
+        queueRevealPath,
       ],
     );
 
@@ -661,6 +694,7 @@ export const RootTree = memo(
           rootPath={rootPath}
           searchRoots={searchRoots}
           onOpenFile={onOpenFile}
+          onRevealDirectory={revealSearchDirectory}
           open={isSearchOpen}
           onRequestClose={() => setIsSearchOpen(false)}
           onActiveChange={setIsSearchActive}

@@ -48,6 +48,7 @@ type Props = {
   rootPath: string;
   searchRoots?: string[];
   onOpenFile: (path: string) => void;
+  onRevealDirectory?: (path: string) => void;
   onAddAsRoot?: (path: string) => void;
   onCopyPaths?: (paths: string[]) => void;
   onCutPaths?: (paths: string[]) => void;
@@ -78,6 +79,7 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
       rootPath,
       searchRoots,
       onOpenFile,
+      onRevealDirectory,
       onAddAsRoot,
       onCopyPaths,
       onCutPaths,
@@ -198,9 +200,8 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
         return;
       }
       onSelectPath?.(hit.path, false);
-      if (!hit.is_dir) {
-        onOpenFile(hit.path);
-      }
+      if (hit.is_dir) onRevealDirectory?.(hit.path);
+      else onOpenFile(hit.path);
     };
 
     return (

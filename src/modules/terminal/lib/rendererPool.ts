@@ -44,6 +44,7 @@ export type SlotAdapter = {
 
 type LeafBridge = {
   writeToPty(data: string): void;
+  interrupt(): void;
   resizePty(cols: number, rows: number): void;
   // Force a SIGWINCH on the underlying PTY at the given dims. Implemented
   // as a +1 row / restore bump because the Linux kernel suppresses winsize
@@ -312,6 +313,12 @@ function createSlot(): Slot {
       event.preventDefault();
       if (event.type === "keydown") bridge.writeToPty("\x1b\r");
       return false;
+    }
+    if (isTerminalInterrupt(event)) {
+      if (event.type === "keydown" && !slot.term.hasSelection()) {
+        bridge.interrupt();
+      }
+      return true;
     }
     if (isTerminalCopy(event)) {
       if (event.type === "keydown" && slot.term.hasSelection()) {
@@ -989,6 +996,18 @@ function isTerminalCopy(e: KeyboardEvent): boolean {
     !IS_MAC &&
     e.ctrlKey &&
     e.shiftKey &&
+    !e.altKey &&
+    !e.metaKey &&
+    (e.code === "KeyC" || e.key === "c" || e.key === "C")
+  );
+}
+
+/** 识别无选区时的 Windows Ctrl+C 中断，保留 xterm 默认发送 ^C。 */
+function isTerminalInterrupt(e: KeyboardEvent): boolean {
+  return (
+    !IS_MAC &&
+    e.ctrlKey &&
+    !e.shiftKey &&
     !e.altKey &&
     !e.metaKey &&
     (e.code === "KeyC" || e.key === "c" || e.key === "C")

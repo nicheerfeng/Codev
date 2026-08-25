@@ -494,6 +494,25 @@ export const FileExplorer = memo(
       return null;
     }, [activeRoot]);
 
+    /** 将搜索命中的目录路由到拥有它的工作区根树。 */
+    const revealSearchDirectory = useCallback(
+      (path: string) => {
+        const target = path.replace(/\\/g, "/").replace(/\/+$/, "");
+        let owner: string | null = null;
+        for (const root of roots) {
+          const normalized = root.replace(/\\/g, "/").replace(/\/+$/, "");
+          if (
+            (target === normalized || target.startsWith(`${normalized}/`)) &&
+            (!owner || normalized.length > owner.length)
+          ) {
+            owner = root;
+          }
+        }
+        if (owner) treeRefs.current.get(owner)?.revealPath(path);
+      },
+      [roots],
+    );
+
     /** 在当前项目根打开文件搜索。 */
     const focusActiveSearch = useCallback(() => {
       getActiveTree()?.focusSearch();
@@ -743,6 +762,7 @@ export const FileExplorer = memo(
                         onActivateRoot={() => onSetActiveRoot(root)}
                         showToolbar={false}
                         {...treeProps}
+                        onRevealDirectory={revealSearchDirectory}
                         searchRoots={roots}
                         onTransfer={startTransfer}
                         onExternalCopy={startExternalCopy}

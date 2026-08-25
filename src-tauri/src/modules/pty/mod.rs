@@ -255,6 +255,7 @@ fn shell_has_children(shell_pid: u32) -> bool {
 
 #[cfg(windows)]
 fn shell_has_children(shell_pid: u32) -> bool {
+    use std::collections::{HashMap, HashSet};
     use std::mem::{size_of, zeroed};
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
@@ -268,19 +269,35 @@ fn shell_has_children(shell_pid: u32) -> bool {
         }
         let mut entry: PROCESSENTRY32 = zeroed();
         entry.dwSize = size_of::<PROCESSENTRY32>() as u32;
-        let mut found = false;
+        let mut children_by_parent: HashMap<u32, Vec<u32>> = HashMap::new();
         if Process32First(snapshot, &mut entry) != 0 {
             loop {
-                if entry.th32ParentProcessID == shell_pid {
-                    found = true;
-                    break;
-                }
+                children_by_parent
+                    .entry(entry.th32ParentProcessID)
+                    .or_default()
+                    .push(entry.th32ProcessID);
                 if Process32Next(snapshot, &mut entry) == 0 {
                     break;
                 }
             }
         }
         CloseHandle(snapshot);
+        let mut pending = vec![shell_pid];
+        let mut visited = HashSet::new();
+        let mut found = false;
+        while let Some(parent) = pending.pop() {
+            if !visited.insert(parent) {
+                continue;
+            }
+            if let Some(children) = children_by_parent.get(&parent) {
+                for child in children {
+                    if visited.insert(*child) {
+                        found = true;
+                        pending.push(*child);
+                    }
+                }
+            }
+        }
         found
     }
 }
