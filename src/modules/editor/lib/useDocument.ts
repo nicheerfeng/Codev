@@ -104,6 +104,7 @@ export function useDocument({ path, onDirtyChange }: Options) {
   }, [dirty]);
 
   const forceRef = useRef(false);
+  const loadedPathRef = useRef(path);
 
   // Adopts a read result as the new saved baseline. `skipIfUnchanged` avoids
   // the re-render when disk already matches the buffer (self-save / duplicate
@@ -137,6 +138,17 @@ export function useDocument({ path, onDirtyChange }: Options) {
 
   // Load on path change.
   useEffect(() => {
+    const previousPath = loadedPathRef.current;
+    loadedPathRef.current = path;
+    if (previousPath !== path && dirtyRef.current) {
+      const { autoSave: active, autoSaveDelay: delay } = autoSaveRef.current;
+      if (active) {
+        timeoutRef.current = setTimeout(() => {
+          saveNow().catch((error) => console.error("[autosave]", error));
+        }, delay);
+      }
+      return;
+    }
     let cancelled = false;
     // "Open anyway" is a per-file decision; a new path starts unforced.
     forceRef.current = false;
@@ -154,7 +166,7 @@ export function useDocument({ path, onDirtyChange }: Options) {
     return () => {
       cancelled = true;
     };
-  }, [readFromDisk, adoptRead]);
+  }, [readFromDisk, adoptRead, path, saveNow]);
 
   const openAnyway = useCallback(() => {
     forceRef.current = true;

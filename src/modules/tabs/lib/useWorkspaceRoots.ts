@@ -6,6 +6,7 @@ import {
   setActiveWorkspaceRoot,
   setWorkspaceRoots,
 } from "@/modules/settings/store";
+import { workspaceAuthorize } from "@/modules/workspace/native";
 
 /**
  * Multi-root workspace state. Roots are imported folders (forward-slash
@@ -47,5 +48,20 @@ export function useWorkspaceRoots() {
     await setActiveWorkspaceRoot(path);
   }, []);
 
-  return { roots, activeRoot, addRoot, removeRoot, setActiveRoot };
+  /** 将已完成磁盘改名的根目录同步到工作区持久化状态。 */
+  const renameRoot = useCallback(async (from: string, to: string) => {
+    try {
+      await workspaceAuthorize(to);
+    } catch (error) {
+      console.error("workspace authorization after rename failed:", error);
+    }
+    const current = usePreferencesStore.getState().workspaceRoots;
+    const next = current.map((root) => (root === from ? to : root));
+    await setWorkspaceRoots(next);
+    if (usePreferencesStore.getState().activeWorkspaceRoot === from) {
+      await setActiveWorkspaceRoot(to);
+    }
+  }, []);
+
+  return { roots, activeRoot, addRoot, removeRoot, renameRoot, setActiveRoot };
 }

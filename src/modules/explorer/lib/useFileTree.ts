@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { usePreferencesStore } from "@/modules/settings/preferences";
+import { replacePathPrefix } from "@/lib/pathPrefix";
 import { listenFsChanged, watchAdd, watchRemove } from "./watch";
 
 export type DirEntry = {
@@ -54,6 +55,19 @@ function recallExpansion(root: string): string[] {
   expansionCache.delete(root);
   expansionCache.set(root, v);
   return v;
+}
+
+/** 在根目录改名时把已展开路径迁移到新根缓存。 */
+export function cacheRenamedExpansion(
+  from: string,
+  to: string,
+  expanded: string[],
+): void {
+  expansionCache.delete(to);
+  expansionCache.set(
+    to,
+    expanded.map((path) => replacePathPrefix(path, from, to)),
+  );
 }
 
 function isUnder(key: string, root: string): boolean {
@@ -364,6 +378,39 @@ export function useFileTree(rootPath: string | null, options?: Options) {
 
   const cancelRename = useCallback(() => setRenaming(null), []);
 
+  /** 重定位目录改名影响的树节点、展开项和文件监听路径。 */
+  const rebaseTreeState = useCallback((from: string, to: string) => {
+    const nextNodes: TreeState = {};
+    for (const [path, state] of Object.entries(nodesRef.current)) {
+      nextNodes[replacePathPrefix(path, from, to)] = state;
+    }
+    nodesRef.current = nextNodes;
+    setNodes(nextNodes);
+
+    const nextExpanded = new Set(
+      [...expandedRef.current].map((path) => replacePathPrefix(path, from, to)),
+    );
+    expandedRef.current = nextExpanded;
+    setExpanded(nextExpanded);
+
+    const previousWatches = [...watchedRef.current];
+    const nextWatches = new Set(
+      previousWatches.map((path) => replacePathPrefix(path, from, to)),
+    );
+    watchedRef.current = nextWatches;
+    watchRemove(previousWatches);
+    watchAdd([...nextWatches]);
+
+    setPendingCreate((pending) =>
+      pending
+        ? {
+            ...pending,
+            parentPath: replacePathPrefix(pending.parentPath, from, to),
+          }
+        : null,
+    );
+  }, []);
+
   const commitRename = useCallback(
     async (newName: string) => {
       if (!renaming) return;
@@ -381,6 +428,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
           to,
           workspace: currentWorkspaceEnv(),
         });
+        rebaseTreeState(renaming, to);
         options?.onPathRenamed?.(renaming, to);
         await fetchChildren(parent);
       } catch (e) {
@@ -389,7 +437,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
         setRenaming(null);
       }
     },
-    [renaming, fetchChildren, options],
+    [renaming, fetchChildren, options, rebaseTreeState],
   );
 
   const deletePath = useCallback(

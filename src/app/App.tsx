@@ -113,6 +113,7 @@ export default function App() {
     closeTab,
     closeTabs,
     updateTab,
+    rebasePaths,
     selectByIndex,
     setLeafCwd,
     focusPane,
@@ -428,6 +429,7 @@ export default function App() {
     activeRoot,
     addRoot,
     removeRoot,
+    renameRoot: renameWorkspaceRoot,
     setActiveRoot,
   } = useWorkspaceRoots();
 
@@ -726,23 +728,9 @@ export default function App() {
 
   const handlePathRenamed = useCallback(
     (from: string, to: string) => {
-      for (const t of tabs) {
-        if (t.kind !== "editor") continue;
-        if (t.path === from) {
-          const i = to.lastIndexOf("/");
-          updateTab(t.id, { path: to, title: i === -1 ? to : to.slice(i + 1) });
-        } else if (t.path.startsWith(`${from}/`)) {
-          const suffix = t.path.slice(from.length);
-          const newPath = `${to}${suffix}`;
-          const i = newPath.lastIndexOf("/");
-          updateTab(t.id, {
-            path: newPath,
-            title: i === -1 ? newPath : newPath.slice(i + 1),
-          });
-        }
-      }
+      rebasePaths(from, to);
     },
-    [tabs, updateTab],
+    [rebasePaths],
   );
 
   const explorerActiveFilePath =
@@ -1085,6 +1073,7 @@ export default function App() {
                       activeRoot={activeRoot}
                       onAddRoot={(p) => void addRoot(p)}
                       onRemoveRoot={(p) => void removeRoot(p)}
+                      onRenameRoot={renameWorkspaceRoot}
                       onSetActiveRoot={(p) => void setActiveRoot(p)}
                       activeFilePath={explorerActiveFilePath}
                       onOpenFile={handleOpenFile}

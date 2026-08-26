@@ -52,6 +52,7 @@ export type RootTreeHandle = {
   refresh: () => void;
   refreshPath: (path: string) => void;
   revealPath: (path: string) => void;
+  expandedPaths: () => string[];
 };
 
 export type RootTreeProps = {
@@ -457,6 +458,7 @@ export const RootTree = memo(
         },
         refreshPath: (path: string) => tree.refresh(path),
         revealPath: queueRevealPath,
+        expandedPaths: () => [...tree.expanded],
       }),
       [
         entryPaths,
@@ -466,6 +468,7 @@ export const RootTree = memo(
         rootPath,
         tree.beginCreate,
         tree.refresh,
+        tree.expanded,
         queueRevealPath,
       ],
     );

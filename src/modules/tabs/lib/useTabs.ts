@@ -21,6 +21,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { replacePathPrefix } from "@/lib/pathPrefix";
 
 // Matches the renderer slot pool size — over this we'd evict an active leaf.
 export const MAX_PANES_PER_TAB = 4;
@@ -70,6 +71,42 @@ export type MarkdownTab = TabBase & {
 };
 
 export type Tab = TerminalTab | EditorTab | MarkdownTab;
+
+/** 递归更新终端分屏树内受目录重命名影响的工作目录。 */
+function rebasePaneCwds(node: PaneNode, from: string, to: string): PaneNode {
+  if (node.kind === "leaf") {
+    if (!node.cwd) return node;
+    const cwd = replacePathPrefix(node.cwd, from, to);
+    return cwd === node.cwd ? node : { ...node, cwd };
+  }
+  let changed = false;
+  const children = node.children.map((child) => {
+    const next = rebasePaneCwds(child, from, to);
+    if (next !== child) changed = true;
+    return next;
+  });
+  return changed ? { ...node, children } : node;
+}
+
+/** 同步重命名路径下的文件标签和终端工作目录。 */
+export function rebaseTabPaths(tabs: Tab[], from: string, to: string): Tab[] {
+  let changed = false;
+  const next = tabs.map((tab) => {
+    if (tab.kind === "terminal") {
+      const paneTree = rebasePaneCwds(tab.paneTree, from, to);
+      const cwd = tab.cwd ? replacePathPrefix(tab.cwd, from, to) : tab.cwd;
+      if (paneTree === tab.paneTree && cwd === tab.cwd) return tab;
+      changed = true;
+      return { ...tab, paneTree, cwd };
+    }
+    const path = replacePathPrefix(tab.path, from, to);
+    if (path === tab.path) return tab;
+    changed = true;
+    const title = path.slice(path.lastIndexOf("/") + 1);
+    return { ...tab, path, title };
+  });
+  return changed ? next : tabs;
+}
 
 export type TabPatch = Partial<{
   title: string;
@@ -769,6 +806,15 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     );
   }, []);
 
+  /** 原子同步目录重命名影响的全部标签路径。 */
+  const rebasePaths = useCallback((from: string, to: string) => {
+    const current = tabsRef.current;
+    const next = rebaseTabPaths(current, from, to);
+    if (next === current) return;
+    tabsRef.current = next;
+    setTabs(next);
+  }, []);
+
   const selectByIndex = useCallback(
     (idx: number, spaceId?: string) => {
       const t = spaceId ? pickTabBySpaceIndex(tabs, idx, spaceId) : tabs[idx];
@@ -993,6 +1039,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     closeTab,
     closeTabs,
     updateTab,
+    rebasePaths,
     selectByIndex,
     setLeafCwd,
     focusPane,

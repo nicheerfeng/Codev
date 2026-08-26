@@ -87,7 +87,7 @@ function EntryRowImpl(props: EntryRowProps) {
       data-fs-path={path}
       data-fs-kind={isDir ? "dir" : "file"}
       onClick={handleClick}
-      onDoubleClick={() => !isDir && actions.beginRename(path)}
+      onDoubleClick={() => actions.beginRename(path)}
       className={cn(
         "group flex h-6 w-full min-w-0 cursor-pointer items-center gap-2 rounded-sm px-1.5 text-left text-[13px] transition-colors hover:bg-accent/70",
         isSelected ? "bg-accent text-foreground" : "text-foreground/85",

@@ -39,6 +39,9 @@ import { useSelectedFileMeta } from "./lib/useSelectedFileMeta";
 import { useWorkspaceFolderDrop } from "./lib/useWorkspaceFolderDrop";
 import { ExplorerStatusBar } from "./ExplorerStatusBar";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { InlineInput } from "./InlineInput";
+import { cacheRenamedExpansion } from "./lib/useFileTree";
+import { replacePathPrefix } from "@/lib/pathPrefix";
 
 export type FileExplorerHandle = {
   focus: () => void;
@@ -61,6 +64,7 @@ type Props = Omit<
   activeRoot: string | null;
   onAddRoot: (path: string) => void;
   onRemoveRoot: (path: string) => void;
+  onRenameRoot: (from: string, to: string) => void | Promise<void>;
   onSetActiveRoot: (path: string | null) => void;
 };
 
@@ -131,6 +135,7 @@ function RootSection({
   onActivate,
   onRemove,
   onCopy,
+  onRename,
   onCreateFile,
   onCreateFolder,
   onAddFolder,
@@ -143,6 +148,7 @@ function RootSection({
   onActivate: () => void;
   onRemove: () => void;
   onCopy: () => void;
+  onRename: (name: string) => void;
   onCreateFile: () => void;
   onCreateFolder: () => void;
   onAddFolder: () => void;
@@ -152,7 +158,9 @@ function RootSection({
 }) {
   const t = useT();
   const [open, setOpen] = useState(true);
+  const [renaming, setRenaming] = useState(false);
   const color = rootColor(root);
+  const canRename = root !== "/" && !/^[A-Za-z]:\/$/.test(root);
   return (
     <div
       className="flex min-w-0 flex-col"
@@ -197,9 +205,25 @@ function RootSection({
               width={14}
               className="mx-0.5 shrink-0"
             />
-            <span className="min-w-0 flex-1 truncate">
-              {basename(root) || root}
-            </span>
+            {renaming ? (
+              <span
+                className="flex min-w-0 flex-1"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <InlineInput
+                  initial={basename(root)}
+                  onCommit={(name) => {
+                    setRenaming(false);
+                    onRename(name);
+                  }}
+                  onCancel={() => setRenaming(false)}
+                />
+              </span>
+            ) : (
+              <span className="min-w-0 flex-1 truncate">
+                {basename(root) || root}
+              </span>
+            )}
             <button
               type="button"
               className="size-4 shrink-0 rounded text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -234,6 +258,13 @@ function RootSection({
             {t("New folder")}
           </ContextMenuItem>
           <ContextMenuSeparator className="my-0.5" />
+          <ContextMenuItem
+            className={COMPACT_ITEM}
+            disabled={!canRename}
+            onSelect={() => setRenaming(true)}
+          >
+            {t("Rename")}
+          </ContextMenuItem>
           {onPaste ? (
             <ContextMenuItem className={COMPACT_ITEM} onSelect={onPaste}>
               {t("Paste")}
@@ -269,6 +300,7 @@ export const FileExplorer = memo(
       activeRoot,
       onAddRoot,
       onRemoveRoot,
+      onRenameRoot,
       onSetActiveRoot,
       ...treeProps
     },
@@ -534,6 +566,59 @@ export const FileExplorer = memo(
       [onRemoveRoot],
     );
 
+    /** 同步目录重命名影响的共享选中项、剪贴板和标签路径。 */
+    const handleTreePathRenamed = useCallback(
+      (from: string, to: string) => {
+        setSelectedPaths((paths) =>
+          paths.map((path) => replacePathPrefix(path, from, to)),
+        );
+        setClipboard((current) =>
+          current
+            ? {
+                ...current,
+                paths: current.paths.map((path) =>
+                  replacePathPrefix(path, from, to),
+                ),
+              }
+            : null,
+        );
+        treeProps.onPathRenamed?.(from, to);
+      },
+      [treeProps.onPathRenamed],
+    );
+
+    /** 重命名磁盘根目录并同步工作区、展开缓存和关联路径。 */
+    const renameRoot = useCallback(
+      async (root: string, newName: string) => {
+        const trimmed = newName.trim();
+        if (!trimmed || trimmed === basename(root)) return;
+        if (/[\\/]/.test(trimmed)) {
+          toast.error("名称不能包含路径分隔符");
+          return;
+        }
+        const separator = root.lastIndexOf("/");
+        if (separator < 0) return;
+        const to = `${root.slice(0, separator + 1)}${trimmed}`;
+        try {
+          await invoke("fs_rename", {
+            from: root,
+            to,
+            workspace: currentWorkspaceEnv(),
+          });
+          cacheRenamedExpansion(
+            root,
+            to,
+            treeRefs.current.get(root)?.expandedPaths() ?? [],
+          );
+          handleTreePathRenamed(root, to);
+          await onRenameRoot(root, to);
+        } catch (error) {
+          toast.error(`重命名失败：${String(error)}`);
+        }
+      },
+      [handleTreePathRenamed, onRenameRoot],
+    );
+
     const getActiveTree = useCallback((): RootTreeHandle | null => {
       if (activeRoot) return treeRefs.current.get(activeRoot) ?? null;
       return null;
@@ -779,6 +864,7 @@ export const FileExplorer = memo(
                       onActivate={() => onSetActiveRoot(root)}
                       onRemove={() => removeRoot(root)}
                       onCopy={() => void copyToClipboard(root)}
+                      onRename={(name) => void renameRoot(root, name)}
                       onCreateFile={() =>
                         treeRefs.current.get(root)?.createFile()
                       }
@@ -810,6 +896,7 @@ export const FileExplorer = memo(
                         onActivateRoot={() => onSetActiveRoot(root)}
                         showToolbar={false}
                         {...treeProps}
+                        onPathRenamed={handleTreePathRenamed}
                         onRevealDirectory={revealSearchDirectory}
                         searchRoots={roots}
                         onTransfer={startTransfer}
