@@ -9,6 +9,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import {
   forwardRef,
+  type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -87,6 +88,7 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
   function MarkdownPreviewPane({ path, visible, onSetView }, ref) {
     const [status, setStatus] = useState<Status>({ kind: "loading" });
     const [reloadKey, setReloadKey] = useState(0);
+    const [outlineCollapsed, setOutlineCollapsed] = useState(false);
     const rootRef = useRef<HTMLDivElement>(null);
     const contentRootRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef("");
@@ -97,6 +99,26 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
     const searchListenersRef = useRef<Set<(status: TextSearchStatus) => void>>(
       new Set(),
     );
+
+    /** 在当前渲染视图内处理全文折叠与展开快捷键。 */
+    const handleOutlineShortcut = useCallback(
+      (event: ReactKeyboardEvent<HTMLDivElement>) => {
+        if (!event.ctrlKey || event.altKey || event.shiftKey || event.metaKey) {
+          return;
+        }
+        const key = event.key.toLowerCase();
+        if (key !== "k" && key !== "l") return;
+        event.preventDefault();
+        event.stopPropagation();
+        setOutlineCollapsed(key === "k");
+      },
+      [],
+    );
+
+    /** 将指针所在的 Markdown 预览设为当前快捷键作用域。 */
+    const focusPreview = useCallback(() => {
+      rootRef.current?.focus({ preventScroll: true });
+    }, []);
 
     /** 计算当前 Markdown 原文的字面量搜索状态。 */
     const getSearchStatus = useCallback(
@@ -179,6 +201,7 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
         query: string,
         options: TextSearchOptions = { caseSensitive: false },
       ) => {
+        if (query) setOutlineCollapsed(false);
         queryRef.current = query;
         optionsRef.current = options;
         matchesRef.current = findLiteralMatches(
@@ -293,8 +316,11 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
     return (
       <div
         ref={rootRef}
+        tabIndex={0}
+        onKeyDown={handleOutlineShortcut}
+        onPointerDownCapture={focusPreview}
         className={cn(
-          "relative flex h-full w-full flex-col overflow-hidden rounded-md border border-border/60 bg-background",
+          "relative flex h-full w-full flex-col overflow-hidden rounded-md border border-border/60 bg-background outline-none",
           !visible && "pointer-events-none",
         )}
       >
@@ -321,7 +347,11 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
             )}
             {status.kind === "ready" && (
               <Streamdown
-                className="select-text [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+                className={cn(
+                  "select-text [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+                  outlineCollapsed &&
+                    "[&>:not(h1):not(h2):not(h3):not(h4):not(h5):not(h6)]:hidden",
+                )}
                 components={components}
                 mode="static"
                 parseIncompleteMarkdown={false}

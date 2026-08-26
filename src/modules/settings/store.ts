@@ -186,8 +186,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   zoomLevel: 1.0,
   defaultWorkspaceEnv: "local",
   shortcuts: {} as Record<ShortcutId, KeyBinding[]>,
-  editorAutoSave: false,
-  editorAutoSaveDelay: 1000,
+  editorAutoSave: true,
+  editorAutoSaveDelay: 5000,
 };
 
 const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: 200 });

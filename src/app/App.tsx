@@ -384,6 +384,18 @@ export default function App() {
     [reorderTabByGroup, secondaryEditorTabs],
   );
 
+  /** 在终端导航分组内按目标间隙持久重排终端标签。 */
+  const reorderTerminals = useCallback(
+    (fromId: number, toGapIndex: number) => {
+      reorderTabByGroup(
+        terminalTabs.map((tab) => tab.id),
+        fromId,
+        toGapIndex,
+      );
+    },
+    [reorderTabByGroup, terminalTabs],
+  );
+
   const terminalPanelRef = useRef<PanelImperativeHandle>(null);
   const [terminalPanelCollapsed, setTerminalPanelCollapsed] = useState(false);
   const previousTerminalCountRef = useRef(0);
@@ -1135,6 +1147,7 @@ export default function App() {
                       onClose={handleClose}
                       onNew={openNewTab}
                       onRename={handleRenameTab}
+                      onReorder={reorderTerminals}
                       registerHandle={registerTerminalHandle}
                       onSearchReady={handleSearchReady}
                       onCwd={handleTerminalCwd}

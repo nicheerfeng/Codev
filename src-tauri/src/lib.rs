@@ -269,7 +269,7 @@ pub fn run() {
         let target = parse_launch_target_args(argv.into_iter().skip(1));
         queue_open_target(app, target);
     }));
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
     builder
         .plugin(tauri_plugin_dialog::init())

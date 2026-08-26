@@ -1,5 +1,6 @@
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { redo, undo } from "@codemirror/commands";
+import { foldAll, unfoldAll } from "@codemirror/language";
 import {
   findNext,
   findPrevious,
@@ -191,6 +192,8 @@ export const EditorPane = memo(
               return true;
             },
           },
+          { key: "Ctrl-k", preventDefault: true, run: foldAll },
+          { key: "Ctrl-l", preventDefault: true, run: unfoldAll },
           { key: "Ctrl-g", run: gotoLine },
         ]),
       ],

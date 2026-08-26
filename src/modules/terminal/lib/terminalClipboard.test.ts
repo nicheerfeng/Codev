@@ -13,7 +13,9 @@ const web = {
 
 const original = globalThis.navigator;
 const LINUX = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15";
-const MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15";
+const WINDOWS = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+const MAC =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15";
 
 function platform(userAgent: string) {
   Object.defineProperty(globalThis, "navigator", {
@@ -76,6 +78,18 @@ describe("terminalClipboard", () => {
     const { writeTerminalClipboard } = await load();
     await writeTerminalClipboard("copied");
     expect(native.writeText).toHaveBeenCalledWith("copied");
+    expect(web.writeText).not.toHaveBeenCalled();
+  });
+
+  it("uses the native clipboard first on Windows", async () => {
+    platform(WINDOWS);
+    native.readText.mockResolvedValue("windows-native");
+    native.writeText.mockResolvedValue();
+    const { readTerminalClipboard, writeTerminalClipboard } = await load();
+    await expect(readTerminalClipboard()).resolves.toBe("windows-native");
+    await writeTerminalClipboard("copied");
+    expect(native.writeText).toHaveBeenCalledWith("copied");
+    expect(web.readText).not.toHaveBeenCalled();
     expect(web.writeText).not.toHaveBeenCalled();
   });
 });

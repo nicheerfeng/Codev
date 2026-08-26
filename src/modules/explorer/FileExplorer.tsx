@@ -77,6 +77,25 @@ function basename(path: string): string {
   return parts.length ? parts[parts.length - 1] : path;
 }
 
+const ROOT_COLORS = [
+  "#73869a",
+  "#688b87",
+  "#788a72",
+  "#8b7894",
+  "#9a776d",
+  "#91836f",
+] as const;
+
+/** 将根目录绝对路径稳定映射到低饱和项目色。 */
+function rootColor(path: string): string {
+  let hash = 2166136261;
+  for (const char of path.replace(/\\/g, "/").toLowerCase()) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return ROOT_COLORS[(hash >>> 0) % ROOT_COLORS.length];
+}
+
 /** 为文件树空白区域提供稳定的添加工作区目录菜单。 */
 function EmptyExplorerContextMenu({
   onAddFolder,
@@ -112,6 +131,8 @@ function RootSection({
   onActivate,
   onRemove,
   onCopy,
+  onCreateFile,
+  onCreateFolder,
   onAddFolder,
   onOpenTerminal,
   onPaste,
@@ -122,6 +143,8 @@ function RootSection({
   onActivate: () => void;
   onRemove: () => void;
   onCopy: () => void;
+  onCreateFile: () => void;
+  onCreateFolder: () => void;
   onAddFolder: () => void;
   onOpenTerminal?: () => void;
   onPaste?: () => void;
@@ -129,6 +152,7 @@ function RootSection({
 }) {
   const t = useT();
   const [open, setOpen] = useState(true);
+  const color = rootColor(root);
   return (
     <div
       className="flex min-w-0 flex-col"
@@ -140,11 +164,13 @@ function RootSection({
         <ContextMenuTrigger asChild>
           <div
             className={cn(
-              "flex h-7 shrink-0 cursor-pointer items-center gap-1 border-b border-border/60 px-2 text-xs font-medium select-none",
-              active
-                ? "bg-accent/60 text-accent-foreground"
-                : "text-foreground/80 hover:bg-muted/50",
+              "flex h-7 shrink-0 cursor-pointer items-center gap-1 border-b border-l-2 border-border/60 px-2 text-xs font-medium select-none",
             )}
+            style={{
+              borderLeftColor: color,
+              backgroundColor: `color-mix(in srgb, ${color} ${active ? 24 : 14}%, var(--background))`,
+              color: `color-mix(in srgb, ${color} ${active ? 32 : 22}%, var(--foreground))`,
+            }}
             onClick={() => {
               onActivate();
               setOpen((value) => !value);
@@ -189,6 +215,25 @@ function RootSection({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent className={COMPACT_CONTENT}>
+          <ContextMenuItem
+            className={COMPACT_ITEM}
+            onSelect={() => {
+              setOpen(true);
+              requestAnimationFrame(onCreateFile);
+            }}
+          >
+            {t("New file")}
+          </ContextMenuItem>
+          <ContextMenuItem
+            className={COMPACT_ITEM}
+            onSelect={() => {
+              setOpen(true);
+              requestAnimationFrame(onCreateFolder);
+            }}
+          >
+            {t("New folder")}
+          </ContextMenuItem>
+          <ContextMenuSeparator className="my-0.5" />
           {onPaste ? (
             <ContextMenuItem className={COMPACT_ITEM} onSelect={onPaste}>
               {t("Paste")}
@@ -723,10 +768,7 @@ export const FileExplorer = memo(
                 : undefined
             }
           >
-            <div
-              className="min-h-0 min-w-0 flex-1"
-              data-explorer-empty=""
-            >
+            <div className="min-h-0 min-w-0 flex-1" data-explorer-empty="">
               <ScrollArea className="h-full min-h-0 min-w-0">
                 <div className="min-w-0">
                   {roots.map((root) => (
@@ -737,6 +779,12 @@ export const FileExplorer = memo(
                       onActivate={() => onSetActiveRoot(root)}
                       onRemove={() => removeRoot(root)}
                       onCopy={() => void copyToClipboard(root)}
+                      onCreateFile={() =>
+                        treeRefs.current.get(root)?.createFile()
+                      }
+                      onCreateFolder={() =>
+                        treeRefs.current.get(root)?.createFolder()
+                      }
                       onAddFolder={requestAddFolder}
                       onOpenTerminal={
                         treeProps.onRevealInTerminal

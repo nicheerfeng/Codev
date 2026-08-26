@@ -54,6 +54,7 @@ nucleo-matcher = "0.3"
 tauri-plugin-log = "2"
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"
+tauri-plugin-clipboard-manager = "2"
 tempfile = "3"
 notify = "8.2.0"
 
@@ -67,10 +68,6 @@ libc = "0.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSUserDefaults"] }
-
-# WebKitGTK can't read external clipboard copies; mac/win webviews can.
-[target.'cfg(target_os = "linux")'.dependencies]
-tauri-plugin-clipboard-manager = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = [

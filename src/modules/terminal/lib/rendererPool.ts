@@ -314,17 +314,19 @@ function createSlot(): Slot {
       if (event.type === "keydown") bridge.writeToPty("\x1b\r");
       return false;
     }
-    if (isTerminalInterrupt(event)) {
-      if (event.type === "keydown" && !slot.term.hasSelection()) {
-        bridge.interrupt();
-      }
-      return true;
-    }
-    if (isTerminalCopy(event)) {
-      if (event.type === "keydown" && slot.term.hasSelection()) {
+    if (isTerminalCopy(event) && slot.term.hasSelection()) {
+      if (event.type === "keydown") {
         const sel = slot.term.getSelection();
         if (sel) void writeTerminalClipboard(sel);
       }
+      event.preventDefault();
+      return false;
+    }
+    if (isTerminalInterrupt(event)) {
+      if (event.type === "keydown") bridge.interrupt();
+      return true;
+    }
+    if (isTerminalCopy(event)) {
       event.preventDefault();
       return false;
     }
@@ -995,7 +997,6 @@ function isTerminalCopy(e: KeyboardEvent): boolean {
   return (
     !IS_MAC &&
     e.ctrlKey &&
-    e.shiftKey &&
     !e.altKey &&
     !e.metaKey &&
     (e.code === "KeyC" || e.key === "c" || e.key === "C")
@@ -1018,7 +1019,6 @@ function isTerminalPaste(e: KeyboardEvent): boolean {
   return (
     !IS_MAC &&
     e.ctrlKey &&
-    e.shiftKey &&
     !e.altKey &&
     !e.metaKey &&
     (e.code === "KeyV" || e.key === "v" || e.key === "V")
