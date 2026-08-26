@@ -9,7 +9,6 @@ import type { PanelImperativeHandle } from "react-resizable-panels";
 
 const SIDEBAR_DEFAULT_WIDTH = 260;
 export const SIDEBAR_MIN_WIDTH = 220;
-export const SIDEBAR_MAX_WIDTH = 480;
 const SIDEBAR_WIDTH_STORAGE_KEY = "codev.sidebar.width";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "codev.sidebar.collapsed";
 
@@ -21,10 +20,7 @@ export function shouldPersistSidebarWidth(
 }
 
 function clampSidebarWidth(width: number): number {
-  return Math.min(
-    SIDEBAR_MAX_WIDTH,
-    Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)),
-  );
+  return Math.max(SIDEBAR_MIN_WIDTH, Math.round(width));
 }
 
 function readSidebarWidth(): number {

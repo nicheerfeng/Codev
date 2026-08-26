@@ -17,3 +17,7 @@ export {
   leafIds,
   type PaneBounds,
 } from "./lib/panes";
+export {
+  TERMINAL_MIN_WIDTH,
+  useTerminalPanelLayout,
+} from "./lib/useTerminalPanelLayout";

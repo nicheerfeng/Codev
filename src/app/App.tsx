@@ -3,11 +3,7 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import type {
-  Layout,
-  LayoutChangedMeta,
-  PanelImperativeHandle,
-} from "react-resizable-panels";
+import type { Layout, LayoutChangedMeta } from "react-resizable-panels";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -42,11 +38,7 @@ import {
   type ShortcutId,
   useGlobalShortcuts,
 } from "@/modules/shortcuts";
-import {
-  SIDEBAR_MAX_WIDTH,
-  SIDEBAR_MIN_WIDTH,
-  useSidebarPanel,
-} from "@/modules/sidebar";
+import { SIDEBAR_MIN_WIDTH, useSidebarPanel } from "@/modules/sidebar";
 import {
   useSpacePersistence,
   useSpaces,
@@ -71,6 +63,8 @@ import {
   TerminalPanel,
   type PaneBounds,
   type TerminalPaneHandle,
+  TERMINAL_MIN_WIDTH,
+  useTerminalPanelLayout,
   useTerminalFileDrop,
   writeToSession,
 } from "@/modules/terminal";
@@ -396,8 +390,15 @@ export default function App() {
     [reorderTabByGroup, terminalTabs],
   );
 
-  const terminalPanelRef = useRef<PanelImperativeHandle>(null);
-  const [terminalPanelCollapsed, setTerminalPanelCollapsed] = useState(false);
+  const {
+    terminalPanelRef,
+    terminalWidthRef,
+    initialTerminalCollapsed,
+    terminalPanelCollapsed,
+    persistTerminalCollapsed,
+    persistTerminalWidth,
+    expandTerminalPanel,
+  } = useTerminalPanelLayout();
   const previousTerminalCountRef = useRef(0);
   useEffect(() => {
     const panel = terminalPanelRef.current;
@@ -411,10 +412,10 @@ export default function App() {
       previousTerminalCountRef.current === 0 ||
       terminalTabs.length > previousTerminalCountRef.current
     ) {
-      panel.expand();
+      expandTerminalPanel();
     }
     previousTerminalCountRef.current = terminalTabs.length;
-  }, [terminalTabs.length]);
+  }, [expandTerminalPanel, terminalTabs.length]);
   const isTerminalTab = activeTab?.kind === "terminal";
   const isSearchableDocumentTab =
     activeTab?.kind === "editor" || activeTab?.kind === "markdown";
@@ -1038,8 +1039,7 @@ export default function App() {
               terminalPanelCollapsed={terminalPanelCollapsed}
               onToggleTerminalPanel={() => {
                 if (terminalTabs.length === 0) openNewTab();
-                else if (terminalPanelCollapsed)
-                  terminalPanelRef.current?.expand();
+                else if (terminalPanelCollapsed) expandTerminalPanel();
                 else terminalPanelRef.current?.collapse();
               }}
               searchTarget={searchTarget}
@@ -1057,6 +1057,9 @@ export default function App() {
               ) => {
                 const width = sidebarRef.current?.getSize().inPixels ?? 0;
                 persistSidebarWidth(width, isUserInteraction);
+                const terminalWidth =
+                  terminalPanelRef.current?.getSize().inPixels ?? 0;
+                persistTerminalWidth(terminalWidth, isUserInteraction);
               }}
             >
               <ResizablePanel
@@ -1068,7 +1071,6 @@ export default function App() {
                     : `${sidebarWidthRef.current}px`
                 }
                 minSize={`${SIDEBAR_MIN_WIDTH}px`}
-                maxSize={`${SIDEBAR_MAX_WIDTH}px`}
                 collapsible
                 collapsedSize={0}
                 onResize={(size) => {
@@ -1096,66 +1098,62 @@ export default function App() {
                 </div>
               </ResizablePanel>
               <ResizableHandle withHandle />
-              <ResizablePanel id="workspace" defaultSize="78%" minSize="30%">
-                <ResizablePanelGroup orientation="horizontal">
-                  <ResizablePanel
-                    id="main-content"
-                    defaultSize={terminalTabs.length > 0 ? 70 : 100}
-                    minSize="30%"
-                  >
-                    <div className="relative h-full min-h-0">
-                      <WorkspaceSurface
-                        primaryTabs={primaryEditorTabs}
-                        primaryActiveId={primaryActiveId}
-                        secondaryTabs={secondaryEditorTabs}
-                        secondaryActiveId={secondaryActiveId}
-                        workspaceRoots={workspaceRoots}
-                        onSelectPrimary={selectPrimaryEditor}
-                        onSelectSecondary={selectSecondaryEditor}
-                        onClose={handleClose}
-                        onCloseTabsToRight={handleCloseTabsToRightInGroup}
-                        onCloseOtherTabs={handleCloseOtherTabsInGroup}
-                        onPin={pinTab}
-                        onRename={handleRenameTab}
-                        onReorderPrimary={reorderPrimaryEditors}
-                        onReorderSecondary={reorderSecondaryEditors}
-                        onOverrideLanguage={setOverrideLanguage}
-                        onMoveToGroup={moveEditorToGroup}
-                        registerEditorHandle={registerEditorHandle}
-                        onEditorDirtyChange={handleEditorDirty}
-                        onSetMarkdownView={setMarkdownView}
-                        onFocusEditor={focusEditor}
-                      />
-                    </div>
-                  </ResizablePanel>
-                  <ResizableHandle withHandle />
-                  <ResizablePanel
-                    id="terminal-panel"
-                    panelRef={terminalPanelRef}
-                    defaultSize="30%"
-                    minSize="10%"
-                    collapsible
-                    collapsedSize={0}
-                    onResize={(size) => {
-                      setTerminalPanelCollapsed(size.inPixels <= 1);
-                    }}
-                  >
-                    <TerminalPanel
-                      tabs={terminalTabs}
-                      activeId={terminalActiveId}
-                      onSelect={setActiveId}
-                      onClose={handleClose}
-                      onNew={openNewTab}
-                      onRename={handleRenameTab}
-                      onReorder={reorderTerminals}
-                      registerHandle={registerTerminalHandle}
-                      onSearchReady={handleSearchReady}
-                      onCwd={handleTerminalCwd}
-                      onExit={handleLeafExit}
-                      onFocusLeaf={handleFocusLeaf}
-                    />
-                  </ResizablePanel>
-                </ResizablePanelGroup>
+              <ResizablePanel id="main-content" minSize="60px">
+                <div className="relative h-full min-h-0">
+                  <WorkspaceSurface
+                    primaryTabs={primaryEditorTabs}
+                    primaryActiveId={primaryActiveId}
+                    secondaryTabs={secondaryEditorTabs}
+                    secondaryActiveId={secondaryActiveId}
+                    workspaceRoots={workspaceRoots}
+                    onSelectPrimary={selectPrimaryEditor}
+                    onSelectSecondary={selectSecondaryEditor}
+                    onClose={handleClose}
+                    onCloseTabsToRight={handleCloseTabsToRightInGroup}
+                    onCloseOtherTabs={handleCloseOtherTabsInGroup}
+                    onPin={pinTab}
+                    onRename={handleRenameTab}
+                    onReorderPrimary={reorderPrimaryEditors}
+                    onReorderSecondary={reorderSecondaryEditors}
+                    onOverrideLanguage={setOverrideLanguage}
+                    onMoveToGroup={moveEditorToGroup}
+                    registerEditorHandle={registerEditorHandle}
+                    onEditorDirtyChange={handleEditorDirty}
+                    onSetMarkdownView={setMarkdownView}
+                    onFocusEditor={focusEditor}
+                  />
+                </div>
+              </ResizablePanel>
+              <ResizableHandle withHandle />
+              <ResizablePanel
+                id="terminal-panel"
+                panelRef={terminalPanelRef}
+                defaultSize={
+                  initialTerminalCollapsed || terminalTabs.length === 0
+                    ? "0px"
+                    : `${terminalWidthRef.current}px`
+                }
+                minSize={`${TERMINAL_MIN_WIDTH}px`}
+                collapsible
+                collapsedSize={0}
+                onResize={(size) => {
+                  persistTerminalCollapsed(size.inPixels <= 1);
+                }}
+              >
+                <TerminalPanel
+                  tabs={terminalTabs}
+                  activeId={terminalActiveId}
+                  onSelect={setActiveId}
+                  onClose={handleClose}
+                  onNew={openNewTab}
+                  onRename={handleRenameTab}
+                  onReorder={reorderTerminals}
+                  registerHandle={registerTerminalHandle}
+                  onSearchReady={handleSearchReady}
+                  onCwd={handleTerminalCwd}
+                  onExit={handleLeafExit}
+                  onFocusLeaf={handleFocusLeaf}
+                />
               </ResizablePanel>
             </ResizablePanelGroup>
           </main>
