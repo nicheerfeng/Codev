@@ -53,7 +53,8 @@ export function useAppCloseGuard(tabsRef: RefObject<Tab[]>) {
         const dirtyEditors = tabsRef.current.filter(
           (t) =>
             (t.kind === "editor" ||
-              (t.kind === "markdown" && t.viewMode === "raw")) &&
+              (t.kind === "markdown" && t.viewMode === "raw") ||
+              (t.kind === "html" && t.viewMode === "raw")) &&
             t.dirty,
         ).length;
         if (dirtyEditors > 0 || busyTerminal) {

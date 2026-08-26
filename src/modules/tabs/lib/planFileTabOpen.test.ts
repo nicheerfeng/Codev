@@ -3,6 +3,7 @@ import {
   type EditorTab,
   planFileTabOpen,
   planMarkdownTabOpen,
+  planHtmlTabOpen,
   reorderTabsByGroup,
   type Tab,
   type TerminalTab,
@@ -241,5 +242,52 @@ describe("planMarkdownTabOpen", () => {
     });
 
     expect(plan).toEqual({ tabs, tabId: 3 });
+  });
+});
+
+describe("planHtmlTabOpen", () => {
+  it("opens html rendered and reuses its normalized path", () => {
+    const opened = planHtmlTabOpen(
+      [terminal],
+      "C:\\repo\\index.html",
+      "one",
+      () => 3,
+    );
+    expect(opened.tabs).toContainEqual(
+      expect.objectContaining({
+        id: 3,
+        kind: "html",
+        path: "C:\\repo\\index.html",
+        viewMode: "rendered",
+      }),
+    );
+
+    const reused = planHtmlTabOpen(
+      opened.tabs,
+      "C:/repo/index.html",
+      "one",
+      () => {
+        throw new Error("should not allocate");
+      },
+    );
+    expect(reused.tabId).toBe(3);
+    expect(reused.tabs).toBe(opened.tabs);
+  });
+
+  it("allows one html path in both reader groups", () => {
+    const first = planHtmlTabOpen(
+      [terminal],
+      "/repo/index.html",
+      "one",
+      () => 3,
+    );
+    const second = planHtmlTabOpen(
+      first.tabs,
+      "/repo/index.html",
+      "one",
+      () => 4,
+      true,
+    );
+    expect(second.tabs.filter((tab) => tab.kind === "html")).toHaveLength(2);
   });
 });

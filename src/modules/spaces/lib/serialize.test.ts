@@ -86,6 +86,32 @@ describe("serializeTabs", () => {
       dirty: false,
     });
   });
+
+  it("persists an html tab's raw view without changing its tab kind", () => {
+    const [serialized] = serializeTabs([
+      {
+        id: 8,
+        kind: "html",
+        spaceId: "s1",
+        title: "index.html",
+        path: "/a/index.html",
+        viewMode: "raw",
+        dirty: false,
+      },
+    ]);
+
+    expect(serialized).toEqual({
+      kind: "html",
+      path: "/a/index.html",
+      viewMode: "raw",
+    });
+    const [restored] = hydrateTabs([serialized], "s1", counter());
+    expect(restored).toMatchObject({
+      kind: "html",
+      viewMode: "raw",
+      dirty: false,
+    });
+  });
 });
 
 describe("hydrateTabs", () => {
@@ -155,13 +181,27 @@ describe("hydrateTabs", () => {
     ).toEqual([]);
   });
 
-  it("hydrates editor and markdown as cold with derived titles", () => {
+  it("hydrates editor, markdown and html as cold with derived titles", () => {
     const serialized: SerializedTab[] = [
       { kind: "editor", path: "/a/foo.ts" },
       { kind: "markdown", path: "/a/README.md" },
+      { kind: "html", path: "/a/index.html" },
     ];
     const out = hydrateTabs(serialized, "s1", counter());
     expect(out.every((t) => t.cold === true)).toBe(true);
-    expect(out.map((t) => t.title)).toEqual(["foo.ts", "README.md"]);
+    expect(out.map((t) => t.title)).toEqual([
+      "foo.ts",
+      "README.md",
+      "index.html",
+    ]);
+  });
+
+  it("restores legacy editor html as raw html", () => {
+    const [restored] = hydrateTabs(
+      [{ kind: "editor", path: "/a/legacy.htm" }],
+      "s1",
+      counter(),
+    );
+    expect(restored).toMatchObject({ kind: "html", viewMode: "raw" });
   });
 });

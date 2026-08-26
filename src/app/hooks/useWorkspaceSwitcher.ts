@@ -85,7 +85,8 @@ export function useWorkspaceSwitcher({
       const dirty = tabsRef.current.some(
         (t) =>
           (t.kind === "editor" ||
-            (t.kind === "markdown" && t.viewMode === "raw")) &&
+            (t.kind === "markdown" && t.viewMode === "raw") ||
+            (t.kind === "html" && t.viewMode === "raw")) &&
           t.dirty,
       );
       if (dirty) {

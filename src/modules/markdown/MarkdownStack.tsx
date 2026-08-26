@@ -8,7 +8,7 @@ type Props = {
   registerHandle: (
     id: number,
     handle: EditorPaneHandle | null,
-    owner: "editor" | "markdown",
+    owner: "editor" | "markdown" | "html",
   ) => void;
   onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
 };

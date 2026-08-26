@@ -13,7 +13,7 @@ import {
   getLaunchDir,
   type OpenTargetPayload,
 } from "@/lib/launchDir";
-import { isMarkdownPath } from "@/lib/utils";
+import { isHtmlPath, isMarkdownPath } from "@/lib/utils";
 import { useZoom } from "@/lib/useZoom";
 import { quoteShellArg } from "@/lib/shellQuote";
 import { CommandPalette, createCommandItems } from "@/modules/command-palette";
@@ -89,7 +89,12 @@ import { useWorkspaceSwitcher } from "./hooks/useWorkspaceSwitcher";
 
 /** 判断文件标签是否对应同一个规范化路径。 */
 function tabPathMatches(tab: Tab, path: string): boolean {
-  if (tab.kind !== "editor" && tab.kind !== "markdown") return false;
+  if (
+    tab.kind !== "editor" &&
+    tab.kind !== "markdown" &&
+    tab.kind !== "html"
+  )
+    return false;
   return tab.path.replace(/\\/g, "/") === path.replace(/\\/g, "/");
 }
 
@@ -108,7 +113,9 @@ export default function App() {
     openFileTab,
     pinTab,
     newMarkdownTab,
+    newHtmlTab,
     setMarkdownView,
+    setHtmlView,
     setOverrideLanguage,
     closeTab,
     closeTabs,
@@ -142,9 +149,9 @@ export default function App() {
   const searchInlineRef = useRef<SearchInlineHandle | null>(null);
   const terminalRefs = useRef<Map<number, TerminalPaneHandle>>(new Map());
   const editorRefs = useRef<Map<number, EditorPaneHandle>>(new Map());
-  const editorHandleOwners = useRef<Map<number, "editor" | "markdown">>(
-    new Map(),
-  );
+  const editorHandleOwners = useRef<
+    Map<number, "editor" | "markdown" | "html">
+  >(new Map());
   const [activeEditorHandle, setActiveEditorHandle] =
     useState<EditorPaneHandle | null>(null);
   const [primaryEditorActiveId, setPrimaryEditorActiveId] = useState<
@@ -419,7 +426,9 @@ export default function App() {
   }, [expandTerminalPanel, terminalTabs.length]);
   const isTerminalTab = activeTab?.kind === "terminal";
   const isSearchableDocumentTab =
-    activeTab?.kind === "editor" || activeTab?.kind === "markdown";
+    activeTab?.kind === "editor" ||
+    activeTab?.kind === "markdown" ||
+    (activeTab?.kind === "html" && activeTab.viewMode === "raw");
 
   useEditorFileSync({ tabs, tabsRef, editorRefs });
   useThemeFileEditing({ tabsRef, openFileTab });
@@ -577,16 +586,19 @@ export default function App() {
 
   const handleOpenFile = useCallback(
     (path: string, pin?: boolean) => {
-      // Markdown tabs keep their own view mode; new Markdown files start rendered.
+      // Markdown and HTML tabs keep their own view mode and start rendered.
       const id = isMarkdownPath(path)
         ? newMarkdownTab(path)
-        : openFileTab(path, pin ?? true);
+        : isHtmlPath(path)
+          ? newHtmlTab(path)
+          : openFileTab(path, pin ?? true);
       if (secondaryEditorIdSet.has(id)) selectSecondaryEditor(id);
       else selectPrimaryEditor(id);
       return id;
     },
     [
       newMarkdownTab,
+      newHtmlTab,
       openFileTab,
       secondaryEditorIdSet,
       selectPrimaryEditor,
@@ -601,16 +613,18 @@ export default function App() {
       );
       const id =
         existing?.id ??
-        openFileTab(path, true, {
-          activate: false,
-          allowDuplicate: true,
-        });
+        (isHtmlPath(path)
+          ? newHtmlTab(path, { activate: false, allowDuplicate: true })
+          : openFileTab(path, true, {
+              activate: false,
+              allowDuplicate: true,
+            }));
       setSecondaryEditorIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
       setSecondaryEditorActiveId(id);
       setActiveId(id);
       return id;
     },
-    [openFileTab, secondaryEditorTabs, setActiveId],
+    [newHtmlTab, openFileTab, secondaryEditorTabs, setActiveId],
   );
 
   /** 在指定阅览器中以临时标签打开外部拖入文件。 */
@@ -626,9 +640,11 @@ export default function App() {
       }
       const id = isMarkdownPath(path)
         ? newMarkdownTab(path)
-        : openFileTab(path, false, {
-            activate: group === "primary",
-          });
+        : isHtmlPath(path)
+          ? newHtmlTab(path, { activate: group === "primary" })
+          : openFileTab(path, false, {
+              activate: group === "primary",
+            });
       if (group === "secondary") {
         setSecondaryEditorIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
         setSecondaryEditorActiveId(id);
@@ -637,7 +653,7 @@ export default function App() {
       }
       setActiveId(id);
     },
-    [addRoot, newMarkdownTab, openFileTab, setActiveId],
+    [addRoot, newHtmlTab, newMarkdownTab, openFileTab, setActiveId],
   );
 
   useReaderFileDrop({ onOpen: openDroppedFile });
@@ -734,7 +750,9 @@ export default function App() {
   );
 
   const explorerActiveFilePath =
-    activeTab?.kind === "editor" || activeTab?.kind === "markdown"
+    activeTab?.kind === "editor" ||
+    activeTab?.kind === "markdown" ||
+    activeTab?.kind === "html"
       ? activeTab.path
       : null;
 
@@ -878,7 +896,11 @@ export default function App() {
   );
 
   const registerEditorHandle = useCallback(
-    (id: number, h: EditorPaneHandle | null, owner: "editor" | "markdown") => {
+    (
+      id: number,
+      h: EditorPaneHandle | null,
+      owner: "editor" | "markdown" | "html",
+    ) => {
       if (h) {
         editorRefs.current.set(id, h);
         editorHandleOwners.current.set(id, owner);
@@ -1109,6 +1131,7 @@ export default function App() {
                     registerEditorHandle={registerEditorHandle}
                     onEditorDirtyChange={handleEditorDirty}
                     onSetMarkdownView={setMarkdownView}
+                    onSetHtmlView={setHtmlView}
                     onFocusEditor={focusEditor}
                   />
                 </div>

@@ -70,7 +70,18 @@ export type MarkdownTab = TabBase & {
   overrideLanguage?: string | null;
 };
 
-export type Tab = TerminalTab | EditorTab | MarkdownTab;
+export type HtmlViewMode = "rendered" | "raw";
+
+export type HtmlTab = TabBase & {
+  id: number;
+  kind: "html";
+  title: string;
+  path: string;
+  viewMode: HtmlViewMode;
+  dirty: boolean;
+};
+
+export type Tab = TerminalTab | EditorTab | MarkdownTab | HtmlTab;
 
 /** 递归更新终端分屏树内受目录重命名影响的工作目录。 */
 function rebasePaneCwds(node: PaneNode, from: string, to: string): PaneNode {
@@ -158,6 +169,43 @@ export function planMarkdownTabOpen(
       {
         id: tabId,
         kind: "markdown",
+        spaceId,
+        title: basename(path),
+        path,
+        viewMode: "rendered",
+        dirty: false,
+      },
+    ],
+    tabId,
+  };
+}
+
+/** 规划 HTML 文件标签，默认进入原始交互渲染视图。 */
+export function planHtmlTabOpen(
+  tabs: Tab[],
+  path: string,
+  spaceId: string,
+  allocId: () => number,
+  allowDuplicate = false,
+): { tabs: Tab[]; tabId: number } {
+  const pathKey = path.replace(/\\/g, "/");
+  if (!allowDuplicate) {
+    const existing = tabs.find(
+      (tab) =>
+        tab.kind === "html" &&
+        tab.spaceId === spaceId &&
+        tab.path.replace(/\\/g, "/") === pathKey,
+    );
+    if (existing) return { tabs, tabId: existing.id };
+  }
+
+  const tabId = allocId();
+  return {
+    tabs: [
+      ...tabs,
+      {
+        id: tabId,
+        kind: "html",
         spaceId,
         title: basename(path),
         path,
@@ -695,6 +743,27 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     return plan.tabId;
   }, []);
 
+  /** 打开 HTML 标签，并按调用方要求决定激活与重复标签行为。 */
+  const newHtmlTab = useCallback(
+    (path: string, options: OpenFileTabOptions = {}) => {
+      const curr = tabsRef.current;
+      const plan = planHtmlTabOpen(
+        curr,
+        path,
+        options.spaceId ?? activeSpaceIdRef.current,
+        () => nextIdRef.current++,
+        options.allowDuplicate ?? false,
+      );
+      if (plan.tabs !== curr) {
+        tabsRef.current = plan.tabs;
+        setTabs(plan.tabs);
+      }
+      if (options.activate ?? true) setActiveId(plan.tabId);
+      return plan.tabId;
+    },
+    [],
+  );
+
   const setOverrideLanguage = useCallback((id: number, lang: string | null) => {
     setTabs((curr) =>
       curr.map((t) => {
@@ -722,6 +791,22 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     setTabs(next);
   }, []);
 
+  /** 切换 HTML 原始渲染或源码模式，并阻止未保存内容被卸载。 */
+  const setHtmlView = useCallback((id: number, mode: HtmlViewMode) => {
+    const curr = tabsRef.current;
+    let changed = false;
+    const next = curr.map((t) => {
+      if (t.id !== id || t.kind !== "html") return t;
+      if (mode === "rendered" && t.dirty) return t;
+      if (t.viewMode === mode) return t;
+      changed = true;
+      return { ...t, viewMode: mode };
+    });
+    if (!changed) return;
+    tabsRef.current = next;
+    setTabs(next);
+  }, []);
+
   const closeTab = useCallback((id: number) => {
     let toDispose: number[] = [];
     setTabs((curr) => {
@@ -730,7 +815,8 @@ export function useTabs(initial?: Partial<TerminalTab>) {
       if (
         fallback === null &&
         target?.kind !== "editor" &&
-        target?.kind !== "markdown"
+        target?.kind !== "markdown" &&
+        target?.kind !== "html"
       )
         return curr;
       if (target?.kind === "terminal") {
@@ -785,6 +871,13 @@ export function useTabs(initial?: Partial<TerminalTab>) {
             ...(patch.overrideLanguage !== undefined && {
               overrideLanguage: patch.overrideLanguage,
             }),
+          };
+        }
+        if (x.kind === "html") {
+          return {
+            ...x,
+            ...(patch.title !== undefined && { title: patch.title }),
+            ...(patch.dirty !== undefined && { dirty: patch.dirty }),
           };
         }
         // editor tab: auto-promote from preview the moment the file becomes dirty.
@@ -1035,7 +1128,9 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     openFileTab,
     pinTab,
     newMarkdownTab,
+    newHtmlTab,
     setMarkdownView,
+    setHtmlView,
     closeTab,
     closeTabs,
     updateTab,

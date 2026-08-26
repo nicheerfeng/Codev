@@ -1,6 +1,6 @@
-import { cn, isMarkdownPath } from "@/lib/utils";
+import { cn, isHtmlPath, isMarkdownPath } from "@/lib/utils";
 import { MarkdownViewToggle } from "@/modules/markdown";
-import type { EditorTab, MarkdownTab, Tab } from "@/modules/tabs";
+import type { EditorTab, HtmlTab, MarkdownTab, Tab } from "@/modules/tabs";
 import { useEffect, useRef } from "react";
 import type { EditorPaneHandle } from "./EditorPane";
 import { FileViewer } from "./FileViewer";
@@ -12,9 +12,10 @@ type Props = {
   registerHandle: (
     id: number,
     handle: EditorPaneHandle | null,
-    owner: "editor" | "markdown",
+    owner: "editor" | "markdown" | "html",
   ) => void;
   onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
+  onSetHtmlView: (id: number, mode: "rendered" | "raw") => void;
 };
 
 export function EditorStack({
@@ -23,11 +24,14 @@ export function EditorStack({
   onDirtyChange,
   registerHandle,
   onSetMarkdownView,
+  onSetHtmlView,
 }: Props) {
   const editors = tabs.filter(
-    (t): t is EditorTab | MarkdownTab =>
+    (t): t is EditorTab | MarkdownTab | HtmlTab =>
       !t.cold &&
-      (t.kind === "editor" || (t.kind === "markdown" && t.viewMode === "raw")),
+      (t.kind === "editor" ||
+        ((t.kind === "markdown" || t.kind === "html") &&
+          t.viewMode === "raw")),
   );
   // 仅保留当前文件和未保存文件的编辑器实例，干净后台标签重新激活时再加载。
   const mountedEditors = editors.filter((t) => t.id === activeId || t.dirty);
@@ -102,10 +106,20 @@ export function EditorStack({
                   renderedHint="Save to preview"
                 />
               )}
+              {isHtmlPath(t.path) && (
+                <MarkdownViewToggle
+                  mode={t.kind === "html" ? t.viewMode : "raw"}
+                  onChange={(mode) => onSetHtmlView(t.id, mode)}
+                  renderedDisabled={t.dirty}
+                  renderedHint="Save to preview"
+                />
+              )}
               <FileViewer
                 ref={getRefCallback(t.id)}
                 path={t.path}
-                overrideLanguage={t.overrideLanguage}
+                overrideLanguage={
+                  t.kind === "html" ? undefined : t.overrideLanguage
+                }
                 onDirtyChange={getDirtyCallback(t.id)}
               />
             </div>

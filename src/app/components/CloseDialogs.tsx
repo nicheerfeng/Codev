@@ -92,7 +92,9 @@ function closeManyMessage(pending: CloseManyPending, tabs: Tab[]): string {
   const busyCount = busyLeafIds.length;
   if (dirtyCount === 1 && busyCount === 0) {
     const dirty = tabs.find(
-      (tab) => tab.kind === "editor" && dirtyIds.includes(tab.id),
+      (tab) =>
+        (tab.kind === "editor" || tab.kind === "html") &&
+        dirtyIds.includes(tab.id),
     );
     return dirty?.title
       ? `"${dirty.title}" has unsaved changes. Close it anyway?`

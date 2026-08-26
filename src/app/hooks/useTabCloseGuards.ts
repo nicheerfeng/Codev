@@ -65,12 +65,14 @@ export function useTabCloseGuards({
       if (
         nextActiveInSpace(tabs, id) === null &&
         t?.kind !== "editor" &&
-        t?.kind !== "markdown"
+        t?.kind !== "markdown" &&
+        t?.kind !== "html"
       )
         return;
       if (
         (t?.kind === "editor" ||
-          (t?.kind === "markdown" && t.viewMode === "raw")) &&
+          (t?.kind === "markdown" && t.viewMode === "raw") ||
+          (t?.kind === "html" && t.viewMode === "raw")) &&
         t.dirty
       ) {
         setPendingCloseTab(id);
@@ -97,7 +99,8 @@ export function useTabCloseGuards({
         .filter(
           (tab) =>
             (tab.kind === "editor" ||
-              (tab.kind === "markdown" && tab.viewMode === "raw")) &&
+              (tab.kind === "markdown" && tab.viewMode === "raw") ||
+              (tab.kind === "html" && tab.viewMode === "raw")) &&
             tab.dirty,
         )
         .map((tab) => tab.id),

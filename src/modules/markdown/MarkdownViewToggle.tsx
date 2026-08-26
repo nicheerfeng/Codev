@@ -7,6 +7,7 @@ type Props = {
   onChange: (mode: Mode) => void;
   renderedDisabled?: boolean;
   renderedHint?: string;
+  className?: string;
 };
 
 export function MarkdownViewToggle({
@@ -14,9 +15,15 @@ export function MarkdownViewToggle({
   onChange,
   renderedDisabled,
   renderedHint,
+  className,
 }: Props) {
   return (
-    <div className="absolute right-3 top-3 z-10 inline-flex items-center gap-0.5 rounded-md border border-border/60 bg-card/85 p-0.5 text-[11px] shadow-sm backdrop-blur">
+    <div
+      className={cn(
+        "absolute right-3 top-3 z-10 inline-flex items-center gap-0.5 rounded-md border border-border/60 bg-card/85 p-0.5 text-[11px] shadow-sm backdrop-blur",
+        className,
+      )}
+    >
       <button
         type="button"
         onClick={() => onChange("rendered")}

@@ -258,12 +258,25 @@ pub async fn fs_replace_text(
     Ok(replaced)
 }
 
-/// 将当前外部媒体文件加入 asset scope，供图片、PDF 和音视频直接读取。
+/// 将当前外部文件或其资源目录加入 asset scope，供媒体和 HTML 直接读取。
 #[tauri::command]
-pub fn fs_allow_asset(path: String, app: AppHandle) -> Result<(), String> {
-    app.asset_protocol_scope()
-        .allow_file(Path::new(&path))
-        .map_err(|error| error.to_string())
+pub fn fs_allow_asset(
+    path: String,
+    recursive_directory: Option<bool>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let path = Path::new(&path);
+    let scope = app.asset_protocol_scope();
+    if recursive_directory.unwrap_or(false) {
+        let parent = path
+            .parent()
+            .ok_or_else(|| "HTML 文件缺少父目录".to_string())?;
+        scope
+            .allow_directory(parent, true)
+            .map_err(|error| error.to_string())
+    } else {
+        scope.allow_file(path).map_err(|error| error.to_string())
+    }
 }
 
 fn read_file_sync(p: &Path, force: bool) -> Result<ReadResult, String> {

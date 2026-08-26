@@ -10,7 +10,7 @@ function subtitleFor(tab: Tab): string | null {
     return tab.cwd
       ? (tab.cwd.split(/[\\/]/).filter(Boolean).slice(-2).join("/") || tab.cwd)
       : null;
-  if (tab.kind === "editor" || tab.kind === "markdown")
+  if (tab.kind === "editor" || tab.kind === "markdown" || tab.kind === "html")
     return tab.path.split(/[\\/]/).filter(Boolean).slice(-2, -1)[0] ?? null;
   return null;
 }

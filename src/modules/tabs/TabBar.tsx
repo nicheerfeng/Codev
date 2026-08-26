@@ -41,6 +41,13 @@ import {
 import { labelFor } from "./lib/tabLabel";
 import type { EditorTab, Tab } from "./lib/useTabs";
 
+type FileTab = Exclude<Tab, { kind: "terminal" }>;
+
+/** 判断标签是否承载工作区文件。 */
+function isFileTab(tab: Tab): tab is FileTab {
+  return tab.kind !== "terminal";
+}
+
 type Props = {
   tabs: Tab[];
   activeId: number;
@@ -66,7 +73,7 @@ type Props = {
 
 /** 返回文件所属工作区根目录的可读名称。 */
 function workspaceLabelFor(tab: Tab, roots: string[]): string | null {
-  if (tab.kind !== "editor" && tab.kind !== "markdown") return null;
+  if (!isFileTab(tab)) return null;
   const path = tab.path.replace(/\\/g, "/");
   const root = roots
     .map((item) => item.replace(/\\/g, "/").replace(/\/+$/, ""))
@@ -79,7 +86,7 @@ function workspaceLabelFor(tab: Tab, roots: string[]): string | null {
 
 /** 返回文件路径中紧邻文件名的父文件夹名称。 */
 function parentFolderFor(tab: Tab): string | null {
-  if (tab.kind !== "editor" && tab.kind !== "markdown") return null;
+  if (!isFileTab(tab)) return null;
   const parts = tab.path.replace(/\\/g, "/").split("/").filter(Boolean);
   return parts.length > 1 ? (parts[parts.length - 2] ?? null) : null;
 }
@@ -91,12 +98,12 @@ function displaySuffixFor(
   roots: string[],
   groupId?: "primary" | "secondary",
 ): string | null {
-  if (tab.kind !== "editor" && tab.kind !== "markdown") return null;
+  if (!isFileTab(tab)) return null;
   const name = labelFor(tab);
   const peers = scopeTabs.filter(
     (candidate) =>
       candidate.id !== tab.id &&
-      (candidate.kind === "editor" || candidate.kind === "markdown") &&
+      isFileTab(candidate) &&
       labelFor(candidate) === name,
   );
   if (peers.length === 0) return null;
@@ -118,15 +125,12 @@ function displaySuffixFor(
   );
   if (rootNames.size > 1 && root) return root;
 
-  const normalizedPath =
-    tab.kind === "editor" || tab.kind === "markdown"
-      ? tab.path.replace(/\\/g, "/")
-      : "";
+  const normalizedPath = tab.path.replace(/\\/g, "/");
   if (
     groupId &&
     collision.some(
       (candidate) =>
-        (candidate.kind === "editor" || candidate.kind === "markdown") &&
+        isFileTab(candidate) &&
         candidate.path.replace(/\\/g, "/") === normalizedPath,
     )
   ) {
@@ -694,7 +698,7 @@ function DropIndicator() {
 }
 
 export function TabIcon({ tab }: { tab: Tab }) {
-  if (tab.kind === "editor" || tab.kind === "markdown") {
+  if (isFileTab(tab)) {
     const url =
       tab.kind === "editor" && tab.overrideLanguage
         ? fileIconUrl(`dummy.${tab.overrideLanguage}`)

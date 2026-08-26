@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { rebaseTabPaths, type Tab } from "./useTabs";
 
 describe("rebaseTabPaths", () => {
-  it("updates editor, markdown and every terminal pane cwd", () => {
+  it("updates editor, markdown, html and every terminal pane cwd", () => {
     const tabs: Tab[] = [
       {
         id: 1,
@@ -24,18 +24,27 @@ describe("rebaseTabPaths", () => {
       },
       {
         id: 3,
+        kind: "html",
+        spaceId: "default",
+        title: "index.html",
+        path: "C:/repo/web/index.html",
+        dirty: false,
+        viewMode: "rendered",
+      },
+      {
+        id: 4,
         kind: "terminal",
         spaceId: "default",
         title: "shell",
         cwd: "C:/repo",
-        activeLeafId: 4,
+        activeLeafId: 5,
         paneTree: {
           kind: "split",
-          id: 6,
+          id: 7,
           dir: "row",
           children: [
-            { kind: "leaf", id: 4, cwd: "C:/repo" },
-            { kind: "leaf", id: 5, cwd: "C:/repo/src" },
+            { kind: "leaf", id: 5, cwd: "C:/repo" },
+            { kind: "leaf", id: 6, cwd: "C:/repo/src" },
           ],
         },
       },
@@ -44,7 +53,8 @@ describe("rebaseTabPaths", () => {
     const result = rebaseTabPaths(tabs, "C:/repo", "C:/renamed");
     expect(result[0]).toMatchObject({ path: "C:/renamed/src/a.ts" });
     expect(result[1]).toMatchObject({ path: "C:/renamed/readme.md" });
-    expect(result[2]).toMatchObject({
+    expect(result[2]).toMatchObject({ path: "C:/renamed/web/index.html" });
+    expect(result[3]).toMatchObject({
       cwd: "C:/renamed",
       paneTree: {
         children: [{ cwd: "C:/renamed" }, { cwd: "C:/renamed/src" }],

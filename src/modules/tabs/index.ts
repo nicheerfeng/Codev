@@ -11,6 +11,8 @@ export {
   type CloseTabsPlan,
   type Tab,
   type EditorTab,
+  type HtmlTab,
+  type HtmlViewMode,
   type MarkdownTab,
   type MarkdownViewMode,
 } from "./lib/useTabs";

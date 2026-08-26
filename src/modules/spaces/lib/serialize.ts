@@ -3,9 +3,11 @@ import {
   type PaneNode,
   type SplitDir,
 } from "@/modules/terminal/lib/panes";
-import { isMarkdownPath } from "@/lib/utils";
+import { isHtmlPath, isMarkdownPath } from "@/lib/utils";
 import type {
   EditorTab,
+  HtmlTab,
+  HtmlViewMode,
   MarkdownTab,
   MarkdownViewMode,
   Tab,
@@ -23,7 +25,8 @@ export type SerializedTab =
       customTitle?: string;
     }
   | { kind: "editor"; path: string }
-  | { kind: "markdown"; path: string; viewMode?: MarkdownViewMode };
+  | { kind: "markdown"; path: string; viewMode?: MarkdownViewMode }
+  | { kind: "html"; path: string; viewMode?: HtmlViewMode };
 
 function basename(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
@@ -50,6 +53,7 @@ export function isSerializableTab(tab: Tab): boolean {
     case "terminal":
     case "editor":
     case "markdown":
+    case "html":
       return true;
     default:
       return false;
@@ -70,6 +74,12 @@ function serializeTab(tab: Tab): SerializedTab | null {
     case "markdown":
       return {
         kind: "markdown",
+        path: tab.path,
+        ...(tab.viewMode === "raw" && { viewMode: "raw" }),
+      };
+    case "html":
+      return {
+        kind: "html",
         path: tab.path,
         ...(tab.viewMode === "raw" && { viewMode: "raw" }),
       };
@@ -166,6 +176,18 @@ function hydrateTab(
           dirty: false,
         } satisfies MarkdownTab;
       }
+      if (isHtmlPath(s.path)) {
+        return {
+          id: allocId(),
+          kind: "html",
+          spaceId,
+          cold: true,
+          title: basename(s.path),
+          path: s.path,
+          viewMode: "raw",
+          dirty: false,
+        } satisfies HtmlTab;
+      }
       return {
         id: allocId(),
         kind: "editor",
@@ -187,6 +209,17 @@ function hydrateTab(
         viewMode: s.viewMode ?? "rendered",
         dirty: false,
       } satisfies MarkdownTab;
+    case "html":
+      return {
+        id: allocId(),
+        kind: "html",
+        spaceId,
+        cold: true,
+        title: basename(s.path),
+        path: s.path,
+        viewMode: s.viewMode ?? "rendered",
+        dirty: false,
+      } satisfies HtmlTab;
     default:
       return null;
   }

@@ -4,15 +4,19 @@ import {
   watchAdd,
   watchRemove,
 } from "@/modules/explorer/lib/watch";
-import type { EditorTab, MarkdownTab, Tab } from "@/modules/tabs";
+import type { EditorTab, HtmlTab, MarkdownTab, Tab } from "@/modules/tabs";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { type RefObject, useEffect, useRef } from "react";
 import type { EditorPaneHandle } from "./EditorPane";
 
 /** 判断标签是否由文本编辑器承载。 */
-function isEditableFileTab(tab: Tab): tab is EditorTab | MarkdownTab {
+function isEditableFileTab(
+  tab: Tab,
+): tab is EditorTab | MarkdownTab | HtmlTab {
   return (
-    tab.kind === "editor" || (tab.kind === "markdown" && tab.viewMode === "raw")
+    tab.kind === "editor" ||
+    (tab.kind === "markdown" && tab.viewMode === "raw") ||
+    tab.kind === "html"
   );
 }
 

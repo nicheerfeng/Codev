@@ -6,6 +6,7 @@ import {
 import { cn } from "@/lib/utils";
 import { EditorStack, type EditorPaneHandle } from "@/modules/editor";
 import { MarkdownStack } from "@/modules/markdown";
+import { HtmlStack } from "@/modules/html";
 import { TabBar } from "@/modules/tabs";
 import type { Tab } from "@/modules/tabs";
 
@@ -29,10 +30,11 @@ type EditorGroupProps = {
   registerEditorHandle: (
     id: number,
     handle: EditorPaneHandle | null,
-    owner: "editor" | "markdown",
+    owner: "editor" | "markdown" | "html",
   ) => void;
   onDirtyChange: (id: number, dirty: boolean) => void;
   onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
+  onSetHtmlView: (id: number, mode: "rendered" | "raw") => void;
   onFocusEditor: (id: number) => void;
 };
 
@@ -55,14 +57,18 @@ function EditorGroup({
   registerEditorHandle,
   onDirtyChange,
   onSetMarkdownView,
+  onSetHtmlView,
   onFocusEditor,
 }: EditorGroupProps) {
   const activeTab = tabs.find((tab) => tab.id === activeId);
   const showEditorStack =
     activeTab?.kind === "editor" ||
-    (activeTab?.kind === "markdown" && activeTab.viewMode === "raw");
+    ((activeTab?.kind === "markdown" || activeTab?.kind === "html") &&
+      activeTab.viewMode === "raw");
   const showMarkdownStack =
     activeTab?.kind === "markdown" && activeTab.viewMode === "rendered";
+  const showHtmlStack =
+    activeTab?.kind === "html" && activeTab.viewMode === "rendered";
 
   return (
     <div
@@ -117,6 +123,20 @@ function EditorGroup({
             registerHandle={registerEditorHandle}
             onDirtyChange={onDirtyChange}
             onSetMarkdownView={onSetMarkdownView}
+            onSetHtmlView={onSetHtmlView}
+          />
+        </div>
+        <div
+          className={cn(
+            "absolute inset-0",
+            showHtmlStack ? "pointer-events-auto" : "pointer-events-none",
+          )}
+        >
+          <HtmlStack
+            tabs={tabs}
+            activeId={activeId}
+            registerHandle={registerEditorHandle}
+            onSetHtmlView={onSetHtmlView}
           />
         </div>
         <div
@@ -157,10 +177,11 @@ type Props = {
   registerEditorHandle: (
     id: number,
     handle: EditorPaneHandle | null,
-    owner: "editor" | "markdown",
+    owner: "editor" | "markdown" | "html",
   ) => void;
   onDirtyChange: (id: number, dirty: boolean) => void;
   onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
+  onSetHtmlView: (id: number, mode: "rendered" | "raw") => void;
   onFocusEditor: (id: number) => void;
 };
 
@@ -185,6 +206,7 @@ export function EditorCompareView({
   registerEditorHandle,
   onDirtyChange,
   onSetMarkdownView,
+  onSetHtmlView,
   onFocusEditor,
 }: Props) {
   const labelScopeTabs = [...primaryTabs, ...secondaryTabs];
@@ -207,6 +229,7 @@ export function EditorCompareView({
       registerEditorHandle={registerEditorHandle}
       onDirtyChange={onDirtyChange}
       onSetMarkdownView={onSetMarkdownView}
+      onSetHtmlView={onSetHtmlView}
       onFocusEditor={onFocusEditor}
     />
   );
@@ -230,6 +253,7 @@ export function EditorCompareView({
       registerEditorHandle={registerEditorHandle}
       onDirtyChange={onDirtyChange}
       onSetMarkdownView={onSetMarkdownView}
+      onSetHtmlView={onSetHtmlView}
       onFocusEditor={onFocusEditor}
     />
   );

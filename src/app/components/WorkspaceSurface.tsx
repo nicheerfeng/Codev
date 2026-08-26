@@ -22,10 +22,11 @@ type Props = {
   registerEditorHandle: (
     id: number,
     handle: EditorPaneHandle | null,
-    owner: "editor" | "markdown",
+    owner: "editor" | "markdown" | "html",
   ) => void;
   onEditorDirtyChange: (id: number, dirty: boolean) => void;
   onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
+  onSetHtmlView: (id: number, mode: "rendered" | "raw") => void;
   onFocusEditor: (id: number) => void;
 };
 
@@ -50,6 +51,7 @@ export function WorkspaceSurface({
   registerEditorHandle,
   onEditorDirtyChange,
   onSetMarkdownView,
+  onSetHtmlView,
   onFocusEditor,
 }: Props) {
   return (
@@ -74,6 +76,7 @@ export function WorkspaceSurface({
         registerEditorHandle={registerEditorHandle}
         onDirtyChange={onEditorDirtyChange}
         onSetMarkdownView={onSetMarkdownView}
+        onSetHtmlView={onSetHtmlView}
         onFocusEditor={onFocusEditor}
       />
     </div>
