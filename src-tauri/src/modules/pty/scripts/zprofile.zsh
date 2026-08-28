@@ -1,9 +1,9 @@
-# terax-shell-integration (zprofile)
+# codev-shell-integration (zprofile)
 #
 # See zshenv.zsh for the rationale on the trailing `:`.
 {
-  _terax_user_zdotdir="${TERAX_USER_ZDOTDIR:-$HOME}"
-  [ -f "$_terax_user_zdotdir/.zprofile" ] && source "$_terax_user_zdotdir/.zprofile"
-  unset _terax_user_zdotdir
+  _codev_user_zdotdir="${CODEV_USER_ZDOTDIR:-$HOME}"
+  [ -f "$_codev_user_zdotdir/.zprofile" ] && source "$_codev_user_zdotdir/.zprofile"
+  unset _codev_user_zdotdir
 }
 :

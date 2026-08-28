@@ -1,65 +1,71 @@
-# Terminal renderer pool
+# Terminal renderer lifecycle
 
-This guide elaborates on `TERAX.md`. If anything here conflicts with `TERAX.md`, `TERAX.md` wins.
+This guide elaborates on `CODEV.md`. If anything here conflicts with
+`CODEV.md`, `CODEV.md` wins.
 
-## Why a pool exists
+## Why a lifecycle exists
 
-Terminal tabs are kept mounted and hidden on switch so PTYs and dev servers keep streaming in the background. Creating an unbounded number of live xterm + WebGL renderer instances would blow the memory budget, so Codev pools renderer slots.
+Terminal sessions are kept alive so shells and development services can keep
+running in the background. Every currently visible terminal gets its own
+xterm.js rendering slot. Hidden idle terminals release their slot on demand;
+their PTY session and recent output remain available for restoration.
 
-The pool lives in `src/modules/terminal/lib/rendererPool.ts`.
+The lifecycle is implemented in `src/modules/terminal/lib/rendererPool.ts`.
 
 ## Slot lifecycle
 
-- `POOL_MAX_SIZE` is 5 (`rendererPool.ts:22`). Each slot owns one xterm `Terminal`, `FitAddon`, `SearchAddon`, `SerializeAddon`, and optionally a `WebglAddon`.
-- A slot is created on demand and assigned to a leaf on bind.
-- `releaseSlot` detaches a slot from a leaf. If the leaf is idle, the slot is parked with `display:none` so xterm stops rendering but keeps parsing PTY bytes.
-- After a grace period, idle slots may be reaped to keep the pool size down.
+- A slot owns one xterm `Terminal`, `FitAddon`, `SearchAddon`, and
+  `SerializeAddon`.
+- Slots are created on demand when a visible terminal needs one. There is no
+  fixed five-slot limit and visible terminals are never displaced to make room
+  for another visible terminal.
+- `releaseSlot` detaches a hidden idle terminal and parks its host with
+  `display:none` before the slot becomes reusable.
+- After a grace period, surplus idle slots are disposed. At least one idle slot
+  stays warm.
 
 ## Parking vs releasing
 
-When a leaf becomes hidden:
+When a terminal becomes hidden:
 
-1. `parkLeafSlot` sets the host to `display:none`. Rendering pauses but the live buffer keeps receiving bytes.
-2. If the leaf is **busy** (foreground command or alt-screen TUI), it keeps the slot parked indefinitely.
-3. If the leaf is **idle**, `releaseSlot` is called after `HIDDEN_RELEASE_DELAY_MS`. The slot's `currentLeafId` is cleared and `retainedLeafId` is set so the buffer stays live.
+1. `parkLeafSlot` first pauses rendering with `display:none` while the xterm
+   buffer remains available.
+2. If the terminal has a foreground command or alternate-screen TUI, its slot
+   stays parked so its live screen is preserved.
+3. If the terminal is idle, `releaseSlot` detaches the slot after the idle
+   check. The PTY stays alive and subsequent output enters `DormantRing`.
 
-When the leaf becomes visible again, `acquireSlot` looks for:
-
-1. A slot already bound to this leaf.
-2. A retained slot for this leaf (`retainedLeafId === leafId`) - fast path, no snapshot replay.
-3. A clean idle slot.
-4. If the pool is at max size, the lowest-scoring slot is evicted. Eviction serializes the retained buffer to a snapshot via `SerializeAddon` before stealing the slot.
+When the terminal becomes visible again, `acquireSlot` first reuses its
+retained slot, then a clean idle slot, and finally creates a new slot. A
+retained buffer may be serialized before its slot is reused.
 
 ## The DormantRing
 
-`src/modules/terminal/lib/dormantRing.ts` buffers PTY bytes for leaves that have no slot at all (stolen or never bound). It is capped at 1 MiB and drops oldest blocks on overflow. On drain it resumes from the next line boundary rather than resetting the terminal, so a mid-line escape sequence is not replayed from the middle.
+`src/modules/terminal/lib/dormantRing.ts` buffers PTY bytes while a terminal
+has no slot. It is capped at 1 MiB per terminal and drops the oldest blocks on
+overflow. On drain it resumes from the next line boundary rather than
+resetting the terminal, so a mid-line escape sequence is not replayed from the
+middle.
 
-## The never-serialize-mid-command invariant
+## Restoration
 
-This is the most important rule in the pool. A leaf that is in the middle of a command must **never** be serialized. Replaying incremental TUI repaints over a stale snapshot can corrupt a full-screen TUI.
-
-The code enforces this by checking `isLeafBusy` before eviction and by keeping slots parked (not released) while `commandRunning` or alt-screen is true.
-
-## Fast path and snapshot replay
-
-If a retained slot exists for a leaf, `bindSlot` skips `term.clear()` / `term.reset()` and simply drains the DormantRing into the live buffer. This avoids re-rendering a large snapshot.
-
-If only a snapshot exists, `bindSlot` clears the terminal, resizes, writes the snapshot, then drains the ring. For alt-screen TUIs, the snapshot is skipped and a SIGWINCH kick is sent so the TUI repaints from scratch.
-
-## WebGL lifecycle
-
-WebGL addons are created when a slot becomes visible and reaped after a grace period when parked. The addon recovers from context loss on sleep/wake or GPU reset.
+If a retained slot still belongs to the terminal, binding skips a full reset
+and drains the dormant ring into its live buffer. If the slot was reused, the
+serialized snapshot is restored and new dormant output is appended. For
+alternate-screen TUIs, the snapshot is skipped and a PTY resize kick asks the
+TUI to repaint its current screen.
 
 ## Invariants
 
-- Never allow the pool to grow without bound; max is `POOL_MAX_SIZE`.
-- Never serialize or evict a leaf that is mid-command or in alt-screen.
-- A hidden busy leaf keeps its live grid parked with `display:none`.
-- An idle hidden leaf releases its slot but the buffer continues parsing bytes.
-- The DormantRing only buffers bytes for leaves without any slot.
+- The number of terminal sessions is not limited by the renderer lifecycle.
+- Every currently visible terminal has its own rendering slot.
+- Hidden idle terminals may release their slots; their PTYs are not closed.
+- Hidden busy terminals and alternate-screen TUIs keep their live slot parked.
+- `DormantRing` only buffers output for a terminal without a slot.
 
 ## See also
 
-- [`TERAX.md`](../../TERAX.md) - the architecture source of truth
+- [`CODEV.md`](../../CODEV.md) - the architecture source of truth
 - [`docs/README.md`](../README.md) - index of contributor guides
-- [PTY shell integration](pty-shell-integration.md) - sessions, OSC sequences, and ConPTY
+- [PTY shell integration](pty-shell-integration.md) - sessions, OSC sequences,
+  and terminal lifecycle integration

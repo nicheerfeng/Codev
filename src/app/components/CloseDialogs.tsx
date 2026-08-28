@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { useT } from "@/lib/i18n";
 import { setConfirmCloseRunningTerminal } from "@/modules/settings/store";
 import type { Tab } from "@/modules/tabs";
 import { useId, useState } from "react";
@@ -39,18 +40,28 @@ type Props = {
   onConfirmAppClose: () => void;
 };
 
-function appCloseMessage(blocker: AppCloseBlocker): string {
+function appCloseMessage(
+  blocker: AppCloseBlocker,
+  t: (text: string) => string,
+): string {
   const dirty =
     blocker.dirtyEditors === 1
-      ? "1 file has unsaved changes"
-      : `${blocker.dirtyEditors} files have unsaved changes`;
+      ? t("1 file has unsaved changes")
+      : t("{count} files have unsaved changes").replace(
+          "{count}",
+          String(blocker.dirtyEditors),
+        );
   if (blocker.dirtyEditors > 0 && blocker.busyTerminal) {
-    return `A process is still running and ${dirty}. Quitting will terminate it and discard the changes.`;
+    return t(
+      "A process is still running and {dirty}. Quitting will terminate it and discard the changes.",
+    ).replace("{dirty}", dirty);
   }
   if (blocker.dirtyEditors > 0) {
-    return `${dirty.charAt(0).toUpperCase()}${dirty.slice(1)}. Quitting will discard them.`;
+    return t("{dirty}. Quitting will discard them.").replace("{dirty}", dirty);
   }
-  return "A process is still running in a terminal. Quitting will terminate it.";
+  return t(
+    "A process is still running in a terminal. Quitting will terminate it.",
+  );
 }
 
 function OptOutRow({
@@ -60,6 +71,7 @@ function OptOutRow({
   checked: boolean;
   onCheckedChange: (value: boolean) => void;
 }) {
+  const t = useT();
   const id = useId();
   return (
     <div className="-mt-3 flex items-center justify-center gap-2 sm:justify-start">
@@ -72,7 +84,7 @@ function OptOutRow({
         htmlFor={id}
         className="font-normal text-[12px] text-muted-foreground"
       >
-        Don't ask again about running processes
+        {t("Don't ask again about running processes")}
       </Label>
     </div>
   );
@@ -138,6 +150,7 @@ export function CloseDialogs({
   onCancelAppClose,
   onConfirmAppClose,
 }: Props) {
+  const t = useT();
   const [optOutTerminalClose, setOptOutTerminalClose] = useState(false);
   const [optOutAppClose, setOptOutAppClose] = useState(false);
   const appCloseCanOptOut =
@@ -290,9 +303,9 @@ export function CloseDialogs({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Quit Codev?</AlertDialogTitle>
+            <AlertDialogTitle>{t("Quit Codev?")}</AlertDialogTitle>
             <AlertDialogDescription>
-              {pendingAppClose ? appCloseMessage(pendingAppClose) : ""}
+              {pendingAppClose ? appCloseMessage(pendingAppClose, t) : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {appCloseCanOptOut ? (
@@ -303,10 +316,10 @@ export function CloseDialogs({
           ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel onClick={cancelAppClose}>
-              Cancel
+              {t("Cancel")}
             </AlertDialogCancel>
             <AlertDialogAction onClick={() => void confirmAppClose()}>
-              Quit Anyway
+              {t("Quit Anyway")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

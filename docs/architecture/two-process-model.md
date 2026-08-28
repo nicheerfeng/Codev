@@ -38,7 +38,7 @@ Codev 由 Rust 后端和前端 WebView 组成。Rust 负责文件、目录、PTY
 
 ## See also
 
-- [`TERAX.md`](../../TERAX.md) - 当前架构边界
+- [`CODEV.md`](../../CODEV.md) - 当前架构边界
 - [`docs/README.md`](../README.md) - 文档索引
 - [PTY shell integration](pty-shell-integration.md) - PTY 与 Shell 集成
 - [Security model](security-model.md) - IPC、路径和终端安全边界

@@ -5,7 +5,7 @@ import { LazyStore } from "@tauri-apps/plugin-store";
 
 export type ThemePref = "system" | "light" | "dark";
 
-export const DEFAULT_THEME_ID = "terax-default";
+export const DEFAULT_THEME_ID = "codev-default";
 
 const LEGACY_BUILTIN_THEME_IDS = new Set([
   "claude",

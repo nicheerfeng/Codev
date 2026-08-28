@@ -40,6 +40,6 @@ CI 还会在 Linux、Windows 和 macOS 上执行 Rust 检查；本地没有 `car
 
 ## See also
 
-- [`TERAX.md`](../../TERAX.md)
+- [`CODEV.md`](../../CODEV.md)
 - [`CONTRIBUTING.md`](../../CONTRIBUTING.md)
 - [`docs/README.md`](../README.md)

@@ -35,6 +35,7 @@ type EditorGroupProps = {
   onDirtyChange: (id: number, dirty: boolean) => void;
   onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
   onSetHtmlView: (id: number, mode: "rendered" | "raw") => void;
+  onFocusSearch: () => void;
   onFocusEditor: (id: number) => void;
 };
 
@@ -58,6 +59,7 @@ function EditorGroup({
   onDirtyChange,
   onSetMarkdownView,
   onSetHtmlView,
+  onFocusSearch,
   onFocusEditor,
 }: EditorGroupProps) {
   const activeTab = tabs.find((tab) => tab.id === activeId);
@@ -137,6 +139,7 @@ function EditorGroup({
             activeId={activeId}
             registerHandle={registerEditorHandle}
             onSetHtmlView={onSetHtmlView}
+            onFocusSearch={onFocusSearch}
           />
         </div>
         <div
@@ -182,6 +185,7 @@ type Props = {
   onDirtyChange: (id: number, dirty: boolean) => void;
   onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
   onSetHtmlView: (id: number, mode: "rendered" | "raw") => void;
+  onFocusSearch: () => void;
   onFocusEditor: (id: number) => void;
 };
 
@@ -207,6 +211,7 @@ export function EditorCompareView({
   onDirtyChange,
   onSetMarkdownView,
   onSetHtmlView,
+  onFocusSearch,
   onFocusEditor,
 }: Props) {
   const labelScopeTabs = [...primaryTabs, ...secondaryTabs];
@@ -230,6 +235,7 @@ export function EditorCompareView({
       onDirtyChange={onDirtyChange}
       onSetMarkdownView={onSetMarkdownView}
       onSetHtmlView={onSetHtmlView}
+      onFocusSearch={onFocusSearch}
       onFocusEditor={onFocusEditor}
     />
   );
@@ -254,6 +260,7 @@ export function EditorCompareView({
       onDirtyChange={onDirtyChange}
       onSetMarkdownView={onSetMarkdownView}
       onSetHtmlView={onSetHtmlView}
+      onFocusSearch={onFocusSearch}
       onFocusEditor={onFocusEditor}
     />
   );

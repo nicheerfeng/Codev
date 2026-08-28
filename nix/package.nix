@@ -9,15 +9,15 @@ let
 
   srcMap = {
     x86_64-linux = fetchurl {
-      url = "https://github.com/crynta/terax-ai/releases/download/v${version}/Codev_${version}_amd64.deb";
+      url = "https://github.com/teague/codev/releases/download/v${version}/Codev_${version}_amd64.deb";
       hash = sources.hashes.x86_64-linux;
     };
     x86_64-darwin = fetchurl {
-      url = "https://github.com/crynta/terax-ai/releases/download/v${version}/Codev_x64.app.tar.gz";
+      url = "https://github.com/teague/codev/releases/download/v${version}/Codev_x64.app.tar.gz";
       hash = sources.hashes.x86_64-darwin;
     };
     aarch64-darwin = fetchurl {
-      url = "https://github.com/crynta/terax-ai/releases/download/v${version}/Codev_aarch64.app.tar.gz";
+      url = "https://github.com/teague/codev/releases/download/v${version}/Codev_aarch64.app.tar.gz";
       hash = sources.hashes.aarch64-darwin;
     };
   };
@@ -26,10 +26,10 @@ let
 in
 
 assert lib.assertMsg (builtins.hasAttr sys srcMap)
-  "terax: unsupported platform ${sys}";
+  "codev: unsupported platform ${sys}";
 
 stdenv.mkDerivation {
-  pname = "terax";
+  pname = "codev";
   inherit version;
 
   src = srcMap.${sys};
@@ -57,9 +57,9 @@ stdenv.mkDerivation {
   installPhase = if stdenv.hostPlatform.isLinux then ''
     mkdir -p $out/bin $out/share
     cp -r usr/share/* $out/share/
-    install -Dm755 usr/bin/terax $out/bin/terax
+    install -Dm755 usr/bin/codev $out/bin/codev
 
-    wrapProgram $out/bin/terax \
+    wrapProgram $out/bin/codev \
       "''${gappsWrapperArgs[@]}" \
       --prefix GST_PLUGIN_SYSTEM_PATH : "$GST_PLUGIN_SYSTEM_PATH"
   '' else ''
@@ -69,7 +69,7 @@ stdenv.mkDerivation {
 
   meta = with lib; {
     description = "Lightweight cross-platform code and document reader with an integrated terminal";
-    homepage = "https://terax.app";
+    homepage = "https://github.com/teague/codev";
     license = licenses.asl20;
     platforms = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" ];
   };

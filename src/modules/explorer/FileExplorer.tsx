@@ -7,6 +7,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
+  Cancel01Icon,
   FileAddIcon,
   Folder01Icon,
   FolderAddIcon,
@@ -29,7 +30,6 @@ import {
 } from "react";
 import { useT } from "@/lib/i18n";
 import { currentWorkspaceEnv } from "@/modules/workspace";
-import { cn } from "@/lib/utils";
 import { copyToClipboard } from "./lib/contextActions";
 import { COMPACT_CONTENT, COMPACT_ITEM } from "./lib/menuItemClass";
 import { RootTree, type RootTreeHandle, type RootTreeProps } from "./RootTree";
@@ -132,6 +132,8 @@ function EmptyExplorerContextMenu({
 function RootSection({
   root,
   active,
+  revealRequest,
+  onRevealPath,
   onActivate,
   onRemove,
   onCopy,
@@ -145,6 +147,8 @@ function RootSection({
 }: {
   root: string;
   active: boolean;
+  revealRequest: { nonce: number; path: string } | null;
+  onRevealPath: (root: string, path: string) => void;
   onActivate: () => void;
   onRemove: () => void;
   onCopy: () => void;
@@ -159,8 +163,19 @@ function RootSection({
   const t = useT();
   const [open, setOpen] = useState(true);
   const [renaming, setRenaming] = useState(false);
+  const [rootHeaderHovered, setRootHeaderHovered] = useState(false);
   const color = rootColor(root);
   const canRename = root !== "/" && !/^[A-Za-z]:\/$/.test(root);
+
+  useEffect(() => {
+    if (!revealRequest) return;
+    setOpen(true);
+    const frame = requestAnimationFrame(() =>
+      onRevealPath(root, revealRequest.path),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [onRevealPath, revealRequest, root]);
+
   return (
     <div
       className="flex min-w-0 flex-col"
@@ -171,62 +186,67 @@ function RootSection({
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
-            className={cn(
-              "flex h-7 shrink-0 cursor-pointer items-center gap-1 border-b border-l-2 border-border/60 px-2 text-xs font-medium select-none",
-            )}
+            className="flex h-7 shrink-0 cursor-pointer items-center gap-1 overflow-hidden border-b border-l-2 border-border/60 px-2 text-xs font-medium select-none"
             style={{
               borderLeftColor: color,
-              backgroundColor: `color-mix(in srgb, ${color} ${active ? 24 : 14}%, var(--background))`,
-              color: `color-mix(in srgb, ${color} ${active ? 32 : 22}%, var(--foreground))`,
+              backgroundColor: `color-mix(in srgb, ${color} ${active ? 100 : 70}%, var(--background))`,
+              color: "var(--foreground)",
             }}
+            onMouseEnter={() => setRootHeaderHovered(true)}
+            onMouseLeave={() => setRootHeaderHovered(false)}
             onClick={() => {
               onActivate();
               setOpen((value) => !value);
             }}
             title={root}
           >
-            <button
-              type="button"
-              className="size-4 shrink-0 text-muted-foreground hover:text-foreground"
-              onClick={(event) => {
-                event.stopPropagation();
-                setOpen((value) => !value);
-              }}
-              aria-label={open ? t("Collapse") : t("Expand")}
-            >
-              <span className="inline-block text-[10px] leading-4">
-                {open ? "▾" : "▸"}
-              </span>
-            </button>
-            <img
-              src={folderIconUrl(basename(root), false)}
-              alt=""
-              height={14}
-              width={14}
-              className="mx-0.5 shrink-0"
-            />
-            {renaming ? (
-              <span
-                className="flex min-w-0 flex-1"
-                onClick={(event) => event.stopPropagation()}
+              <button
+                type="button"
+                className="size-4 shrink-0 text-muted-foreground hover:text-foreground"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setOpen((value) => !value);
+                }}
+                aria-label={open ? t("Collapse") : t("Expand")}
               >
-                <InlineInput
-                  initial={basename(root)}
-                  onCommit={(name) => {
-                    setRenaming(false);
-                    onRename(name);
-                  }}
-                  onCancel={() => setRenaming(false)}
-                />
-              </span>
-            ) : (
-              <span className="min-w-0 flex-1 truncate">
-                {basename(root) || root}
-              </span>
-            )}
+                <span className="inline-block text-[10px] leading-4">
+                  {open ? "▾" : "▸"}
+                </span>
+              </button>
+              <img
+                src={folderIconUrl(basename(root), false)}
+                alt=""
+                height={14}
+                width={14}
+                className="mx-0.5 shrink-0"
+              />
+              {renaming ? (
+                <span
+                  className="flex min-w-0 flex-1"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <InlineInput
+                    initial={basename(root)}
+                    onCommit={(name) => {
+                      setRenaming(false);
+                      onRename(name);
+                    }}
+                    onCancel={() => setRenaming(false)}
+                  />
+                </span>
+              ) : (
+                <span className="min-w-0 flex-1 truncate pr-1">
+                  {basename(root) || root}
+                </span>
+              )}
             <button
               type="button"
-              className="size-4 shrink-0 rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+              data-root-remove=""
+              className="flex size-5 shrink-0 items-center justify-center text-muted-foreground/55 transition-[opacity,color] hover:text-muted-foreground focus-visible:text-muted-foreground"
+              style={{
+                opacity: rootHeaderHovered ? 1 : 0,
+                pointerEvents: rootHeaderHovered ? "auto" : "none",
+              }}
               onClick={(event) => {
                 event.stopPropagation();
                 onRemove();
@@ -234,7 +254,7 @@ function RootSection({
               aria-label={t("Remove root")}
               title={t("Remove from workspace")}
             >
-              <span className="inline-block text-[11px] leading-4">×</span>
+              <HugeiconsIcon icon={Cancel01Icon} size={11} strokeWidth={1.5} />
             </button>
           </div>
         </ContextMenuTrigger>
@@ -319,6 +339,12 @@ export const FileExplorer = memo(
     const selectedMeta = useSelectedFileMeta(treeProps.activeFilePath ?? null);
     const containerRef = useRef<HTMLDivElement>(null);
     const treeRefs = useRef<Map<string, RootTreeHandle>>(new Map());
+    const rootRevealNonceRef = useRef(0);
+    const [rootRevealRequest, setRootRevealRequest] = useState<{
+      root: string;
+      nonce: number;
+      path: string;
+    } | null>(null);
     const refreshedTransferIds = useRef<Set<string>>(new Set());
     const { onPathDeleted } = treeProps;
 
@@ -624,6 +650,11 @@ export const FileExplorer = memo(
       return null;
     }, [activeRoot]);
 
+    /** 在目标根树挂载后展开并定位搜索命中的目录。 */
+    const revealRootPath = useCallback((root: string, path: string) => {
+      treeRefs.current.get(root)?.revealPath(path);
+    }, []);
+
     /** 将搜索命中的目录路由到拥有它的工作区根树。 */
     const revealSearchDirectory = useCallback(
       (path: string) => {
@@ -638,9 +669,13 @@ export const FileExplorer = memo(
             owner = root;
           }
         }
-        if (owner) treeRefs.current.get(owner)?.revealPath(path);
+        if (owner) {
+          const nonce = ++rootRevealNonceRef.current;
+          setRootRevealRequest({ root: owner, nonce, path });
+          onSetActiveRoot(owner);
+        }
       },
-      [roots],
+      [onSetActiveRoot, roots],
     );
 
     /** 在当前项目根打开文件搜索。 */
@@ -854,13 +889,19 @@ export const FileExplorer = memo(
             }
           >
             <div className="min-h-0 min-w-0 flex-1" data-explorer-empty="">
-              <ScrollArea className="h-full min-h-0 min-w-0">
+              <ScrollArea className="explorer-scroll-flow h-full min-h-0 min-w-0">
                 <div className="min-w-0">
                   {roots.map((root) => (
                     <RootSection
                       key={root}
                       root={root}
                       active={root === activeRoot}
+                      revealRequest={
+                        rootRevealRequest?.root === root
+                          ? rootRevealRequest
+                          : null
+                      }
+                      onRevealPath={revealRootPath}
                       onActivate={() => onSetActiveRoot(root)}
                       onRemove={() => removeRoot(root)}
                       onCopy={() => void copyToClipboard(root)}

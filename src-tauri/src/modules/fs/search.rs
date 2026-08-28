@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 
 use ignore::WalkBuilder;
-use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
-use nucleo_matcher::{Config, Matcher, Utf32Str};
 use serde::Serialize;
 
 use super::to_canon;
@@ -148,31 +146,41 @@ pub fn fs_search(
         }
     }
 
-    let hits = rank_fuzzy(cands, q, cap);
+    let hits = rank_direct(cands, q, cap);
     Ok(SearchResult { hits, truncated })
 }
 
-/// Fuzzy-rank candidates against the query (path-aware, smart-case), keeping
-/// the top `cap`. Ties break toward shorter relative paths.
-fn rank_fuzzy(cands: Vec<SearchHit>, query: &str, cap: usize) -> Vec<SearchHit> {
-    let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
-    let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
-    let mut buf = Vec::new();
+/// 按文件名或目录名做大小写不敏感的直接包含匹配，不读取或模糊匹配路径。
+fn rank_direct(cands: Vec<SearchHit>, query: &str, cap: usize) -> Vec<SearchHit> {
+    let needle = query.to_lowercase();
+    let mut matched: Vec<(u8, usize, usize, SearchHit)> = cands
+        .into_iter()
+        .filter_map(|candidate| {
+            let name = candidate.name.to_lowercase();
+            if !name.contains(&needle) {
+                return None;
+            }
+            let rank = if name == needle {
+                0
+            } else if name.starts_with(&needle) {
+                1
+            } else {
+                2
+            };
+            Some((rank, name.chars().count(), candidate.rel.len(), candidate))
+        })
+        .collect();
 
-    let mut scored = Vec::with_capacity(cands.len());
-    for (i, c) in cands.iter().enumerate() {
-        if let Some(s) = pattern.score(Utf32Str::new(&c.rel, &mut buf), &mut matcher) {
-            scored.push((s, i));
-        }
-    }
-    scored.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then_with(|| cands[a.1].rel.len().cmp(&cands[b.1].rel.len()))
+    matched.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+            .then_with(|| a.3.rel.cmp(&b.3.rel))
     });
-    scored
+    matched
         .into_iter()
         .take(cap)
-        .map(|(_, i)| cands[i].clone())
+        .map(|(_, _, _, candidate)| candidate)
         .collect()
 }
 
@@ -292,22 +300,24 @@ mod tests {
     }
 
     #[test]
-    fn rank_fuzzy_prefers_name_and_shorter_path() {
+    fn rank_direct_matches_names_only() {
         let cands = vec![
-            hit("src/deeply/nested/config.rs"),
+            hit("config/deeply/nested/readme.rs"),
             hit("config.rs"),
-            hit("src/main.rs"),
+            hit("config/config.toml"),
         ];
-        let out = rank_fuzzy(cands, "config", 10);
+        let out = rank_direct(cands, "config", 10);
         assert_eq!(out[0].rel, "config.rs");
-        assert!(!out.iter().any(|h| h.rel == "src/main.rs"));
+        assert_eq!(out[1].rel, "config/config.toml");
+        assert!(!out
+            .iter()
+            .any(|h| h.rel == "config/deeply/nested/readme.rs"));
     }
 
     #[test]
-    fn rank_fuzzy_matches_subsequence() {
+    fn rank_direct_does_not_match_subsequence() {
         let cands = vec![hit("CommandPalette.tsx"), hit("readme.md")];
-        let out = rank_fuzzy(cands, "cmdp", 10);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].rel, "CommandPalette.tsx");
+        let out = rank_direct(cands, "cmdp", 10);
+        assert!(out.is_empty());
     }
 }

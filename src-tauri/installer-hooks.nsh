@@ -3,13 +3,7 @@
 ; NoWorkingDirectory keeps Explorer from overriding %V (System32 on Drive).
 
 !macro NSIS_HOOK_POSTINSTALL
-  ; Remove the legacy verb from installations created before the Codev rebrand.
-  DeleteRegKey HKCU "Software\Classes\Directory\shell\OpenInTerax"
-  DeleteRegKey HKCU "Software\Classes\Directory\Background\shell\OpenInTerax"
-  DeleteRegKey HKCU "Software\Classes\Drive\shell\OpenInTerax"
-
-  ; Recreate the current verbs so Explorer drops a cached icon value from an
-  ; older build before reading the icon embedded in the new executable.
+  ; Recreate the current verbs so Explorer drops a cached icon value.
   DeleteRegKey HKCU "Software\Classes\Directory\shell\OpenInCodev"
   DeleteRegKey HKCU "Software\Classes\Directory\Background\shell\OpenInCodev"
   DeleteRegKey HKCU "Software\Classes\Drive\shell\OpenInCodev"
@@ -32,10 +26,6 @@
   ; Refresh file associations and Explorer's icon cache immediately.
   !insertmacro UPDATEFILEASSOC
 
-  ; Remove the obsolete binary before refreshing shortcuts so Windows cannot
-  ; keep resolving its historical icon.
-  Delete "$INSTDIR\terax.exe"
-
   ; Refresh only existing shortcuts so an opted-out shortcut is never created
   ; implicitly.
   IfFileExists "$DESKTOP\Codev.lnk" codev_refresh_desktop_icon codev_desktop_icon_done
@@ -56,8 +46,5 @@ codev_start_menu_icon_done:
   DeleteRegKey HKCU "Software\Classes\Directory\shell\OpenInCodev"
   DeleteRegKey HKCU "Software\Classes\Directory\Background\shell\OpenInCodev"
   DeleteRegKey HKCU "Software\Classes\Drive\shell\OpenInCodev"
-  DeleteRegKey HKCU "Software\Classes\Directory\shell\OpenInTerax"
-  DeleteRegKey HKCU "Software\Classes\Directory\Background\shell\OpenInTerax"
-  DeleteRegKey HKCU "Software\Classes\Drive\shell\OpenInTerax"
   !insertmacro UPDATEFILEASSOC
 !macroend

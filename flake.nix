@@ -9,16 +9,16 @@
     packages = forAllSystems (system: let
       pkgs = nixpkgs.legacyPackages.${system};
     in {
-      terax = pkgs.callPackage ./nix/package.nix { };
-      default = self.packages.${system}.terax;
+      codev = pkgs.callPackage ./nix/package.nix { };
+      default = self.packages.${system}.codev;
     });
 
-    nixosModules.terax = { pkgs, ... }: {
-      environment.systemPackages = [ self.packages.${pkgs.system}.terax ];
+    nixosModules.codev = { pkgs, ... }: {
+      environment.systemPackages = [ self.packages.${pkgs.system}.codev ];
     };
 
-    darwinModules.terax = { pkgs, ... }: {
-      environment.systemPackages = [ self.packages.${pkgs.system}.terax ];
+    darwinModules.codev = { pkgs, ... }: {
+      environment.systemPackages = [ self.packages.${pkgs.system}.codev ];
     };
   };
 }

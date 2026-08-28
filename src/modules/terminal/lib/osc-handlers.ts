@@ -1,5 +1,6 @@
 import { IS_WINDOWS } from "@/lib/platform";
 import type { IMarker, Terminal } from "@xterm/xterm";
+import { writeTerminalClipboard } from "./terminalClipboard";
 
 const MAX_OSC52_CLIPBOARD_BYTES = 1024 * 1024;
 
@@ -86,7 +87,7 @@ export type ClipboardWriter = (text: string) => void | Promise<void>;
 
 export function registerOsc52ClipboardHandler(
   term: Terminal,
-  writeClipboard: ClipboardWriter = writeSystemClipboard,
+  writeClipboard: ClipboardWriter = writeTerminalClipboard,
 ): () => void {
   const d = term.parser.registerOscHandler(52, (data) => {
     const text = parseOsc52Clipboard(data);
@@ -139,8 +140,4 @@ function parseOsc52Clipboard(data: string): string | null {
   } catch {
     return null;
   }
-}
-
-async function writeSystemClipboard(text: string): Promise<void> {
-  await navigator.clipboard.writeText(text);
 }

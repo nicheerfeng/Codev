@@ -465,7 +465,7 @@ export const LANGUAGES: LanguageDefinition[] = [
   },
   {
     name: "Codev Theme",
-    extensions: ["terax-theme"],
+    extensions: ["codev-theme"],
     loader: async () => {
       const [{ json }, { colorSwatches }] = await Promise.all([
         import("@codemirror/lang-json"),

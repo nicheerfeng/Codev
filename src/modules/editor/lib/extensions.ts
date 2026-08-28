@@ -2,7 +2,7 @@ import { detectMonoFontFamily } from "@/lib/fonts";
 import { indentUnit } from "@codemirror/language";
 import { search } from "@codemirror/search";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorView, type Panel } from "@codemirror/view";
 import { chromeTheme } from "./chromeTheme";
 
 // Compartments allow runtime reconfiguration without rebuilding state.
@@ -18,6 +18,14 @@ export function indentExtension(unit: string): Extension {
 }
 
 export const DEFAULT_INDENT: Extension = indentExtension("  ");
+
+/** 为顶部统一搜索保留词级装饰状态，不显示 CodeMirror 自带面板。 */
+function createHiddenSearchPanel(): Panel {
+  const dom = document.createElement("div");
+  dom.hidden = true;
+  dom.setAttribute("aria-hidden", "true");
+  return { dom, top: true };
+}
 
 const WORD_WRAP_COLUMN_VAR = "--codev-editor-wrap-column";
 const WORD_WRAP_COLUMN_THEME = EditorView.theme({
@@ -50,7 +58,7 @@ export function wordWrapExtension(column: number | null): Extension {
 // actual selected range receives the selection background.
 // Singleton: per-pane instances would inject duplicate style modules.
 const SHARED_EXTENSIONS: readonly Extension[] = Object.freeze([
-  search({ top: true }),
+  search({ top: true, createPanel: createHiddenSearchPanel }),
   chromeTheme(),
   EditorView.theme({
     "&, &.cm-editor, &.cm-editor.cm-focused": {
@@ -91,6 +99,16 @@ const SHARED_EXTENSIONS: readonly Extension[] = Object.freeze([
       borderTopLeftRadius: "5px",
       borderBottomLeftRadius: "5px",
       userSelect: "none",
+    },
+    "&[data-search-active] .cm-activeLine, &[data-search-active] .cm-activeLineGutter":
+      {
+        backgroundColor: "transparent !important",
+      },
+    ".cm-searchMatch": {
+      backgroundColor: "rgba(86, 116, 145, 0.32) !important",
+    },
+    ".cm-searchMatch-selected": {
+      backgroundColor: "rgba(86, 116, 145, 0.52) !important",
     },
     ".cm-cursor, .cm-dropCursor": {
       borderLeftColor: "var(--foreground)",

@@ -1,11 +1,53 @@
 pub mod modules;
 
 use modules::{fs, history, pty, workspace};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 #[cfg(target_os = "macos")]
 use tauri::{PhysicalPosition, WindowEvent};
+#[cfg(target_os = "windows")]
+use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+#[cfg(target_os = "windows")]
+use windows::core::Interface;
+
+const HTML_PREVIEW_BRIDGE: &str = include_str!("html_preview_bridge.js");
+
+/// 关闭 WebView2 浏览器级快捷键，让 HTML 预览的 Ctrl+F 交给 Codev 搜索。
+#[cfg(target_os = "windows")]
+fn disable_browser_accelerator_keys(
+    window: &tauri::WebviewWindow<tauri::Wry>,
+) -> Result<(), String> {
+    window
+        .with_webview(|webview| {
+            let result = (|| -> Result<(), String> {
+                let core_webview = unsafe {
+                    webview
+                        .controller()
+                        .CoreWebView2()
+                        .map_err(|error| error.to_string())?
+                };
+                let settings = unsafe {
+                    core_webview
+                        .Settings()
+                        .map_err(|error| error.to_string())?
+                };
+                let settings3 = settings
+                    .cast::<ICoreWebView2Settings3>()
+                    .map_err(|error| error.to_string())?;
+                unsafe {
+                    settings3
+                        .SetAreBrowserAcceleratorKeysEnabled(false)
+                        .map_err(|error| error.to_string())?
+                };
+                Ok(())
+            })();
+            if let Err(error) = result {
+                log::warn!("[Codev] browser accelerator keys unchanged: {error}");
+            }
+        })
+        .map_err(|error| error.to_string())
+}
 
 /// Drained on first read so HMR / re-mounts can't replay the launch dir.
 #[derive(Default)]
@@ -200,70 +242,17 @@ async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 将旧 Terax 运行时目录中的用户状态迁移到 Codev 命名空间。
-fn migrate_legacy_directory(legacy: &Path, current: &Path) -> Result<(), String> {
-    if legacy == current || !legacy.exists() {
-        return Ok(());
-    }
-
-    std::fs::create_dir_all(current).map_err(|e| e.to_string())?;
-    for entry in std::fs::read_dir(legacy).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let source = entry.path();
-        let name = entry.file_name();
-        let target_name = match name.to_str() {
-            Some("terax-settings.json") => "codev-settings.json",
-            Some("terax-spaces.json") => "codev-spaces.json",
-            Some("terax-custom-themes.json") => "codev-custom-themes.json",
-            _ => name.to_str().unwrap_or_default(),
-        };
-        if target_name.is_empty() {
-            continue;
-        }
-        let target = current.join(target_name);
-        if target.exists() {
-            continue;
-        }
-        if let Err(error) = std::fs::rename(&source, &target) {
-            log::warn!("[Codev] legacy item migration skipped: {error}");
-        }
-    }
-
-    if std::fs::read_dir(legacy)
-        .map_err(|e| e.to_string())?
-        .next()
-        .is_none()
-    {
-        let _ = std::fs::remove_dir(legacy);
-    }
-    Ok(())
-}
-
-/// 将安装升级前的本地缓存和配置目录迁移到新的 Codev 标识符。
-fn migrate_legacy_runtime_data(app: &tauri::AppHandle) -> Result<(), String> {
-    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
-    let local_dir = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| e.to_string())?;
-    let legacy_config = dirs::config_dir()
-        .ok_or_else(|| "legacy config directory unavailable".to_string())?
-        .join("app.crynta.terax");
-    let legacy_local = dirs::data_local_dir()
-        .ok_or_else(|| "legacy local data directory unavailable".to_string())?
-        .join("app.crynta.terax");
-
-    migrate_legacy_directory(&legacy_config, &config_dir)?;
-    migrate_legacy_directory(&legacy_local, &local_dir)
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let launch = parse_launch_target();
     let cli_dir = launch.dir.clone();
     workspace::init_launch_cwd(cli_dir.as_deref());
 
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().plugin(
+        tauri::plugin::Builder::<tauri::Wry, ()>::new("html-preview")
+            .js_init_script_on_all_frames(HTML_PREVIEW_BRIDGE)
+            .build(),
+    );
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
         let target = parse_launch_target_args(argv.into_iter().skip(1));
@@ -282,8 +271,9 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .setup(move |_app| {
-            if let Err(error) = migrate_legacy_runtime_data(_app.handle()) {
-                log::warn!("[Codev] legacy data migration skipped: {error}");
+            #[cfg(target_os = "windows")]
+            if let Some(main) = _app.get_webview_window("main") {
+                let _ = disable_browser_accelerator_keys(&main);
             }
             // macOS skips parent() for the settings window, so tie its lifecycle
             // to the main window here instead. Other platforms keep parent().

@@ -165,7 +165,7 @@ export function TerminalPanel({
       </div>
 
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-        <ResizablePanel id="terminal-content" minSize="40%">
+        <ResizablePanel id="terminal-content" minSize="0px">
           <div className="h-full min-h-0 min-w-0 pl-2">
             <TerminalStack
               tabs={tabs}
@@ -184,7 +184,6 @@ export function TerminalPanel({
           id="terminal-navigation"
           defaultSize="160px"
           minSize="32px"
-          maxSize="40%"
           onResize={(size) => setNavCollapsed(size.inPixels <= 36)}
         >
           <aside
@@ -306,7 +305,7 @@ export function TerminalPanel({
                         className={cn(
                           "group flex min-w-0 items-center rounded-sm px-1.5 py-1 text-left outline-none transition-colors focus-visible:ring-1 focus-visible:ring-primary/60",
                           isActive
-                            ? "bg-accent text-accent-foreground"
+                            ? "bg-[#7894b0]/20 text-[#5f7f9d] dark:text-[#9ab8d0]"
                             : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                         )}
                       >
@@ -341,8 +340,10 @@ export function TerminalPanel({
                               className={cn(
                                 "flex size-3.5 shrink-0 items-center justify-center transition-colors",
                                 active
-                                  ? "animate-pulse text-primary"
-                                  : "text-muted-foreground",
+                                  ? "animate-pulse text-[#6f95b8] dark:text-[#9ab8d0]"
+                                  : isActive
+                                    ? "text-[#5f7f9d] dark:text-[#9ab8d0]"
+                                    : "text-muted-foreground",
                               )}
                             >
                               <TabIcon tab={tab} />

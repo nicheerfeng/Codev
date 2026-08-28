@@ -417,7 +417,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
       const trimmed = newName.trim();
       const parent = dirname(renaming);
       const oldName = renaming.slice(parent === "/" ? 1 : parent.length + 1);
-      if (!trimmed || trimmed === oldName) {
+      if (!trimmed || trimmed === oldName || /[\\/]/.test(trimmed)) {
         setRenaming(null);
         return;
       }

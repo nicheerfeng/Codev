@@ -50,7 +50,6 @@ grep-regex = "0.1"
 grep-searcher = "0.1"
 grep-matcher = "0.1"
 globset = "0.4"
-nucleo-matcher = "0.3"
 tauri-plugin-log = "2"
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"
@@ -70,6 +69,8 @@ objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSUserDefaults"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = "0.38"
+windows = { version = "0.61", features = ["Win32_Foundation"] }
 windows-sys = { version = "0.61", features = [
 	"Win32_Foundation",
 	"Win32_Security",

@@ -197,6 +197,17 @@ html[data-chrome="borderless"] #settings-root {
   background: var(--background);
 }
 
+/* Keep the multi-root explorer inside the sidebar width. Radix ScrollArea
+ * uses an intrinsic table content layer; long expanded entries must not push
+ * root-header actions outside the visible viewport. */
+.explorer-scroll-flow
+  > [data-slot="scroll-area-viewport"]
+  > div {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
 /*
  * xterm.js overrides — kept outside @layer so they win against the addon's
  * own stylesheet (which is not in any layer and would otherwise override).
@@ -288,6 +299,7 @@ textarea,
   overflow: hidden;
   cursor: pointer;
 }
+
 .cm-color-swatch-input {
   position: absolute;
   inset: 0;

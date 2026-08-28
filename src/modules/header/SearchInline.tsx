@@ -36,7 +36,12 @@ const TERM_DECORATIONS = {
 
 export type SearchTarget =
   | { kind: "terminal"; addon: SearchAddon; focus: () => void }
-  | { kind: "editor"; handle: EditorPaneHandle; focus: () => void }
+  | {
+      kind: "editor";
+      handle: EditorPaneHandle;
+      focus: () => void;
+      canReplace?: boolean;
+    }
   | null;
 
 export type SearchInlineHandle = { focus: () => void };
@@ -136,9 +141,12 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
       return unsubscribe;
     }, [q, searchOptions, target]);
 
+    const targetCanReplace =
+      target?.kind === "editor" && target.canReplace !== false;
+
     useEffect(() => {
-      if (target?.kind !== "editor") setReplaceOpen(false);
-    }, [target]);
+      if (!targetCanReplace) setReplaceOpen(false);
+    }, [targetCanReplace]);
 
     const applyIncremental = (next: string) => {
       if (!target) {
@@ -174,7 +182,8 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
     };
 
     const runReplace = async (all: boolean) => {
-      if (!target || target.kind !== "editor" || !q) return;
+      if (!target || target.kind !== "editor" || !targetCanReplace || !q)
+        return;
       const count = all
         ? await target.handle.replaceAll(replacement)
         : await target.handle.replaceCurrent(replacement);
@@ -193,7 +202,7 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
             : null;
     const canNavigate = Boolean(q && status && status.count > 0);
     const canReplace = Boolean(
-      q && status && status.count > 0 && target?.kind === "editor",
+      q && status && status.count > 0 && targetCanReplace,
     );
 
     return (
@@ -298,17 +307,18 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
                 </button>
               )}
             </div>
-            <button
-              type="button"
-              disabled={!target || target.kind !== "editor"}
-              onClick={() => setReplaceOpen((open) => !open)}
-              className="size-7 shrink-0 rounded-md bg-muted/80 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
-              aria-label={t("Replace")}
-              title={t("Replace")}
-            >
-              ⇄
-            </button>
-            {replaceOpen && (
+            {targetCanReplace && (
+              <button
+                type="button"
+                onClick={() => setReplaceOpen((open) => !open)}
+                className="size-7 shrink-0 rounded-md bg-muted/80 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                aria-label={t("Replace")}
+                title={t("Replace")}
+              >
+                ⇄
+              </button>
+            )}
+            {targetCanReplace && replaceOpen && (
               <div className="flex h-7 min-w-0 flex-1 items-center gap-1">
                 <Input
                   value={replacement}

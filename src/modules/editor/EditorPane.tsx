@@ -5,6 +5,7 @@ import {
   findNext,
   findPrevious,
   gotoLine,
+  openSearchPanel,
   SearchQuery,
   setSearchQuery,
 } from "@codemirror/search";
@@ -287,6 +288,8 @@ export const EditorPane = memo(
       const query = searchQueryRef.current;
       const view = cmRef.current?.view;
       if (!query || !view) return;
+      view.dom.toggleAttribute("data-search-active", true);
+      openSearchPanel(view);
       view.dispatch({
         effects: setSearchQuery.of(
           new SearchQuery({
@@ -308,6 +311,8 @@ export const EditorPane = memo(
           searchOptionsRef.current = options;
           const view = cmRef.current?.view;
           if (view) {
+            view.dom.toggleAttribute("data-search-active", Boolean(query));
+            if (query) openSearchPanel(view);
             view.dispatch({
               effects: setSearchQuery.of(
                 new SearchQuery({
@@ -334,10 +339,12 @@ export const EditorPane = memo(
         clearQuery: () => {
           searchQueryRef.current = "";
           const view = cmRef.current?.view;
-          if (view)
+          if (view) {
+            view.dom.removeAttribute("data-search-active");
             view.dispatch({
               effects: setSearchQuery.of(new SearchQuery({ search: "" })),
             });
+          }
           emitSearchStatus();
         },
         getSearchStatus,

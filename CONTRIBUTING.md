@@ -13,7 +13,7 @@ pnpm tauri dev
 
 ## Before opening a change
 
-先阅读 [ROADMAP.md](ROADMAP.md)、[TERAX.md](TERAX.md) 和 [docs/README.md](docs/README.md)。大型改动、架构调整和新依赖应先在 issue 中确认范围；小型 bug 修复、测试和文档修正可直接提交。
+先阅读 [ROADMAP.md](ROADMAP.md)、[CODEV.md](CODEV.md) 和 [docs/README.md](docs/README.md)。大型改动、架构调整和新依赖应先在 issue 中确认范围；小型 bug 修复、测试和文档修正可直接提交。
 
 每个改动只解决一个问题。不要顺手重构相邻模块、恢复已删除功能或添加备用配置。
 

@@ -28,7 +28,6 @@ import {
 import { createTerminalLinkHandler } from "./terminalLinks";
 import { pasteIntoTerminal } from "./terminalPaste";
 
-const POOL_MAX_SIZE = 5;
 const FIT_DEBOUNCE_MS = 8;
 const PTY_RESIZE_DEBOUNCE_MS = 256;
 const SNAPSHOT_SCROLLBACK_CAP = 5_000;
@@ -133,7 +132,7 @@ export function pasteIntoLeaf(leafId: number, text: string): boolean {
 function getRecycler(): HTMLDivElement {
   if (recyclerEl?.isConnected) return recyclerEl;
   const el = document.createElement("div");
-  el.setAttribute("data-terax-recycler", "");
+  el.setAttribute("data-codev-recycler", "");
   el.style.cssText =
     "position:fixed;left:-99999px;top:-99999px;width:1024px;height:768px;overflow:hidden;pointer-events:none;contain:strict;";
   document.body.appendChild(el);
@@ -202,7 +201,7 @@ function createSlot(): Slot {
 
   const host = document.createElement("div");
   host.style.cssText = "width:100%;height:100%;";
-  host.setAttribute("data-terax-slot", String(slots.length));
+  host.setAttribute("data-codev-slot", String(slots.length));
   getRecycler().appendChild(host);
   term.open(host);
 
@@ -364,20 +363,6 @@ function isAltScreen(s: Slot): boolean {
   }
 }
 
-function evictionScore(s: Slot): number {
-  const leafId = s.currentLeafId;
-  const visible = leafId !== null && (adapter?.isLeafVisible(leafId) ?? false);
-  const busy = leafId !== null && (adapter?.isLeafBusy(leafId) ?? false);
-  const focused = leafId !== null && (adapter?.isLeafFocused(leafId) ?? false);
-  return (
-    (visible ? 1000 : 0) +
-    (isAltScreen(s) ? 100 : 0) +
-    (busy ? 80 : 0) +
-    (focused ? 10 : 0) +
-    s.lastUsedAt / 1e12
-  );
-}
-
 function pickSlotFor(leafId: number): PickResult {
   const retainedOwn = slots.find(
     (s) => s.currentLeafId === null && s.retainedLeafId === leafId,
@@ -388,9 +373,6 @@ function pickSlotFor(leafId: number): PickResult {
     (s) => s.currentLeafId === null && s.retainedLeafId === null,
   );
   if (clean) return { slot: clean, previousLeafId: null };
-  if (slots.length < POOL_MAX_SIZE)
-    return { slot: createSlot(), previousLeafId: null };
-
   // Retained buffers are cheaper to lose than bound ones: serialize, no evict.
   let retained: Slot | null = null;
   for (const s of slots) {
@@ -399,18 +381,8 @@ function pickSlotFor(leafId: number): PickResult {
   }
   if (retained) return { slot: retained, previousLeafId: null };
 
-  let best: Slot | null = null;
-  let bestScore = Number.POSITIVE_INFINITY;
-  for (const s of slots) {
-    if (s.currentLeafId === leafId) return { slot: s, previousLeafId: null };
-    const score = evictionScore(s);
-    if (score < bestScore) {
-      bestScore = score;
-      best = s;
-    }
-  }
-  const chosen = best!;
-  return { slot: chosen, previousLeafId: chosen.currentLeafId };
+  // 可见终端必须保留独立渲染槽；只有隐藏空闲终端才会回收槽位。
+  return { slot: createSlot(), previousLeafId: null };
 }
 
 export type AcquireParams = {

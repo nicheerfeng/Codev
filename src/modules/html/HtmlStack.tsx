@@ -11,6 +11,7 @@ type Props = {
     owner: "editor" | "markdown" | "html",
   ) => void;
   onSetHtmlView: (id: number, mode: "rendered" | "raw") => void;
+  onFocusSearch: () => void;
 };
 
 /** 仅挂载当前活动的 HTML 渲染页，避免后台脚本继续运行。 */
@@ -19,6 +20,7 @@ export function HtmlStack({
   activeId,
   registerHandle,
   onSetHtmlView,
+  onFocusSearch,
 }: Props) {
   const activeHtml = tabs.find(
     (tab): tab is HtmlTab =>
@@ -35,6 +37,7 @@ export function HtmlStack({
         ref={(handle) => registerHandle(activeHtml.id, handle, "html")}
         path={activeHtml.path}
         onSetView={(mode) => onSetHtmlView(activeHtml.id, mode)}
+        onFocusSearch={onFocusSearch}
       />
     </div>
   );

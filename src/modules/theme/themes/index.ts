@@ -1,9 +1,9 @@
 import { DEFAULT_THEME_ID, type Theme } from "../types";
 import { catppuccin } from "./catppuccin";
 import { codiumDark } from "./codium-dark";
-import { teraxDefault } from "./terax-default";
+import { codevDefault } from "./codev-default";
 
-const BUILTIN: Theme[] = [teraxDefault, codiumDark, catppuccin];
+const BUILTIN: Theme[] = [codevDefault, codiumDark, catppuccin];
 
 const BY_ID = new Map<string, Theme>(BUILTIN.map((t) => [t.id, t]));
 

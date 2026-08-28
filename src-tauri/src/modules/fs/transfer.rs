@@ -301,7 +301,7 @@ fn execute(
         return snapshots(items, mode);
     }
 
-    let temp = destination.join(format!(".terax-transfer-{id}"));
+    let temp = destination.join(format!(".codev-transfer-{id}"));
     fs::create_dir(&temp).map_err(|error| io_error(&temp, error))?;
     let _guard = TempDir(temp.clone());
     emit(&mut progress, "copying", None, true);

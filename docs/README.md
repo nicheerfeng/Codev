@@ -4,7 +4,7 @@
 
 ## Getting started
 
-- [项目架构](../TERAX.md) - 当前模块边界与开发约定
+- [项目架构](../CODEV.md) - 当前模块边界与开发约定
 - [贡献指南](../CONTRIBUTING.md) - 质量要求、目录结构和检查命令
 - [测试指南](contributing/testing.md) - 前端与 Rust 回归测试
 

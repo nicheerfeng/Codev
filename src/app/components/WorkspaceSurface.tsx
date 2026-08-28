@@ -27,6 +27,7 @@ type Props = {
   onEditorDirtyChange: (id: number, dirty: boolean) => void;
   onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
   onSetHtmlView: (id: number, mode: "rendered" | "raw") => void;
+  onFocusSearch: () => void;
   onFocusEditor: (id: number) => void;
 };
 
@@ -52,6 +53,7 @@ export function WorkspaceSurface({
   onEditorDirtyChange,
   onSetMarkdownView,
   onSetHtmlView,
+  onFocusSearch,
   onFocusEditor,
 }: Props) {
   return (
@@ -77,6 +79,7 @@ export function WorkspaceSurface({
         onDirtyChange={onEditorDirtyChange}
         onSetMarkdownView={onSetMarkdownView}
         onSetHtmlView={onSetHtmlView}
+        onFocusSearch={onFocusSearch}
         onFocusEditor={onFocusEditor}
       />
     </div>

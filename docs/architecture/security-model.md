@@ -32,7 +32,7 @@ Codev 的安全重点是文件、Shell、PTY 和前端 IPC 边界。项目没有
 
 ## See also
 
-- [`TERAX.md`](../../TERAX.md)
+- [`CODEV.md`](../../CODEV.md)
 - [`docs/README.md`](../README.md)
 - [Two-process model](two-process-model.md)
 - [PTY shell integration](pty-shell-integration.md)

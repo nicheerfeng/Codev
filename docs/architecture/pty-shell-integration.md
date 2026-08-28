@@ -1,6 +1,6 @@
 # PTY shell integration
 
-This guide elaborates on `TERAX.md`. If anything here conflicts with `TERAX.md`, `TERAX.md` wins.
+This guide elaborates on `CODEV.md`. If anything here conflicts with `CODEV.md`, `CODEV.md` wins.
 
 ## Session model
 
@@ -37,7 +37,7 @@ Integration scripts live in `src-tauri/src/modules/pty/scripts/`:
 
 - `zshenv.zsh`, `zprofile.zsh`, `zlogin.zsh`, `zshrc.zsh` for zsh
 - `bashrc.bash` for bash
-- `init.fish` for fish, installed to `~/.config/fish/conf.d/terax.fish`
+- `init.fish` for fish, installed to `~/.config/fish/conf.d/codev.fish`
 
 Zsh is launched with `ZDOTDIR` pointing at a temp directory that sources our scripts and then the user's real configs. Bash uses `--rcfile` with a wrapper that sources the user's `~/.bashrc` after Codev's. Fish uses `conf.d` so no user file is replaced.
 
@@ -94,7 +94,7 @@ Terminal input sends `\r` (CR), not `\n` (LF). PowerShell on Windows requires CR
 
 ## See also
 
-- [`TERAX.md`](../../TERAX.md) - the architecture source of truth
+- [`CODEV.md`](../../CODEV.md) - the architecture source of truth
 - [`docs/README.md`](../README.md) - index of contributor guides
 - [Two-process model](two-process-model.md) - IPC boundary and command catalog
 - [Terminal renderer pool](terminal-renderer-pool.md) - slot pooling and the DormantRing

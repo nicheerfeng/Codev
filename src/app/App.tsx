@@ -428,7 +428,7 @@ export default function App() {
   const isSearchableDocumentTab =
     activeTab?.kind === "editor" ||
     activeTab?.kind === "markdown" ||
-    (activeTab?.kind === "html" && activeTab.viewMode === "raw");
+    activeTab?.kind === "html";
 
   useEditorFileSync({ tabs, tabsRef, editorRefs });
   useThemeFileEditing({ tabsRef, openFileTab });
@@ -969,6 +969,7 @@ export default function App() {
         kind: "editor",
         handle: activeEditorHandle,
         focus: () => activeEditorHandle.focus(),
+        canReplace: activeTab?.kind === "html" ? activeTab.viewMode === "raw" : true,
       };
     return null;
   }, [
@@ -977,6 +978,7 @@ export default function App() {
     activeLeafId,
     activeSearchAddon,
     activeEditorHandle,
+    activeTab,
   ]);
 
   const commandPaletteItems = useMemo(
@@ -1132,6 +1134,7 @@ export default function App() {
                     onEditorDirtyChange={handleEditorDirty}
                     onSetMarkdownView={setMarkdownView}
                     onSetHtmlView={setHtmlView}
+                    onFocusSearch={() => searchInlineRef.current?.focus()}
                     onFocusEditor={focusEditor}
                   />
                 </div>

@@ -42,7 +42,7 @@ jobs:
           VERSION: ${{ steps.tag.outputs.version }}
         run: |
           gh release download "$TAG" \
-            --repo crynta/terax-ai \
+            --repo "$GITHUB_REPOSITORY" \
             --pattern "Codev_${VERSION}_amd64.deb" \
             --pattern "Codev_x64.app.tar.gz" \
             --pattern "Codev_aarch64.app.tar.gz"

@@ -1,5 +1,5 @@
-import { useCallback } from "react";
 import { usePreferencesStore } from "@/modules/settings/preferences";
+import { useCallback } from "react";
 import type { Locale } from "./types";
 
 const ZH: Record<string, string> = {
@@ -173,6 +173,16 @@ const ZH: Record<string, string> = {
   "Confirm before killing a running process": "关闭运行中的进程前确认",
   "Ask before closing a terminal tab or quitting while a command is still running. Unsaved editor changes are always confirmed.":
     "命令运行时关闭终端标签或退出前询问。未保存的编辑器修改始终会确认。",
+  "Quit Codev?": "退出 Codev？",
+  "A process is still running in a terminal. Quitting will terminate it.":
+    "终端中仍有进程在运行。退出将终止该进程。",
+  "Don't ask again about running processes": "不再询问运行中的进程",
+  "Quit Anyway": "仍然退出",
+  "1 file has unsaved changes": "有 1 个文件尚未保存",
+  "{count} files have unsaved changes": "有 {count} 个文件尚未保存",
+  "A process is still running and {dirty}. Quitting will terminate it and discard the changes.":
+    "终端中仍有进程在运行，{dirty}。退出将终止该进程并丢弃未保存的修改。",
+  "{dirty}. Quitting will discard them.": "{dirty}。退出将丢弃这些修改。",
   "Font family": "字体族",
   'Nerd Font name for icons (e.g. "CaskaydiaCove Nerd Font Mono"). Leave blank to auto-detect.':
     "图标使用的 Nerd Font 名称（例如 “CaskaydiaCove Nerd Font Mono”），留空则自动检测。",
@@ -216,7 +226,7 @@ const ZH: Record<string, string> = {
   "Codium Dark": "Codium 深色",
   Catppuccin: "Catppuccin",
   Create: "创建",
-  "Import .terax-theme": "导入 .terax-theme",
+  "Import .codev-theme": "导入 .codev-theme",
   "Editor theme": "编辑器主题",
   "Syntax colors for the code editor. Auto follows the app theme.":
     "代码编辑器的语法颜色。自动模式跟随应用主题。",
