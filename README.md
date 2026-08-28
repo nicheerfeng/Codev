@@ -101,6 +101,6 @@ pnpm tauri build --config src-tauri/tauri.portable.conf.json --no-bundle
 
 ## 致谢与来源
 
-Codev 的起点来自一个开源桌面工作台项目。感谢最初的开发者和贡献者为 Tauri 桌面架构、跨平台终端、Shell 集成与本地工作流奠定的基础。Codev 在此基础上持续做减法与重组，形成面向多项目文件处理和高专注阅读的独立产品方向。
+Codev 基于 [Terax AI](https://github.com/crynta/terax-ai) 的开源基础发展而来。感谢 Terax AI 的开发者和贡献者为 Tauri 桌面架构、跨平台终端、Shell 集成与本地工作流奠定的基础。Codev 在此基础上持续做减法与重组，形成面向多项目文件处理和高专注阅读的独立产品方向。
 
 项目遵循 Apache-2.0 License。原始版权与许可证声明持续保留在 [LICENSE](LICENSE) 中。
