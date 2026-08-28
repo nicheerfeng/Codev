@@ -1,0 +1,9 @@
+# Local build tuning: keep disk and memory pressure low while other work runs.
+# Two rustc jobs avoid saturating the D: drive with concurrent object writes.
+[build]
+jobs = 2
+
+# Dev builds skip debug info: much lower memory + faster compile.
+# Release profile is untouched (stays fully optimized).
+[profile.dev]
+debug = false

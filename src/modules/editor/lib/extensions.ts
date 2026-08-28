@@ -1,0 +1,131 @@
+import { detectMonoFontFamily } from "@/lib/fonts";
+import { indentUnit } from "@codemirror/language";
+import { search } from "@codemirror/search";
+import { Compartment, EditorState, type Extension } from "@codemirror/state";
+import { EditorView, type Panel } from "@codemirror/view";
+import { chromeTheme } from "./chromeTheme";
+
+// Compartments allow runtime reconfiguration without rebuilding state.
+export const languageCompartment = new Compartment();
+export const wrapCompartment = new Compartment();
+export const indentCompartment = new Compartment();
+
+export function indentExtension(unit: string): Extension {
+  return [
+    indentUnit.of(unit),
+    EditorState.tabSize.of(unit === "\t" ? 4 : unit.length),
+  ];
+}
+
+export const DEFAULT_INDENT: Extension = indentExtension("  ");
+
+/** 为顶部统一搜索保留词级装饰状态，不显示 CodeMirror 自带面板。 */
+function createHiddenSearchPanel(): Panel {
+  const dom = document.createElement("div");
+  dom.hidden = true;
+  dom.setAttribute("aria-hidden", "true");
+  return { dom, top: true };
+}
+
+const WORD_WRAP_COLUMN_VAR = "--codev-editor-wrap-column";
+const WORD_WRAP_COLUMN_THEME = EditorView.theme({
+  ".cm-content.cm-lineWrapping": {
+    maxWidth: `var(${WORD_WRAP_COLUMN_VAR})`,
+    marginLeft: "6px",
+    marginRight: "2px",
+  },
+  ".cm-content.cm-lineWrapping .cm-line": {
+    paddingLeft: "0",
+    paddingRight: "0",
+  },
+});
+
+export function wordWrapExtension(column: number | null): Extension {
+  if (column === null) return [];
+  return [
+    EditorView.lineWrapping,
+    WORD_WRAP_COLUMN_THEME,
+    EditorView.contentAttributes.of({
+      style: `${WORD_WRAP_COLUMN_VAR}: ${column}ch`,
+    }),
+  ];
+}
+
+// Only what basicSetup doesn't already cover, to avoid duplicate extensions.
+// basicSetup gives us line numbers, fold gutter, history, indentOnInput,
+// bracketMatching, closeBrackets, highlightActiveLine and the search keymap.
+// EditorPane deliberately disables same-word selection matches so only the
+// actual selected range receives the selection background.
+// Singleton: per-pane instances would inject duplicate style modules.
+const SHARED_EXTENSIONS: readonly Extension[] = Object.freeze([
+  search({ top: true, createPanel: createHiddenSearchPanel }),
+  chromeTheme(),
+  EditorView.theme({
+    "&, &.cm-editor, &.cm-editor.cm-focused": {
+      backgroundColor: "transparent !important",
+      color: "var(--foreground)",
+      outline: "none",
+      padding: "8px",
+    },
+    ".cm-scroller": {
+      fontFamily: detectMonoFontFamily(),
+      fontSize: "calc(var(--editor-font-size, 13px) * var(--app-zoom, 1))",
+      lineHeight: "1.55",
+      backgroundColor: "transparent !important",
+    },
+    ".cm-content": {
+      caretColor: "var(--foreground)",
+      backgroundColor: "transparent !important",
+    },
+    ".cm-gutters": {
+      backgroundColor: "transparent !important",
+      color: "var(--muted-foreground)",
+    },
+    ".cm-gutter": { backgroundColor: "transparent !important" },
+    ".cm-lineNumbers .cm-gutterElement": {
+      opacity: "0.55",
+    },
+    ".cm-foldGutter": { width: "10px" },
+    ".cm-foldGutter .cm-gutterElement": {
+      color: "var(--muted-foreground)",
+      opacity: "0.5",
+    },
+    ".cm-activeLine": {
+      borderTopRightRadius: "5px",
+      borderBottomRightRadius: "5px",
+      backgroundColor: "color-mix(in srgb, var(--foreground) 4%, transparent)",
+    },
+    ".cm-lineNumbers .cm-activeLineGutter": {
+      borderTopLeftRadius: "5px",
+      borderBottomLeftRadius: "5px",
+      userSelect: "none",
+    },
+    "&[data-search-active] .cm-activeLine, &[data-search-active] .cm-activeLineGutter":
+      {
+        backgroundColor: "transparent !important",
+      },
+    ".cm-searchMatch": {
+      backgroundColor: "rgba(86, 116, 145, 0.32) !important",
+    },
+    ".cm-searchMatch-selected": {
+      backgroundColor: "rgba(86, 116, 145, 0.52) !important",
+    },
+    ".cm-cursor, .cm-dropCursor": {
+      borderLeftColor: "var(--foreground)",
+    },
+    ".cm-selectionMatch": {
+      backgroundColor:
+        "color-mix(in srgb, var(--primary) 24%, transparent) !important",
+      outline: "1px solid color-mix(in srgb, var(--primary) 42%, transparent)",
+    },
+    ".cm-panels": {
+      backgroundColor: "var(--popover)",
+      color: "var(--popover-foreground)",
+      borderColor: "var(--border)",
+    },
+  }),
+]);
+
+export function buildSharedExtensions(): readonly Extension[] {
+  return SHARED_EXTENSIONS;
+}

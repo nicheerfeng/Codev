@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "app.teague.codev.portable",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Codev",
+        "width": 800,
+        "height": 600,
+        "minWidth": 420,
+        "minHeight": 280,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "decorations": false,
+        "transparent": false,
+        "visible": true,
+        "shadow": false,
+        "dragDropEnabled": true
+      }
+    ]
+  }
+}
