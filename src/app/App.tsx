@@ -957,6 +957,9 @@ export default function App() {
     [updateTab],
   );
 
+  const activeDocumentCanReplace =
+    activeTab?.kind !== "html" || activeTab.viewMode === "raw";
+
   const searchTarget = useMemo<SearchTarget>(() => {
     if (isTerminalTab && activeLeafId !== null && activeSearchAddon)
       return {
@@ -969,7 +972,7 @@ export default function App() {
         kind: "editor",
         handle: activeEditorHandle,
         focus: () => activeEditorHandle.focus(),
-        canReplace: activeTab?.kind === "html" ? activeTab.viewMode === "raw" : true,
+        canReplace: activeDocumentCanReplace,
       };
     return null;
   }, [
@@ -978,7 +981,7 @@ export default function App() {
     activeLeafId,
     activeSearchAddon,
     activeEditorHandle,
-    activeTab,
+    activeDocumentCanReplace,
   ]);
 
   const commandPaletteItems = useMemo(

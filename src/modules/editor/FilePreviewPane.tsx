@@ -15,6 +15,8 @@ import type {
   TextSearchOptions,
   TextSearchStatus,
 } from "./lib/textSearch";
+import { findLiteralMatches } from "./lib/textSearch";
+import type { ReactNode } from "react";
 
 type Props = {
   path: string;
@@ -42,6 +44,12 @@ type TextSearchResult = {
   matches: TextMatch[];
   total: number;
   truncated: boolean;
+};
+
+type WindowSearchMatch = {
+  from: number;
+  to: number;
+  globalOffset: number;
 };
 
 type LoadState =
@@ -97,6 +105,57 @@ function formatBytes(size: number): string {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** 计算 UTF-8 文本前缀的字节长度，用于对齐 Rust 返回的文件偏移。 */
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+/** 收集当前纯文本窗口内的全部搜索命中并映射到文件偏移。 */
+function collectWindowSearchMatches(
+  content: string,
+  windowOffset: number,
+  query: string,
+  options: TextSearchOptions,
+): WindowSearchMatch[] {
+  return findLiteralMatches(content, query, options).map((from) => ({
+    from,
+    to: from + query.length,
+    globalOffset: windowOffset + utf8ByteLength(content.slice(0, from)),
+  }));
+}
+
+/** 渲染纯文本窗口中的全部命中，保持正文可复制且不创建浏览器选区。 */
+function renderWindowSearchText(
+  content: string,
+  matches: WindowSearchMatch[],
+  activeOffset: number | undefined,
+) {
+  if (matches.length === 0) return content;
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index];
+    if (match.from > cursor) {
+      parts.push(content.slice(cursor, match.from));
+    }
+    parts.push(
+      <span
+        className={
+          match.globalOffset === activeOffset
+            ? "codev-search-active"
+            : "codev-search-match"
+        }
+        key={`${match.from}:${index}`}
+      >
+        {content.slice(match.from, match.to)}
+      </span>,
+    );
+    cursor = match.to;
+  }
+  if (cursor < content.length) parts.push(content.slice(cursor));
+  return parts;
 }
 
 // 返回图片字节流对应的 MIME 类型，供 Blob URL 直接交给 WebView 解码。
@@ -176,6 +235,8 @@ const TextWindowPreview = forwardRef<
   const searchListenersRef = useRef<Set<(status: TextSearchStatus) => void>>(
     new Set(),
   );
+  const [searchRevision, setSearchRevision] = useState(0);
+  const textScrollRef = useRef<HTMLPreElement>(null);
 
   /** 计算大文本预览的当前搜索状态。 */
   const getSearchStatus = useCallback(
@@ -191,6 +252,7 @@ const TextWindowPreview = forwardRef<
   /** 通知 Header 大文本检索状态已经更新。 */
   const emitSearchStatus = useCallback(() => {
     const status = getSearchStatus();
+    setSearchRevision((value) => value + 1);
     for (const listener of searchListenersRef.current) listener(status);
   }, [getSearchStatus]);
 
@@ -361,6 +423,16 @@ const TextWindowPreview = forwardRef<
     setOffset(state.value.nextOffset);
   }, [offset, state]);
 
+  useEffect(() => {
+    if (state.kind !== "ready" || !queryRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      textScrollRef.current
+        ?.querySelector<HTMLElement>(".codev-search-active")
+        ?.scrollIntoView({ block: "center", inline: "nearest" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [searchRevision, state]);
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       {state.kind === "loading" && (
@@ -383,8 +455,20 @@ const TextWindowPreview = forwardRef<
             onBack={goBack}
             onForward={goForward}
           />
-          <pre className="reader-scrollbar min-h-0 flex-1 select-text overflow-auto p-3 font-mono text-[12px] leading-5 whitespace-pre text-foreground">
-            {state.value.content}
+          <pre
+            ref={textScrollRef}
+            className="reader-scrollbar min-h-0 flex-1 select-text overflow-auto p-3 font-mono text-[12px] leading-5 whitespace-pre text-foreground"
+          >
+            {renderWindowSearchText(
+              state.value.content,
+              collectWindowSearchMatches(
+                state.value.content,
+                state.value.offset,
+                queryRef.current,
+                optionsRef.current,
+              ),
+              matchesRef.current[currentMatchRef.current]?.offset,
+            )}
           </pre>
         </>
       )}
