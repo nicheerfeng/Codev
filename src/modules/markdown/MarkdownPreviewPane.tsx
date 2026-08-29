@@ -13,6 +13,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useId,
   useRef,
   useState,
 } from "react";
@@ -39,6 +40,7 @@ type Props = {
 };
 
 type TextSpan = { node: Text; start: number; end: number };
+type RenderedMatch = { range: Range };
 
 /** 收集渲染 Markdown 中的文本节点，建立可定位的连续文本坐标。 */
 function collectRenderedText(root: HTMLElement): {
@@ -82,6 +84,55 @@ function resolveTextPoint(
   return { node: last.node, offset: last.node.data.length };
 }
 
+/** 返回当前 WebView 是否提供 CSS Custom Highlight API。 */
+function getHighlightRegistry(): HighlightRegistry | null {
+  if (
+    typeof CSS === "undefined" ||
+    !("highlights" in CSS) ||
+    typeof Highlight === "undefined"
+  ) {
+    return null;
+  }
+  return CSS.highlights;
+}
+
+/** 将渲染文本中的全部命中转换为可绘制的 DOM Range。 */
+function collectRenderedMatches(
+  root: HTMLElement,
+  query: string,
+  options: TextSearchOptions,
+): RenderedMatch[] {
+  if (!query) return [];
+  const rendered = collectRenderedText(root);
+  return findLiteralMatches(rendered.text, query, options).flatMap((from) => {
+    const start = resolveTextPoint(rendered.spans, from);
+    const end = resolveTextPoint(rendered.spans, from + query.length);
+    if (!start || !end) return [];
+    const range = document.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+    return [{ range }];
+  });
+}
+
+/** 将 DOM 命中范围在实际 Markdown 阅读容器中垂直居中。 */
+function revealRenderedRange(range: Range, scrollRoot: HTMLElement): void {
+  const rangeRect = range.getBoundingClientRect();
+  const rootRect = scrollRoot.getBoundingClientRect();
+  if (rangeRect.height > 0) {
+    const delta =
+      rangeRect.top -
+      rootRect.top -
+      (scrollRoot.clientHeight - rangeRect.height) / 2;
+    scrollRoot.scrollTop += delta;
+    return;
+  }
+  range.startContainer.parentElement?.scrollIntoView({
+    block: "center",
+    inline: "nearest",
+  });
+}
+
 const components = { a: MarkdownLink };
 
 export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
@@ -89,12 +140,18 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
     const [status, setStatus] = useState<Status>({ kind: "loading" });
     const [reloadKey, setReloadKey] = useState(0);
     const [outlineCollapsed, setOutlineCollapsed] = useState(false);
+    const highlightId = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+    const matchHighlightName = `codev-md-match-${highlightId}`;
+    const activeHighlightName = `codev-md-active-${highlightId}`;
     const rootRef = useRef<HTMLDivElement>(null);
+    const scrollRootRef = useRef<HTMLDivElement>(null);
     const contentRootRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef("");
     const queryRef = useRef("");
     const optionsRef = useRef<TextSearchOptions>({ caseSensitive: false });
     const matchesRef = useRef<number[]>([]);
+    const renderedMatchesRef = useRef<RenderedMatch[]>([]);
+    const renderedSearchReadyRef = useRef(false);
     const currentMatchRef = useRef(-1);
     const searchListenersRef = useRef<Set<(status: TextSearchStatus) => void>>(
       new Set(),
@@ -122,10 +179,16 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
 
     /** 计算当前 Markdown 原文的字面量搜索状态。 */
     const getSearchStatus = useCallback(
-      (): TextSearchStatus => ({
-        count: matchesRef.current.length,
-        index: currentMatchRef.current >= 0 ? currentMatchRef.current + 1 : 0,
-      }),
+      (): TextSearchStatus => {
+        const count = renderedSearchReadyRef.current
+          ? renderedMatchesRef.current.length
+          : matchesRef.current.length;
+        const index =
+          count > 0 && currentMatchRef.current >= 0
+            ? Math.min(currentMatchRef.current + 1, count)
+            : 0;
+        return { count, index };
+      },
       [],
     );
 
@@ -135,37 +198,122 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
       for (const listener of searchListenersRef.current) listener(value);
     }, [getSearchStatus]);
 
-    /** 在渲染后的 Markdown 页面中定位当前文本命中并滚动到可视区域。 */
-    const selectRenderedMatch = useCallback(() => {
-      const query = queryRef.current;
-      const root = contentRootRef.current;
-      if (!query || !root) return;
-      const rendered = collectRenderedText(root);
-      const renderedMatches = findLiteralMatches(
-        rendered.text,
-        query,
-        optionsRef.current,
-      );
-      if (renderedMatches.length > 0) {
-        const index = currentMatchRef.current % renderedMatches.length;
-        const from = renderedMatches[index];
-        const start = resolveTextPoint(rendered.spans, from);
-        const end = resolveTextPoint(rendered.spans, from + query.length);
-        if (start && end) {
-          const range = document.createRange();
-          range.setStart(start.node, start.offset);
-          range.setEnd(end.node, end.offset);
-          const selection = window.getSelection();
-          selection?.removeAllRanges();
-          selection?.addRange(range);
-          start.node.parentElement?.scrollIntoView({
-            block: "nearest",
-            inline: "nearest",
-          });
-          return;
+    /** 清除当前 Markdown 页面中的全部搜索高亮范围。 */
+    const clearRenderedHighlights = useCallback(() => {
+      const registry = getHighlightRegistry();
+      registry?.delete(matchHighlightName);
+      registry?.delete(activeHighlightName);
+      renderedMatchesRef.current = [];
+      renderedSearchReadyRef.current = false;
+    }, [activeHighlightName, matchHighlightName]);
+
+    /** 绘制 Markdown 中的全部命中并将当前命中滚动到视口中央。 */
+    const applyRenderedSearch = useCallback(
+      (reveal: boolean) => {
+        const root = contentRootRef.current;
+        const scrollRoot = scrollRootRef.current;
+        const query = queryRef.current;
+        if (!root || !scrollRoot) return;
+
+        const renderedMatches = collectRenderedMatches(
+          root,
+          query,
+          optionsRef.current,
+        );
+        renderedMatchesRef.current = renderedMatches;
+        renderedSearchReadyRef.current = true;
+
+        const registry = getHighlightRegistry();
+        registry?.delete(matchHighlightName);
+        registry?.delete(activeHighlightName);
+        const activeIndex =
+          renderedMatches.length > 0
+            ? Math.max(
+                0,
+                Math.min(
+                  currentMatchRef.current < 0 ? 0 : currentMatchRef.current,
+                  renderedMatches.length - 1,
+                ),
+              )
+            : -1;
+        if (currentMatchRef.current !== activeIndex && activeIndex >= 0) {
+          currentMatchRef.current = activeIndex;
         }
-      }
+        if (registry && renderedMatches.length > 0) {
+          const ordinary = renderedMatches.filter(
+            (_, index) => index !== activeIndex,
+          );
+          if (ordinary.length > 0) {
+            registry.set(
+              matchHighlightName,
+              new Highlight(...ordinary.map((match) => match.range)),
+            );
+          }
+          const active = renderedMatches[activeIndex];
+          if (active) {
+            registry.set(activeHighlightName, new Highlight(active.range));
+            if (reveal) revealRenderedRange(active.range, scrollRoot);
+          }
+        } else if (reveal) {
+          const active = renderedMatches[activeIndex];
+          if (active) revealRenderedRange(active.range, scrollRoot);
+        }
+      },
+      [activeHighlightName, matchHighlightName],
+    );
+
+    /** 在渲染内容完成后重新应用当前搜索会话。 */
+    const scheduleRenderedSearch = useCallback(() => {
+      requestAnimationFrame(() => {
+        applyRenderedSearch(true);
+        emitSearchStatus();
+      });
+    }, [applyRenderedSearch, emitSearchStatus]);
+
+    /** 在渲染后的 Markdown 页面中定位当前文本命中。 */
+    const selectRenderedMatch = useCallback(() => {
+      applyRenderedSearch(true);
+    }, [applyRenderedSearch]);
+
+    /** 返回当前渲染视图实际可见的命中数量。 */
+    const getRenderedMatchCount = useCallback(() => {
+      if (!renderedSearchReadyRef.current) return matchesRef.current.length;
+      return renderedMatchesRef.current.length;
     }, []);
+
+    /*
+     * The rendered pane owns browser ranges for search only. The browser's
+     * user selection remains untouched so selecting text still works normally.
+     */
+    useEffect(() => {
+      const style = document.createElement("style");
+      style.dataset.codevMarkdownSearch = highlightId;
+      style.textContent = `
+        ::highlight(${matchHighlightName}) {
+          background-color: #E8C75A !important;
+          color: #171A1F !important;
+        }
+        ::highlight(${activeHighlightName}) {
+          background-color: #F0A43B !important;
+          color: #111318 !important;
+        }
+      `;
+      document.head.appendChild(style);
+      return () => {
+        clearRenderedHighlights();
+        style.remove();
+      };
+    }, [
+      activeHighlightName,
+      clearRenderedHighlights,
+      highlightId,
+      matchHighlightName,
+    ]);
+
+    /** 清除内容切换时遗留的渲染搜索范围。 */
+    useEffect(() => {
+      if (status.kind !== "ready") clearRenderedHighlights();
+    }, [clearRenderedHighlights, status.kind]);
 
     /** 读取 Markdown 文件并刷新当前渲染内容。 */
     const loadContent = useCallback(async () => {
@@ -210,10 +358,19 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
           options,
         );
         currentMatchRef.current = matchesRef.current.length > 0 ? 0 : -1;
+        if (!query) {
+          clearRenderedHighlights();
+          emitSearchStatus();
+          return;
+        }
+        scheduleRenderedSearch();
         emitSearchStatus();
-        requestAnimationFrame(selectRenderedMatch);
       },
-      [emitSearchStatus, selectRenderedMatch],
+      [
+        clearRenderedHighlights,
+        emitSearchStatus,
+        scheduleRenderedSearch,
+      ],
     );
 
     useEffect(() => {
@@ -227,17 +384,18 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
       () => ({
         setQuery: setSearchQuery,
         findNext: () => {
-          if (matchesRef.current.length === 0) return;
+          const count = getRenderedMatchCount();
+          if (count === 0) return;
           currentMatchRef.current =
-            (currentMatchRef.current + 1) % matchesRef.current.length;
+            (currentMatchRef.current + 1) % count;
           selectRenderedMatch();
           emitSearchStatus();
         },
         findPrevious: () => {
-          if (matchesRef.current.length === 0) return;
+          const count = getRenderedMatchCount();
+          if (count === 0) return;
           currentMatchRef.current =
-            (currentMatchRef.current - 1 + matchesRef.current.length) %
-            matchesRef.current.length;
+            (currentMatchRef.current - 1 + count) % count;
           selectRenderedMatch();
           emitSearchStatus();
         },
@@ -245,7 +403,7 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
           queryRef.current = "";
           matchesRef.current = [];
           currentMatchRef.current = -1;
-          window.getSelection()?.removeAllRanges();
+          clearRenderedHighlights();
           emitSearchStatus();
         },
         getSearchStatus,
@@ -304,7 +462,9 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
         redo: () => {},
       }),
       [
+        clearRenderedHighlights,
         emitSearchStatus,
+        getRenderedMatchCount,
         getSearchStatus,
         loadContent,
         path,
@@ -325,7 +485,10 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
         )}
       >
         <MarkdownViewToggle mode="rendered" onChange={onSetView} />
-        <div className="reader-scrollbar flex-1 overflow-auto">
+        <div
+          ref={scrollRootRef}
+          className="reader-scrollbar flex-1 overflow-auto"
+        >
           <div ref={contentRootRef} className="px-8 py-6">
             {status.kind === "loading" && (
               <p className="text-[12px] text-muted-foreground">Loading…</p>

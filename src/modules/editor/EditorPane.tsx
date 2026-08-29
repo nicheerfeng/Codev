@@ -1,14 +1,7 @@
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { redo, undo } from "@codemirror/commands";
 import { foldAll, unfoldAll } from "@codemirror/language";
-import {
-  findNext,
-  findPrevious,
-  gotoLine,
-  openSearchPanel,
-  SearchQuery,
-  setSearchQuery,
-} from "@codemirror/search";
+import { gotoLine } from "@codemirror/search";
 import { EditorView, keymap } from "@codemirror/view";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
@@ -25,9 +18,12 @@ import {
 import {
   buildSharedExtensions,
   DEFAULT_INDENT,
+  getEditorSearchActiveRange,
+  getEditorSearchStatus,
   indentCompartment,
   indentExtension,
   languageCompartment,
+  setEditorSearchSession,
   wordWrapExtension,
   wrapCompartment,
 } from "./lib/extensions";
@@ -36,7 +32,6 @@ import { type LanguageResult, resolveLanguage } from "./lib/languageResolver";
 import { FORCE_READ_LIMIT, useDocument } from "./lib/useDocument";
 import {
   findLiteralMatches,
-  replaceLiteralMatch,
   type TextSearchHandle,
   type TextSearchOptions,
   type TextSearchStatus,
@@ -64,6 +59,31 @@ type Props = {
 
 // Above this, syntax highlighting is disabled to keep large-file reading responsive.
 const SYNTAX_MAX_BYTES = 4 * 1024 * 1024;
+
+/** 写入独立搜索会话，并将当前命中滚动到编辑视口中央。 */
+function applyEditorSearchSession(
+  view: EditorView,
+  query: string,
+  options: TextSearchOptions,
+  activeIndex: number,
+  reveal: boolean,
+) {
+  view.dom.toggleAttribute("data-search-active", Boolean(query));
+  view.dispatch({
+    effects: setEditorSearchSession.of({
+      query,
+      caseSensitive: options.caseSensitive,
+      activeIndex,
+    }),
+  });
+  if (!reveal) return;
+  const range = getEditorSearchActiveRange(view.state);
+  if (range) {
+    view.dispatch({
+      effects: EditorView.scrollIntoView(range.from, { y: "center" }),
+    });
+  }
+}
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -114,6 +134,7 @@ export const EditorPane = memo(
     const searchListenersRef = useRef<Set<(status: TextSearchStatus) => void>>(
       new Set(),
     );
+    const searchStatusEmitterRef = useRef<() => void>(() => {});
     const statusRef = useRef(doc.status);
     useLayoutEffect(() => {
       statusRef.current = doc.status;
@@ -184,6 +205,10 @@ export const EditorPane = memo(
         ...buildSharedExtensions(),
         indentCompartment.of(DEFAULT_INDENT),
         languageCompartment.of([]),
+        EditorView.updateListener.of((update) => {
+          if (!update.docChanged || !searchQueryRef.current) return;
+          requestAnimationFrame(() => searchStatusEmitterRef.current());
+        }),
         keymap.of([
           {
             key: "Mod-s",
@@ -259,21 +284,12 @@ export const EditorPane = memo(
     /** 计算当前 CodeMirror 文档的字面量搜索状态。 */
     const getSearchStatus = useCallback((): TextSearchStatus => {
       const view = cmRef.current?.view;
-      const query = searchQueryRef.current;
-      if (!view || !query) return { count: 0, index: 0 };
-      const matches = findLiteralMatches(
-        view.state.doc.toString(),
-        query,
-        searchOptionsRef.current,
-      );
-      const selection = view.state.selection.main;
-      const current = matches.findIndex(
-        (offset) =>
-          selection.from >= offset && selection.from <= offset + query.length,
-      );
+      if (!view || !searchQueryRef.current) return { count: 0, index: 0 };
+      const status = getEditorSearchStatus(view.state);
       return {
-        count: matches.length,
-        index: current >= 0 ? current + 1 : matches.length > 0 ? 1 : 0,
+        count: status.count,
+        index: status.index,
+        truncated: status.truncated,
       };
     }, []);
 
@@ -282,24 +298,20 @@ export const EditorPane = memo(
       const status = getSearchStatus();
       for (const listener of searchListenersRef.current) listener(status);
     }, [getSearchStatus]);
+    searchStatusEmitterRef.current = emitSearchStatus;
 
     useEffect(() => {
       if (doc.status !== "ready") return;
       const query = searchQueryRef.current;
       const view = cmRef.current?.view;
       if (!query || !view) return;
-      view.dom.toggleAttribute("data-search-active", true);
-      openSearchPanel(view);
-      view.dispatch({
-        effects: setSearchQuery.of(
-          new SearchQuery({
-            search: query,
-            caseSensitive: searchOptionsRef.current.caseSensitive,
-            regexp: false,
-          }),
-        ),
-      });
-      findNext(view);
+      applyEditorSearchSession(
+        view,
+        query,
+        searchOptionsRef.current,
+        0,
+        true,
+      );
       emitSearchStatus();
     }, [doc.status, emitSearchStatus]);
 
@@ -307,44 +319,60 @@ export const EditorPane = memo(
       ref,
       () => ({
         setQuery: (query: string, options = { caseSensitive: false }) => {
+          const changed =
+            query !== searchQueryRef.current ||
+            options.caseSensitive !== searchOptionsRef.current.caseSensitive;
           searchQueryRef.current = query;
           searchOptionsRef.current = options;
           const view = cmRef.current?.view;
-          if (view) {
-            view.dom.toggleAttribute("data-search-active", Boolean(query));
-            if (query) openSearchPanel(view);
-            view.dispatch({
-              effects: setSearchQuery.of(
-                new SearchQuery({
-                  search: query,
-                  caseSensitive: options.caseSensitive,
-                  regexp: false,
-                }),
-              ),
-            });
-            if (query) findNext(view);
+          if (view && (changed || !query)) {
+            applyEditorSearchSession(view, query, options, 0, Boolean(query));
           }
           emitSearchStatus();
         },
         findNext: () => {
           const view = cmRef.current?.view;
-          if (view) findNext(view);
+          if (view && searchQueryRef.current) {
+            const status = getEditorSearchStatus(view.state);
+            if (status.count > 0) {
+              applyEditorSearchSession(
+                view,
+                searchQueryRef.current,
+                searchOptionsRef.current,
+                status.index % status.count,
+                true,
+              );
+            }
+          }
           emitSearchStatus();
         },
         findPrevious: () => {
           const view = cmRef.current?.view;
-          if (view) findPrevious(view);
+          if (view && searchQueryRef.current) {
+            const status = getEditorSearchStatus(view.state);
+            if (status.count > 0) {
+              applyEditorSearchSession(
+                view,
+                searchQueryRef.current,
+                searchOptionsRef.current,
+                status.index <= 1 ? status.count - 1 : status.index - 2,
+                true,
+              );
+            }
+          }
           emitSearchStatus();
         },
         clearQuery: () => {
           searchQueryRef.current = "";
           const view = cmRef.current?.view;
-          if (view) {
-            view.dom.removeAttribute("data-search-active");
-            view.dispatch({
-              effects: setSearchQuery.of(new SearchQuery({ search: "" })),
-            });
-          }
+          if (view)
+            applyEditorSearchSession(
+              view,
+              "",
+              searchOptionsRef.current,
+              -1,
+              false,
+            );
           emitSearchStatus();
         },
         getSearchStatus,
@@ -357,34 +385,13 @@ export const EditorPane = memo(
           const view = cmRef.current?.view;
           const query = searchQueryRef.current;
           if (!view || !query) return 0;
-          const content = view.state.doc.toString();
-          const matches = findLiteralMatches(
-            content,
-            query,
-            searchOptionsRef.current,
-          );
-          const selection = view.state.selection.main;
-          const index = matches.findIndex(
-            (offset) =>
-              selection.from >= offset &&
-              selection.from <= offset + query.length,
-          );
-          if (index < 0) return 0;
-          const result = replaceLiteralMatch(
-            content,
-            query,
-            replacement,
-            searchOptionsRef.current,
-            index,
-          );
-          if (result.count > 0) {
-            const from = matches[index];
-            view.dispatch({
-              changes: { from, to: from + query.length, insert: replacement },
-            });
-          }
+          const range = getEditorSearchActiveRange(view.state);
+          if (!range) return 0;
+          view.dispatch({
+            changes: { from: range.from, to: range.to, insert: replacement },
+          });
           emitSearchStatus();
-          return result.count;
+          return 1;
         },
         replaceAll: async (replacement: string) => {
           const view = cmRef.current?.view;

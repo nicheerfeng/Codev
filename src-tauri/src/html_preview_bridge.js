@@ -28,10 +28,12 @@
     style.id = STYLE_ID;
     style.textContent = `
       ::highlight(${MATCH_HIGHLIGHT}) {
-        background-color: rgba(86, 116, 145, 0.32) !important;
+        background-color: #E8C75A !important;
+        color: #171A1F !important;
       }
       ::highlight(${ACTIVE_HIGHLIGHT}) {
-        background-color: rgba(86, 116, 145, 0.52) !important;
+        background-color: #F0A43B !important;
+        color: #111318 !important;
       }
     `;
     (document.head || document.documentElement).appendChild(style);
@@ -122,7 +124,10 @@
       return false;
     }
     try {
-      CSS.highlights.set(MATCH_HIGHLIGHT, new Highlight(...matches));
+      const ordinary = matches.filter((_, index) => index !== activeIndex);
+      if (ordinary.length > 0) {
+        CSS.highlights.set(MATCH_HIGHLIGHT, new Highlight(...ordinary));
+      }
       if (activeIndex >= 0) {
         CSS.highlights.set(
           ACTIVE_HIGHLIGHT,
@@ -137,37 +142,81 @@
     }
   }
 
-  /** 从当前渲染页面中收集普通字面量命中范围。 */
-  function collectMatches() {
-    if (!query || !document.body) return;
-    const needle = caseSensitive ? query : query.toLocaleLowerCase();
+  /** 将 HTML 正文文本节点压平成可连续检索的文本坐标。 */
+  function collectSearchableText() {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const spans = [];
+    const chunks = [];
+    let cursor = 0;
     let node;
     while ((node = walker.nextNode())) {
       if (!isSearchableTextNode(node)) continue;
-      const text = node.nodeValue || "";
-      const haystack = caseSensitive ? text : text.toLocaleLowerCase();
-      let offset = 0;
-      while (offset <= haystack.length) {
-        const found = haystack.indexOf(needle, offset);
-        if (found < 0) break;
-        if (matches.length >= MAX_MATCHES) {
-          truncated = true;
-          return;
-        }
-        const range = document.createRange();
-        range.setStart(node, found);
-        range.setEnd(node, found + query.length);
-        matches.push(range);
-        offset = found + Math.max(query.length, 1);
+      const value = node.nodeValue || "";
+      if (!value) continue;
+      spans.push({ node, start: cursor, end: cursor + value.length });
+      chunks.push(value);
+      cursor += value.length;
+    }
+    return { text: chunks.join(""), spans };
+  }
+
+  /** 将连续文本偏移还原为 HTML 文本节点位置。 */
+  function resolveTextPoint(spans, offset) {
+    const target = Math.max(0, offset);
+    for (const span of spans) {
+      if (target <= span.end) {
+        return {
+          node: span.node,
+          offset: Math.min(target - span.start, span.node.data.length),
+        };
       }
+    }
+    const last = spans[spans.length - 1];
+    return last
+      ? { node: last.node, offset: last.node.data.length }
+      : null;
+  }
+
+  /** 从当前渲染页面中收集全部普通字面量命中范围。 */
+  function collectMatches() {
+    if (!query || !document.body) return;
+    const searchable = collectSearchableText();
+    const needle = caseSensitive ? query : query.toLocaleLowerCase();
+    const haystack = caseSensitive
+      ? searchable.text
+      : searchable.text.toLocaleLowerCase();
+    let offset = 0;
+    while (offset <= haystack.length) {
+      const found = haystack.indexOf(needle, offset);
+      if (found < 0) break;
+      if (matches.length >= MAX_MATCHES) {
+        truncated = true;
+        return;
+      }
+      const start = resolveTextPoint(searchable.spans, found);
+      const end = resolveTextPoint(searchable.spans, found + query.length);
+      if (start && end) {
+        const range = document.createRange();
+        range.setStart(start.node, start.offset);
+        range.setEnd(end.node, end.offset);
+        matches.push(range);
+      }
+      offset = found + Math.max(query.length, 1);
     }
   }
 
-  /** 让当前命中进入 HTML 页面自身的可视区域。 */
+  /** 让当前命中进入 HTML 页面可视区域的垂直中心。 */
   function revealActiveMatch() {
     const range = matches[activeIndex];
     if (!range) return;
+    const rect = range.getBoundingClientRect();
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+    const scroller = document.scrollingElement || document.documentElement;
+    if (rect.height > 0 && scroller) {
+      scroller.scrollTop +=
+        rect.top - (viewportHeight - rect.height) / 2;
+      return;
+    }
     const element =
       range.startContainer.parentElement ||
       range.commonAncestorContainer.parentElement;

@@ -27,8 +27,9 @@ export function findLiteralMatches(
   content: string,
   query: string,
   options: TextSearchOptions,
+  limit = Number.POSITIVE_INFINITY,
 ): number[] {
-  if (!query) return [];
+  if (!query || limit <= 0) return [];
   const haystack = options.caseSensitive
     ? content
     : content.toLocaleLowerCase();
@@ -39,6 +40,7 @@ export function findLiteralMatches(
     const match = haystack.indexOf(needle, offset);
     if (match < 0) break;
     matches.push(match);
+    if (matches.length >= limit) break;
     offset = match + Math.max(needle.length, 1);
   }
   return matches;

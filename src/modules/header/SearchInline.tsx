@@ -28,10 +28,10 @@ import {
 } from "react";
 
 const TERM_DECORATIONS = {
-  matchBackground: "#515c6a",
-  activeMatchBackground: "#d18616",
-  matchOverviewRuler: "#d18616",
-  activeMatchColorOverviewRuler: "#d18616",
+  matchBorder: "#E8C75A",
+  activeMatchBorder: "#F0A43B",
+  matchOverviewRuler: "#E8C75A",
+  activeMatchColorOverviewRuler: "#F0A43B",
 };
 
 export type SearchTarget =
@@ -100,12 +100,14 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
 
     useImperativeHandle(ref, () => ({ focus }), [focus]);
 
+    const editorTarget = target?.kind === "editor" ? target.handle : null;
+    const terminalTarget = target?.kind === "terminal" ? target.addon : null;
+
     const clearTarget = useCallback(() => {
       setStatus(null);
-      if (!target) return;
-      if (target.kind === "terminal") target.addon.clearDecorations();
-      else target.handle.clearQuery();
-    }, [target]);
+      if (terminalTarget) terminalTarget.clearDecorations();
+      else editorTarget?.clearQuery();
+    }, [editorTarget, terminalTarget]);
 
     const restoreTargetFocus = useCallback(() => {
       if (!target) return;
@@ -121,13 +123,17 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
     );
 
     useEffect(() => {
-      if (!target) {
+      if (!editorTarget && !terminalTarget) {
         setStatus(null);
         return;
       }
-      if (target.kind === "terminal") {
-        if (q) target.addon.findNext(q, { decorations: TERM_DECORATIONS });
-        const unlisten = target.addon.onDidChangeResults((event) => {
+      if (terminalTarget) {
+        if (q) {
+          terminalTarget.findNext(q, { decorations: TERM_DECORATIONS });
+        } else {
+          terminalTarget.clearDecorations();
+        }
+        const unlisten = terminalTarget.onDidChangeResults((event) => {
           setStatus({
             count: event.resultCount,
             index: event.resultIndex >= 0 ? event.resultIndex + 1 : 0,
@@ -135,11 +141,12 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
         });
         return () => unlisten.dispose();
       }
-      if (q) target.handle.setQuery(q, searchOptions);
-      const unsubscribe = target.handle.subscribeSearchStatus(setStatus);
-      setStatus(target.handle.getSearchStatus());
+      if (!editorTarget) return;
+      editorTarget.setQuery(q, searchOptions);
+      const unsubscribe = editorTarget.subscribeSearchStatus(setStatus);
+      setStatus(editorTarget.getSearchStatus());
       return unsubscribe;
-    }, [q, searchOptions, target]);
+    }, [editorTarget, q, searchOptions, terminalTarget]);
 
     const targetCanReplace =
       target?.kind === "editor" && target.canReplace !== false;
@@ -147,26 +154,6 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
     useEffect(() => {
       if (!targetCanReplace) setReplaceOpen(false);
     }, [targetCanReplace]);
-
-    const applyIncremental = (next: string) => {
-      if (!target) {
-        setStatus(next ? { count: 0, index: 0 } : null);
-        return;
-      }
-      if (target.kind === "terminal") {
-        if (next) {
-          target.addon.findNext(next, {
-            incremental: true,
-            decorations: TERM_DECORATIONS,
-          });
-        } else {
-          target.addon.clearDecorations();
-        }
-      } else {
-        target.handle.setQuery(next, searchOptions);
-        setStatus(next ? target.handle.getSearchStatus() : null);
-      }
-    };
 
     const findDirection = (forward: boolean) => {
       if (!target || !q) return;
@@ -227,9 +214,7 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
                 placeholder={placeholder}
                 className="h-7 w-full bg-muted/80 pr-20 pl-7 text-[13px]! placeholder:text-muted-foreground/70 focus-visible:ring-0"
                 onChange={(e) => {
-                  const next = e.target.value;
-                  setQ(next);
-                  applyIncremental(next);
+                  setQ(e.target.value);
                 }}
                 onBlur={() => {
                   if (compact && !q) setOpenInCompact(false);
