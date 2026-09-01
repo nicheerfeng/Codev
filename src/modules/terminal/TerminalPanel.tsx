@@ -26,6 +26,8 @@ import { leafIds } from "./lib/panes";
 type Props = {
   /** Terminal tabs only (filtered upstream). */
   tabs: Tab[];
+  /** Hide the terminal-owned header when hosted by the right dock. */
+  showHeader?: boolean;
   activeId: number;
   onSelect: (id: number) => void;
   onClose: (id: number) => void;
@@ -49,6 +51,7 @@ function cwdLabel(cwd: string): string {
 /** 渲染右侧终端面板、可伸缩终端树和当前 PTY 内容。 */
 export function TerminalPanel({
   tabs,
+  showHeader = true,
   activeId,
   onSelect,
   onClose,
@@ -149,20 +152,22 @@ export function TerminalPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-card">
-      <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border/60 px-2">
-        <span className="min-w-0 flex-1 truncate pr-1 text-[11px] font-medium text-muted-foreground">
-          {t("Terminal")}
-        </span>
-        <button
-          type="button"
-          className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-          onClick={onNew}
-          title={t("New terminal")}
-          aria-label={t("New terminal")}
-        >
-          <HugeiconsIcon icon={PlusSignIcon} size={13} strokeWidth={2} />
-        </button>
-      </div>
+      {showHeader && (
+        <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border/60 px-2">
+          <span className="min-w-0 flex-1 truncate pr-1 text-[11px] font-medium text-muted-foreground">
+            {t("Terminal")}
+          </span>
+          <button
+            type="button"
+            className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+            onClick={onNew}
+            title={t("New terminal")}
+            aria-label={t("New terminal")}
+          >
+            <HugeiconsIcon icon={PlusSignIcon} size={13} strokeWidth={2} />
+          </button>
+        </div>
+      )}
 
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
         <ResizablePanel id="terminal-content" minSize="0px">

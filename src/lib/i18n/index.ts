@@ -78,6 +78,10 @@ const ZH: Record<string, string> = {
     "结果不完整，请缩小搜索范围。",
   "Clear search": "清除搜索",
   Settings: "设置",
+  Plugins: "插件",
+  "JSON/JSONL Formatter": "JSON/JSONL 格式化",
+  "Paste JSON or JSONL into an independent formatter page, then search and compare it.":
+    "将 JSON 或 JSONL 粘贴到独立格式化页面中，支持搜索和对照。",
   Shortcuts: "快捷键",
   "Show hidden files": "显示隐藏文件",
   "Semi-Bold": "半粗",

@@ -31,6 +31,16 @@ describe("wordWrapExtension", () => {
     expect(state.facet(EditorView.contentAttributes)).toEqual([]);
   });
 
+  it("wraps to the editor viewport without a fixed column", () => {
+    const state = EditorState.create({
+      extensions: [wordWrapExtension("viewport")],
+    });
+
+    expect(state.facet(EditorView.contentAttributes)).toEqual([
+      { class: "cm-lineWrapping" },
+    ]);
+  });
+
   it("reuses the wrap theme across column changes", () => {
     const first = wordWrapExtension(80) as readonly Extension[];
     const second = wordWrapExtension(120) as readonly Extension[];

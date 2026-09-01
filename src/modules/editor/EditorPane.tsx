@@ -1,3 +1,4 @@
+import { isMarkdownPath } from "@/lib/utils";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { redo, undo } from "@codemirror/commands";
 import { foldAll, unfoldAll } from "@codemirror/language";
@@ -24,6 +25,7 @@ import {
   indentExtension,
   languageCompartment,
   setEditorSearchSession,
+  type WordWrapMode,
   wordWrapExtension,
   wrapCompartment,
 } from "./lib/extensions";
@@ -59,6 +61,18 @@ type Props = {
 
 // Above this, syntax highlighting is disabled to keep large-file reading responsive.
 const SYNTAX_MAX_BYTES = 4 * 1024 * 1024;
+
+/** 按文件类型决定编辑器的软换行策略，结构化数据保持单行。 */
+function getWordWrapMode(
+  path: string,
+  enabled: boolean,
+  column: number,
+): WordWrapMode {
+  if (isMarkdownPath(path)) return "viewport";
+  const extension = path.split(".").pop()?.toLowerCase() ?? "";
+  if (extension === "json" || extension === "jsonl") return null;
+  return enabled ? column : null;
+}
 
 /** 写入独立搜索会话，并将当前命中滚动到编辑视口中央。 */
 function applyEditorSearchSession(
@@ -105,8 +119,14 @@ export const EditorPane = memo(
     reloadRef.current = reload;
     const cmRef = useRef<ReactCodeMirrorRef>(null);
     const themeExt = useEditorThemeExt();
-    const wordWrapColumn = usePreferencesStore((s) =>
-      s.editorWordWrap ? s.editorWordWrapColumn : null,
+    const editorWordWrap = usePreferencesStore((s) => s.editorWordWrap);
+    const editorWordWrapColumn = usePreferencesStore(
+      (s) => s.editorWordWrapColumn,
+    );
+    const wordWrapMode = getWordWrapMode(
+      path,
+      editorWordWrap,
+      editorWordWrapColumn,
     );
     // Stabilize save so the extensions array keeps its identity across renders.
     const saveRef = useRef(save);
@@ -197,9 +217,11 @@ export const EditorPane = memo(
       () => [
         wrapCompartment.of(
           wordWrapExtension(
-            usePreferencesStore.getState().editorWordWrap
-              ? usePreferencesStore.getState().editorWordWrapColumn
-              : null,
+            getWordWrapMode(
+              path,
+              usePreferencesStore.getState().editorWordWrap,
+              usePreferencesStore.getState().editorWordWrapColumn,
+            ),
           ),
         ),
         ...buildSharedExtensions(),
@@ -230,9 +252,9 @@ export const EditorPane = memo(
       const view = cmRef.current?.view;
       if (!view) return;
       view.dispatch({
-        effects: wrapCompartment.reconfigure(wordWrapExtension(wordWrapColumn)),
+        effects: wrapCompartment.reconfigure(wordWrapExtension(wordWrapMode)),
       });
-    }, [wordWrapColumn]);
+    }, [wordWrapMode]);
 
     useEffect(() => {
       if (doc.status !== "ready") return;
