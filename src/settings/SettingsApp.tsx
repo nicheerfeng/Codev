@@ -2,9 +2,16 @@ import { WindowControls } from "@/components/WindowControls";
 import { useT } from "@/lib/i18n";
 import { IS_MAC, USE_CUSTOM_WINDOW_CONTROLS } from "@/lib/platform";
 import { usePreferencesStore } from "@/modules/settings/preferences";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { useEffect } from "react";
 import { EditorSection } from "./sections/EditorSection";
 import { GeneralSection } from "./sections/GeneralSection";
+import { PluginsSection } from "./sections/PluginsSection";
 import { ThemesSection } from "./sections/ThemesSection";
 
 /** 渲染单页面紧凑设置窗口，避免分页和低频配置分散注意力。 */
@@ -31,12 +38,36 @@ export function SettingsApp() {
         {USE_CUSTOM_WINDOW_CONTROLS && <WindowControls closeOnly />}
       </header>
 
-      <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <div className="mx-auto flex w-full max-w-[560px] flex-col gap-4">
-          <GeneralSection />
-          <ThemesSection />
-          <EditorSection />
-        </div>
+      <main className="min-h-0 flex-1 overflow-hidden px-4 py-3 sm:px-5">
+        <Tabs defaultValue="general" className="mx-auto flex h-full w-full max-w-[560px] flex-col">
+          <TabsList
+            variant="line"
+            className="h-8 w-full shrink-0 justify-start border-b border-border/60"
+          >
+            <TabsTrigger value="general" className="flex-none px-3 text-[11px]">
+              {t("General")}
+            </TabsTrigger>
+            <TabsTrigger value="plugins" className="flex-none px-3 text-[11px]">
+              {t("Plugins")}
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent
+            value="general"
+            className="min-h-0 flex-1 overflow-y-auto py-4 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          >
+            <div className="flex flex-col gap-4">
+              <GeneralSection />
+              <ThemesSection />
+              <EditorSection />
+            </div>
+          </TabsContent>
+          <TabsContent
+            value="plugins"
+            className="min-h-0 flex-1 overflow-y-auto py-4 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          >
+            <PluginsSection />
+          </TabsContent>
+        </Tabs>
       </main>
     </div>
   );

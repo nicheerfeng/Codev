@@ -285,13 +285,21 @@ textarea,
 /* Unified search backgrounds for plain-text preview windows. */
 .codev-search-match {
   background-color: #e8c75a;
-  color: #171a1f;
+  color: #171a1f !important;
+}
+
+.codev-search-match * {
+  color: #171a1f !important;
 }
 
 .codev-search-active {
   background-color: #f0a43b;
-  color: #111318;
+  color: #111318 !important;
   box-shadow: inset 0 0 0 1px #8a4f0b;
+}
+
+.codev-search-active * {
+  color: #111318 !important;
 }
 
 .select-text ::selection,

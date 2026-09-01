@@ -32,6 +32,7 @@ import {
   type SearchTarget,
 } from "@/modules/header";
 import { openSettingsWindow } from "@/modules/settings/openSettingsWindow";
+import { ToolPanel, usePluginStore } from "@/modules/plugins";
 import {
   shouldDisablePaneSwapShortcut,
   type ShortcutHandlers,
@@ -73,6 +74,8 @@ import { useWorkspaceEnvStore } from "@/modules/workspace";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { SearchAddon } from "@xterm/addon-search";
+import { PlusSignIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import {
   useCallback,
   useEffect,
@@ -165,6 +168,21 @@ export default function App() {
   useApplyEditorFontSize();
   const terminalPathDropTarget = useTerminalFileDrop();
   const explorerRef = useRef<FileExplorerHandle>(null);
+  const pluginEnabled = usePluginStore(
+    (state) => state.enabled["json-formatter"],
+  );
+  const initPlugins = usePluginStore((state) => state.init);
+  const [rightDockView, setRightDockView] = useState<"terminal" | "tools">(
+    "terminal",
+  );
+
+  useEffect(() => {
+    void initPlugins();
+  }, [initPlugins]);
+
+  useEffect(() => {
+    if (!pluginEnabled) setRightDockView("terminal");
+  }, [pluginEnabled]);
 
   // Drives session disposal off the pane tree, not React lifecycles —
   // split/unsplit re-mount components but the leaf is still live.
@@ -424,6 +442,12 @@ export default function App() {
     }
     previousTerminalCountRef.current = terminalTabs.length;
   }, [expandTerminalPanel, terminalTabs.length]);
+
+  useEffect(() => {
+    if (!pluginEnabled) return;
+    setRightDockView("tools");
+    expandTerminalPanel();
+  }, [expandTerminalPanel, pluginEnabled]);
   const isTerminalTab = activeTab?.kind === "terminal";
   const isSearchableDocumentTab =
     activeTab?.kind === "editor" ||
@@ -1158,20 +1182,86 @@ export default function App() {
                   persistTerminalCollapsed(size.inPixels <= 1);
                 }}
               >
-                <TerminalPanel
-                  tabs={terminalTabs}
-                  activeId={terminalActiveId}
-                  onSelect={setActiveId}
-                  onClose={handleClose}
-                  onNew={openNewTab}
-                  onRename={handleRenameTab}
-                  onReorder={reorderTerminals}
-                  registerHandle={registerTerminalHandle}
-                  onSearchReady={handleSearchReady}
-                  onCwd={handleTerminalCwd}
-                  onExit={handleLeafExit}
-                  onFocusLeaf={handleFocusLeaf}
-                />
+                <div className="flex h-full min-h-0 flex-col bg-card">
+                  {pluginEnabled && (
+                    <header className="flex h-8 shrink-0 items-center gap-1 border-b border-border/60 px-2">
+                      <button
+                        type="button"
+                        className={`h-6 rounded-sm px-2 text-[11px] ${
+                          rightDockView === "terminal"
+                            ? "bg-accent text-foreground"
+                            : "text-muted-foreground hover:bg-muted"
+                        }`}
+                        onClick={() => setRightDockView("terminal")}
+                      >
+                        终端
+                      </button>
+                      <button
+                        type="button"
+                        className={`h-6 rounded-sm px-2 text-[11px] ${
+                          rightDockView === "tools"
+                            ? "bg-accent text-foreground"
+                            : "text-muted-foreground hover:bg-muted"
+                        }`}
+                        onClick={() => setRightDockView("tools")}
+                      >
+                        JSON格式化
+                      </button>
+                      <div className="flex-1" />
+                      {rightDockView === "terminal" && (
+                        <button
+                          type="button"
+                          className="flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                          onClick={openNewTab}
+                          title="新建终端"
+                          aria-label="新建终端"
+                        >
+                          <HugeiconsIcon
+                            icon={PlusSignIcon}
+                            size={13}
+                            strokeWidth={2}
+                          />
+                        </button>
+                      )}
+                    </header>
+                  )}
+                  <div className="relative min-h-0 flex-1">
+                    <div
+                      className={
+                        rightDockView === "terminal"
+                          ? "absolute inset-0"
+                          : "invisible pointer-events-none absolute inset-0"
+                      }
+                    >
+                      <TerminalPanel
+                        tabs={terminalTabs}
+                        showHeader={!pluginEnabled}
+                        activeId={terminalActiveId}
+                        onSelect={setActiveId}
+                        onClose={handleClose}
+                        onNew={openNewTab}
+                        onRename={handleRenameTab}
+                        onReorder={reorderTerminals}
+                        registerHandle={registerTerminalHandle}
+                        onSearchReady={handleSearchReady}
+                        onCwd={handleTerminalCwd}
+                        onExit={handleLeafExit}
+                        onFocusLeaf={handleFocusLeaf}
+                      />
+                    </div>
+                    {pluginEnabled && (
+                      <div
+                        className={
+                          rightDockView === "tools"
+                            ? "absolute inset-0"
+                            : "invisible pointer-events-none absolute inset-0"
+                        }
+                      >
+                        <ToolPanel />
+                      </div>
+                    )}
+                  </div>
+                </div>
               </ResizablePanel>
             </ResizablePanelGroup>
           </main>

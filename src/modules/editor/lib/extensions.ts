@@ -226,13 +226,17 @@ const WORD_WRAP_COLUMN_THEME = EditorView.theme({
   },
 });
 
-export function wordWrapExtension(column: number | null): Extension {
-  if (column === null) return [];
+export type WordWrapMode = number | "viewport" | null;
+
+/** 根据换行模式创建 CodeMirror 软换行扩展。 */
+export function wordWrapExtension(mode: WordWrapMode): Extension {
+  if (mode === null) return [];
+  if (mode === "viewport") return [EditorView.lineWrapping];
   return [
     EditorView.lineWrapping,
     WORD_WRAP_COLUMN_THEME,
     EditorView.contentAttributes.of({
-      style: `${WORD_WRAP_COLUMN_VAR}: ${column}ch`,
+      style: `${WORD_WRAP_COLUMN_VAR}: ${mode}ch`,
     }),
   ];
 }
@@ -295,10 +299,16 @@ const SHARED_EXTENSIONS: readonly Extension[] = Object.freeze([
       backgroundColor: "#E8C75A !important",
       color: "#171A1F !important",
     },
+    ".codev-search-match *": {
+      color: "#171A1F !important",
+    },
     ".codev-search-active": {
       backgroundColor: "#F0A43B !important",
       color: "#111318 !important",
       boxShadow: "inset 0 0 0 1px #8A4F0B",
+    },
+    ".codev-search-active *": {
+      color: "#111318 !important",
     },
     ".cm-cursor, .cm-dropCursor": {
       borderLeftColor: "var(--foreground)",
