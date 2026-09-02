@@ -21,11 +21,13 @@ import {
 } from "@/modules/editor/lib/languageDefinitions";
 import { resolveDisplayName } from "@/modules/editor/lib/languageResolver";
 import { fileIconUrl } from "@/modules/explorer/lib/iconResolver";
+import { copyToClipboard } from "@/modules/explorer/lib/contextActions";
 import {
   ArrowRight01Icon,
   Cancel01Icon,
   CancelCircleIcon,
   ComputerTerminal02Icon,
+  Copy01Icon,
   PencilEdit02Icon,
   Tick02Icon,
 } from "@hugeicons/core-free-icons";
@@ -606,6 +608,24 @@ export function TabBar({
                     className="min-w-32 p-1"
                     onCloseAutoFocus={(e) => e.preventDefault()}
                   >
+                    {isFileTab(t) && (
+                      <>
+                        <ContextMenuItem
+                          className="gap-2 rounded-xl px-2.5 py-1.5 text-[13px]"
+                          onSelect={() => void copyToClipboard(t.path)}
+                        >
+                          <HugeiconsIcon
+                            icon={Copy01Icon}
+                            size={13}
+                            strokeWidth={1.75}
+                          />
+                          <span className="flex-1">
+                            {translate("Copy Absolute Path")}
+                          </span>
+                        </ContextMenuItem>
+                        <ContextMenuSeparator />
+                      </>
+                    )}
                     {t.kind === "terminal" && (
                       <>
                         <ContextMenuItem

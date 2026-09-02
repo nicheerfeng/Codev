@@ -39,6 +39,8 @@ import {
   type TextSearchStatus,
 } from "./lib/textSearch";
 import { useEditorThemeExt } from "./lib/useEditorThemeExt";
+import { FilePreviewPane } from "./FilePreviewPane";
+import { shouldUseLargeStructuredTextPreview } from "./lib/largeStructuredText";
 
 export type EditorPaneHandle = TextSearchHandle & {
   focus: () => void;
@@ -491,6 +493,19 @@ export const EditorPane = memo(
     }
     if (doc.status === "binary" || doc.status === "toolarge") {
       const ext = path.split(".").pop()?.toLowerCase() ?? "";
+      const isLargeStructuredText =
+        doc.status === "toolarge" &&
+        shouldUseLargeStructuredTextPreview(path, doc.size);
+      if (isLargeStructuredText) {
+        return (
+          <FilePreviewPane
+            ref={ref}
+            path={path}
+            textOnly
+            onDirtyChange={onDirtyChange}
+          />
+        );
+      }
       const isImage = [
         "png",
         "jpg",

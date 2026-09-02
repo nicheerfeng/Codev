@@ -5,46 +5,55 @@ use serde::Serialize;
 pub struct ExternalFileClipboard {
     pub paths: Vec<String>,
     pub mode: String,
+    pub sequence: u32,
 }
 
 /// 读取系统文件剪贴板中的文件路径和复制/剪切状态。
 #[tauri::command]
-pub fn fs_get_file_clipboard() -> Option<ExternalFileClipboard> {
+pub fn fs_get_file_clipboard() -> ExternalFileClipboard {
     #[cfg(windows)]
     {
         return read_windows_file_clipboard();
     }
     #[cfg(not(windows))]
     {
-        None
+        ExternalFileClipboard {
+            paths: Vec::new(),
+            mode: "copy".to_string(),
+            sequence: 0,
+        }
     }
 }
 
 #[cfg(windows)]
 /// 从 Windows CF_HDROP 剪贴板读取外部文件路径。
-fn read_windows_file_clipboard() -> Option<ExternalFileClipboard> {
+fn read_windows_file_clipboard() -> ExternalFileClipboard {
     use std::ptr;
 
     use windows_sys::Win32::Foundation::HGLOBAL;
     use windows_sys::Win32::System::DataExchange::{
-        CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
-        RegisterClipboardFormatW,
+        CloseClipboard, GetClipboardData, GetClipboardSequenceNumber, IsClipboardFormatAvailable,
+        OpenClipboard, RegisterClipboardFormatW,
     };
     use windows_sys::Win32::System::Memory::{GlobalLock, GlobalUnlock};
     use windows_sys::Win32::System::Ole::{CF_HDROP, DROPEFFECT_MOVE};
-    use windows_sys::Win32::UI::Shell::{
-        DragQueryFileW, CFSTR_PREFERREDDROPEFFECT, HDROP,
-    };
+    use windows_sys::Win32::UI::Shell::{DragQueryFileW, CFSTR_PREFERREDDROPEFFECT, HDROP};
 
     unsafe {
-        if IsClipboardFormatAvailable(CF_HDROP as u32) == 0 {
-            return None;
-        }
+        let fallback_sequence = GetClipboardSequenceNumber();
         if OpenClipboard(ptr::null_mut()) == 0 {
-            return None;
+            return ExternalFileClipboard {
+                paths: Vec::new(),
+                mode: "copy".to_string(),
+                sequence: fallback_sequence,
+            };
         }
+        let sequence = GetClipboardSequenceNumber();
 
         let result = (|| {
+            if IsClipboardFormatAvailable(CF_HDROP as u32) == 0 {
+                return None;
+            }
             let data = GetClipboardData(CF_HDROP as u32);
             if data.is_null() {
                 return None;
@@ -81,16 +90,25 @@ fn read_windows_file_clipboard() -> Option<ExternalFileClipboard> {
                     if !locked.is_null() {
                         let _ = GlobalUnlock(effect_data as HGLOBAL);
                     }
-                    if is_move { "move" } else { "copy" }
+                    if is_move {
+                        "move"
+                    } else {
+                        "copy"
+                    }
                 }
             };
             Some(ExternalFileClipboard {
                 paths,
                 mode: mode.to_string(),
+                sequence,
             })
         })();
 
         CloseClipboard();
-        result
+        result.unwrap_or_else(|| ExternalFileClipboard {
+            paths: Vec::new(),
+            mode: "copy".to_string(),
+            sequence,
+        })
     }
 }

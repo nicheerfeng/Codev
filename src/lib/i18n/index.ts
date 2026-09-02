@@ -121,6 +121,7 @@ const ZH: Record<string, string> = {
   "Back to workspace roots": "返回工作区根目录",
   "Click again to confirm": "再次点击确认",
   "Copy Path": "复制路径",
+  "Copy Absolute Path": "复制绝对路径",
   "Copy Paths": "复制多个路径",
   "Enter folder path, e.g. D:/projects": "输入文件夹路径，例如 D:/projects",
   "Interface language": "界面语言",
