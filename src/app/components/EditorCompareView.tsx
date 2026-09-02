@@ -21,7 +21,6 @@ type EditorGroupProps = {
   onSelect: (id: number) => void;
   onClose: (id: number) => void;
   onCloseTabsToRight: (groupIds: number[], id: number) => void;
-  onCloseOtherTabs: (groupIds: number[], id: number) => void;
   onPin: (id: number) => void;
   onRename: (id: number, title: string) => void;
   onReorder: (fromId: number, toGapIndex: number) => void;
@@ -49,7 +48,6 @@ function EditorGroup({
   onSelect,
   onClose,
   onCloseTabsToRight,
-  onCloseOtherTabs,
   onPin,
   onRename,
   onReorder,
@@ -86,12 +84,6 @@ function EditorGroup({
             onClose={onClose}
             onCloseTabsToRight={(id) =>
               onCloseTabsToRight(
-                tabs.map((tab) => tab.id),
-                id,
-              )
-            }
-            onCloseOtherTabs={(id) =>
-              onCloseOtherTabs(
                 tabs.map((tab) => tab.id),
                 id,
               )
@@ -170,7 +162,6 @@ type Props = {
   onSelectSecondary: (id: number) => void;
   onClose: (id: number) => void;
   onCloseTabsToRight: (groupIds: number[], id: number) => void;
-  onCloseOtherTabs: (groupIds: number[], id: number) => void;
   onPin: (id: number) => void;
   onRename: (id: number, title: string) => void;
   onReorderPrimary: (fromId: number, toGapIndex: number) => void;
@@ -200,7 +191,6 @@ export function EditorCompareView({
   onSelectSecondary,
   onClose,
   onCloseTabsToRight,
-  onCloseOtherTabs,
   onPin,
   onRename,
   onReorderPrimary,
@@ -225,7 +215,6 @@ export function EditorCompareView({
       onSelect={onSelectPrimary}
       onClose={onClose}
       onCloseTabsToRight={onCloseTabsToRight}
-      onCloseOtherTabs={onCloseOtherTabs}
       onPin={onPin}
       onRename={onRename}
       onReorder={onReorderPrimary}
@@ -250,7 +239,6 @@ export function EditorCompareView({
       onSelect={onSelectSecondary}
       onClose={onClose}
       onCloseTabsToRight={onCloseTabsToRight}
-      onCloseOtherTabs={onCloseOtherTabs}
       onPin={onPin}
       onRename={onRename}
       onReorder={onReorderSecondary}

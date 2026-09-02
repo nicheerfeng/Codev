@@ -5,13 +5,13 @@ import {
 } from "./largeStructuredText";
 
 describe("shouldUseLargeStructuredTextPreview", () => {
-  it("keeps JSON and JSONL in the editor through 50 MB", () => {
+  it("keeps JSON and JSONL in the editor through the full-read limit", () => {
     expect(
       shouldUseLargeStructuredTextPreview("data.jsonl", FULL_EDITOR_MAX_BYTES),
     ).toBe(false);
   });
 
-  it("routes JSON and JSONL above 50 MB to paged text", () => {
+  it("routes JSON and JSONL above the full-read limit to paged text", () => {
     expect(
       shouldUseLargeStructuredTextPreview(
         "data.JSON",

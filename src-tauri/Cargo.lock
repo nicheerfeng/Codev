@@ -534,7 +534,7 @@ dependencies = [
 
 [[package]]
 name = "codev"
-version = "0.8.9"
+version = "0.8.10"
 dependencies = [
  "dirs",
  "globset",
