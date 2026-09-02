@@ -21,6 +21,7 @@ import type { ReactNode } from "react";
 type Props = {
   path: string;
   onDirtyChange?: (dirty: boolean) => void;
+  textOnly?: boolean;
 };
 
 type PreviewKind = "asset" | "text";
@@ -639,13 +640,13 @@ function AssetPreview({ path }: { path: string }) {
 // 提供只读预览器的编辑器句柄，保持标签和刷新接口稳定。
 export const FilePreviewPane = memo(
   forwardRef<EditorPaneHandle, Props>(function FilePreviewPane(
-    { path, onDirtyChange },
+    { path, onDirtyChange, textOnly = false },
     ref,
   ) {
     const rootRef = useRef<HTMLDivElement>(null);
     const textSearchRef = useRef<TextSearchHandle | null>(null);
     const [reloadKey, setReloadKey] = useState(0);
-    const previewKind = getPreviewKind(path);
+    const previewKind = textOnly ? "text" : getPreviewKind(path);
 
     useEffect(() => {
       onDirtyChange?.(false);

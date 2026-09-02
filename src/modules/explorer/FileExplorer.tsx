@@ -42,6 +42,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { InlineInput } from "./InlineInput";
 import { cacheRenamedExpansion } from "./lib/useFileTree";
 import { replacePathPrefix } from "@/lib/pathPrefix";
+import {
+  selectExplorerClipboard,
+  type ExplorerClipboardPayload,
+} from "./lib/clipboardPriority";
 
 export type FileExplorerHandle = {
   focus: () => void;
@@ -70,10 +74,7 @@ type Props = Omit<
 
 type ClipboardKind = "files" | "directories" | "mixed";
 
-type ExternalFileClipboard = {
-  paths: string[];
-  mode: "copy" | "move";
-};
+type ExternalFileClipboard = ExplorerClipboardPayload;
 
 /** 提取工作区根目录的最后一级名称。 */
 function basename(path: string): string {
@@ -332,6 +333,7 @@ export const FileExplorer = memo(
       paths: string[];
       mode: "copy" | "move";
       kind: ClipboardKind;
+      sequence: number;
     } | null>(null);
     const [externalClipboard, setExternalClipboard] =
       useState<ExternalFileClipboard | null>(null);
@@ -348,13 +350,17 @@ export const FileExplorer = memo(
     const refreshedTransferIds = useRef<Set<string>>(new Set());
     const { onPathDeleted } = treeProps;
 
-    /** 查询 Windows 外部文件剪贴板，供 Ctrl+V 和右键菜单使用。 */
-    const refreshExternalClipboard = useCallback(async () => {
-      const value = await invoke<ExternalFileClipboard | null>(
-        "fs_get_file_clipboard",
-      ).catch(() => null);
-      setExternalClipboard(value && value.paths.length > 0 ? value : null);
+    /** 查询系统文件剪贴板及其变更序号。 */
+    const readExternalClipboard = useCallback(async () => {
+      return invoke<ExternalFileClipboard>("fs_get_file_clipboard").catch(
+        () => null,
+      );
     }, []);
+
+    /** 刷新外部剪贴板快照，供右键菜单判断粘贴是否可用。 */
+    const refreshExternalClipboard = useCallback(async () => {
+      setExternalClipboard(await readExternalClipboard());
+    }, [readExternalClipboard]);
 
     useEffect(() => {
       void refreshExternalClipboard();
@@ -390,11 +396,23 @@ export const FileExplorer = memo(
         const uniquePaths = [...new Set(paths)];
         if (uniquePaths.length === 0) return;
         const kind = await detectClipboardKind(uniquePaths);
+        const system = await readExternalClipboard();
+        if (system) setExternalClipboard(system);
         transfer.clear();
-        setClipboard({ paths: uniquePaths, mode: "copy", kind });
+        setClipboard({
+          paths: uniquePaths,
+          mode: "copy",
+          kind,
+          sequence: system?.sequence ?? externalClipboard?.sequence ?? 0,
+        });
         toast.success(`已复制 ${uniquePaths.length} 项`);
       },
-      [detectClipboardKind, transfer.clear],
+      [
+        detectClipboardKind,
+        externalClipboard?.sequence,
+        readExternalClipboard,
+        transfer.clear,
+      ],
     );
 
     /** 将选中路径放入应用内剪切剪贴板。 */
@@ -403,11 +421,23 @@ export const FileExplorer = memo(
         const uniquePaths = [...new Set(paths)];
         if (uniquePaths.length === 0) return;
         const kind = await detectClipboardKind(uniquePaths);
+        const system = await readExternalClipboard();
+        if (system) setExternalClipboard(system);
         transfer.clear();
-        setClipboard({ paths: uniquePaths, mode: "move", kind });
+        setClipboard({
+          paths: uniquePaths,
+          mode: "move",
+          kind,
+          sequence: system?.sequence ?? externalClipboard?.sequence ?? 0,
+        });
         toast.success(`已剪切 ${uniquePaths.length} 项`);
       },
-      [detectClipboardKind, transfer.clear],
+      [
+        detectClipboardKind,
+        externalClipboard?.sequence,
+        readExternalClipboard,
+        transfer.clear,
+      ],
     );
 
     /** 将复制、剪切和拖拽统一提交到后台迁移任务。 */
@@ -465,17 +495,9 @@ export const FileExplorer = memo(
     /** 通过 Ctrl+V 将应用内或系统文件剪贴板迁移到当前选中的目录。 */
     const pasteClipboard = useCallback(
       async (targetDirectory?: string) => {
-        let pending = clipboard
-          ? { paths: clipboard.paths, mode: clipboard.mode }
-          : externalClipboard;
-        if (!pending) {
-          pending = await invoke<ExternalFileClipboard | null>(
-            "fs_get_file_clipboard",
-          ).catch(() => null);
-          setExternalClipboard(
-            pending && pending.paths.length > 0 ? pending : null,
-          );
-        }
+        const system = await readExternalClipboard();
+        if (system) setExternalClipboard(system);
+        const pending = selectExplorerClipboard(clipboard, system);
         if (!pending || pending.paths.length === 0) return;
         const selected = selectedPaths[selectedPaths.length - 1];
         const destination =
@@ -496,7 +518,7 @@ export const FileExplorer = memo(
             pending.mode === "copy" ? "copy" : "move",
           );
           if (pending.mode === "move" && result?.status === "completed") {
-            setClipboard(null);
+            if (pending.source === "internal") setClipboard(null);
             setExternalClipboard(null);
           }
         } catch (error) {
@@ -506,15 +528,16 @@ export const FileExplorer = memo(
       [
         activeRoot,
         clipboard,
-        externalClipboard,
         parentPath,
+        readExternalClipboard,
         roots,
         selectedPaths,
         transfer.start,
       ],
     );
 
-    const pasteAvailable = clipboard !== null || externalClipboard !== null;
+    const pasteAvailable =
+      selectExplorerClipboard(clipboard, externalClipboard) !== null;
 
     /** 仅在文件树获得焦点时接管复制、剪切、粘贴快捷键。 */
     const handleExplorerKeyDown = useCallback(
@@ -533,12 +556,12 @@ export const FileExplorer = memo(
         } else if (key === "x" && selectedPaths.length > 0) {
           event.preventDefault();
           cutPaths(selectedPaths);
-        } else if (key === "v" && pasteAvailable) {
+        } else if (key === "v") {
           event.preventDefault();
           void pasteClipboard();
         }
       },
-      [copyPaths, cutPaths, pasteAvailable, pasteClipboard, selectedPaths],
+      [copyPaths, cutPaths, pasteClipboard, selectedPaths],
     );
 
     useEffect(() => {
