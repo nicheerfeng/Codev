@@ -92,11 +92,7 @@ import { useWorkspaceSwitcher } from "./hooks/useWorkspaceSwitcher";
 
 /** 判断文件标签是否对应同一个规范化路径。 */
 function tabPathMatches(tab: Tab, path: string): boolean {
-  if (
-    tab.kind !== "editor" &&
-    tab.kind !== "markdown" &&
-    tab.kind !== "html"
-  )
+  if (tab.kind !== "editor" && tab.kind !== "markdown" && tab.kind !== "html")
     return false;
   return tab.path.replace(/\\/g, "/") === path.replace(/\\/g, "/");
 }
@@ -523,7 +519,6 @@ export default function App() {
     closeManyConfirming,
     handleClose,
     handleCloseTabsToRightInGroup,
-    handleCloseOtherTabsInGroup,
     confirmClose,
     cancelClose,
     confirmTerminalClose,
@@ -1083,6 +1078,9 @@ export default function App() {
               }}
               searchTarget={searchTarget}
               searchRef={searchInlineRef}
+              openFileTabs={fileTabs}
+              activeFileId={isTerminalTab ? null : activeId}
+              onSelectFile={focusEditor}
             />
           )}
 
@@ -1150,7 +1148,6 @@ export default function App() {
                     onSelectSecondary={selectSecondaryEditor}
                     onClose={handleClose}
                     onCloseTabsToRight={handleCloseTabsToRightInGroup}
-                    onCloseOtherTabs={handleCloseOtherTabsInGroup}
                     onPin={pinTab}
                     onRename={handleRenameTab}
                     onReorderPrimary={reorderPrimaryEditors}
