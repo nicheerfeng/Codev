@@ -511,7 +511,7 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
             {status.kind === "ready" && (
               <Streamdown
                 className={cn(
-                  "select-text [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+                  "markdown-rendered select-text [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
                   outlineCollapsed &&
                     "[&>:not(h1):not(h2):not(h3):not(h4):not(h5):not(h6)]:hidden",
                 )}

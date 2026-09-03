@@ -2,6 +2,7 @@ import { Switch } from "@/components/ui/switch";
 import { useT } from "@/lib/i18n";
 import {
   JSON_FORMATTER_PLUGIN_ID,
+  TEXT_DIFF_PLUGIN_ID,
   setPluginEnabled,
   usePluginStore,
 } from "@/modules/plugins";
@@ -13,6 +14,9 @@ export function PluginsSection() {
   const t = useT();
   const enabled = usePluginStore(
     (state) => state.enabled[JSON_FORMATTER_PLUGIN_ID],
+  );
+  const diffEnabled = usePluginStore(
+    (state) => state.enabled[TEXT_DIFF_PLUGIN_ID],
   );
   const init = usePluginStore((state) => state.init);
 
@@ -35,6 +39,19 @@ export function PluginsSection() {
           checked={enabled}
           onCheckedChange={(value) =>
             void setPluginEnabled(JSON_FORMATTER_PLUGIN_ID, value)
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        title={t("Text Diff")}
+        description={t(
+          "Compare two texts in aligned editors with automatic difference highlighting.",
+        )}
+      >
+        <Switch
+          checked={diffEnabled}
+          onCheckedChange={(value) =>
+            void setPluginEnabled(TEXT_DIFF_PLUGIN_ID, value)
           }
         />
       </SettingRow>

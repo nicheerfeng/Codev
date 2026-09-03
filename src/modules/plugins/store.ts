@@ -3,7 +3,10 @@ import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { LazyStore } from "@tauri-apps/plugin-store";
 
 export const JSON_FORMATTER_PLUGIN_ID = "json-formatter" as const;
-export type PluginId = typeof JSON_FORMATTER_PLUGIN_ID;
+export const TEXT_DIFF_PLUGIN_ID = "text-diff" as const;
+export type PluginId =
+  | typeof JSON_FORMATTER_PLUGIN_ID
+  | typeof TEXT_DIFF_PLUGIN_ID;
 
 export type PluginState = {
   enabled: Record<PluginId, boolean>;
@@ -18,7 +21,10 @@ const STORE_PATH = "codev-plugins.json";
 const ENABLED_PLUGINS_KEY = "enabledPlugins";
 const PLUGIN_CHANGED_EVENT = "codev://plugin-settings-changed";
 const DEFAULT_PLUGIN_STATE: PluginState = {
-  enabled: { [JSON_FORMATTER_PLUGIN_ID]: false },
+  enabled: {
+    [JSON_FORMATTER_PLUGIN_ID]: false,
+    [TEXT_DIFF_PLUGIN_ID]: false,
+  },
 };
 const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: 200 });
 let initPromise: Promise<void> | null = null;
@@ -33,6 +39,7 @@ function normalizePluginState(value: unknown): PluginState {
     enabled: {
       [JSON_FORMATTER_PLUGIN_ID]:
         enabled[JSON_FORMATTER_PLUGIN_ID] === true,
+      [TEXT_DIFF_PLUGIN_ID]: enabled[TEXT_DIFF_PLUGIN_ID] === true,
     },
   };
 }
@@ -63,8 +70,12 @@ export async function onPluginStateChange(
   return listen<{ id: string; enabled: boolean }>(
     PLUGIN_CHANGED_EVENT,
     (event) => {
-      if (event.payload.id !== JSON_FORMATTER_PLUGIN_ID) return;
-      callback(JSON_FORMATTER_PLUGIN_ID, event.payload.enabled === true);
+      if (
+        event.payload.id !== JSON_FORMATTER_PLUGIN_ID &&
+        event.payload.id !== TEXT_DIFF_PLUGIN_ID
+      )
+        return;
+      callback(event.payload.id, event.payload.enabled === true);
     },
   );
 }

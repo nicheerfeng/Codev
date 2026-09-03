@@ -87,6 +87,9 @@ const ZH: Record<string, string> = {
   "JSON/JSONL Formatter": "JSON/JSONL 格式化",
   "Paste JSON or JSONL into an independent formatter page, then search and compare it.":
     "将 JSON 或 JSONL 粘贴到独立格式化页面中，支持搜索和对照。",
+  "Text Diff": "文本对照",
+  "Compare two texts in aligned editors with automatic difference highlighting.":
+    "在对齐编辑器中比较两段文本并自动高亮差异。",
   Shortcuts: "快捷键",
   "Show hidden files": "显示隐藏文件",
   "Semi-Bold": "半粗",

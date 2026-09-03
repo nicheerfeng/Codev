@@ -404,6 +404,104 @@ html *::-webkit-scrollbar {
   background: var(--background) !important;
 }
 
+/* Keep rendered Markdown tables inside the reader and usable with long URLs. */
+.markdown-rendered [data-streamdown="table-wrapper"] > div:last-child {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin !important;
+  -ms-overflow-style: auto !important;
+}
+.markdown-rendered
+  [data-streamdown="table-wrapper"]
+  > div:last-child::-webkit-scrollbar {
+  width: 9px !important;
+  height: 9px !important;
+  display: block !important;
+  background: var(--background) !important;
+}
+.markdown-rendered
+  [data-streamdown="table-wrapper"]
+  > div:last-child::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted-foreground) 58%, transparent) !important;
+  background-clip: padding-box !important;
+}
+.markdown-rendered
+  [data-streamdown="table-wrapper"]
+  > div:last-child::-webkit-scrollbar-track {
+  background: var(--background) !important;
+}
+.markdown-rendered [data-streamdown="table-wrapper"] td {
+  overflow-wrap: anywhere;
+}
+
+/* Keep both text-diff editors fully interactive with one scroll layer each. */
+.codev-diff-view {
+  background: var(--background);
+}
+.codev-diff-editor {
+  display: flex;
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  min-height: 0;
+  background: var(--background);
+}
+.codev-diff-cm {
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--background);
+}
+.codev-diff-cm > .cm-editor {
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  background: var(--background) !important;
+}
+.codev-diff-cm > .cm-editor > .cm-scroller {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: auto !important;
+}
+.codev-diff-changed-text {
+  font-weight: 600;
+}
+.codev-diff-left-changed-text,
+.codev-diff-left-changed-text * {
+  color: color-mix(in srgb, var(--foreground) 46%, #6eaa84 54%) !important;
+}
+.codev-diff-left-changed-text {
+  background: color-mix(in srgb, #91b5a2 28%, transparent) !important;
+}
+.codev-diff-right-changed-text,
+.codev-diff-right-changed-text * {
+  color: color-mix(in srgb, var(--foreground) 46%, #9c7fbc 54%) !important;
+}
+.codev-diff-right-changed-text {
+  background: color-mix(in srgb, #a797be 28%, transparent) !important;
+}
+.codev-diff-editor .codev-search-match {
+  background: #e8c75a !important;
+  color: #171a1f !important;
+}
+.codev-diff-editor .codev-search-active {
+  background: #f0a43b !important;
+  color: #111318 !important;
+  box-shadow: inset 0 0 0 1px #8a4f0b;
+}
+
 /* Motion tokens. Reduced-motion zeroes the durations as a global snap. */
 :root {
   --dur-fast: 160ms;
