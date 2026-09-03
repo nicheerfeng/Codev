@@ -16,4 +16,8 @@ describe("MarkdownPreviewPane Streamdown configuration", () => {
   it("does not run streaming incomplete-markdown repair for files", () => {
     expect(streamdownJsx).toMatch(/parseIncompleteMarkdown=\{false\}/);
   });
+
+  it("scopes table overflow handling to rendered markdown", () => {
+    expect(streamdownJsx).toMatch(/markdown-rendered/);
+  });
 });

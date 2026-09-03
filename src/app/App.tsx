@@ -165,12 +165,17 @@ export default function App() {
   const terminalPathDropTarget = useTerminalFileDrop();
   const explorerRef = useRef<FileExplorerHandle>(null);
   const pluginEnabled = usePluginStore(
+    (state) => state.enabled["json-formatter"] || state.enabled["text-diff"],
+  );
+  const jsonFormatterEnabled = usePluginStore(
     (state) => state.enabled["json-formatter"],
   );
+  const textDiffEnabled = usePluginStore((state) => state.enabled["text-diff"]);
   const initPlugins = usePluginStore((state) => state.init);
   const [rightDockView, setRightDockView] = useState<"terminal" | "tools">(
     "terminal",
   );
+  const [toolView, setToolView] = useState<"json" | "diff">("json");
 
   useEffect(() => {
     void initPlugins();
@@ -179,6 +184,15 @@ export default function App() {
   useEffect(() => {
     if (!pluginEnabled) setRightDockView("terminal");
   }, [pluginEnabled]);
+
+  useEffect(() => {
+    if (toolView === "json" && !jsonFormatterEnabled && textDiffEnabled) {
+      setToolView("diff");
+    }
+    if (toolView === "diff" && !textDiffEnabled && jsonFormatterEnabled) {
+      setToolView("json");
+    }
+  }, [jsonFormatterEnabled, textDiffEnabled, toolView]);
 
   // Drives session disposal off the pane tree, not React lifecycles —
   // split/unsplit re-mount components but the leaf is still live.
@@ -1193,17 +1207,38 @@ export default function App() {
                       >
                         终端
                       </button>
-                      <button
-                        type="button"
-                        className={`h-6 rounded-sm px-2 text-[11px] ${
-                          rightDockView === "tools"
-                            ? "bg-accent text-foreground"
-                            : "text-muted-foreground hover:bg-muted"
-                        }`}
-                        onClick={() => setRightDockView("tools")}
-                      >
-                        JSON格式化
-                      </button>
+                      {jsonFormatterEnabled && (
+                        <button
+                          type="button"
+                          className={`h-6 rounded-sm px-2 text-[11px] ${
+                            rightDockView === "tools" && toolView === "json"
+                              ? "bg-accent text-foreground"
+                              : "text-muted-foreground hover:bg-muted"
+                          }`}
+                          onClick={() => {
+                            setToolView("json");
+                            setRightDockView("tools");
+                          }}
+                        >
+                          JSON格式化
+                        </button>
+                      )}
+                      {textDiffEnabled && (
+                        <button
+                          type="button"
+                          className={`h-6 rounded-sm px-2 text-[11px] ${
+                            rightDockView === "tools" && toolView === "diff"
+                              ? "bg-accent text-foreground"
+                              : "text-muted-foreground hover:bg-muted"
+                          }`}
+                          onClick={() => {
+                            setToolView("diff");
+                            setRightDockView("tools");
+                          }}
+                        >
+                          文本对照
+                        </button>
+                      )}
                       <div className="flex-1" />
                       {rightDockView === "terminal" && (
                         <button
@@ -1254,7 +1289,7 @@ export default function App() {
                             : "invisible pointer-events-none absolute inset-0"
                         }
                       >
-                        <ToolPanel />
+                        <ToolPanel tool={toolView} />
                       </div>
                     )}
                   </div>

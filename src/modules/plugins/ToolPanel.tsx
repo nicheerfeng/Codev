@@ -1,11 +1,16 @@
 import { useState } from "react";
 import { JsonFormatterPane } from "./JsonFormatterPane";
+import { TextDiffPane } from "./TextDiffPane";
 
 const MAX_FORMATTER_PANES = 2;
 
+type ToolId = "json" | "diff";
+
 /** 渲染独立插件工具区，最多保留两个横向 JSON 格式化页面。 */
-export function ToolPanel() {
+export function ToolPanel({ tool = "json" }: { tool?: ToolId }) {
   const [paneIds, setPaneIds] = useState([1]);
+
+  if (tool === "diff") return <TextDiffPane />;
 
   /** 创建第二个独立格式化页，不超过工具页上限。 */
   const addPane = () => {
@@ -16,7 +21,9 @@ export function ToolPanel() {
 
   /** 关闭格式化页并保留至少一个可用工具页。 */
   const closePane = (id: number) => {
-    setPaneIds((ids) => (ids.length === 1 ? ids : ids.filter((item) => item !== id)));
+    setPaneIds((ids) =>
+      ids.length === 1 ? ids : ids.filter((item) => item !== id),
+    );
   };
 
   return (
