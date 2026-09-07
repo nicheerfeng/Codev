@@ -10,6 +10,11 @@ describe("resolveDisplayName", () => {
     expect(resolveDisplayName("README.md")).toBe("Markdown");
     expect(resolveDisplayName("query.sql")).toBe("SQL");
     expect(resolveDisplayName("Component.svelte")).toBe("Svelte");
+    expect(resolveDisplayName("analysis.R")).toBe("R");
+    expect(resolveDisplayName("simulation.jl")).toBe("Julia");
+    expect(resolveDisplayName("model.m")).toBe("MATLAB / Octave");
+    expect(resolveDisplayName("pipeline.sas")).toBe("SAS");
+    expect(resolveDisplayName("solver.f90")).toBe("Fortran");
   });
 
   it("strips directories before resolving", () => {
@@ -39,6 +44,23 @@ describe("resolveDisplayName", () => {
     expect(result?.name).toBe("Dotenv");
     expect(result?.id).toBe("env");
     expect(result?.ext).toBeTruthy();
+  });
+
+  it("loads applied-language modes for script files", async () => {
+    const cases = [
+      ["analysis.R", "R", "r"],
+      ["simulation.jl", "Julia", "jl"],
+      ["model.m", "MATLAB / Octave", "m"],
+      ["pipeline.sas", "SAS", "sas"],
+      ["solver.f90", "Fortran", "f"],
+    ] as const;
+
+    for (const [path, name, id] of cases) {
+      const result = await resolveLanguage(path);
+      expect(result?.name).toBe(name);
+      expect(result?.id).toBe(id);
+      expect(result?.ext).toBeTruthy();
+    }
   });
 
   // `.svelte` used to resolve to HTML, which left blocks and directives as

@@ -39,6 +39,7 @@ const searchMatch = Decoration.mark({ class: "codev-search-match" });
 const searchActive = Decoration.mark({ class: "codev-search-active" });
 
 const DIFF_BASIC_SETUP = {
+  drawSelection: false,
   lineNumbers: true,
   foldGutter: true,
   bracketMatching: true,
@@ -438,7 +439,7 @@ export function TextDiffPane() {
   );
 
   return (
-    <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+    <section className="flex h-full w-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
       <header className="flex h-9 shrink-0 items-center gap-1 border-b border-border/60 px-2">
         <DiffSearchBox
           label="原文"

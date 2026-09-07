@@ -201,6 +201,7 @@ export function JsonFormatterPane({ onAdd, onClose }: Props) {
         height="100%"
         className="reader-scrollbar min-h-0 min-w-0 max-w-full flex-1 overflow-hidden"
         basicSetup={{
+          drawSelection: false,
           lineNumbers: true,
           foldGutter: true,
           bracketMatching: true,

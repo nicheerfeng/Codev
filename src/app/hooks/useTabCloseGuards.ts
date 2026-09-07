@@ -16,9 +16,20 @@ import {
 } from "@/modules/tabs";
 import { leafHasForegroundProcess, leafIds } from "@/modules/terminal";
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
 function confirmRunningTerminal(): boolean {
   return usePreferencesStore.getState().confirmCloseRunningTerminal;
+}
+
+/** 判断标签是否为当前关闭范围内的可保存未保存文件。 */
+function isDirtyFileTab(tab: Tab): boolean {
+  return (
+    (tab.kind === "editor" ||
+      (tab.kind === "markdown" && tab.viewMode === "raw") ||
+      (tab.kind === "html" && tab.viewMode === "raw")) &&
+    tab.dirty
+  );
 }
 
 type Params = {
@@ -26,18 +37,19 @@ type Params = {
   activeId: number;
   disposeTab: (id: number) => void;
   disposeTabs: (anchorId: number, plan: CloseTabsPlan) => void;
+  saveTab: (id: number) => Promise<boolean>;
 };
 
 /**
- * Guards tab closing: dirty editors and terminals with a live foreground
- * process route through a confirmation dialog instead of closing immediately.
- * Owns the pending-close states the dialogs render from.
+ * Guards tab closing: live terminal processes route through confirmation,
+ * while dirty file buffers are saved before the tabs are disposed.
  */
 export function useTabCloseGuards({
   tabs,
   activeId,
   disposeTab,
   disposeTabs,
+  saveTab,
 }: Params) {
   const tabsRef = useRef(tabs);
   const activeIdRef = useRef(activeId);
@@ -45,7 +57,6 @@ export function useTabCloseGuards({
     tabsRef.current = tabs;
     activeIdRef.current = activeId;
   }, [tabs, activeId]);
-  const [pendingCloseTab, setPendingCloseTab] = useState<number | null>(null);
   const [pendingTerminalCloseTab, setPendingTerminalCloseTab] = useState<
     number | null
   >(null);
@@ -56,6 +67,31 @@ export function useTabCloseGuards({
     useState<CloseManyPending | null>(null);
   const [closeManyConfirming, setCloseManyConfirming] = useState(false);
   const closeManyRequestRef = useRef(0);
+
+  /** 关闭前顺序保存目标文件，任一失败时保留全部目标标签。 */
+  const saveDirtyTabs = useCallback(
+    async (ids: number[]): Promise<boolean> => {
+      const targets = new Set(ids);
+      const dirtyTabs = tabsRef.current.filter(
+        (tab) => targets.has(tab.id) && isDirtyFileTab(tab),
+      );
+      for (const tab of dirtyTabs) {
+        try {
+          if (await saveTab(tab.id)) continue;
+          toast.error(`保存失败，已取消关闭：${tab.title}`);
+          return false;
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          toast.error(`保存失败，已取消关闭：${tab.title}`, {
+            description: reason,
+          });
+          return false;
+        }
+      }
+      return true;
+    },
+    [saveTab],
+  );
 
   const handleClose = useCallback(
     async (id: number) => {
@@ -69,15 +105,6 @@ export function useTabCloseGuards({
         t?.kind !== "html"
       )
         return;
-      if (
-        (t?.kind === "editor" ||
-          (t?.kind === "markdown" && t.viewMode === "raw") ||
-          (t?.kind === "html" && t.viewMode === "raw")) &&
-        t.dirty
-      ) {
-        setPendingCloseTab(id);
-        return;
-      }
       if (t?.kind === "terminal" && confirmRunningTerminal()) {
         const leaves = leafIds(t.paneTree);
         const checks = await Promise.all(leaves.map(leafHasForegroundProcess));
@@ -86,24 +113,16 @@ export function useTabCloseGuards({
           return;
         }
       }
+      if (!(await saveDirtyTabs([id]))) return;
       disposeTab(id);
     },
-    [tabs, disposeTab],
+    [tabs, disposeTab, saveDirtyTabs],
   );
 
   const captureCloseMany = useCallback((closeIds: number[]) => {
     const close = new Set(closeIds);
     const affected = tabsRef.current.filter((tab) => close.has(tab.id));
     return {
-      dirtyIds: affected
-        .filter(
-          (tab) =>
-            (tab.kind === "editor" ||
-              (tab.kind === "markdown" && tab.viewMode === "raw") ||
-              (tab.kind === "html" && tab.viewMode === "raw")) &&
-            tab.dirty,
-        )
-        .map((tab) => tab.id),
       leafIds: affected
         .filter((tab) => tab.kind === "terminal")
         .flatMap((tab) => leafIds(tab.paneTree)),
@@ -151,9 +170,17 @@ export function useTabCloseGuards({
         setPendingCloseMany({ kind, anchorId, plan, ...hazards });
         return;
       }
+      if (!(await saveDirtyTabs(plan.closeIds))) return;
+      if (requestId !== closeManyRequestRef.current) return;
       disposeTabs(anchorId, withCurrentActive(plan));
     },
-    [disposeTabs, evaluateCloseMany, planCloseMany, withCurrentActive],
+    [
+      disposeTabs,
+      evaluateCloseMany,
+      planCloseMany,
+      saveDirtyTabs,
+      withCurrentActive,
+    ],
   );
 
   const handleCloseTabsToRight = useCallback(
@@ -195,29 +222,31 @@ export function useTabCloseGuards({
       setCloseManyConfirming(false);
       return;
     }
+    const saved = await saveDirtyTabs(pendingCloseMany.plan.closeIds);
+    if (requestId !== closeManyRequestRef.current) return;
+    if (!saved) {
+      setPendingCloseMany(null);
+      setCloseManyConfirming(false);
+      return;
+    }
     disposeTabs(
       pendingCloseMany.anchorId,
       withCurrentActive(pendingCloseMany.plan),
     );
     setPendingCloseMany(null);
     setCloseManyConfirming(false);
-  }, [pendingCloseMany, disposeTabs, evaluateCloseMany, withCurrentActive]);
+  }, [
+    pendingCloseMany,
+    disposeTabs,
+    evaluateCloseMany,
+    saveDirtyTabs,
+    withCurrentActive,
+  ]);
 
   const cancelCloseMany = useCallback(() => {
     closeManyRequestRef.current += 1;
     setPendingCloseMany(null);
     setCloseManyConfirming(false);
-  }, []);
-
-  const confirmClose = useCallback(() => {
-    if (pendingCloseTab !== null) {
-      disposeTab(pendingCloseTab);
-      setPendingCloseTab(null);
-    }
-  }, [pendingCloseTab, disposeTab]);
-
-  const cancelClose = useCallback(() => {
-    setPendingCloseTab(null);
   }, []);
 
   const confirmTerminalClose = useCallback(() => {
@@ -258,7 +287,6 @@ export function useTabCloseGuards({
   );
 
   return {
-    pendingCloseTab,
     pendingTerminalCloseTab,
     pendingDeleteTabs,
     pendingCloseMany,
@@ -268,8 +296,6 @@ export function useTabCloseGuards({
     handleCloseOtherTabs,
     handleCloseTabsToRightInGroup,
     handleCloseOtherTabsInGroup,
-    confirmClose,
-    cancelClose,
     confirmTerminalClose,
     cancelTerminalClose,
     confirmDeleteClose,

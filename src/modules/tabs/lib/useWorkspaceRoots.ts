@@ -7,6 +7,7 @@ import {
   setWorkspaceRoots,
 } from "@/modules/settings/store";
 import { workspaceAuthorize } from "@/modules/workspace/native";
+import { reorderRoots } from "@/modules/explorer/lib/reorderRoots";
 
 /**
  * Multi-root workspace state. Roots are imported folders (forward-slash
@@ -63,5 +64,12 @@ export function useWorkspaceRoots() {
     }
   }, []);
 
-  return { roots, activeRoot, addRoot, removeRoot, renameRoot, setActiveRoot };
+  /** 保存根目录展示顺序，保持活动根目录不变。 */
+  const reorderRoot = useCallback(async (source: string, gap: number) => {
+    const current = usePreferencesStore.getState().workspaceRoots;
+    const next = reorderRoots(current, source, gap);
+    if (next !== current) await setWorkspaceRoots(next);
+  }, []);
+
+  return { roots, activeRoot, addRoot, removeRoot, renameRoot, setActiveRoot, reorderRoot };
 }

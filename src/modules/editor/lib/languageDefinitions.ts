@@ -76,6 +76,54 @@ export const LANGUAGES: LanguageDefinition[] = [
     userSelectable: true,
   },
   {
+    name: "R",
+    extensions: ["r", "rscript"],
+    loader: () =>
+      defineLanguage(
+        import("@codemirror/legacy-modes/mode/r").then((m) => m.r),
+      ),
+    filenames: [".rprofile", "rprofile.site"],
+    userSelectable: true,
+  },
+  {
+    name: "Julia",
+    extensions: ["jl"],
+    loader: () =>
+      defineLanguage(
+        import("@codemirror/legacy-modes/mode/julia").then((m) => m.julia),
+      ),
+    userSelectable: true,
+  },
+  {
+    name: "MATLAB / Octave",
+    extensions: ["m"],
+    loader: () =>
+      defineLanguage(
+        import("@codemirror/legacy-modes/mode/octave").then((m) => m.octave),
+      ),
+    userSelectable: true,
+  },
+  {
+    name: "SAS",
+    extensions: ["sas"],
+    loader: () =>
+      defineLanguage(
+        import("@codemirror/legacy-modes/mode/sas").then((m) => m.sas),
+      ),
+    userSelectable: true,
+  },
+  {
+    name: "Fortran",
+    extensions: ["f", "f90", "f95", "f03", "f08", "for"],
+    loader: () =>
+      defineLanguage(
+        import("@codemirror/legacy-modes/mode/fortran").then(
+          (m) => m.fortran,
+        ),
+      ),
+    userSelectable: true,
+  },
+  {
     name: "JSON",
     extensions: ["json", "jsonc", "json5"],
     loader: () => import("@codemirror/lang-json").then((m) => m.json()),

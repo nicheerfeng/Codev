@@ -473,6 +473,7 @@ export default function App() {
     addRoot,
     removeRoot,
     renameRoot: renameWorkspaceRoot,
+    reorderRoot,
     setActiveRoot,
   } = useWorkspaceRoots();
 
@@ -514,6 +515,13 @@ export default function App() {
     [closeTab],
   );
 
+  /** 从编辑器句柄保存指定文件，为关闭流程提供统一入口。 */
+  const saveTab = useCallback(async (id: number): Promise<boolean> => {
+    const handle = editorRefs.current.get(id);
+    if (!handle) return false;
+    return handle.save();
+  }, []);
+
   const disposeTabs = useCallback(
     (anchorId: number, plan: CloseTabsPlan) => {
       const closedIds = closeTabs(anchorId, plan);
@@ -526,15 +534,12 @@ export default function App() {
   );
 
   const {
-    pendingCloseTab,
     pendingTerminalCloseTab,
     pendingDeleteTabs,
     pendingCloseMany,
     closeManyConfirming,
     handleClose,
     handleCloseTabsToRightInGroup,
-    confirmClose,
-    cancelClose,
     confirmTerminalClose,
     cancelTerminalClose,
     confirmDeleteClose,
@@ -547,6 +552,7 @@ export default function App() {
     activeId,
     disposeTab,
     disposeTabs,
+    saveTab,
   });
 
   const { pendingAppClose, confirmAppClose, cancelAppClose } =
@@ -1137,6 +1143,7 @@ export default function App() {
                       onAddRoot={(p) => void addRoot(p)}
                       onRemoveRoot={(p) => void removeRoot(p)}
                       onRenameRoot={renameWorkspaceRoot}
+                      onReorderRoot={reorderRoot}
                       onSetActiveRoot={(p) => void setActiveRoot(p)}
                       activeFilePath={explorerActiveFilePath}
                       onOpenFile={handleOpenFile}
@@ -1323,9 +1330,6 @@ export default function App() {
 
           <CloseDialogs
             tabs={tabs}
-            pendingCloseTab={pendingCloseTab}
-            onCancelClose={cancelClose}
-            onConfirmClose={confirmClose}
             pendingTerminalCloseTab={pendingTerminalCloseTab}
             onCancelTerminalClose={cancelTerminalClose}
             onConfirmTerminalClose={confirmTerminalClose}

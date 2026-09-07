@@ -678,6 +678,7 @@ export const FilePreviewPane = memo(
         focus: () => rootRef.current?.focus(),
         getSelection: () => null,
         getPath: () => path,
+        save: async () => true,
         reload,
         gotoLine: () => {},
         undo: () => {},

@@ -278,6 +278,7 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
         focus: () => iframeRef.current?.focus(),
         getSelection: () => null,
         getPath: () => path,
+        save: async () => true,
         reload,
         gotoLine: () => {},
         undo: () => {},

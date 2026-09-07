@@ -46,6 +46,8 @@ export type EditorPaneHandle = TextSearchHandle & {
   focus: () => void;
   getSelection: () => string | null;
   getPath: () => string;
+  /** 立即保存当前编辑缓冲区，返回是否写入成功。 */
+  save: () => Promise<boolean>;
   /** Re-read the file from disk. Skips silently if the buffer is dirty. */
   reload: () => boolean;
   /** Move the cursor to a 1-based line and center it, once content is ready. */
@@ -450,6 +452,7 @@ export const EditorPane = memo(
           return view.state.sliceDoc(from, to);
         },
         getPath: () => path,
+        save: () => saveRef.current(),
         reload: () => reloadRef.current(),
         gotoLine: (line: number, options) => {
           pendingLineRef.current = {
