@@ -6,6 +6,10 @@ import { getNonWhitespaceRanges, tightenDiffRange } from "./TextDiffPane";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(path.join(here, "TextDiffPane.tsx"), "utf8");
+const themeSource = readFileSync(
+  path.join(here, "../editor/lib/cmThemes.ts"),
+  "utf8",
+);
 const appSource = readFileSync(path.join(here, "../../app/App.tsx"), "utf8");
 
 describe("TextDiffPane", () => {
@@ -25,6 +29,19 @@ describe("TextDiffPane", () => {
     expect(source).toMatch(/w-1\/2 max-w-\[50%\]/);
     expect(source).toMatch(/label="原文"/);
     expect(source).toMatch(/label="对照文本"/);
+  });
+
+  it("fills the complete tool viewport when both panes are empty", () => {
+    expect(source).toMatch(
+      /className="flex h-full w-full min-h-0 min-w-0 flex-1 flex-col/,
+    );
+  });
+
+  it("uses the reader selection background for both plugin editors", () => {
+    expect(source).toMatch(/drawSelection: false/);
+    expect(themeSource).toMatch(
+      /selection: "var\(--text-selection-background\)"/,
+    );
   });
 
   it("keeps pure diff calculation and decorations on both sides", () => {

@@ -22,9 +22,6 @@ import { useId, useState } from "react";
 
 type Props = {
   tabs: Tab[];
-  pendingCloseTab: number | null;
-  onCancelClose: () => void;
-  onConfirmClose: () => void;
   pendingTerminalCloseTab: number | null;
   onCancelTerminalClose: () => void;
   onConfirmTerminalClose: () => void;
@@ -98,31 +95,10 @@ async function persistOptOut(): Promise<void> {
   }
 }
 
-function closeManyMessage(pending: CloseManyPending, tabs: Tab[]): string {
-  const { kind, dirtyIds, busyLeafIds } = pending;
-  const dirtyCount = dirtyIds.length;
+/** 生成运行中终端批量关闭确认的提示文本。 */
+function closeManyMessage(pending: CloseManyPending): string {
+  const { kind, busyLeafIds } = pending;
   const busyCount = busyLeafIds.length;
-  if (dirtyCount === 1 && busyCount === 0) {
-    const dirty = tabs.find(
-      (tab) =>
-        (tab.kind === "editor" || tab.kind === "html") &&
-        dirtyIds.includes(tab.id),
-    );
-    return dirty?.title
-      ? `"${dirty.title}" has unsaved changes. Close it anyway?`
-      : "1 tab has unsaved changes. Close it anyway?";
-  }
-  if (dirtyCount > 0 && busyCount > 0) {
-    const dirty = `${dirtyCount} tab${dirtyCount === 1 ? " has" : "s have"} unsaved changes`;
-    const busy =
-      busyCount === 1
-        ? "a process is running"
-        : `${busyCount} processes are running`;
-    return `${dirty} and ${busy}. Closing will discard the changes and terminate the ${busyCount === 1 ? "process" : "processes"}. Close anyway?`;
-  }
-  if (dirtyCount > 0) {
-    return `${dirtyCount} tabs have unsaved changes. Closing will discard them. Close anyway?`;
-  }
   const process =
     busyCount === 1 ? "A process is" : `${busyCount} processes are`;
   return kind === "right"
@@ -133,9 +109,6 @@ function closeManyMessage(pending: CloseManyPending, tabs: Tab[]): string {
 /** Confirmation dialogs for closing dirty editors and terminals with live processes. */
 export function CloseDialogs({
   tabs,
-  pendingCloseTab,
-  onCancelClose,
-  onConfirmClose,
   pendingTerminalCloseTab,
   onCancelTerminalClose,
   onConfirmTerminalClose,
@@ -182,32 +155,6 @@ export function CloseDialogs({
 
   return (
     <>
-      <AlertDialog
-        open={pendingCloseTab !== null}
-        onOpenChange={(open) => !open && onCancelClose()}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Unsaved Changes</AlertDialogTitle>
-            <AlertDialogDescription>
-              {tabs.find((t) => t.id === pendingCloseTab)?.title
-                ? `"${
-                    tabs.find((t) => t.id === pendingCloseTab)?.title
-                  }" has unsaved changes. Close anyway?`
-                : "This file has unsaved changes. Close anyway?"}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={onCancelClose}>
-              Cancel
-            </AlertDialogCancel>
-            <AlertDialogAction onClick={onConfirmClose}>
-              Close Anyway
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
       <AlertDialog
         open={pendingTerminalCloseTab !== null}
         onOpenChange={(open) => !open && cancelTerminalClose()}
@@ -277,7 +224,7 @@ export function CloseDialogs({
                 : "Close Other Tabs"}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {pendingCloseMany ? closeManyMessage(pendingCloseMany, tabs) : ""}
+              {pendingCloseMany ? closeManyMessage(pendingCloseMany) : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -453,6 +453,7 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
         focus: () => rootRef.current?.focus(),
         getSelection: () => null,
         getPath: () => path,
+        save: async () => true,
         reload: () => {
           setReloadKey((value) => value + 1);
           return true;

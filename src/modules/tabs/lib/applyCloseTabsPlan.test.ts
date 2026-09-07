@@ -25,6 +25,17 @@ function terminal(id: number, leafId: number, spaceId = "a"): Tab {
 }
 
 describe("applyCloseTabsPlan", () => {
+  it("plans every tab strictly to the right of the anchor", () => {
+    const plan = planCloseTabsToRight(
+      [editor(1), editor(2), editor(3), editor(4)],
+      2,
+      2,
+    );
+
+    expect(plan.closeIds).toEqual([3, 4]);
+    expect(plan.nextActiveId).toBe(2);
+  });
+
   it("closes exactly the planned tabs and returns terminal leaves to dispose", () => {
     const tabs = [terminal(1, 10), terminal(2, 20), editor(3), editor(4)];
     const result = applyCloseTabsPlan(tabs, 1, {

@@ -37,6 +37,7 @@ function build(p: Palette): Extension {
       background: p.bg,
       foreground: p.fg,
       caret: p.caret,
+      selection: "var(--text-selection-background)",
       selectionMatch: p.selection,
       lineHighlight: p.lineHighlight,
       gutterBackground: p.bg,

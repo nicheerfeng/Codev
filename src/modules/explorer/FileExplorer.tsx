@@ -41,6 +41,7 @@ import { ExplorerStatusBar } from "./ExplorerStatusBar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { InlineInput } from "./InlineInput";
 import { cacheRenamedExpansion } from "./lib/useFileTree";
+import { useRootReorder } from "./lib/useRootReorder";
 import { replacePathPrefix } from "@/lib/pathPrefix";
 import {
   selectExplorerClipboard,
@@ -69,6 +70,7 @@ type Props = Omit<
   onAddRoot: (path: string) => void;
   onRemoveRoot: (path: string) => void;
   onRenameRoot: (from: string, to: string) => void | Promise<void>;
+  onReorderRoot: (source: string, gap: number) => void | Promise<void>;
   onSetActiveRoot: (path: string | null) => void;
 };
 
@@ -83,12 +85,12 @@ function basename(path: string): string {
 }
 
 const ROOT_COLORS = [
-  "#73869a",
-  "#688b87",
-  "#788a72",
-  "#8b7894",
-  "#9a776d",
-  "#91836f",
+  "#71869a",
+  "#668b85",
+  "#7c9070",
+  "#6f809f",
+  "#8c8c6e",
+  "#6c9090",
 ] as const;
 
 /** 将根目录绝对路径稳定映射到低饱和项目色。 */
@@ -131,6 +133,8 @@ function EmptyExplorerContextMenu({
 
 /** 保留项目根目录的可见分组与独立管理入口。 */
 function RootSection({
+  reorderHeaderProps,
+  insertBefore,
   root,
   active,
   revealRequest,
@@ -146,6 +150,8 @@ function RootSection({
   onPaste,
   children,
 }: {
+  reorderHeaderProps: React.HTMLAttributes<HTMLDivElement>;
+  insertBefore: boolean;
   root: string;
   active: boolean;
   revealRequest: { nonce: number; path: string } | null;
@@ -179,14 +185,17 @@ function RootSection({
 
   return (
     <div
-      className="flex min-w-0 flex-col"
+      className="relative flex min-w-0 flex-col"
       data-explorer-drop=""
       data-fs-path={root}
       data-fs-kind="dir"
     >
+      {insertBefore && <span className="pointer-events-none absolute inset-x-0 top-0 z-20 h-0.5 bg-[#7894b0]" />}
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
+            {...reorderHeaderProps}
+            data-root-reorder-header=""
             className="flex h-7 shrink-0 cursor-pointer items-center gap-1 overflow-hidden border-b border-l-2 border-border/60 px-2 text-xs font-medium select-none"
             style={{
               borderLeftColor: color,
@@ -243,7 +252,7 @@ function RootSection({
             <button
               type="button"
               data-root-remove=""
-              className="flex size-5 shrink-0 items-center justify-center text-muted-foreground/55 transition-[opacity,color] hover:text-muted-foreground focus-visible:text-muted-foreground"
+              className="flex size-5 shrink-0 items-center justify-center text-foreground/80 transition-[opacity,color] hover:text-foreground focus-visible:text-foreground"
               style={{
                 opacity: rootHeaderHovered ? 1 : 0,
                 pointerEvents: rootHeaderHovered ? "auto" : "none",
@@ -322,6 +331,7 @@ export const FileExplorer = memo(
       onAddRoot,
       onRemoveRoot,
       onRenameRoot,
+      onReorderRoot,
       onSetActiveRoot,
       ...treeProps
     },
@@ -340,6 +350,16 @@ export const FileExplorer = memo(
     const transfer = useFileTransfer();
     const selectedMeta = useSelectedFileMeta(treeProps.activeFilePath ?? null);
     const containerRef = useRef<HTMLDivElement>(null);
+    /** 保存排序失败时提示用户，避免静默丢失顺序。 */
+    const persistRootOrder = async (source: string, gap: number) => {
+      try { await onReorderRoot(source, gap); }
+      catch (error) { toast.error(`根目录排序保存失败：${String(error)}`); }
+    };
+    const rootReorder = useRootReorder(containerRef, persistRootOrder);
+    const sourceIndex = roots.indexOf(rootReorder.position?.source ?? "");
+    /** 仅显示实际改变顺序的根目录插入位置。 */
+    const showRootGap = (gap: number) => rootReorder.position?.gap === gap &&
+      gap !== sourceIndex && gap !== sourceIndex + 1;
     const treeRefs = useRef<Map<string, RootTreeHandle>>(new Map());
     const rootRevealNonceRef = useRef(0);
     const [rootRevealRequest, setRootRevealRequest] = useState<{
@@ -914,9 +934,11 @@ export const FileExplorer = memo(
             <div className="min-h-0 min-w-0 flex-1" data-explorer-empty="">
               <ScrollArea className="explorer-scroll-flow h-full min-h-0 min-w-0">
                 <div className="min-w-0">
-                  {roots.map((root) => (
+                  {roots.map((root, index) => (
                     <RootSection
                       key={root}
+                      reorderHeaderProps={rootReorder.headerProps(root)}
+                      insertBefore={showRootGap(index)}
                       root={root}
                       active={root === activeRoot}
                       revealRequest={
@@ -974,6 +996,7 @@ export const FileExplorer = memo(
                       />
                     </RootSection>
                   ))}
+                  {showRootGap(roots.length) && <div className="relative h-0"><span className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-[#7894b0]" /></div>}
                 </div>
               </ScrollArea>
             </div>
