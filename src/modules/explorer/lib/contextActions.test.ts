@@ -17,4 +17,11 @@ describe("relativePath", () => {
   it("returns an unrelated path unchanged", () => {
     expect(relativePath("/a/b", "/x/y")).toBe("/x/y");
   });
+
+  it("relativizes every selected path for multiline clipboard output", () => {
+    const paths = ["/a/b/one.txt", "/a/b/folder/two.txt"];
+    expect(paths.map((path) => relativePath("/a/b", path)).join("\n")).toBe(
+      "one.txt\nfolder/two.txt",
+    );
+  });
 });

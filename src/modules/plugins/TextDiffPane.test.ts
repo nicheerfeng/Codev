@@ -89,4 +89,11 @@ describe("TextDiffPane", () => {
       /rightDockView === "tools" && toolView === "diff"/,
     );
   });
+
+  it("hard-hides the inactive dock surface to prevent cross-pane selection", () => {
+    expect(appSource).not.toMatch(
+      /invisible pointer-events-none absolute inset-0/,
+    );
+    expect(appSource.match(/hidden absolute inset-0/g)).toHaveLength(2);
+  });
 });
