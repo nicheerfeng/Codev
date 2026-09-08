@@ -126,7 +126,7 @@ export function JsonFormatterPane({ onAdd, onClose }: Props) {
   );
 
   return (
-    <section className="flex min-h-0 min-w-0 max-w-full flex-1 flex-col overflow-hidden bg-background">
+    <section className="flex h-full min-h-0 min-w-0 w-full max-w-full flex-1 flex-col overflow-hidden bg-background">
       <header className="flex h-9 shrink-0 items-center gap-1 border-b border-border/60 px-2">
         <div className="relative min-w-0 w-1/2 max-w-[50%] shrink-0">
           <HugeiconsIcon

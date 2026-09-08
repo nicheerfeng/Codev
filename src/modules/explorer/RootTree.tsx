@@ -959,7 +959,9 @@ export const RootTree = memo(
                     className={COMPACT_ITEM}
                     onSelect={() =>
                       void copyToClipboard(
-                        relativePath(rootPath, menuTarget.path),
+                        menuPaths
+                          .map((path) => relativePath(rootPath, path))
+                          .join("\n"),
                       )
                     }
                   >

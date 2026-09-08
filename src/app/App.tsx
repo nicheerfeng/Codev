@@ -1269,7 +1269,7 @@ export default function App() {
                       className={
                         rightDockView === "terminal"
                           ? "absolute inset-0"
-                          : "invisible pointer-events-none absolute inset-0"
+                          : "hidden absolute inset-0"
                       }
                     >
                       <TerminalPanel
@@ -1293,7 +1293,7 @@ export default function App() {
                         className={
                           rightDockView === "tools"
                             ? "absolute inset-0"
-                            : "invisible pointer-events-none absolute inset-0"
+                            : "hidden absolute inset-0"
                         }
                       >
                         <ToolPanel tool={toolView} />
