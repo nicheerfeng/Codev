@@ -157,6 +157,7 @@ export function PiAgentPane({ cwd, active }: Props) {
   const transcriptRef = useRef<HTMLDivElement>(null);
   const nearBottomRef = useRef(true);
   const requestIdRef = useRef(1);
+  const cwdRef = useRef(cwd);
 
   const virtualizer = useVirtualizer({
     count: view.items.length,
@@ -219,6 +220,9 @@ export function PiAgentPane({ cwd, active }: Props) {
   }, [active, refreshSessions]);
 
   useEffect(() => {
+    const previousCwd = cwdRef.current;
+    cwdRef.current = cwd;
+    if (previousCwd === cwd) return;
     const id = runtimeRef.current;
     runtimeRef.current = null;
     setRuntimeId(null);
