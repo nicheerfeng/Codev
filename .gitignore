@@ -34,3 +34,7 @@ src-tauri/target
 
 # Local installer and portable deliverables
 artifacts/
+
+# Read-only upstream snapshots used during feature design; never shipped.
+.reference-cache/
+output/
