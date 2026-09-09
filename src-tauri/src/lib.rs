@@ -1,6 +1,6 @@
 pub mod modules;
 
-use modules::{fs, history, pty, workspace};
+use modules::{fs, history, pi_agent, pty, workspace};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
@@ -297,6 +297,7 @@ pub fn run() {
         .manage(fs::watch::FsWatchState::default())
         .manage(fs::transfer::TransferState::default())
         .manage(history::HistoryState::default())
+        .manage(pi_agent::PiAgentState::default())
         .manage(fs::grep::ContentSearchState::default())
         .manage(PendingOpenTargets::default())
         .manage({
@@ -359,6 +360,12 @@ pub fn run() {
             history::history_commands,
             history::history_record,
             history::history_list,
+            pi_agent::pi_agent_probe,
+            pi_agent::pi_agent_list_sessions,
+            pi_agent::pi_agent_start,
+            pi_agent::pi_agent_send,
+            pi_agent::pi_agent_close,
+            pi_agent::pi_agent_close_all,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

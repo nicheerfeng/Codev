@@ -2,6 +2,7 @@ import { Switch } from "@/components/ui/switch";
 import { useT } from "@/lib/i18n";
 import {
   JSON_FORMATTER_PLUGIN_ID,
+  PI_AGENT_PLUGIN_ID,
   TEXT_DIFF_PLUGIN_ID,
   setPluginEnabled,
   usePluginStore,
@@ -17,6 +18,9 @@ export function PluginsSection() {
   );
   const diffEnabled = usePluginStore(
     (state) => state.enabled[TEXT_DIFF_PLUGIN_ID],
+  );
+  const piAgentEnabled = usePluginStore(
+    (state) => state.enabled[PI_AGENT_PLUGIN_ID],
   );
   const init = usePluginStore((state) => state.init);
 
@@ -39,6 +43,17 @@ export function PluginsSection() {
           checked={enabled}
           onCheckedChange={(value) =>
             void setPluginEnabled(JSON_FORMATTER_PLUGIN_ID, value)
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        title="Pi Agent"
+        description="在右侧工作区运行并恢复 Pi Coding Agent 原生线程。"
+      >
+        <Switch
+          checked={piAgentEnabled}
+          onCheckedChange={(value) =>
+            void setPluginEnabled(PI_AGENT_PLUGIN_ID, value)
           }
         />
       </SettingRow>

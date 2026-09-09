@@ -4,9 +4,11 @@ import { LazyStore } from "@tauri-apps/plugin-store";
 
 export const JSON_FORMATTER_PLUGIN_ID = "json-formatter" as const;
 export const TEXT_DIFF_PLUGIN_ID = "text-diff" as const;
+export const PI_AGENT_PLUGIN_ID = "pi-agent" as const;
 export type PluginId =
   | typeof JSON_FORMATTER_PLUGIN_ID
-  | typeof TEXT_DIFF_PLUGIN_ID;
+  | typeof TEXT_DIFF_PLUGIN_ID
+  | typeof PI_AGENT_PLUGIN_ID;
 
 export type PluginState = {
   enabled: Record<PluginId, boolean>;
@@ -24,6 +26,7 @@ const DEFAULT_PLUGIN_STATE: PluginState = {
   enabled: {
     [JSON_FORMATTER_PLUGIN_ID]: false,
     [TEXT_DIFF_PLUGIN_ID]: false,
+    [PI_AGENT_PLUGIN_ID]: false,
   },
 };
 const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: 200 });
@@ -40,6 +43,7 @@ function normalizePluginState(value: unknown): PluginState {
       [JSON_FORMATTER_PLUGIN_ID]:
         enabled[JSON_FORMATTER_PLUGIN_ID] === true,
       [TEXT_DIFF_PLUGIN_ID]: enabled[TEXT_DIFF_PLUGIN_ID] === true,
+      [PI_AGENT_PLUGIN_ID]: enabled[PI_AGENT_PLUGIN_ID] === true,
     },
   };
 }
@@ -72,7 +76,8 @@ export async function onPluginStateChange(
     (event) => {
       if (
         event.payload.id !== JSON_FORMATTER_PLUGIN_ID &&
-        event.payload.id !== TEXT_DIFF_PLUGIN_ID
+        event.payload.id !== TEXT_DIFF_PLUGIN_ID &&
+        event.payload.id !== PI_AGENT_PLUGIN_ID
       )
         return;
       callback(event.payload.id, event.payload.enabled === true);

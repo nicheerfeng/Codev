@@ -96,4 +96,14 @@ describe("TextDiffPane", () => {
     );
     expect(appSource.match(/hidden absolute inset-0/g)).toHaveLength(2);
   });
+
+  it("does not probe Pi until its dock tab is active", () => {
+    const toolPanel = readFileSync(
+      path.join(here, "ToolPanel.tsx"),
+      "utf8",
+    );
+    const piPane = readFileSync(path.join(here, "pi-agent/PiAgentPane.tsx"), "utf8");
+    expect(toolPanel).toMatch(/active=\{tool === "pi"\}/);
+    expect(piPane).toMatch(/if \(!active\) return;/);
+  });
 });

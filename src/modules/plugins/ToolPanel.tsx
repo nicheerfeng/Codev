@@ -1,16 +1,15 @@
 import { useState } from "react";
 import { JsonFormatterPane } from "./JsonFormatterPane";
 import { TextDiffPane } from "./TextDiffPane";
+import { PiAgentPane } from "./pi-agent/PiAgentPane";
 
 const MAX_FORMATTER_PANES = 2;
 
-type ToolId = "json" | "diff";
+export type ToolId = "json" | "diff" | "pi";
 
-/** 渲染独立插件工具区，最多保留两个横向 JSON 格式化页面。 */
-export function ToolPanel({ tool = "json" }: { tool?: ToolId }) {
+/** 渲染最多两个横向 JSON 格式化页面。 */
+function JsonFormatterTool() {
   const [paneIds, setPaneIds] = useState([1]);
-
-  if (tool === "diff") return <TextDiffPane />;
 
   /** 创建第二个独立格式化页，不超过工具页上限。 */
   const addPane = () => {
@@ -36,6 +35,29 @@ export function ToolPanel({ tool = "json" }: { tool?: ToolId }) {
             onClose={paneIds.length === 2 ? () => closePane(id) : undefined}
           />
         ))}
+      </div>
+    </div>
+  );
+}
+
+/** 渲染互相隔离的内置插件页面，并在切换时保留各自状态。 */
+export function ToolPanel({
+  tool = "json",
+  cwd,
+}: {
+  tool?: ToolId;
+  cwd: string | null;
+}) {
+  return (
+    <div className="relative h-full min-h-0 min-w-0 overflow-hidden bg-card">
+      <div className={tool === "json" ? "absolute inset-0" : "hidden absolute inset-0"}>
+        <JsonFormatterTool />
+      </div>
+      <div className={tool === "diff" ? "absolute inset-0" : "hidden absolute inset-0"}>
+        <TextDiffPane />
+      </div>
+      <div className={tool === "pi" ? "absolute inset-0" : "hidden absolute inset-0"}>
+        <PiAgentPane cwd={cwd} active={tool === "pi"} />
       </div>
     </div>
   );
