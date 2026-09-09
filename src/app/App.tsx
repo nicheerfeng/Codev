@@ -165,17 +165,21 @@ export default function App() {
   const terminalPathDropTarget = useTerminalFileDrop();
   const explorerRef = useRef<FileExplorerHandle>(null);
   const pluginEnabled = usePluginStore(
-    (state) => state.enabled["json-formatter"] || state.enabled["text-diff"],
+    (state) =>
+      state.enabled["json-formatter"] ||
+      state.enabled["text-diff"] ||
+      state.enabled["pi-agent"],
   );
   const jsonFormatterEnabled = usePluginStore(
     (state) => state.enabled["json-formatter"],
   );
   const textDiffEnabled = usePluginStore((state) => state.enabled["text-diff"]);
+  const piAgentEnabled = usePluginStore((state) => state.enabled["pi-agent"]);
   const initPlugins = usePluginStore((state) => state.init);
   const [rightDockView, setRightDockView] = useState<"terminal" | "tools">(
     "terminal",
   );
-  const [toolView, setToolView] = useState<"json" | "diff">("json");
+  const [toolView, setToolView] = useState<"json" | "diff" | "pi">("pi");
 
   useEffect(() => {
     void initPlugins();
@@ -192,7 +196,10 @@ export default function App() {
     if (toolView === "diff" && !textDiffEnabled && jsonFormatterEnabled) {
       setToolView("json");
     }
-  }, [jsonFormatterEnabled, textDiffEnabled, toolView]);
+    if (toolView === "pi" && !piAgentEnabled) {
+      setToolView(jsonFormatterEnabled ? "json" : "diff");
+    }
+  }, [jsonFormatterEnabled, piAgentEnabled, textDiffEnabled, toolView]);
 
   // Drives session disposal off the pane tree, not React lifecycles —
   // split/unsplit re-mount components but the leaf is still live.
@@ -1246,6 +1253,22 @@ export default function App() {
                           文本对照
                         </button>
                       )}
+                      {piAgentEnabled && (
+                        <button
+                          type="button"
+                          className={`h-6 rounded-sm px-2 text-[11px] ${
+                            rightDockView === "tools" && toolView === "pi"
+                              ? "bg-accent text-foreground"
+                              : "text-muted-foreground hover:bg-muted"
+                          }`}
+                          onClick={() => {
+                            setToolView("pi");
+                            setRightDockView("tools");
+                          }}
+                        >
+                          Pi
+                        </button>
+                      )}
                       <div className="flex-1" />
                       {rightDockView === "terminal" && (
                         <button
@@ -1296,7 +1319,10 @@ export default function App() {
                             : "hidden absolute inset-0"
                         }
                       >
-                        <ToolPanel tool={toolView} />
+                        <ToolPanel
+                          tool={toolView}
+                          cwd={explorerRoot ?? activeRoot ?? workspaceRoots[0] ?? null}
+                        />
                       </div>
                     )}
                   </div>
