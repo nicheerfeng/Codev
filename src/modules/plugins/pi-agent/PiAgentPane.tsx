@@ -184,7 +184,16 @@ export function PiAgentPane({ cwd, active }: Props) {
 
   useEffect(() => {
     if (!active) return;
-    void probePiAgent().then(setProbe);
+    void probePiAgent()
+      .then(setProbe)
+      .catch((error) =>
+        setProbe({
+          available: false,
+          path: null,
+          version: null,
+          error: String(error),
+        }),
+      );
   }, [active]);
 
   useEffect(() => {
@@ -198,13 +207,20 @@ export function PiAgentPane({ cwd, active }: Props) {
         setRuntimeId(null);
       }
       if (payload.event.type === "agent_settled") void refreshSessions();
-    }).then((stop) => {
+    })
+      .then((stop) => {
       if (disposed) stop();
       else {
         unlisten = stop;
         setListenerReady(true);
       }
-    });
+      })
+      .catch((error) => {
+        if (!disposed) {
+          setListenerReady(false);
+          dispatch({ type: "error", message: String(error) });
+        }
+      });
     return () => {
       disposed = true;
       unlisten?.();
