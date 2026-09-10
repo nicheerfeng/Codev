@@ -5,6 +5,8 @@ export {
   loadPluginState,
   onPluginStateChange,
   setPluginEnabled,
+  setPiAgentHiddenProjects,
+  setPiAgentProjects,
   usePluginStore,
   type PluginId,
   type PluginState,
@@ -12,3 +14,8 @@ export {
 export { ToolPanel } from "./ToolPanel";
 export { TextDiffPane } from "./TextDiffPane";
 export { PiAgentPane } from "./pi-agent/PiAgentPane";
+export {
+  listAllPiSessions,
+  readPiModels,
+  writePiModels,
+} from "./pi-agent/native";

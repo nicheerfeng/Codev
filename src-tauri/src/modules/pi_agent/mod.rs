@@ -62,6 +62,14 @@ pub struct PiSessionSummary {
     message_count: usize,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PiModelsFile {
+    path: String,
+    exists: bool,
+    content: String,
+}
+
 struct PiProcess {
     child: Arc<Mutex<Child>>,
     stdin: Arc<Mutex<ChildStdin>>,
@@ -546,7 +554,7 @@ fn message_preview(message: &Value) -> Option<String> {
 }
 
 /// 解析一个 Pi JSONL 文件的轻量线程摘要。
-fn parse_session_summary(path: &Path, expected_cwd: &str) -> Option<PiSessionSummary> {
+fn parse_session_summary(path: &Path, expected_cwd: Option<&str>) -> Option<PiSessionSummary> {
     let file = File::open(path).ok()?;
     let mut id = None;
     let mut cwd = None;
@@ -567,11 +575,13 @@ fn parse_session_summary(path: &Path, expected_cwd: &str) -> Option<PiSessionSum
                     .get("timestamp")
                     .and_then(Value::as_str)
                     .map(str::to_string);
-                if !cwd
-                    .as_deref()
-                    .is_some_and(|value| same_path(value, expected_cwd))
-                {
-                    return None;
+                if let Some(expected) = expected_cwd {
+                    if !cwd
+                        .as_deref()
+                        .is_some_and(|value| same_path(value, expected))
+                    {
+                        return None;
+                    }
                 }
             }
             Some("session_info") => {
@@ -610,7 +620,7 @@ fn parse_session_summary(path: &Path, expected_cwd: &str) -> Option<PiSessionSum
 }
 
 /// 扫描会话目录并返回属于指定工作目录的最近线程。
-fn list_sessions(cwd: &str, limit: usize) -> Vec<PiSessionSummary> {
+fn list_sessions(cwd: Option<&str>, limit: usize) -> Vec<PiSessionSummary> {
     let Some(root) = pi_sessions_dir() else {
         return Vec::new();
     };
@@ -642,9 +652,73 @@ pub async fn pi_agent_list_sessions(
     cwd: String,
     limit: Option<usize>,
 ) -> Result<Vec<PiSessionSummary>, String> {
-    tauri::async_runtime::spawn_blocking(move || list_sessions(&cwd, limit.unwrap_or(100)))
+    tauri::async_runtime::spawn_blocking(move || list_sessions(Some(&cwd), limit.unwrap_or(100)))
         .await
         .map_err(|error| error.to_string())
+}
+
+/// 异步列出所有 Pi 原生线程，供前端按 cwd 分组。
+#[tauri::command]
+pub async fn pi_agent_list_all_sessions(
+    limit: Option<usize>,
+) -> Result<Vec<PiSessionSummary>, String> {
+    tauri::async_runtime::spawn_blocking(move || list_sessions(None, limit.unwrap_or(300)))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// 返回 Pi models.json 的原始文本，不在 Codev 内复制模型密钥。
+#[tauri::command]
+pub fn pi_agent_read_models() -> Result<PiModelsFile, String> {
+    let path = pi_sessions_dir()
+        .and_then(|sessions| sessions.parent().map(Path::to_path_buf))
+        .ok_or_else(|| "无法定位 Pi 配置目录".to_string())?
+        .join("models.json");
+    match std::fs::read_to_string(&path) {
+        Ok(content) => Ok(PiModelsFile {
+            path: canonical_display(&path),
+            exists: true,
+            content,
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(PiModelsFile {
+            path: canonical_display(&path),
+            exists: false,
+            content: "{\n  \"providers\": {}\n}\n".to_string(),
+        }),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// 校验并直接保存 Pi models.json，不创建额外备份文件。
+#[tauri::command]
+pub fn pi_agent_write_models(content: String) -> Result<(), String> {
+    let value: Value =
+        serde_json::from_str(&content).map_err(|error| format!("JSON 格式错误：{error}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "根节点必须是 JSON 对象".to_string())?;
+    if let Some(providers) = object.get("providers") {
+        if !providers.is_object() {
+            return Err("providers 必须是对象".to_string());
+        }
+    }
+    let path = pi_sessions_dir()
+        .and_then(|sessions| sessions.parent().map(Path::to_path_buf))
+        .ok_or_else(|| "无法定位 Pi 配置目录".to_string())?
+        .join("models.json");
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Pi 配置目录不存在".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    std::fs::write(
+        path,
+        if content.ends_with('\n') {
+            content
+        } else {
+            format!("{content}\n")
+        },
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -687,12 +761,12 @@ mod tests {
         writeln!(file, "{}", json!({"type":"session","id":"s1","timestamp":"2026-09-09T00:00:00Z","cwd":"C:\\Work\\Demo"})).unwrap();
         writeln!(file, "{}", json!({"type":"message","message":{"role":"user","content":[{"type":"text","text":"Implement this feature"}]}})).unwrap();
         writeln!(file, "{}", json!({"type":"session_info","name":"Feature"})).unwrap();
-        let summary = parse_session_summary(&path, "c:/work/demo").expect("summary");
+        let summary = parse_session_summary(&path, Some("c:/work/demo")).expect("summary");
         assert_eq!(summary.id, "s1");
         assert_eq!(summary.name.as_deref(), Some("Feature"));
         assert_eq!(summary.preview.as_deref(), Some("Implement this feature"));
         assert_eq!(summary.message_count, 1);
-        assert!(parse_session_summary(&path, "C:/work/other").is_none());
+        assert!(parse_session_summary(&path, Some("C:/work/other")).is_none());
     }
 
     #[test]
