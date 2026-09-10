@@ -1,4 +1,4 @@
-# Codev 0.8.12
+# Codev 0.9.1
 
 本次更新新增 Pi Agent 工作台，并改善 Markdown 双栏阅读体验。
 
@@ -26,20 +26,7 @@
 
 ## 下载
 
-- `Codev-0.8.12-Windows-x64-Portable.exe`
-- `Codev-0.8.12-Windows-x64-Setup.exe`
+- `Codev-0.9.1-Windows-x64-Portable.exe`
+- `Codev-0.9.1-Windows-x64-Setup.exe`
 
 Pi 功能需要本机已安装 Pi Coding Agent 并配置可用模型。便携版与安装版保持独立应用标识；模型测试会在用户点击后发送真实短请求。
-
-## 验证与交付
-
-类型检查、68 个测试文件共 394 项测试、Windows 双包构建通过。后台 Chrome 核验右侧线程栏、鼠标/键盘调宽、折叠与左侧搜索/设置操作。未自动启动或安装交付文件；真实 Pi 模型与用户扩展行为由审核确认。
-
-两份文件均为 0.8.12，未做 Authenticode 签名。校验值：
-
-```text
-508E5A64D69AA8C739DF4C0E6297B45CFFD7A5146177ABA045E35863309BA16F  Codev-0.8.12-Windows-x64-Portable.exe
-EE3302182905215FADD9534FB2834C599DB6791EAE25A1B734D142B06B6C28E7  Codev-0.8.12-Windows-x64-Setup.exe
-```
-
-发布日期：2026-09-10。
