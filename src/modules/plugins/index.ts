@@ -13,7 +13,6 @@ export {
 } from "./store";
 export { ToolPanel } from "./ToolPanel";
 export { TextDiffPane } from "./TextDiffPane";
-export { PiAgentPane } from "./pi-agent/PiAgentPane";
 export {
   listAllPiSessions,
   readPiModels,

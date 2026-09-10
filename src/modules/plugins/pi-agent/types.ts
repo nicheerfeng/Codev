@@ -46,6 +46,15 @@ export type PiMessageItem = {
   text: string;
   thinking: string;
   streaming: boolean;
+  images?: PiImage[];
+};
+
+export type PiImage = { type: "image"; data: string; mimeType: string };
+export type PiThinkingItem = {
+  id: string;
+  kind: "thinking";
+  text: string;
+  streaming: boolean;
 };
 
 export type PiToolItem = {
@@ -58,7 +67,7 @@ export type PiToolItem = {
   output: string;
 };
 
-export type PiTranscriptItem = PiMessageItem | PiToolItem;
+export type PiTranscriptItem = PiMessageItem | PiThinkingItem | PiToolItem;
 
 export type PiViewStatus =
   | "starting"
@@ -78,5 +87,7 @@ export type PiViewState = {
   thinkingLevel: string;
   thinkingLevels: string[];
   contextPercent: number | null;
+  contextTokens: number | null;
+  phase: string;
   error: string | null;
 };

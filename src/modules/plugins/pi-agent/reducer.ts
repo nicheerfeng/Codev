@@ -1,8 +1,6 @@
 import type {
   PiEventEnvelope,
-  PiMessageItem,
   PiModel,
-  PiToolItem,
   PiTranscriptItem,
   PiViewState,
 } from "./types";
@@ -17,337 +15,349 @@ export const INITIAL_PI_VIEW_STATE: PiViewState = {
   thinkingLevel: "off",
   thinkingLevels: ["off"],
   contextPercent: null,
+  contextTokens: null,
+  phase: "",
   error: null,
 };
 
 type PiViewAction =
   | { type: "reset"; status?: PiViewState["status"] }
-  | { type: "optimistic_user"; id: string; text: string }
   | { type: "stopping" }
   | { type: "error"; message: string }
   | { type: "event"; payload: PiEventEnvelope };
 
-/** 将未知值安全转换成普通对象。 */
-function objectValue(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null
+/** 读取 RPC 对象，不把数组当成消息。 */
+export function objectValue(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
 }
 
-/** 将未知输出压缩为工具卡片可展示的文本。 */
-function displayText(value: unknown): string {
+/** 提取原生工具结果文本，避免将 content 数组直接作为 JSON 显示。 */
+export function resultText(value: unknown): string {
   if (typeof value === "string") return value;
-  if (value === null || value === undefined) return "";
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
+  if (Array.isArray(value))
+    return value
+      .map((part) => {
+        const item = objectValue(part);
+        return typeof item?.text === "string"
+          ? item.text
+          : item?.type === "image"
+            ? "[图片结果]"
+            : "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  const result = objectValue(value);
+  if (result?.content) return resultText(result.content);
+  return value == null ? "" : JSON.stringify(value, null, 2);
 }
 
-/** 返回数组中最后一个满足条件的下标，兼容项目当前 TypeScript 目标。 */
-function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    if (predicate(items[index])) return index;
-  }
-  return -1;
-}
-
-/** 从 Pi 消息内容中提取正文与思考文本。 */
-function messageText(message: Record<string, unknown>): {
-  text: string;
-  thinking: string;
-} {
-  const content = message.content;
-  if (typeof content === "string") return { text: content, thinking: "" };
-  if (!Array.isArray(content)) return { text: "", thinking: "" };
-  const text: string[] = [];
-  const thinking: string[] = [];
-  for (const part of content) {
-    const item = objectValue(part);
-    if (!item) continue;
-    if (item.type === "text" && typeof item.text === "string") text.push(item.text);
-    if (item.type === "thinking" && typeof item.thinking === "string") {
-      thinking.push(item.thinking);
-    }
-  }
-  return { text: text.join(""), thinking: thinking.join("") };
-}
-
-/** 将 Pi 完整消息转换成轻量对话记录。 */
-function normalizeMessage(message: unknown, fallbackId: string): PiTranscriptItem[] {
+/** 按 Pi contentIndex 保留每一段正文、思考和工具的原始顺序。 */
+function normalizeMessage(message: unknown, id: string): PiTranscriptItem[] {
   const value = objectValue(message);
   if (!value) return [];
+  if (value.role === "toolResult")
+    return [
+      {
+        id: String(value.toolCallId ?? id),
+        kind: "tool",
+        toolCallId: String(value.toolCallId ?? id),
+        name: String(value.toolName ?? "tool"),
+        status: value.isError ? "error" : "done",
+        args: null,
+        output: resultText(value.content),
+      },
+    ];
+  if (value.role !== "user" && value.role !== "assistant") return [];
   const role = value.role;
-  const id = typeof value.id === "string" ? value.id : fallbackId;
-  if (role === "user" || role === "assistant") {
-    const content = messageText(value);
+  const content = Array.isArray(value.content)
+    ? value.content
+    : [{ type: "text", text: value.content ?? "" }];
+  if (role === "user")
     return [
       {
         id,
         kind: "message",
         role,
-        text: content.text,
-        thinking: content.thinking,
+        text: resultText(content),
+        thinking: "",
         streaming: false,
+        images: content.filter(
+          (part) => part.type === "image" && typeof part.data === "string",
+        ),
       },
     ];
-  }
-  if (role === "toolResult") {
-    const content = Array.isArray(value.content)
-      ? value.content
-          .map((part) => objectValue(part)?.text)
-          .filter((part): part is string => typeof part === "string")
-          .join("\n")
-      : displayText(value.content);
-    return [
-      {
-        id,
-        kind: "tool",
-        toolCallId:
-          typeof value.toolCallId === "string" ? value.toolCallId : id,
-        name: typeof value.toolName === "string" ? value.toolName : "tool",
-        status: value.isError === true ? "error" : "done",
-        args: null,
-        output: content,
-      },
-    ];
-  }
-  return [];
-}
-
-/** 将恢复接口返回的完整消息列表转换为显示记录。 */
-function normalizeMessages(value: unknown): PiTranscriptItem[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((message, index) =>
-    normalizeMessage(message, `restored-${index}`),
-  );
-}
-
-/** 更新或创建当前流式助手消息。 */
-function updateStreamingMessage(
-  items: PiTranscriptItem[],
-  field: "text" | "thinking",
-  delta: string,
-): PiTranscriptItem[] {
-  const next = [...items];
-  const index = findLastIndex(next,
-    (item) => item.kind === "message" && item.role === "assistant" && item.streaming,
-  );
-  const current: PiMessageItem =
-    index >= 0
-      ? (next[index] as PiMessageItem)
-      : {
-          id: `assistant-${Date.now()}`,
+  return content.flatMap((part, index): PiTranscriptItem[] => {
+    if (part.type === "thinking")
+      return [
+        {
+          id: `${id}:${index}`,
+          kind: "thinking",
+          text: part.thinking ?? "",
+          streaming: false,
+        },
+      ];
+    if (part.type === "text")
+      return [
+        {
+          id: `${id}:${index}`,
           kind: "message",
-          role: "assistant",
-          text: "",
+          role,
+          text: part.text ?? "",
           thinking: "",
-          streaming: true,
-        };
-  const updated = { ...current, [field]: current[field] + delta };
-  if (index >= 0) next[index] = updated;
-  else next.push(updated);
-  return next;
+          streaming: false,
+        },
+      ];
+    if (part.type === "toolCall")
+      return [
+        {
+          id: part.id,
+          kind: "tool",
+          toolCallId: part.id,
+          name: part.name,
+          args: part.arguments,
+          output: "",
+          status: "running",
+        },
+      ];
+    return [];
+  });
 }
 
-/** 将最终助手消息替换对应的流式草稿。 */
-function finishMessage(
+/** 合并工具结果到原始调用位置，历史恢复不会重复显示同一工具。 */
+function mergeItems(
   items: PiTranscriptItem[],
-  message: unknown,
+  incoming: PiTranscriptItem[],
 ): PiTranscriptItem[] {
-  const normalized = normalizeMessage(message, `message-${Date.now()}`);
-  const finalMessage = normalized[0];
-  if (!finalMessage) return items;
-  if (finalMessage.kind === "message" && finalMessage.role === "user") {
-  const last = items[items.length - 1];
-    if (last?.kind === "message" && last.role === "user" && last.text === finalMessage.text) {
-      return items;
+  const next = [...items];
+  for (const item of incoming) {
+    const index = next.findIndex((existing) => existing.id === item.id);
+    if (index < 0) next.push(item);
+    else {
+      const previous = next[index];
+      next[index] =
+        previous.kind === "tool" && item.kind === "tool"
+          ? { ...item, args: item.args ?? previous.args }
+          : item;
     }
-    return [...items, finalMessage];
   }
-  const index = findLastIndex(items,
-    (item) => item.kind === "message" && item.role === "assistant" && item.streaming,
-  );
-  if (index < 0) return [...items, finalMessage];
-  const next = [...items];
-  next[index] = finalMessage;
   return next;
 }
 
-/** 更新工具调用卡片的开始、进度或结束状态。 */
-function updateTool(
-  items: PiTranscriptItem[],
-  event: Record<string, unknown>,
-  status: PiToolItem["status"],
-): PiTranscriptItem[] {
-  const toolCallId =
-    typeof event.toolCallId === "string" ? event.toolCallId : `tool-${Date.now()}`;
-  const index = items.findIndex(
-    (item) => item.kind === "tool" && item.toolCallId === toolCallId,
-  );
-  const previous = index >= 0 ? (items[index] as PiToolItem) : null;
-  const result = objectValue(event.result);
-  const outputSource =
-    event.partialResult ?? result?.content ?? event.result ?? previous?.output ?? "";
-  const tool: PiToolItem = {
-    id: previous?.id ?? toolCallId,
-    kind: "tool",
-    toolCallId,
-    name:
-      typeof event.toolName === "string"
-        ? event.toolName
-        : (previous?.name ?? "tool"),
-    status: event.isError === true ? "error" : status,
-    args: event.args ?? previous?.args ?? null,
-    output: displayText(outputSource),
-  };
-  if (index < 0) return [...items, tool];
-  const next = [...items];
-  next[index] = tool;
-  return next;
-}
-
-/** 规范化 Pi 返回的模型对象。 */
-function normalizeModel(value: unknown): PiModel | null {
+/** 标准化模型标识。 */
+function modelValue(value: unknown): PiModel | null {
   const model = objectValue(value);
-  if (!model) return null;
-  const provider = typeof model.provider === "string" ? model.provider : null;
-  const id =
-    typeof model.id === "string"
-      ? model.id
-      : typeof model.modelId === "string"
-        ? model.modelId
-        : null;
-  if (!provider || !id) return null;
-  return {
-    provider,
-    id,
-    name: typeof model.name === "string" ? model.name : undefined,
-  };
+  return typeof model?.provider === "string" && typeof model.id === "string"
+    ? {
+        provider: model.provider,
+        id: model.id,
+        name: typeof model.name === "string" ? model.name : undefined,
+      }
+    : null;
 }
 
-/** 把一条 Pi RPC 事件归并到当前面板状态。 */
-function reduceEvent(state: PiViewState, payload: PiEventEnvelope): PiViewState {
+/** 用消息起始位置构造稳定的流式块编号。 */
+function streamBase(items: PiTranscriptItem[]): string {
+  const streaming = items.find(
+    (item) => item.kind !== "tool" && item.streaming,
+  );
+  return streaming ? streaming.id.split(":")[0] : `message-${items.length}`;
+}
+
+/** 根据 RPC 事件更新一个线程，保留工具调用与内容块的相对位置。 */
+function reduceEvent(
+  state: PiViewState,
+  payload: PiEventEnvelope,
+): PiViewState {
   const event = payload.event;
-  const type = typeof event.type === "string" ? event.type : "";
-  if (payload.stream === "stderr") {
+  const type = event.type;
+  if (payload.stream === "stderr")
+    return { ...state, error: String(event.message ?? "Pi 运行输出异常") };
+  if (payload.stream === "protocol")
+    return { ...state, error: String(event.error), status: "failed" };
+  if (type === "process_exit")
     return {
       ...state,
-      error:
-        typeof event.message === "string" ? event.message : "Pi 运行输出异常",
+      status: "stopped",
+      phase: "",
+      items: settleItems(state.items),
     };
-  }
-  if (payload.stream === "protocol") {
-    return { ...state, status: "failed", error: displayText(event.error) };
-  }
-  if (type === "process_exit") {
-    return { ...state, status: "stopped" };
-  }
-  if (type === "agent_start") return { ...state, status: "running", error: null };
-  if (type === "agent_settled") return { ...state, status: "idle" };
+  if (type === "agent_start")
+    return { ...state, status: "running", phase: "思考中", error: null };
+  if (type === "agent_settled")
+    return {
+      ...state,
+      status: "idle",
+      phase: "",
+      items: settleItems(state.items),
+    };
+  if (type === "auto_retry_start") return { ...state, phase: "正在重试" };
+  if (type === "auto_compaction_start")
+    return { ...state, phase: "正在压缩上下文" };
   if (type === "message_update") {
     const update = objectValue(event.assistantMessageEvent);
-    if (!update) return state;
-    if (update.type === "text_delta" && typeof update.delta === "string") {
-      return { ...state, items: updateStreamingMessage(state.items, "text", update.delta) };
-    }
-    if (update.type === "thinking_delta" && typeof update.delta === "string") {
-      return {
-        ...state,
-        items: updateStreamingMessage(state.items, "thinking", update.delta),
-      };
-    }
-    return state;
+    if (
+      !update ||
+      !["text_delta", "thinking_delta"].includes(String(update.type)) ||
+      typeof update.delta !== "string"
+    )
+      return state;
+    const id = `${streamBase(state.items)}:${Number(update.contentIndex ?? 0)}`;
+    const previous = state.items.find((item) => item.id === id);
+    const text =
+      (previous && previous.kind !== "tool" ? previous.text : "") +
+      update.delta;
+    const item: PiTranscriptItem =
+      update.type === "thinking_delta"
+        ? { id, kind: "thinking", text, streaming: true }
+        : {
+            id,
+            kind: "message",
+            role: "assistant",
+            text,
+            thinking: "",
+            streaming: true,
+          };
+    return {
+      ...state,
+      phase: item.kind === "thinking" ? "思考中" : "正在回复",
+      items: mergeItems(state.items, [item]),
+    };
   }
   if (type === "message_end") {
-    return { ...state, items: finishMessage(state.items, event.message) };
+    const value = objectValue(event.message);
+    const id =
+      value?.role === "assistant"
+        ? streamBase(state.items)
+        : `message-${state.items.length}`;
+    return {
+      ...state,
+      items: mergeItems(state.items, normalizeMessage(value, id)),
+      error:
+        typeof value?.errorMessage === "string"
+          ? value.errorMessage
+          : state.error,
+    };
   }
-  if (type === "tool_execution_start") {
-    return { ...state, items: updateTool(state.items, event, "running") };
+  if (
+    [
+      "tool_execution_start",
+      "tool_execution_update",
+      "tool_execution_end",
+    ].includes(String(type))
+  ) {
+    const id = String(event.toolCallId);
+    const previous = state.items.find(
+      (item) => item.kind === "tool" && item.toolCallId === id,
+    );
+    const old = previous?.kind === "tool" ? previous : null;
+    return {
+      ...state,
+      phase: "执行工具",
+      items: mergeItems(state.items, [
+        {
+          id,
+          kind: "tool",
+          toolCallId: id,
+          name: String(event.toolName ?? old?.name ?? "tool"),
+          args: event.args ?? old?.args ?? null,
+          output:
+            event.result !== undefined || event.partialResult !== undefined
+              ? resultText(event.result ?? event.partialResult)
+              : (old?.output ?? ""),
+          status:
+            type !== "tool_execution_end"
+              ? "running"
+              : event.isError
+                ? "error"
+                : "done",
+        },
+      ]),
+    };
   }
-  if (type === "tool_execution_update") {
-    return { ...state, items: updateTool(state.items, event, "running") };
-  }
-  if (type === "tool_execution_end") {
-    return { ...state, items: updateTool(state.items, event, "done") };
-  }
-  if (type !== "response" || event.success === false) {
-    return event.success === false
-      ? { ...state, error: displayText(event.error) || "Pi 命令执行失败" }
-      : state;
-  }
-
-  const command = typeof event.command === "string" ? event.command : "";
+  if (type !== "response") return state;
+  if (event.success === false)
+    return { ...state, error: String(event.error ?? "Pi 命令失败") };
   const data = objectValue(event.data);
-  if (command === "get_messages") {
-    return { ...state, items: normalizeMessages(data?.messages) };
+  if (event.command === "get_messages") {
+    const messages = Array.isArray(data?.messages) ? data.messages : [];
+    return {
+      ...state,
+      items: messages.reduce(
+        (items: PiTranscriptItem[], message, index) =>
+          mergeItems(items, normalizeMessage(message, `history-${index}`)),
+        [],
+      ),
+    };
   }
-  if (command === "get_state") {
-    const contextUsage = objectValue(data?.contextUsage);
+  if (event.command === "get_state")
     return {
       ...state,
       status: data?.isStreaming === true ? "running" : "idle",
       sessionFile:
-        typeof data?.sessionFile === "string" ? data.sessionFile : state.sessionFile,
+        typeof data?.sessionFile === "string"
+          ? data.sessionFile
+          : state.sessionFile,
       sessionName:
-        typeof data?.sessionName === "string" ? data.sessionName : state.sessionName,
-      model: normalizeModel(data?.model) ?? state.model,
-      thinkingLevel:
-        typeof data?.thinkingLevel === "string"
-          ? data.thinkingLevel
-          : state.thinkingLevel,
-      contextPercent:
-        typeof contextUsage?.percent === "number"
-          ? contextUsage.percent
-          : state.contextPercent,
+        typeof data?.sessionName === "string"
+          ? data.sessionName
+          : state.sessionName,
+      model: modelValue(data?.model),
+      thinkingLevel: String(data?.thinkingLevel ?? state.thinkingLevel),
+    };
+  if (event.command === "get_session_stats") {
+    const usage = objectValue(data?.contextUsage);
+    return {
+      ...state,
+      contextPercent: typeof usage?.percent === "number" ? usage.percent : null,
+      contextTokens: typeof usage?.tokens === "number" ? usage.tokens : null,
     };
   }
-  if (command === "get_available_models") {
-    const models = Array.isArray(data?.models)
-      ? data.models.map(normalizeModel).filter((model): model is PiModel => model !== null)
-      : [];
-    return { ...state, models };
-  }
-  if (command === "get_available_thinking_levels") {
-    const levels = Array.isArray(data?.levels)
-      ? data.levels.filter((level): level is string => typeof level === "string")
-      : ["off"];
-    return { ...state, thinkingLevels: levels };
-  }
-  if (command === "set_model") {
-    return { ...state, model: normalizeModel(event.data) ?? state.model };
-  }
+  if (event.command === "get_available_models")
+    return {
+      ...state,
+      models: Array.isArray(data?.models)
+        ? data.models
+            .map(modelValue)
+            .filter((value): value is PiModel => value !== null)
+        : [],
+    };
+  if (event.command === "get_available_thinking_levels")
+    return {
+      ...state,
+      thinkingLevels: Array.isArray(data?.levels)
+        ? data.levels.filter(
+            (value): value is string => typeof value === "string",
+          )
+        : ["off"],
+    };
+  if (event.command === "set_model")
+    return { ...state, model: modelValue(event.data) ?? state.model };
   return state;
 }
 
-/** 维护 Pi Agent 面板的纯前端状态。 */
+/** 结束时解除流式占位，未结束的工具显示已中断。 */
+function settleItems(items: PiTranscriptItem[]): PiTranscriptItem[] {
+  return items.map((item) =>
+    item.kind === "tool"
+      ? item.status === "running"
+        ? { ...item, status: "error", output: item.output || "执行已中断" }
+        : item
+      : item.streaming
+        ? { ...item, streaming: false }
+        : item,
+  );
+}
+
+/** 维护单个 Pi 会话的纯状态，供前端与协议回归共用。 */
 export function piViewReducer(
   state: PiViewState,
   action: PiViewAction,
 ): PiViewState {
-  if (action.type === "reset") {
+  if (action.type === "reset")
     return { ...INITIAL_PI_VIEW_STATE, status: action.status ?? "stopped" };
-  }
-  if (action.type === "optimistic_user") {
-    return {
-      ...state,
-      items: [
-        ...state.items,
-        {
-          id: action.id,
-          kind: "message",
-          role: "user",
-          text: action.text,
-          thinking: "",
-          streaming: false,
-        },
-      ],
-    };
-  }
   if (action.type === "stopping") return { ...state, status: "stopping" };
-  if (action.type === "error") {
-    return { ...state, status: "failed", error: action.message };
-  }
+  if (action.type === "error") return { ...state, error: action.message };
   return reduceEvent(state, action.payload);
 }

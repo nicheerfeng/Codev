@@ -9,6 +9,8 @@ const rootDir = import.meta.dirname;
 
 // https://vite.dev/config/
 export default defineConfig({
+  // 只预扫描产品入口，参考项目和 UI 核验页面不进入应用依赖图。
+  optimizeDeps: { entries: ["index.html", "settings.html"] },
   plugins: [
     babel({
       presets: [reactCompilerPreset({ target: "19" })],

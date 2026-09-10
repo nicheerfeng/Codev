@@ -1,6 +1,10 @@
 import { create } from "zustand";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { LazyStore } from "@tauri-apps/plugin-store";
+import {
+  EMPTY_ORGANIZATION,
+  type PiOrganization,
+} from "./pi-agent/organization";
 
 export const JSON_FORMATTER_PLUGIN_ID = "json-formatter" as const;
 export const TEXT_DIFF_PLUGIN_ID = "text-diff" as const;
@@ -14,6 +18,7 @@ export type PluginState = {
   enabled: Record<PluginId, boolean>;
   piAgentProjects: string[];
   piAgentHiddenProjects: string[];
+  piAgentOrganization: PiOrganization;
 };
 
 type PluginStoreState = PluginState & {
@@ -34,6 +39,7 @@ const DEFAULT_PLUGIN_STATE: PluginState = {
   },
   piAgentProjects: [],
   piAgentHiddenProjects: [],
+  piAgentOrganization: EMPTY_ORGANIZATION,
 };
 const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: 200 });
 let initPromise: Promise<void> | null = null;
@@ -50,6 +56,7 @@ function normalizePluginState(
       ? (value as Partial<Record<PluginId, unknown>>)
       : {};
   return {
+    piAgentOrganization: EMPTY_ORGANIZATION,
     enabled: {
       [JSON_FORMATTER_PLUGIN_ID]: enabled[JSON_FORMATTER_PLUGIN_ID] === true,
       [TEXT_DIFF_PLUGIN_ID]: enabled[TEXT_DIFF_PLUGIN_ID] === true,
@@ -87,11 +94,26 @@ export async function loadPluginState(): Promise<PluginState> {
   const value = await store.get<unknown>(ENABLED_PLUGINS_KEY);
   const projects = await store.get<unknown>(PI_AGENT_PROJECTS_KEY);
   const hiddenProjects = await store.get<unknown>(PI_AGENT_HIDDEN_PROJECTS_KEY);
-  return normalizePluginState(
+  const state = normalizePluginState(
     value ?? DEFAULT_PLUGIN_STATE.enabled,
     projects,
     hiddenProjects,
   );
+  return {
+    ...state,
+    piAgentOrganization:
+      (await store.get<PiOrganization>("piAgentOrganization")) ??
+      EMPTY_ORGANIZATION,
+  };
+}
+
+/** 保存 Pi 组和归档展示信息，不修改 Pi 原生会话。 */
+export async function setPiAgentOrganization(
+  next: PiOrganization,
+): Promise<void> {
+  await store.set("piAgentOrganization", next);
+  await store.save();
+  usePluginStore.setState({ piAgentOrganization: next });
 }
 
 /** 持久化 Pi Agent 的项目目录列表，不写入常规设置。 */

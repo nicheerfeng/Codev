@@ -25,9 +25,7 @@ export function listPiSessions(cwd: string): Promise<PiSessionSummary[]> {
 
 /** 读取所有 Pi 原生线程，供插件按 cwd 自动分组。 */
 export function listAllPiSessions(): Promise<PiSessionSummary[]> {
-  return invoke<PiSessionSummary[]>("pi_agent_list_all_sessions", {
-    limit: 300,
-  });
+  return invoke<PiSessionSummary[]>("pi_agent_list_all_sessions");
 }
 
 /** 读取 Pi 的单一 models.json 文件。 */

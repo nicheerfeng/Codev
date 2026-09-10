@@ -662,7 +662,7 @@ pub async fn pi_agent_list_sessions(
 pub async fn pi_agent_list_all_sessions(
     limit: Option<usize>,
 ) -> Result<Vec<PiSessionSummary>, String> {
-    tauri::async_runtime::spawn_blocking(move || list_sessions(None, limit.unwrap_or(300)))
+    tauri::async_runtime::spawn_blocking(move || list_sessions(None, limit.unwrap_or(usize::MAX)))
         .await
         .map_err(|error| error.to_string())
 }

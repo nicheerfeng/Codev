@@ -8,6 +8,90 @@ function rpc(event: Record<string, unknown>): PiEventEnvelope {
 }
 
 describe("piViewReducer", () => {
+  it("preserves interleaved thinking, text and tools across hydration", () => {
+    const state = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "event",
+      payload: rpc({
+        type: "response",
+        command: "get_messages",
+        success: true,
+        data: {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "plan" },
+                { type: "text", text: "read first" },
+                {
+                  type: "toolCall",
+                  id: "read-1",
+                  name: "read",
+                  arguments: { path: "a.ts" },
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "read-1",
+              toolName: "read",
+              content: [{ type: "text", text: "file contents" }],
+            },
+            { role: "assistant", content: [{ type: "text", text: "answer" }] },
+          ],
+        },
+      }),
+    });
+    expect(state.items.map((item) => item.kind)).toEqual([
+      "thinking",
+      "message",
+      "tool",
+      "message",
+    ]);
+    expect(state.items[2]).toMatchObject({
+      args: { path: "a.ts" },
+      output: "file contents",
+      status: "done",
+    });
+  });
+
+  it("keeps repeated valid deltas and distinct content indexes", () => {
+    let state = INITIAL_PI_VIEW_STATE;
+    for (const [contentIndex, type, delta] of [
+      [0, "thinking_delta", "plan"],
+      [1, "text_delta", "ha"],
+      [1, "text_delta", "ha"],
+    ] as const) {
+      state = piViewReducer(state, {
+        type: "event",
+        payload: rpc({
+          type: "message_update",
+          assistantMessageEvent: { contentIndex, type, delta },
+        }),
+      });
+    }
+    expect(state.items.map((item) => item.kind)).toEqual([
+      "thinking",
+      "message",
+    ]);
+    expect(state.items[1]).toMatchObject({ text: "haha" });
+  });
+
+  it("waits for settled instead of ending during intermediate agent_end retry", () => {
+    let state = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "event",
+      payload: rpc({ type: "agent_start" }),
+    });
+    state = piViewReducer(state, {
+      type: "event",
+      payload: rpc({ type: "agent_end" }),
+    });
+    expect(state.status).toBe("running");
+    state = piViewReducer(state, {
+      type: "event",
+      payload: rpc({ type: "agent_settled" }),
+    });
+    expect(state.status).toBe("idle");
+  });
   it("streams assistant text without selecting editor content", () => {
     const running = piViewReducer(INITIAL_PI_VIEW_STATE, {
       type: "event",
@@ -36,7 +120,10 @@ describe("piViewReducer", () => {
       type: "event",
       payload: rpc({
         type: "message_end",
-        message: { role: "assistant", content: [{ type: "text", text: "final" }] },
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "final" }],
+        },
       }),
     });
     expect(next.items).toHaveLength(1);
@@ -63,7 +150,10 @@ describe("piViewReducer", () => {
       }),
     });
     expect(ended.items).toHaveLength(1);
-    expect(ended.items[0]).toMatchObject({ toolCallId: "call-1", status: "done" });
+    expect(ended.items[0]).toMatchObject({
+      toolCallId: "call-1",
+      status: "done",
+    });
   });
 
   it("hydrates messages and runtime state from command responses", () => {
