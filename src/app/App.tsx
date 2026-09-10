@@ -32,6 +32,7 @@ import {
   type SearchTarget,
 } from "@/modules/header";
 import { openSettingsWindow } from "@/modules/settings/openSettingsWindow";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import { ToolPanel, usePluginStore } from "@/modules/plugins";
 import {
   shouldDisablePaneSwapShortcut,
@@ -164,6 +165,9 @@ export default function App() {
   useApplyEditorFontSize();
   const terminalPathDropTarget = useTerminalFileDrop();
   const explorerRef = useRef<FileExplorerHandle>(null);
+  const markdownDefaultView = usePreferencesStore(
+    (state) => state.markdownDefaultView,
+  );
   const pluginEnabled = usePluginStore(
     (state) =>
       state.enabled["json-formatter"] ||
@@ -632,9 +636,9 @@ export default function App() {
 
   const handleOpenFile = useCallback(
     (path: string, pin?: boolean) => {
-      // Markdown and HTML tabs keep their own view mode and start rendered.
+      // Markdown 使用用户默认视图，HTML 保持渲染视图。
       const id = isMarkdownPath(path)
-        ? newMarkdownTab(path)
+        ? newMarkdownTab(path, { viewMode: markdownDefaultView })
         : isHtmlPath(path)
           ? newHtmlTab(path)
           : openFileTab(path, pin ?? true);
@@ -644,6 +648,7 @@ export default function App() {
     },
     [
       newMarkdownTab,
+      markdownDefaultView,
       newHtmlTab,
       openFileTab,
       secondaryEditorIdSet,
@@ -659,18 +664,31 @@ export default function App() {
       );
       const id =
         existing?.id ??
-        (isHtmlPath(path)
-          ? newHtmlTab(path, { activate: false, allowDuplicate: true })
-          : openFileTab(path, true, {
+        (isMarkdownPath(path)
+          ? newMarkdownTab(path, {
               activate: false,
               allowDuplicate: true,
-            }));
+              viewMode: markdownDefaultView,
+            })
+          : isHtmlPath(path)
+            ? newHtmlTab(path, { activate: false, allowDuplicate: true })
+            : openFileTab(path, true, {
+                activate: false,
+                allowDuplicate: true,
+              }));
       setSecondaryEditorIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
       setSecondaryEditorActiveId(id);
       setActiveId(id);
       return id;
     },
-    [newHtmlTab, openFileTab, secondaryEditorTabs, setActiveId],
+    [
+      markdownDefaultView,
+      newHtmlTab,
+      newMarkdownTab,
+      openFileTab,
+      secondaryEditorTabs,
+      setActiveId,
+    ],
   );
 
   /** 在指定阅览器中以临时标签打开外部拖入文件。 */
@@ -685,7 +703,11 @@ export default function App() {
         return;
       }
       const id = isMarkdownPath(path)
-        ? newMarkdownTab(path)
+        ? newMarkdownTab(path, {
+            activate: group === "primary",
+            allowDuplicate: group === "secondary",
+            viewMode: markdownDefaultView,
+          })
         : isHtmlPath(path)
           ? newHtmlTab(path, { activate: group === "primary" })
           : openFileTab(path, false, {
@@ -699,7 +721,14 @@ export default function App() {
       }
       setActiveId(id);
     },
-    [addRoot, newHtmlTab, newMarkdownTab, openFileTab, setActiveId],
+    [
+      addRoot,
+      markdownDefaultView,
+      newHtmlTab,
+      newMarkdownTab,
+      openFileTab,
+      setActiveId,
+    ],
   );
 
   useReaderFileDrop({ onOpen: openDroppedFile });

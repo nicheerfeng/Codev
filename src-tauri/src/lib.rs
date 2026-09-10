@@ -363,6 +363,7 @@ pub fn run() {
             pi_agent::pi_agent_probe,
             pi_agent::pi_agent_list_sessions,
             pi_agent::pi_agent_list_all_sessions,
+            pi_agent::pi_agent_delete_session,
             pi_agent::pi_agent_read_models,
             pi_agent::pi_agent_write_models,
             pi_agent::pi_agent_start,

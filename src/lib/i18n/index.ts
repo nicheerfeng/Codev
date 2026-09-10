@@ -223,6 +223,11 @@ const ZH: Record<string, string> = {
   "Word wrap": "自动换行",
   "Wrap long lines instead of scrolling horizontally.":
     "换行显示长行，避免水平滚动。",
+  "Markdown default view": "Markdown 默认视图",
+  "Default view for newly opened Markdown files.":
+    "设置新打开 Markdown 文件时默认使用渲染或原文视图。",
+  Rendered: "渲染",
+  Raw: "原文",
   Saving: "保存",
   "Auto save": "自动保存",
   "Automatically save files after a delay when changes are detected.":

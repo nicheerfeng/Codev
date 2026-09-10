@@ -7,6 +7,7 @@ const mock = vi.hoisted(() => ({
   stop: vi.fn(),
   close: vi.fn(),
   rejectPrompt: false,
+  cancelBranch: false,
 }));
 vi.mock("./native", () => ({
   listenPiEvents: vi.fn(async (receive) => {
@@ -30,11 +31,18 @@ vi.mock("./native", () => ({
           success: command.type !== "prompt" || !mock.rejectPrompt,
           error: "prompt rejected",
           data:
-            command.type === "get_messages"
-              ? { messages: [] }
-              : command.type === "get_state"
-                ? { sessionFile: `session-${runtimeId}.jsonl` }
-                : {},
+            command.type === "clear_queue"
+              ? { steering: ["排队指令"], followUp: ["后续任务"] }
+              : command.type === "fork" || command.type === "clone"
+                ? {
+                    cancelled: mock.cancelBranch,
+                    text: command.type === "fork" ? "原始输入" : "",
+                  }
+                : command.type === "get_messages"
+                  ? { messages: [] }
+                  : command.type === "get_state"
+                    ? { sessionFile: `session-${runtimeId}.jsonl` }
+                    : {},
         },
       }),
     );
@@ -48,6 +56,7 @@ describe("Pi RPC workspace", () => {
     mock.close.mockClear();
     mock.stop.mockClear();
     mock.rejectPrompt = false;
+    mock.cancelBranch = false;
   });
   it("isolates simultaneous threads and never closes one when opening another", async () => {
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
@@ -85,6 +94,104 @@ describe("Pi RPC workspace", () => {
       client.request(one, { type: "prompt", message: "test" }),
     ).rejects.toThrow("prompt rejected");
     expect(one.view.error).toBe("prompt rejected");
+    client.dispose();
+  });
+  it("starts model checks in an explicitly ephemeral test mode", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn(), true);
+    await client.open("test", "D:/config");
+    expect(native.startPiAgent).toHaveBeenLastCalledWith(
+      "D:/config",
+      undefined,
+      true,
+    );
+    client.dispose();
+  });
+  it("keeps history loading visible until messages return after get_state", async () => {
+    const native = await import("./native");
+    let release: (() => void) | undefined;
+    const original = vi.mocked(native.sendPiCommand).getMockImplementation()!;
+    vi.mocked(native.sendPiCommand).mockImplementation(async (id, command) => {
+      if (command.type === "get_messages") {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      return original(id, command);
+    });
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const opening = client.open("history", "D:/one", "history.jsonl");
+    await vi.waitFor(() =>
+      expect(client.threads.get("history")?.view.status).toBe("idle"),
+    );
+    expect(client.threads.get("history")?.loadingHistory).toBe(true);
+    release?.();
+    const thread = await opening;
+    expect(thread.loadingHistory).toBe(false);
+    client.dispose();
+    vi.mocked(native.sendPiCommand).mockImplementation(original);
+  });
+  it("restores queue before abort and leaves other threads untouched", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const thread = await client.open("one", "D:/one");
+    const two = await client.open("two", "D:/two");
+    vi.mocked(native.sendPiCommand).mockClear();
+    const restored: string[][] = [];
+    await client.stopAndRestore(thread, (texts) => {
+      restored.push(texts);
+      expect(
+        vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.some(([, cmd]) => cmd.type === "abort"),
+      ).toBe(false);
+    });
+    expect(restored).toEqual([["排队指令", "后续任务"]]);
+    expect(
+      vi
+        .mocked(native.sendPiCommand)
+        .mock.calls.every(([id]) => id === thread.runtimeId),
+    ).toBe(true);
+    expect(two.view.status).toBe("idle");
+    client.dispose();
+  });
+  it("forks into an independent UI key without overwriting the original transcript", async () => {
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const thread = await client.open("source", "D:/one");
+    mock.receive({
+      sessionId: thread.runtimeId!,
+      stream: "stdout",
+      event: {
+        type: "message_end",
+        message: { role: "user", content: "source text" },
+      },
+    });
+    const result = await client.branch(thread);
+    expect(result?.text).toBe("");
+    expect(result?.thread.key).not.toBe("source");
+    expect(client.threads.get("source")?.view.items[0]).toMatchObject({
+      text: "source text",
+    });
+    expect(client.threads.get("source")?.runtimeId).toBeNull();
+    mock.receive({
+      sessionId: thread.runtimeId!,
+      stream: "stdout",
+      event: {
+        type: "message_end",
+        message: { role: "user", content: "new text" },
+      },
+    });
+    expect(client.threads.get("source")?.view.items).toHaveLength(1);
+    expect(result?.thread.view.items[0]).toMatchObject({ text: "new text" });
+    client.dispose();
+  });
+  it("leaves the current thread intact when an extension cancels clone", async () => {
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const thread = await client.open("source", "D:/one");
+    mock.cancelBranch = true;
+    expect(await client.branch(thread)).toBeNull();
+    expect(thread.key).toBe("source");
+    expect(client.threads.size).toBe(1);
     client.dispose();
   });
 });

@@ -40,6 +40,7 @@ pub struct PiStartRequest {
     session_path: Option<String>,
     name: Option<String>,
     pi_path: Option<String>,
+    model_test: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -395,6 +396,19 @@ pub fn pi_agent_start(
     }
     let path = resolve_pi_binary(request.pi_path.as_deref())?;
     let mut args = vec!["--mode".to_string(), "rpc".to_string()];
+    if request.model_test == Some(true) {
+        args.extend(
+            [
+                "--no-session",
+                "--no-tools",
+                "--no-extensions",
+                "--no-skills",
+                "--no-prompt-templates",
+                "--no-context-files",
+            ]
+            .map(str::to_string),
+        );
+    }
     if let Some(session_path) = request
         .session_path
         .filter(|value| !value.trim().is_empty())
@@ -667,6 +681,29 @@ pub async fn pi_agent_list_all_sessions(
         .map_err(|error| error.to_string())
 }
 
+/// 删除会话目录内明确选中的 JSONL 文件，禁止递归或删除目录。
+#[tauri::command]
+pub fn pi_agent_delete_session(path: String) -> Result<(), String> {
+    let root = pi_sessions_dir()
+        .ok_or("无法定位 Pi 会话目录")?
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    delete_session_file(&root, Path::new(&path))
+}
+
+/// 校验真实路径与会话格式后仅删除该文件。
+fn delete_session_file(root: &Path, target: &Path) -> Result<(), String> {
+    let resolved = target.canonicalize().map_err(|error| error.to_string())?;
+    if !resolved.starts_with(root)
+        || !resolved.is_file()
+        || resolved.extension().and_then(|value| value.to_str()) != Some("jsonl")
+        || parse_session_summary(&resolved, None).is_none()
+    {
+        return Err("仅允许删除 Pi 会话目录中的会话文件".into());
+    }
+    std::fs::remove_file(resolved).map_err(|error| error.to_string())
+}
+
 /// 返回 Pi models.json 的原始文本，不在 Codev 内复制模型密钥。
 #[tauri::command]
 pub fn pi_agent_read_models() -> Result<PiModelsFile, String> {
@@ -723,9 +760,33 @@ pub fn pi_agent_write_models(content: String) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{message_preview, parse_rpc_line, parse_session_summary, same_path};
+    use super::{
+        delete_session_file, message_preview, parse_rpc_line, parse_session_summary, same_path,
+    };
     use serde_json::json;
     use std::io::Write;
+
+    /// 删除仅命中已验证的会话文件，目录、非会话和范围外文件均保留。
+    #[test]
+    fn deletes_only_valid_session_in_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        std::fs::create_dir(&root).unwrap();
+        let content = "{\"type\":\"session\",\"id\":\"s\",\"cwd\":\"C:/work\"}\n";
+        let valid = root.join("valid.jsonl");
+        let invalid = root.join("invalid.jsonl");
+        let outside = directory.path().join("outside.jsonl");
+        std::fs::write(&valid, content).unwrap();
+        std::fs::write(&invalid, "{}").unwrap();
+        std::fs::write(&outside, content).unwrap();
+        let canonical = root.canonicalize().unwrap();
+        assert!(delete_session_file(&canonical, &outside).is_err());
+        assert!(delete_session_file(&canonical, &invalid).is_err());
+        assert!(delete_session_file(&canonical, &root).is_err());
+        delete_session_file(&canonical, &valid).unwrap();
+        assert!(!valid.exists());
+        assert!(outside.exists() && invalid.exists());
+    }
 
     #[test]
     /// 验证 Windows 路径比较忽略大小写和尾部分隔符。

@@ -33,6 +33,8 @@ export type BackgroundKind = "none" | "image";
 
 export type TerminalCursorStyle = "bar" | "block" | "underline";
 
+export type MarkdownDefaultView = "rendered" | "raw";
+
 export const EDITOR_THEMES = [
   "codium-dark",
   "codium-light",
@@ -78,6 +80,7 @@ export type Preferences = {
   editorFontSize: number;
   editorWordWrap: boolean;
   editorWordWrapColumn: number;
+  markdownDefaultView: MarkdownDefaultView;
   showHidden: boolean;
   /** Multi-root workspace: imported folder roots (forward-slash paths). */
   workspaceRoots: string[];
@@ -111,6 +114,7 @@ const KEY_EDITOR_THEME = "editorTheme";
 const KEY_EDITOR_FONT_SIZE = "editorFontSize";
 const KEY_EDITOR_WORD_WRAP = "editorWordWrap";
 const KEY_EDITOR_WORD_WRAP_COLUMN = "editorWordWrapColumn";
+const KEY_MARKDOWN_DEFAULT_VIEW = "markdownDefaultView";
 const KEY_SHOW_HIDDEN = "showHidden";
 const LEGACY_KEY_SHOW_HIDDEN_DIRS = "showHiddenDirectories";
 const KEY_WORKSPACE_ROOTS = "workspaceRoots";
@@ -170,6 +174,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   editorFontSize: EDITOR_FONT_SIZE_DEFAULT,
   editorWordWrap: false,
   editorWordWrapColumn: EDITOR_WORD_WRAP_COLUMN_DEFAULT,
+  markdownDefaultView: "rendered",
   showHidden: true,
   workspaceRoots: [],
   activeWorkspaceRoot: null,
@@ -289,6 +294,10 @@ export async function loadPreferences(): Promise<Preferences> {
       get<number>(KEY_EDITOR_WORD_WRAP_COLUMN) ??
         DEFAULT_PREFERENCES.editorWordWrapColumn,
     ),
+    markdownDefaultView:
+      get<MarkdownDefaultView>(KEY_MARKDOWN_DEFAULT_VIEW) === "raw"
+        ? "raw"
+        : "rendered",
     showHidden:
       get<boolean>(KEY_SHOW_HIDDEN) ??
       get<boolean>(LEGACY_KEY_SHOW_HIDDEN_DIRS) ??
@@ -476,6 +485,13 @@ export async function setEditorWordWrapColumn(value: number): Promise<void> {
   );
 }
 
+/** 持久化新打开 Markdown 文件的默认阅读模式。 */
+export async function setMarkdownDefaultView(
+  value: MarkdownDefaultView,
+): Promise<void> {
+  await writePref(KEY_MARKDOWN_DEFAULT_VIEW, value);
+}
+
 export async function setShowHidden(value: boolean): Promise<void> {
   await writePref(KEY_SHOW_HIDDEN, value);
 }
@@ -603,6 +619,7 @@ export async function onPreferencesChange(
     [KEY_EDITOR_FONT_SIZE]: "editorFontSize",
     [KEY_EDITOR_WORD_WRAP]: "editorWordWrap",
     [KEY_EDITOR_WORD_WRAP_COLUMN]: "editorWordWrapColumn",
+    [KEY_MARKDOWN_DEFAULT_VIEW]: "markdownDefaultView",
     [KEY_SHOW_HIDDEN]: "showHidden",
     [KEY_WORKSPACE_ROOTS]: "workspaceRoots",
     [KEY_ACTIVE_WORKSPACE_ROOT]: "activeWorkspaceRoot",

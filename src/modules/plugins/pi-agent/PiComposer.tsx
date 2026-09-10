@@ -22,6 +22,7 @@ import {
   ArrowDown01Icon,
 } from "@hugeicons/core-free-icons";
 import type { PiImage, PiViewState } from "./types";
+import { PI_LOCAL_COMMANDS } from "./commands";
 
 export type PiDraft = { text: string; images: PiImage[] };
 export const EMPTY_DRAFT: PiDraft = { text: "", images: [] };
@@ -39,6 +40,10 @@ type Props = {
   busy: boolean;
   disabled: boolean;
   project: string;
+  status?: string;
+  notice?: string;
+  onDismissNotice?: () => void;
+  focusRevision?: number;
 };
 
 /** 将粘贴或选择的图片转成 Pi 原生图片输入。 */
@@ -59,6 +64,38 @@ export function PiComposer(props: Props) {
   const [modelFilter, setModelFilter] = useState("");
   const [modelOpen, setModelOpen] = useState(false);
   const [behavior, setBehavior] = useState<"steer" | "followUp">("steer");
+  const [commandIndex, setCommandIndex] = useState(0);
+  const commandList = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    commandList.current
+      ?.querySelector('[aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [commandIndex]);
+  const [commandDismissed, setCommandDismissed] = useState(false);
+  const commands = [
+    ...PI_LOCAL_COMMANDS,
+    ...props.view.commands.filter(
+      (command) =>
+        !PI_LOCAL_COMMANDS.some((local) => local.name === command.name),
+    ),
+  ].filter((command) =>
+    command.name
+      .toLowerCase()
+      .startsWith(props.draft.text.slice(1).toLowerCase()),
+  );
+  const showCommands =
+    !commandDismissed &&
+    /^\/[^\s]*$/.test(props.draft.text) &&
+    commands.length > 0;
+  /** 选择命令后保留输入焦点，允许补写参数再发送。 */
+  const chooseCommand = (name: string) => {
+    props.onChange({ ...props.draft, text: `/${name} ` });
+    setCommandIndex(0);
+    input.current?.focus();
+  };
+  useLayoutEffect(() => {
+    if (props.focusRevision) input.current?.focus();
+  }, [props.focusRevision]);
   const running =
     props.view.status === "running" || props.view.status === "stopping";
   useLayoutEffect(() => {
@@ -89,7 +126,60 @@ export function PiComposer(props: Props) {
       data-testid="pi-composer"
       className="shrink-0 px-3 pt-2 pb-3 @min-[700px]:px-5"
     >
-      <div className="mx-auto w-full max-w-3xl rounded-2xl border border-border bg-card shadow-sm focus-within:border-ring/60">
+      {props.notice && (
+        <div
+          data-testid="pi-notice"
+          role="status"
+          className="relative mx-auto mb-2 w-full max-w-3xl px-7 text-center text-xs leading-5 text-muted-foreground"
+        >
+          <div className="reader-scrollbar max-h-20 overflow-y-auto [overflow-wrap:anywhere]">
+            {props.notice}
+          </div>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            className="absolute top-0 right-0"
+            aria-label="关闭提示"
+            onClick={props.onDismissNotice}
+          >
+            <HugeiconsIcon icon={Cancel01Icon} size={12} />
+          </Button>
+        </div>
+      )}
+      {props.status && (
+        <div
+          data-testid="pi-status"
+          className="reader-scrollbar mx-auto mb-2 max-h-20 w-full max-w-3xl overflow-y-auto text-center text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]"
+        >
+          {props.status}
+        </div>
+      )}
+      <div className="relative mx-auto w-full max-w-3xl rounded-2xl border border-border bg-card shadow-sm focus-within:border-ring/60">
+        {showCommands && (
+          <div
+            ref={commandList}
+            role="listbox"
+            aria-label="Pi 命令"
+            className="reader-scrollbar absolute bottom-full z-20 mb-2 max-h-52 w-full overflow-auto rounded-xl border border-border bg-popover p-1 shadow-md"
+          >
+            {commands.map((command, index) => (
+              <button
+                key={command.name}
+                type="button"
+                role="option"
+                aria-selected={index === commandIndex % commands.length}
+                className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-xs ${index === commandIndex % commands.length ? "bg-accent" : "hover:bg-accent"}`}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => chooseCommand(command.name)}
+              >
+                <span>/{command.name}</span>
+                <span className="truncate text-muted-foreground">
+                  {command.description}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
         {!!props.draft.images.length && (
           <div className="flex max-h-28 flex-wrap gap-2 overflow-auto px-3 pt-3">
             {props.draft.images.map((item, index) => (
@@ -127,9 +217,11 @@ export function PiComposer(props: Props) {
           value={props.draft.text}
           className="pi-prompt reader-scrollbar min-h-18 max-h-45 rounded-none border-0 bg-transparent! px-3 py-3 text-[13px]! shadow-none focus-visible:ring-0 [field-sizing:fixed]"
           disabled={props.disabled}
-          onChange={(event) =>
-            props.onChange({ ...props.draft, text: event.target.value })
-          }
+          onChange={(event) => {
+            setCommandIndex(0);
+            setCommandDismissed(false);
+            props.onChange({ ...props.draft, text: event.target.value });
+          }}
           onPaste={(event) => {
             const images = [...event.clipboardData.files].filter((file) =>
               file.type.startsWith("image/"),
@@ -140,6 +232,41 @@ export function PiComposer(props: Props) {
             }
           }}
           onKeyDown={(event) => {
+            if (
+              event.nativeEvent.isComposing ||
+              event.nativeEvent.keyCode === 229
+            )
+              return;
+            if (
+              showCommands &&
+              event.key === "Enter" &&
+              !event.shiftKey &&
+              props.draft.text !==
+                `/${commands[commandIndex % commands.length].name}`
+            ) {
+              event.preventDefault();
+              chooseCommand(commands[commandIndex % commands.length].name);
+              return;
+            }
+            if (
+              showCommands &&
+              ["ArrowUp", "ArrowDown", "Tab", "Escape"].includes(event.key)
+            ) {
+              event.preventDefault();
+              event.stopPropagation();
+              if (event.key === "Escape") setCommandDismissed(true);
+              else if (event.key === "Tab")
+                chooseCommand(commands[commandIndex % commands.length].name);
+              else
+                setCommandIndex(
+                  (value) =>
+                    (value +
+                      (event.key === "ArrowUp" ? -1 : 1) +
+                      commands.length) %
+                    commands.length,
+                );
+              return;
+            }
             if (
               event.key === "Enter" &&
               !event.shiftKey &&
@@ -209,6 +336,18 @@ export function PiComposer(props: Props) {
                 className="mb-2 h-8 rounded-lg text-xs!"
               />
               <div className="reader-scrollbar max-h-60 overflow-auto">
+                {!props.view.models.length && (
+                  <p
+                    role="status"
+                    className="px-2 py-3 text-xs text-muted-foreground"
+                  >
+                    {props.view.modelsLoading
+                      ? "正在加载模型…"
+                      : props.view.error
+                        ? "模型加载失败，请查看下方提示"
+                        : "暂无可用模型"}
+                  </p>
+                )}
                 {props.view.models
                   .filter((model) =>
                     `${model.provider}/${model.id} ${model.name ?? ""}`

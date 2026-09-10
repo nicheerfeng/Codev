@@ -6,6 +6,8 @@ import type {
 } from "./types";
 
 export const INITIAL_PI_VIEW_STATE: PiViewState = {
+  modelsLoading: false,
+  commands: [],
   status: "stopped",
   items: [],
   sessionFile: null,
@@ -86,6 +88,8 @@ function normalizeMessage(message: unknown, id: string): PiTranscriptItem[] {
         images: content.filter(
           (part) => part.type === "image" && typeof part.data === "string",
         ),
+        timestamp:
+          typeof value.timestamp === "number" ? value.timestamp : undefined,
       },
     ];
   return content.flatMap((part, index): PiTranscriptItem[] => {
@@ -107,6 +111,8 @@ function normalizeMessage(message: unknown, id: string): PiTranscriptItem[] {
           text: part.text ?? "",
           thinking: "",
           streaming: false,
+          timestamp:
+            typeof value.timestamp === "number" ? value.timestamp : undefined,
         },
       ];
     if (part.type === "toolCall")
@@ -280,6 +286,11 @@ function reduceEvent(
   if (event.success === false)
     return { ...state, error: String(event.error ?? "Pi 命令失败") };
   const data = objectValue(event.data);
+  if (event.command === "get_commands")
+    return {
+      ...state,
+      commands: Array.isArray(data?.commands) ? data.commands : [],
+    };
   if (event.command === "get_messages") {
     const messages = Array.isArray(data?.messages) ? data.messages : [];
     return {
@@ -317,6 +328,7 @@ function reduceEvent(
   if (event.command === "get_available_models")
     return {
       ...state,
+      modelsLoading: false,
       models: Array.isArray(data?.models)
         ? data.models
             .map(modelValue)
