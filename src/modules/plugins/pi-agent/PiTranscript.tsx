@@ -10,12 +10,16 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Streamdown } from "streamdown";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowDown01Icon,
   ArrowUp01Icon,
   Cancel01Icon,
   Search01Icon,
+  Copy01Icon,
+  PencilEdit01Icon,
+  GitForkIcon,
 } from "@hugeicons/core-free-icons";
 import { findLiteralMatches } from "@/modules/editor/lib/textSearch";
 import {
@@ -23,13 +27,22 @@ import {
   itemText,
   type PiTimelineBlock,
 } from "./timeline";
-import type { PiTranscriptItem, PiViewState } from "./types";
+import type { PiMessageItem, PiTranscriptItem, PiViewState } from "./types";
+
+type MessageActions = {
+  onCopy?: (text: string) => void;
+  onEdit?: (item: PiMessageItem) => void;
+  onFork?: (item: PiMessageItem) => void;
+  lastUserId?: string;
+};
 
 /** 显示原始消息或工具内容，选中与搜索不改变输入焦点。 */
 const TranscriptItem = memo(function TranscriptItem({
   item,
+  actions,
 }: {
   item: PiTranscriptItem;
+  actions: MessageActions;
 }) {
   if (item.kind === "tool")
     return (
@@ -86,6 +99,52 @@ const TranscriptItem = memo(function TranscriptItem({
             alt="用户附件"
           />
         ))}
+      {item.kind === "message" && (
+        <div className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
+          {item.timestamp !== undefined && (
+            <time
+              dateTime={new Date(item.timestamp).toISOString()}
+              title={new Date(item.timestamp).toLocaleString()}
+            >
+              {new Date(item.timestamp).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </time>
+          )}
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            title="复制消息"
+            aria-label="复制消息"
+            onClick={() => actions.onCopy?.(item.text)}
+          >
+            <HugeiconsIcon icon={Copy01Icon} size={13} />
+          </Button>
+          {item.role === "user" && item.id === actions.lastUserId && (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              title="停止并编辑此输入"
+              aria-label="编辑最后一条输入"
+              onClick={() => actions.onEdit?.(item)}
+            >
+              <HugeiconsIcon icon={PencilEdit01Icon} size={13} />
+            </Button>
+          )}
+          {!item.streaming && (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              title="分叉当前线程"
+              aria-label="分叉当前线程"
+              onClick={() => actions.onFork?.(item)}
+            >
+              <HugeiconsIcon icon={GitForkIcon} size={13} />
+            </Button>
+          )}
+        </div>
+      )}
     </article>
   );
 });
@@ -94,12 +153,15 @@ const TranscriptItem = memo(function TranscriptItem({
 function TimelineBlock({
   block,
   query,
+  actions,
 }: {
   block: PiTimelineBlock;
   query: string;
+  actions: MessageActions;
 }) {
   const [expanded, setExpanded] = useState(false);
-  if (block.kind === "item") return <TranscriptItem item={block.item} />;
+  if (block.kind === "item")
+    return <TranscriptItem item={block.item} actions={actions} />;
   const searchExpanded =
     !!query &&
     block.items.some((item) =>
@@ -137,7 +199,7 @@ function TimelineBlock({
       {open && (
         <div className="ml-1.5 border-l border-border pl-4">
           {block.items.map((item) => (
-            <TranscriptItem key={item.id} item={item} />
+            <TranscriptItem key={item.id} item={item} actions={actions} />
           ))}
         </div>
       )}
@@ -184,17 +246,35 @@ function textRanges(root: HTMLElement, query: string): Range[] {
 /** 虚拟化会话内容，借鉴 Zeno 将主动翻阅与流式自动跟随分离。 */
 export function PiTranscript({
   view,
+  loading = false,
+  sendRevision = 0,
   threadKey,
   active,
   searchOpen,
   onCloseSearch,
+  onCopy,
+  onEdit,
+  onFork,
 }: {
   view: PiViewState;
+  loading?: boolean;
+  sendRevision?: number;
   threadKey: string;
   active: boolean;
   searchOpen: boolean;
   onCloseSearch: () => void;
-}) {
+} & MessageActions) {
+  const actions: MessageActions = useMemo(
+    () => ({
+      onCopy,
+      onEdit,
+      onFork,
+      lastUserId: [...view.items]
+        .reverse()
+        .find((item) => item.kind === "message" && item.role === "user")?.id,
+    }),
+    [view.items, onCopy, onEdit, onFork],
+  );
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
@@ -205,6 +285,7 @@ export function PiTranscript({
   const [jump, setJump] = useState(0);
   const appliedJump = useRef(0);
   const revealPending = useRef(false);
+  const seenSends = useRef(new Map<string, number>());
   const running = view.status === "running" || view.status === "stopping";
   const blocks = useMemo(
     () => buildTimelineBlocks(view.items, running),
@@ -267,11 +348,39 @@ export function PiTranscript({
     };
   }, [threadKey]);
   useLayoutEffect(() => {
+    if (!sendRevision || seenSends.current.get(threadKey) === sendRevision)
+      return;
+    seenSends.current.set(threadKey, sendRevision);
+    follow.current = true;
+    setFollowing(true);
+    setQuery("");
+    appliedJump.current = jump;
+    revealPending.current = false;
+    const node = viewport.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [threadKey, sendRevision, jump]);
+  useLayoutEffect(() => {
     if (active && follow.current) {
       const node = viewport.current;
       if (node) node.scrollTop = node.scrollHeight;
     }
   }, [active, view.items, virtualizer.getTotalSize()]);
+  useEffect(() => {
+    const node = viewport.current;
+    if (!active || !node) return;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (follow.current) node.scrollTop = node.scrollHeight;
+      });
+    });
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, [active]);
   useLayoutEffect(() => {
     if (jump === appliedJump.current || !matches.length) return;
     appliedJump.current = jump;
@@ -340,7 +449,19 @@ export function PiTranscript({
         details.open = true;
   }, [query, jump, active, view.items]);
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div
+      className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+      aria-busy={loading}
+    >
+      {loading && (
+        <div
+          data-testid="pi-history-loading"
+          className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-background text-muted-foreground"
+        >
+          <Spinner className="size-6" aria-label="正在加载线程" />
+          <span className="text-xs">正在加载线程…</span>
+        </div>
+      )}
       {searchOpen && (
         <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2">
           <HugeiconsIcon icon={Search01Icon} size={14} />
@@ -436,6 +557,7 @@ export function PiTranscript({
               <TimelineBlock
                 block={blocks[row.index]}
                 query={searchOpen ? query : ""}
+                actions={actions}
               />
             </div>
           ))}

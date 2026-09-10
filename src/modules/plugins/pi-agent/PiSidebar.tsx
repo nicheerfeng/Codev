@@ -24,6 +24,7 @@ import {
   PlusSignIcon,
   Folder01Icon,
   Search01Icon,
+  Cancel01Icon,
 } from "@hugeicons/core-free-icons";
 import { pathKey, projectName, type PiOrganization } from "./organization";
 import type { PiSessionSummary, PiViewStatus } from "./types";
@@ -34,6 +35,8 @@ export type SidebarThread = PiSessionSummary & {
   waiting?: boolean;
 };
 type Props = {
+  width: number;
+  onWidthChange: (width: number) => void;
   projects: string[];
   threads: SidebarThread[];
   selectedKey: string | null;
@@ -48,10 +51,13 @@ type Props = {
   onExport: (thread: SidebarThread) => void;
   onClose: (thread: SidebarThread) => void;
   onCopyPath: (path: string) => void;
+  onClone: (thread: SidebarThread) => void;
 };
 
 /** 复用 mcode 左栏的组→项目→线程与底部归档收纳，使用 Codev 菜单和控件。 */
 export function PiSidebar(props: Props) {
+  const { width, onWidthChange: setWidth } = props;
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [filter, setFilter] = useState("");
@@ -91,7 +97,11 @@ export function PiSidebar(props: Props) {
             onClick={() => props.onSelect(thread)}
             title={thread.name || thread.preview || "新线程"}
           >
+            <span className="min-w-0 flex-1 truncate text-xs">
+              {thread.name || thread.preview || "新线程"}
+            </span>
             <span
+              role="img"
               aria-label={
                 thread.waiting
                   ? "等待输入"
@@ -99,24 +109,16 @@ export function PiSidebar(props: Props) {
                     ? "运行中"
                     : "就绪"
               }
-              className={`size-1.5 shrink-0 rounded-full ${thread.waiting ? "bg-amber-400" : thread.status === "running" ? "animate-pulse bg-[#8eacc9]" : "bg-muted-foreground/35"}`}
+              title={
+                thread.waiting
+                  ? "等待输入"
+                  : thread.status === "running"
+                    ? "运行中"
+                    : "就绪"
+              }
+              className={`ml-auto size-2 shrink-0 rounded-full ${thread.waiting ? "bg-amber-600 ring-2 ring-amber-600/25 dark:bg-amber-300 dark:ring-amber-300/30" : thread.status === "running" ? "bg-[#477faf] ring-2 ring-[#477faf]/25 dark:bg-[#a6cceb] dark:ring-[#a6cceb]/30" : "bg-muted-foreground/50"}`}
             />
-            <span className="truncate text-xs">
-              {thread.name || thread.preview || "新线程"}
-            </span>
           </button>
-          {thread.path && (
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className="mr-1 opacity-0 group-hover/pi-thread:opacity-100 focus-visible:opacity-100"
-              title={isArchived ? "恢复线程" : "归档线程"}
-              aria-label={isArchived ? "恢复线程" : "归档线程"}
-              onClick={() => archive(thread, !isArchived)}
-            >
-              <span aria-hidden="true">{isArchived ? "↶" : "−"}</span>
-            </Button>
-          )}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="rounded-xl">
@@ -133,14 +135,20 @@ export function PiSidebar(props: Props) {
           导出 HTML
         </ContextMenuItem>
         <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => props.onClone(thread)}>
+          分叉线程
+        </ContextMenuItem>
         <ContextMenuItem
           disabled={!thread.path}
           onSelect={() => archive(thread, !isArchived)}
         >
           {isArchived ? "恢复线程" : "归档线程"}
         </ContextMenuItem>
-        <ContextMenuItem onSelect={() => props.onClose(thread)}>
-          关闭运行会话
+        <ContextMenuItem
+          disabled={!thread.path}
+          onSelect={() => props.onClose(thread)}
+        >
+          彻底删除线程
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -184,6 +192,18 @@ export function PiSidebar(props: Props) {
                 <Button
                   variant="ghost"
                   size="icon-xs"
+                  title={`移除项目 ${projectName(cwd)}`}
+                  aria-label={`移除项目 ${projectName(cwd)}`}
+                  className="text-muted-foreground opacity-0 group-hover/pi-project:opacity-100 focus-visible:opacity-100"
+                  onClick={() => setRemoveTarget(cwd)}
+                >
+                  <HugeiconsIcon icon={Cancel01Icon} size={13} />
+                </Button>
+              )}
+              {!isArchived && (
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
                   title={`在 ${projectName(cwd)} 新建线程`}
                   aria-label={`在 ${projectName(cwd)} 新建线程`}
                   className="opacity-0 group-hover/pi-project:opacity-100 focus-visible:opacity-100"
@@ -223,7 +243,7 @@ export function PiSidebar(props: Props) {
               复制项目路径
             </ContextMenuItem>
             <ContextMenuSeparator />
-            <ContextMenuItem onSelect={() => props.onRemoveProject(cwd)}>
+            <ContextMenuItem onSelect={() => setRemoveTarget(cwd)}>
               移除项目（保留文件）
             </ContextMenuItem>
           </ContextMenuContent>
@@ -263,8 +283,50 @@ export function PiSidebar(props: Props) {
   return (
     <aside
       data-testid="pi-sidebar"
-      className="flex h-full min-h-0 w-[clamp(160px,28cqw,236px)] max-w-[48%] shrink-0 flex-col border-r border-border bg-card"
+      className="relative flex h-full min-h-0 min-w-0 max-w-[calc(100%-180px)] shrink-0 flex-col border-l border-border bg-card"
+      style={{ width }}
     >
+      <div
+        role="separator"
+        aria-label="调整 Pi 侧栏宽度"
+        aria-orientation="vertical"
+        aria-valuenow={width}
+        tabIndex={0}
+        className="absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize touch-none hover:bg-ring/20 focus-visible:bg-ring/30 focus-visible:outline-none"
+        onPointerDown={(event) => {
+          event.preventDefault();
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+          const sidebar = event.currentTarget.parentElement!;
+          const area = sidebar.parentElement!.getBoundingClientRect();
+          setWidth(
+            Math.max(
+              120,
+              Math.min(area.width - 180, area.right - event.clientX),
+            ),
+          );
+        }}
+        onPointerUp={(event) =>
+          event.currentTarget.releasePointerCapture(event.pointerId)
+        }
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+          event.preventDefault();
+          const area = event.currentTarget.parentElement!.parentElement!;
+          setWidth(
+            Math.max(
+              120,
+              Math.min(
+                area.clientWidth - 180,
+                width + (event.key === "ArrowLeft" ? 16 : -16),
+              ),
+            ),
+          );
+        }}
+        onDoubleClick={() => setWidth(236)}
+      />
       <div className="flex shrink-0 items-center gap-1 px-2 pt-3 pb-2">
         <Button
           variant="secondary"
@@ -278,15 +340,6 @@ export function PiSidebar(props: Props) {
         >
           <HugeiconsIcon icon={PlusSignIcon} size={14} />
           新建线程
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          title="添加项目"
-          aria-label="添加项目"
-          onClick={props.onAddProject}
-        >
-          <HugeiconsIcon icon={Folder01Icon} size={15} />
         </Button>
       </div>
       <div className="relative mx-2 mb-2">
@@ -325,17 +378,28 @@ export function PiSidebar(props: Props) {
                     <span className="truncate">{group.name}</span>
                   </button>
                   {!group.id && (
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      title="新建组"
-                      aria-label="新建组"
-                      onClick={() =>
-                        setGroupEdit({ id: crypto.randomUUID(), name: "" })
-                      }
-                    >
-                      <HugeiconsIcon icon={PlusSignIcon} size={12} />
-                    </Button>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        title="添加项目"
+                        aria-label="添加项目"
+                        onClick={props.onAddProject}
+                      >
+                        <HugeiconsIcon icon={Folder01Icon} size={13} />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        title="新建组"
+                        aria-label="新建组"
+                        onClick={() =>
+                          setGroupEdit({ id: crypto.randomUUID(), name: "" })
+                        }
+                      >
+                        <HugeiconsIcon icon={PlusSignIcon} size={12} />
+                      </Button>
+                    </div>
                   )}
                 </div>
               </ContextMenuTrigger>
@@ -393,6 +457,34 @@ export function PiSidebar(props: Props) {
             props.projects.map((path) => projectRow(path, true))}
         </section>
       </div>
+      <Dialog
+        open={removeTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRemoveTarget(null);
+        }}
+      >
+        <DialogContent className="rounded-2xl" showCloseButton={false}>
+          <DialogTitle>
+            移除项目“{projectName(removeTarget ?? "")}”？
+          </DialogTitle>
+          <DialogDescription>
+            仅从 Pi 侧栏移除。磁盘文件、Pi 会话和正在运行的任务均保留。
+          </DialogDescription>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setRemoveTarget(null)}>
+              取消
+            </Button>
+            <Button
+              onClick={() => {
+                if (removeTarget) props.onRemoveProject(removeTarget);
+                setRemoveTarget(null);
+              }}
+            >
+              移除项目
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={groupEdit !== null}
         onOpenChange={(open) => {

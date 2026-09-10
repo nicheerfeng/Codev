@@ -40,6 +40,7 @@ export type PiModel = {
 };
 
 export type PiMessageItem = {
+  timestamp?: number;
   id: string;
   kind: "message";
   role: "user" | "assistant";
@@ -78,6 +79,8 @@ export type PiViewStatus =
   | "failed";
 
 export type PiViewState = {
+  modelsLoading: boolean;
+  commands: { name: string; description?: string }[];
   status: PiViewStatus;
   items: PiTranscriptItem[];
   sessionFile: string | null;

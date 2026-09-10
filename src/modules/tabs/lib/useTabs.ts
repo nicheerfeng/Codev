@@ -135,6 +135,10 @@ export type OpenFileTabOptions = {
   allowDuplicate?: boolean;
 };
 
+type OpenMarkdownTabOptions = OpenFileTabOptions & {
+  viewMode?: MarkdownViewMode;
+};
+
 export type CloseTabsPlan = {
   closeIds: number[];
   nextActiveId: number;
@@ -147,20 +151,25 @@ type CloseTabsPlanResult = {
   nextActiveId: number;
 };
 
+/** 规划 Markdown 标签并应用新文件默认视图及双阅览器重复策略。 */
 export function planMarkdownTabOpen(
   tabs: Tab[],
   path: string,
   spaceId: string,
   allocId: () => number,
+  viewMode: MarkdownViewMode = "rendered",
+  allowDuplicate = false,
 ): { tabs: Tab[]; tabId: number } {
   const pathKey = path.replace(/\\/g, "/");
-  const existing = tabs.find(
-    (tab) =>
-      tab.kind === "markdown" &&
-      tab.spaceId === spaceId &&
-      tab.path.replace(/\\/g, "/") === pathKey,
-  );
-  if (existing) return { tabs, tabId: existing.id };
+  if (!allowDuplicate) {
+    const existing = tabs.find(
+      (tab) =>
+        tab.kind === "markdown" &&
+        tab.spaceId === spaceId &&
+        tab.path.replace(/\\/g, "/") === pathKey,
+    );
+    if (existing) return { tabs, tabId: existing.id };
+  }
 
   const tabId = allocId();
   return {
@@ -172,7 +181,7 @@ export function planMarkdownTabOpen(
         spaceId,
         title: basename(path),
         path,
-        viewMode: "rendered",
+        viewMode,
         dirty: false,
       },
     ],
@@ -723,25 +732,27 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     );
   }, []);
 
-  // Mirrors tabsRef like openFileTab instead of using a functional update: a
-  // batch that opens a markdown file before a regular one (multi-file "Open
-  // With") would otherwise have the queued markdown update clobbered by
-  // openFileTab's setTabs(plan.tabs), which is built from the stale ref.
-  const newMarkdownTab = useCallback((path: string) => {
-    const curr = tabsRef.current;
-    const plan = planMarkdownTabOpen(
-      curr,
-      path,
-      activeSpaceIdRef.current,
-      () => nextIdRef.current++,
-    );
-    if (plan.tabs !== curr) {
-      tabsRef.current = plan.tabs;
-      setTabs(plan.tabs);
-    }
-    setActiveId(plan.tabId);
-    return plan.tabId;
-  }, []);
+  /** 创建 Markdown 标签，并按调用方要求决定视图、激活和侧边重复。 */
+  const newMarkdownTab = useCallback(
+    (path: string, options: OpenMarkdownTabOptions = {}) => {
+      const curr = tabsRef.current;
+      const plan = planMarkdownTabOpen(
+        curr,
+        path,
+        options.spaceId ?? activeSpaceIdRef.current,
+        () => nextIdRef.current++,
+        options.viewMode ?? "rendered",
+        options.allowDuplicate ?? false,
+      );
+      if (plan.tabs !== curr) {
+        tabsRef.current = plan.tabs;
+        setTabs(plan.tabs);
+      }
+      if (options.activate ?? true) setActiveId(plan.tabId);
+      return plan.tabId;
+    },
+    [],
+  );
 
   /** 打开 HTML 标签，并按调用方要求决定激活与重复标签行为。 */
   const newHtmlTab = useCallback(

@@ -4,10 +4,11 @@ import {
   sendPiCommand,
   startPiAgent,
 } from "./native";
-import { INITIAL_PI_VIEW_STATE, piViewReducer } from "./reducer";
+import { INITIAL_PI_VIEW_STATE, objectValue, piViewReducer } from "./reducer";
 import type { PiEventEnvelope, PiViewState } from "./types";
 
 export type PiThread = {
+  loadingHistory: boolean;
   key: string;
   cwd: string;
   runtimeId: number | null;
@@ -33,6 +34,7 @@ export class PiWorkspaceClient {
   constructor(
     private changed: () => void,
     private extension: (key: string, event: Record<string, unknown>) => void,
+    private modelTest = false,
   ) {
     this.stop = listenPiEvents((payload) => this.receive(payload));
     void this.stop.catch((error) => {
@@ -135,30 +137,44 @@ export class PiWorkspaceClient {
     await this.stop;
     if (this.disposed) throw new Error("Pi 插件已关闭");
     const thread: PiThread = {
+      loadingHistory: true,
       key,
       cwd,
       runtimeId: null,
-      view: { ...INITIAL_PI_VIEW_STATE, status: "starting" },
+      view: {
+        ...INITIAL_PI_VIEW_STATE,
+        status: "starting",
+        modelsLoading: true,
+      },
     };
     this.threads.set(key, thread);
     this.publish();
     try {
-      const runtime = await startPiAgent(cwd, path);
+      const runtime = await startPiAgent(cwd, path, this.modelTest);
       if (this.disposed) {
         await closePiAgent(runtime.sessionId);
         throw new Error("Pi 插件已关闭");
       }
       thread.runtimeId = runtime.sessionId;
       await Promise.all([
-        this.request(thread, { type: "get_messages" }),
-        this.refreshState(thread),
         this.request(thread, { type: "get_available_models" }),
+        this.refreshState(thread),
+        this.request(thread, { type: "get_messages" }),
         this.request(thread, { type: "get_available_thinking_levels" }),
+        this.request(thread, { type: "get_commands" }),
       ]);
+      thread.loadingHistory = false;
+      this.publish();
       return thread;
     } catch (error) {
+      thread.loadingHistory = false;
       if (thread.runtimeId !== null) await this.close(key);
-      thread.view = { ...thread.view, status: "failed", error: String(error) };
+      thread.view = {
+        ...thread.view,
+        status: "failed",
+        modelsLoading: false,
+        error: String(error),
+      };
       this.publish();
       throw error;
     }
@@ -170,6 +186,48 @@ export class PiWorkspaceClient {
       this.request(thread, { type: "get_state" }),
       this.request(thread, { type: "get_session_stats" }),
     ]);
+  }
+
+  /** 先取回未执行的队列文本，再中断运行，恢复操作始终绑定原线程。 */
+  async stopAndRestore(thread: PiThread, restore: (texts: string[]) => void) {
+    const queued = objectValue(
+      await this.request(thread, { type: "clear_queue" }),
+    );
+    restore([
+      ...(Array.isArray(queued?.steering) ? queued.steering : []),
+      ...(Array.isArray(queued?.followUp) ? queued.followUp : []),
+    ]);
+    thread.view = piViewReducer(thread.view, { type: "stopping" });
+    this.publish();
+    await this.request(thread, { type: "abort" });
+    await this.refreshState(thread);
+  }
+
+  /** 原生分叉会切换会话文件；为新会话分配独立界面键并保留原线程。 */
+  async branch(thread: PiThread) {
+    if (thread.view.status !== "idle")
+      throw new Error("请先停止当前任务再分叉");
+    const original = { ...thread, runtimeId: null };
+    const result = objectValue(await this.request(thread, { type: "clone" }));
+    if (result?.cancelled) return null;
+    this.threads.set(original.key, original);
+    thread.key = crypto.randomUUID();
+    thread.view = {
+      ...INITIAL_PI_VIEW_STATE,
+      models: original.view.models,
+      commands: original.view.commands,
+    };
+    this.threads.set(thread.key, thread);
+    await Promise.all([
+      this.refreshState(thread),
+      this.request(thread, { type: "get_messages" }),
+      this.request(thread, { type: "get_available_thinking_levels" }),
+    ]);
+    this.publish();
+    return {
+      thread,
+      text: typeof result?.text === "string" ? result.text : "",
+    };
   }
 
   /** 展示当前操作错误，不覆盖已有消息。 */

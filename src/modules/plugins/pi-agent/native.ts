@@ -10,6 +10,11 @@ import type {
 
 const PI_EVENT = "codev://pi-agent-event";
 
+/** 删除已经确认的 Pi 原生会话文件。 */
+export function deletePiSession(path: string): Promise<void> {
+  return invoke("pi_agent_delete_session", { path });
+}
+
 /** 探测本机 Pi 可执行文件和版本。 */
 export function probePiAgent(): Promise<PiProbeResult> {
   return invoke<PiProbeResult>("pi_agent_probe");
@@ -50,6 +55,7 @@ export function renamePiSession(
 export function startPiAgent(
   cwd: string,
   sessionPath?: string,
+  modelTest = false,
 ): Promise<PiStartResult> {
   return invoke<PiStartResult>("pi_agent_start", {
     request: {
@@ -57,6 +63,7 @@ export function startPiAgent(
       sessionPath: sessionPath ?? null,
       name: null,
       piPath: null,
+      modelTest,
     },
   });
 }

@@ -4,10 +4,8 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Search01Icon,
-  Download01Icon,
   Settings01Icon,
-  Cancel01Icon,
-  LayoutLeftIcon,
+  LayoutRightIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,13 +24,20 @@ import {
 } from "../store";
 import { PiWorkspaceClient, type PiThread } from "./client";
 import { INITIAL_PI_VIEW_STATE, objectValue } from "./reducer";
-import { listAllPiSessions, probePiAgent, sendPiCommand } from "./native";
+import {
+  listAllPiSessions,
+  probePiAgent,
+  sendPiCommand,
+  deletePiSession,
+} from "./native";
 import { collectProjects, pathKey, projectName } from "./organization";
 import { PiSidebar, type SidebarThread } from "./PiSidebar";
 import { PiComposer, EMPTY_DRAFT, type PiDraft } from "./PiComposer";
 import { PiTranscript } from "./PiTranscript";
 import { PiSettings } from "./PiSettings";
-import type { PiSessionSummary } from "./types";
+import { plainStatusText } from "./statusText";
+import type { PiMessageItem, PiSessionSummary } from "./types";
+import { localCommand } from "./commands";
 import "./pi-agent.css";
 
 type ExtensionRequest = { key: string; event: Record<string, unknown> };
@@ -61,10 +66,21 @@ export function PiAgentPane({
   const [project, setProject] = useState<string | null>(cwd);
   const [drafts, setDrafts] = useState<Record<string, PiDraft>>({});
   const [pending, setPending] = useState<Set<string>>(new Set());
+  const [operations, setOperations] = useState<Record<string, string>>({});
+  const operationKeys = useRef(new Set<string>());
+  const [focusRevisions, setFocusRevisions] = useState<Record<string, number>>(
+    {},
+  );
+  const [deleteTarget, setDeleteTarget] = useState<SidebarThread | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(236);
   const [searchOpen, setSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [notice, setNotice] = useState("");
+  const [notices, setNotices] = useState<Record<string, string>>({});
+  const [sendRevisions, setSendRevisions] = useState<Record<string, number>>(
+    {},
+  );
   const [probe, setProbe] = useState<Awaited<
     ReturnType<typeof probePiAgent>
   > | null>(null);
@@ -87,6 +103,10 @@ export function PiAgentPane({
   const activeCwd = activeThread?.cwd ?? project ?? cwd;
   const draftKey = selected ?? `draft:${activeCwd ?? ""}`;
   const draft = drafts[draftKey] ?? EMPTY_DRAFT;
+  const notice = notices[draftKey] ?? "";
+  /** 将提示绑定到操作发起时的线程，异步返回不污染后来选中的线程。 */
+  const setNotice = (message: string, key = draftKey) =>
+    setNotices((current) => ({ ...current, [key]: message }));
   const projects = useMemo(
     () =>
       collectProjects(
@@ -133,7 +153,8 @@ export function PiAgentPane({
               text: String(event.text ?? ""),
             },
           }));
-        if (event.method === "notify") setNotice(String(event.message ?? ""));
+        if (event.method === "notify")
+          setNotice(String(event.message ?? ""), key);
         if (event.method === "setStatus")
           setExtensionStatus((value) => ({
             ...value,
@@ -164,6 +185,14 @@ export function PiAgentPane({
   useEffect(() => {
     if (!project && cwd) setProject(cwd);
   }, [cwd, project]);
+  useEffect(() => {
+    if (!initialized || !active || !activeCwd || selected || !client.current)
+      return;
+    const key = `draft:${activeCwd}`;
+    void client.current
+      .open(key, activeCwd)
+      .catch((error) => setNotice(String(error), key));
+  }, [initialized, active, activeCwd, selected]);
   const rows = useMemo<SidebarThread[]>(() => {
     const result: SidebarThread[] = sessions.map((session) => ({
       ...session,
@@ -201,8 +230,8 @@ export function PiAgentPane({
     return result;
   }, [sessions, threads, requests]);
   /** 用统一提示处理操作异常，避免无响应按钮。 */
-  const run = (operation: Promise<unknown>) => {
-    void operation.catch((error) => setNotice(String(error)));
+  const run = (operation: Promise<unknown>, key = draftKey) => {
+    void operation.catch((error) => setNotice(String(error), key));
   };
   /** 获取指定会话的进程，操作始终指向右键目标。 */
   const ensure = async (thread?: SidebarThread): Promise<PiThread> => {
@@ -222,7 +251,11 @@ export function PiAgentPane({
     setSelected(key);
     setSearchOpen(false);
     if (!client.current) throw new Error("Pi 尚未就绪");
-    await client.current.open(key, path);
+    try {
+      await client.current.open(key, path);
+    } catch (error) {
+      setNotice(String(error), key);
+    }
   };
   /** 选择已有线程，恢复时保留另一线程的草稿与运行状态。 */
   const select = async (thread: SidebarThread) => {
@@ -262,6 +295,31 @@ export function PiAgentPane({
   };
   /** 待 Pi 确认接受后清除当前草稿，失败时原输入仍可编辑重发。 */
   const submit = async (behavior: "steer" | "followUp") => {
+    if (operationKeys.current.has(draftKey)) return;
+    const command = localCommand(draft.text);
+    if (command) {
+      if (draft.images.length) throw new Error("请先移除附件再执行会话命令");
+      const thread = await ensure(rows.find((row) => row.key === selected));
+      if (command.name === "fork") await cloneThread(thread);
+      else
+        await operate(thread, "正在压缩上下文…", async () => {
+          if (thread.view.status !== "idle")
+            throw new Error("请先停止当前任务再压缩上下文");
+          await client.current!.request(thread, {
+            type: "compact",
+            ...(command.argument
+              ? { customInstructions: command.argument }
+              : {}),
+          });
+          await client.current!.request(thread, { type: "get_messages" });
+          await client.current!.refreshState(thread);
+        });
+      setDrafts((value) => ({
+        ...value,
+        [draftKey]: value[draftKey] === draft ? EMPTY_DRAFT : value[draftKey],
+      }));
+      return;
+    }
     if (pending.has(draftKey) || (!draft.text.trim() && !draft.images.length))
       return;
     const sourceKey = draftKey;
@@ -275,6 +333,11 @@ export function PiAgentPane({
       setDrafts((value) => ({
         ...value,
         [thread.key]: value[sourceKey] ?? draft,
+      }));
+      setNotice("", thread.key);
+      setSendRevisions((value) => ({
+        ...value,
+        [thread.key]: (value[thread.key] ?? 0) + 1,
       }));
       await client.current!.request(thread, {
         type: "prompt",
@@ -301,6 +364,125 @@ export function PiAgentPane({
       });
     }
   };
+  /** 串行执行同一线程的会话操作，状态提示与异步结果留在原线程。 */
+  const operate = async (
+    thread: PiThread,
+    label: string,
+    operation: () => Promise<void>,
+  ) => {
+    const key = thread.key;
+    if (operationKeys.current.has(key)) return;
+    operationKeys.current.add(key);
+    setOperations((value) => ({ ...value, [key]: label }));
+    try {
+      await operation();
+    } finally {
+      operationKeys.current.delete(key);
+      setOperations((value) => ({ ...value, [key]: "" }));
+    }
+  };
+  /** 停止时取回排队内容；编辑最后输入时将原文与附件放回输入框。 */
+  const stopEditing = async (thread: PiThread, item?: PiMessageItem) => {
+    await operate(thread, "正在停止…", async () => {
+      const key = thread.key;
+      /** 保留停止期间输入的新草稿，并恢复取回的文字和附件。 */
+      const restore = (texts: string[]) => {
+        setDrafts((value) => {
+          const current = value[key] ?? EMPTY_DRAFT;
+          return {
+            ...value,
+            [key]: {
+              text: [item?.text, ...texts, current.text]
+                .filter(Boolean)
+                .join("\n\n"),
+              images: [...(item?.images ?? []), ...current.images],
+            },
+          };
+        });
+        setFocusRevisions((value) => ({
+          ...value,
+          [key]: (value[key] ?? 0) + 1,
+        }));
+      };
+      if (thread.view.status === "running" || thread.view.status === "stopping")
+        await client.current!.stopAndRestore(thread, restore);
+      else restore([]);
+    });
+  };
+  /** 分叉和克隆完成后选中新会话，原会话继续保留在侧栏中。 */
+  const cloneThread = async (thread: PiThread) => {
+    await operate(thread, "正在创建分叉…", async () => {
+      const oldKey = thread.key;
+      const row = rows.find((row) => row.key === oldKey);
+      const base = (
+        thread.view.sessionName ||
+        row?.name ||
+        row?.preview ||
+        "新线程"
+      ).replace(/ · 分叉 \d+$/, "");
+      const names = new Set(rows.map((row) => row.name));
+      let suffix = 1;
+      while (names.has(`${base} · 分叉 ${suffix}`)) suffix++;
+      const result = await client.current!.branch(thread);
+      if (!result) throw new Error("Pi 扩展取消了本次操作");
+      await client.current!.request(result.thread, {
+        type: "set_session_name",
+        name: `${base} · 分叉 ${suffix}`,
+      });
+      await client.current!.refreshState(result.thread);
+      setDrafts((value) => ({
+        ...value,
+        [result.thread.key]: { text: result.text, images: [] },
+      }));
+      setSelected(result.thread.key);
+      setProject(result.thread.cwd);
+      await refreshSessions();
+    });
+  };
+  /** 确认后关闭目标进程并删除对应原生会话文件，同步清理侧栏记录。 */
+  const deleteThread = async () => {
+    if (!deleteTarget || !client.current || deleting) return;
+    setDeleting(true);
+    try {
+      const target = deleteTarget;
+      const matches = [...client.current.threads.values()].filter(
+        (thread) =>
+          thread.key === target.key ||
+          pathKey(thread.view.sessionFile ?? "") === pathKey(target.path),
+      );
+      for (const thread of matches) await client.current.close(thread.key);
+      await deletePiSession(target.path);
+      for (const thread of matches) client.current.threads.delete(thread.key);
+      setThreads(
+        [...client.current.threads.values()].map((thread) => ({ ...thread })),
+      );
+      setSessions((value) =>
+        value.filter(
+          (session) => pathKey(session.path) !== pathKey(target.path),
+        ),
+      );
+      const keys = new Set([
+        target.key,
+        ...matches.map((thread) => thread.key),
+      ]);
+      setDrafts((value) =>
+        Object.fromEntries(
+          Object.entries(value).filter(([key]) => !keys.has(key)),
+        ),
+      );
+      setRequests((value) => value.filter((request) => !keys.has(request.key)));
+      if (selected && keys.has(selected)) setSelected(null);
+      await setPiAgentOrganization({
+        ...organization,
+        archived: organization.archived.filter(
+          (path) => pathKey(path) !== pathKey(target.path),
+        ),
+      });
+      setDeleteTarget(null);
+    } finally {
+      setDeleting(false);
+    }
+  };
   /** 模型和思考设置发送到原生 Pi，成功后读取实际状态。 */
   const configure = async (command: Record<string, unknown>) => {
     const thread = await ensure(rows.find((row) => row.key === selected));
@@ -314,23 +496,21 @@ export function PiAgentPane({
     ]);
   };
   /** 导出明确目标的原生 HTML，由用户选择输出文件路径。 */
-  const exportThread = async (target?: SidebarThread) => {
+  const exportThread = async (target: SidebarThread) => {
     const outputPath = await save({
       title: "导出 Pi 会话",
       defaultPath: "Pi-session.html",
       filters: [{ name: "HTML", extensions: ["html"] }],
     });
     if (!outputPath) return;
-    const thread = await ensure(
-      target ?? rows.find((row) => row.key === selected),
-    );
+    const thread = await ensure(target);
     const result = objectValue(
       await client.current!.request(thread, {
         type: "export_html",
         outputPath,
       }),
     );
-    setNotice(`已导出：${result?.path ?? outputPath}`);
+    setNotice(`已导出：${result?.path ?? outputPath}`, target.key);
   };
   /** 重命名指定会话并回读名称，不依赖当前选中的会话。 */
   const renameThread = async () => {
@@ -375,23 +555,30 @@ export function PiAgentPane({
         }
       }}
     >
-      <header className="flex h-10 shrink-0 items-center gap-1 border-b border-border px-2">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={sidebarOpen ? "收起线程栏" : "展开线程栏"}
-          title={sidebarOpen ? "收起线程栏" : "展开线程栏"}
-          onClick={() => setSidebarOpen(!sidebarOpen)}
+      <header className="flex h-10 shrink-0 items-center border-b border-border px-2">
+        <div
+          className="shrink-0"
         >
-          <HugeiconsIcon icon={LayoutLeftIcon} size={16} />
-        </Button>
-        <div className="min-w-0 flex-1 truncate text-xs font-medium">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={sidebarOpen ? "收起线程栏" : "展开线程栏"}
+            title={sidebarOpen ? "收起线程栏" : "展开线程栏"}
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+          >
+            <HugeiconsIcon icon={LayoutRightIcon} size={16} />
+          </Button>
+        </div>
+        <div
+          data-testid="pi-thread-title"
+          className="order-1 min-w-0 flex-1 truncate px-3 text-xs font-medium"
+        >
           {view.sessionName ||
             rows.find((row) => row.key === selected)?.preview ||
             (activeCwd ? projectName(activeCwd) : "Pi Agent")}
         </div>
         {view.status === "running" && (
-          <span className="truncate text-[11px] text-[#8eacc9]">
+          <span className="order-2 truncate text-[11px] text-[#8eacc9]">
             {view.phase || "运行中"}
           </span>
         )}
@@ -407,16 +594,6 @@ export function PiAgentPane({
         <Button
           variant="ghost"
           size="icon-sm"
-          title="导出当前线程"
-          aria-label="导出当前线程"
-          disabled={!selected}
-          onClick={() => run(exportThread())}
-        >
-          <HugeiconsIcon icon={Download01Icon} size={15} />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
           title="Pi 设置"
           aria-label="Pi 设置"
           onClick={() => setSettingsOpen(true)}
@@ -427,6 +604,8 @@ export function PiAgentPane({
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {sidebarOpen && (
           <PiSidebar
+            width={sidebarWidth}
+            onWidthChange={setSidebarWidth}
             projects={projects}
             threads={rows}
             selectedKey={selected}
@@ -436,49 +615,38 @@ export function PiAgentPane({
             onAddProject={() => run(addProject())}
             onRemoveProject={(path) => run(removeProject(path))}
             onNew={(path) => run(create(path))}
-            onSelect={(thread) => run(select(thread))}
+            onSelect={(thread) => run(select(thread), thread.key)}
             onRename={(thread) =>
               setRename({ thread, name: thread.name || thread.preview || "" })
             }
-            onExport={(thread) => run(exportThread(thread))}
-            onClose={(thread) => run(client.current!.close(thread.key))}
+            onExport={(thread) => run(exportThread(thread), thread.key)}
+            onClose={setDeleteTarget}
             onCopyPath={(path) => run(writeText(path))}
+            onClone={(target) =>
+              run(
+                ensure(target).then((thread) => cloneThread(thread)),
+                target.key,
+              )
+            }
           />
         )}
-        <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <main className="relative order-first flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <PiTranscript
             view={view}
+            sendRevision={sendRevisions[draftKey] ?? 0}
+            loading={activeThread?.loadingHistory ?? false}
             threadKey={draftKey}
             active={active}
             searchOpen={searchOpen}
             onCloseSearch={() => setSearchOpen(false)}
+            onCopy={(text) => run(writeText(text))}
+            onEdit={(item) => {
+              if (activeThread) run(stopEditing(activeThread, item));
+            }}
+            onFork={() => {
+              if (activeThread) run(cloneThread(activeThread));
+            }}
           />
-          {(notice || view.error || probe?.available === false) && (
-            <div
-              role="status"
-              className="flex shrink-0 items-start gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground"
-            >
-              <span className="max-h-20 min-w-0 flex-1 overflow-auto break-words">
-                {notice || view.error || probe?.error}
-              </span>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label="关闭提示"
-                onClick={() => setNotice("")}
-              >
-                <HugeiconsIcon icon={Cancel01Icon} size={12} />
-              </Button>
-            </div>
-          )}
-          {!!selected &&
-            Object.values(extensionStatus[selected] ?? {}).some(Boolean) && (
-              <div className="px-4 text-xs text-muted-foreground">
-                {Object.values(extensionStatus[selected] ?? {})
-                  .filter(Boolean)
-                  .join(" · ")}
-              </div>
-            )}
           <PiComposer
             key={draftKey}
             draft={draft}
@@ -486,14 +654,33 @@ export function PiAgentPane({
               setDrafts((current) => ({ ...current, [draftKey]: value }))
             }
             view={view}
+            notice={plainStatusText(
+              notice ||
+                view.error ||
+                (probe?.available === false
+                  ? (probe.error ?? "Pi 不可用")
+                  : ""),
+            )}
+            onDismissNotice={() => {
+              setNotice("");
+              if (activeThread) client.current?.error(activeThread.key, "");
+            }}
+            status={
+              operations[draftKey] ||
+              Object.values(
+                extensionStatus[activeThread?.key ?? draftKey] ?? {},
+              )
+                .map(plainStatusText)
+                .filter(Boolean)
+                .join(" · ")
+            }
             onLoadModels={() => {
               if (!view.models.length && activeCwd)
                 run(ensure().then(() => undefined));
             }}
             onSend={(behavior) => run(submit(behavior))}
             onStop={() => {
-              if (activeThread)
-                run(client.current!.request(activeThread, { type: "abort" }));
+              if (activeThread) run(stopEditing(activeThread));
             }}
             onModel={(provider, modelId) =>
               run(configure({ type: "set_model", provider, modelId }))
@@ -503,7 +690,12 @@ export function PiAgentPane({
             }
             onSettings={() => setSettingsOpen(true)}
             onError={(error) => setNotice(String(error))}
-            busy={pending.has(draftKey) || view.status === "starting"}
+            busy={
+              pending.has(draftKey) ||
+              !!operations[draftKey] ||
+              view.status === "starting"
+            }
+            focusRevision={focusRevisions[draftKey] ?? 0}
             disabled={!activeCwd || probe?.available === false}
             project={activeCwd ?? ""}
           />
@@ -513,6 +705,34 @@ export function PiAgentPane({
         open={settingsOpen && active}
         onClose={() => setSettingsOpen(false)}
       />
+      <Dialog
+        open={!!deleteTarget && active}
+        onOpenChange={(open) => {
+          if (!open && !deleting) setDeleteTarget(null);
+        }}
+      >
+        <DialogContent showCloseButton={false}>
+          <DialogTitle>彻底删除线程？</DialogTitle>
+          <DialogDescription>
+            将停止此线程并永久删除其会话文件，无法恢复。项目文件及其他线程保留。
+          </DialogDescription>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="ghost"
+              disabled={deleting}
+              onClick={() => setDeleteTarget(null)}
+            >
+              取消
+            </Button>
+            <Button
+              disabled={deleting}
+              onClick={() => run(deleteThread(), deleteTarget?.key)}
+            >
+              {deleting ? "删除中…" : "彻底删除"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={!!rename && active}
         onOpenChange={(value) => {
@@ -526,7 +746,7 @@ export function PiAgentPane({
             className="space-y-3"
             onSubmit={(event) => {
               event.preventDefault();
-              run(renameThread());
+              run(renameThread(), rename?.thread.key);
             }}
           >
             <Input

@@ -12,7 +12,7 @@ def main():
     root = Path(__file__).resolve().parents[3]
     target = root / "src-tauri/target/pi-ui-rebuild"
     env = {**os.environ, "CARGO_BUILD_JOBS": "10", "CARGO_TARGET_DIR": str(target)}
-    output = root / "artifacts/Codev-PiAgent-UI-r7"
+    output = root / "artifacts/Codev-PiAgent-UI-r13"
     output.mkdir(parents=True, exist_ok=True)
     args = ["node", str(root / "node_modules/@tauri-apps/cli/tauri.js"), "build", "--no-bundle", "--config", "src-tauri/tauri.portable.conf.json", "--features", "opaque-window"]
     tail = []
@@ -32,7 +32,7 @@ def main():
         if process.wait():
             raise RuntimeError("".join(tail))
         source = target / "release/codev.exe"
-        binary = output / "Codev-0.8.11-PiAgent-UI-r7-Windows-x64-Portable.exe"
+        binary = output / "Codev-0.8.11-PiAgent-UI-r13-Windows-x64-Portable.exe"
         shutil.copy2(source, binary)
         shutil.copy2(root / "src/modules/plugins/pi-agent/UPSTREAM-NOTICES.md", output / "UPSTREAM-NOTICES.md")
         digest = hashlib.sha256(binary.read_bytes()).hexdigest().upper()

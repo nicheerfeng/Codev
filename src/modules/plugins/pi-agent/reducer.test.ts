@@ -8,6 +8,34 @@ function rpc(event: Record<string, unknown>): PiEventEnvelope {
 }
 
 describe("piViewReducer", () => {
+  it("preserves native timestamps on both input and assistant text blocks", () => {
+    const state = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "event",
+      payload: rpc({
+        type: "response",
+        command: "get_messages",
+        success: true,
+        data: {
+          messages: [
+            { role: "user", timestamp: 1700000000000, content: "input" },
+            {
+              role: "assistant",
+              timestamp: 1700000001000,
+              content: [
+                { type: "thinking", thinking: "plan" },
+                { type: "text", text: "answer" },
+              ],
+            },
+          ],
+        },
+      }),
+    });
+    expect(state.items[0]).toMatchObject({ timestamp: 1700000000000 });
+    expect(state.items[2]).toMatchObject({
+      timestamp: 1700000001000,
+      text: "answer",
+    });
+  });
   it("preserves interleaved thinking, text and tools across hydration", () => {
     const state = piViewReducer(INITIAL_PI_VIEW_STATE, {
       type: "event",

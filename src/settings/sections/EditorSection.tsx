@@ -22,6 +22,7 @@ import {
   setEditorFontSize,
   setEditorWordWrap,
   setEditorWordWrapColumn,
+  setMarkdownDefaultView,
 } from "@/modules/settings/store";
 import { useEffect, useState } from "react";
 import { SettingRow } from "../components/SettingRow";
@@ -36,6 +37,7 @@ export function EditorSection() {
   const editorWordWrapColumn = usePreferencesStore(
     (s) => s.editorWordWrapColumn,
   );
+  const markdownDefaultView = usePreferencesStore((s) => s.markdownDefaultView);
   const editorAutoSave = usePreferencesStore((s) => s.editorAutoSave);
   const editorAutoSaveDelay = usePreferencesStore((s) => s.editorAutoSaveDelay);
 
@@ -83,6 +85,29 @@ export function EditorSection() {
           onChange={(value) => void setEditorWordWrapColumn(value)}
         />
       )}
+      <SettingRow
+        title={t("Markdown default view")}
+        description={t("Default view for newly opened Markdown files.")}
+      >
+        <Select
+          value={markdownDefaultView}
+          onValueChange={(value) =>
+            void setMarkdownDefaultView(value as "rendered" | "raw")
+          }
+        >
+          <SelectTrigger size="sm" className="h-7 w-24 text-[11px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="rendered" className="text-[11px]">
+              {t("Rendered")}
+            </SelectItem>
+            <SelectItem value="raw" className="text-[11px]">
+              {t("Raw")}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
       <SettingRow
         title={t("Auto save")}
         description={t(

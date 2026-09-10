@@ -137,6 +137,45 @@ describe("planFileTabOpen", () => {
 });
 
 describe("planMarkdownTabOpen", () => {
+  it("opens a markdown tab in the requested default view", () => {
+    const plan = planMarkdownTabOpen(
+      [terminal],
+      "/repo/README.md",
+      "one",
+      () => 3,
+      "raw",
+    );
+
+    expect(plan.tabs).toContainEqual(
+      expect.objectContaining({
+        id: 3,
+        kind: "markdown",
+        viewMode: "raw",
+      }),
+    );
+  });
+
+  it("allows the same markdown path in the secondary reader", () => {
+    const first = planMarkdownTabOpen(
+      [terminal],
+      "/repo/README.md",
+      "one",
+      () => 3,
+    );
+    const second = planMarkdownTabOpen(
+      first.tabs,
+      "/repo/README.md",
+      "one",
+      () => 4,
+      "rendered",
+      true,
+    );
+
+    expect(second.tabs.filter((tab) => tab.kind === "markdown")).toHaveLength(
+      2,
+    );
+  });
+
   it("appends a new markdown tab beside a raw markdown tab", () => {
     const tabs: Tab[] = [
       terminal,
