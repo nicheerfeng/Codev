@@ -5,6 +5,7 @@ import type {
   PiProbeResult,
   PiSessionSummary,
   PiStartResult,
+  PiModelsFile,
 } from "./types";
 
 const PI_EVENT = "codev://pi-agent-event";
@@ -22,13 +23,43 @@ export function listPiSessions(cwd: string): Promise<PiSessionSummary[]> {
   });
 }
 
+/** 读取所有 Pi 原生线程，供插件按 cwd 自动分组。 */
+export function listAllPiSessions(): Promise<PiSessionSummary[]> {
+  return invoke<PiSessionSummary[]>("pi_agent_list_all_sessions", {
+    limit: 300,
+  });
+}
+
+/** 读取 Pi 的单一 models.json 文件。 */
+export function readPiModels(): Promise<PiModelsFile> {
+  return invoke<PiModelsFile>("pi_agent_read_models");
+}
+
+/** 校验并直接保存 Pi 的 models.json 文件。 */
+export function writePiModels(content: string): Promise<void> {
+  return invoke("pi_agent_write_models", { content });
+}
+
+/** 重命名当前 Pi 会话，写入 Pi 原生 session_info 记录。 */
+export function renamePiSession(
+  sessionId: number,
+  name: string,
+): Promise<void> {
+  return sendPiCommand(sessionId, { type: "set_session_name", name });
+}
+
 /** 启动新建或恢复的 Pi RPC 会话。 */
 export function startPiAgent(
   cwd: string,
   sessionPath?: string,
 ): Promise<PiStartResult> {
   return invoke<PiStartResult>("pi_agent_start", {
-    request: { cwd, sessionPath: sessionPath ?? null, name: null, piPath: null },
+    request: {
+      cwd,
+      sessionPath: sessionPath ?? null,
+      name: null,
+      piPath: null,
+    },
   });
 }
 

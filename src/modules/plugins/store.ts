@@ -12,6 +12,8 @@ export type PluginId =
 
 export type PluginState = {
   enabled: Record<PluginId, boolean>;
+  piAgentProjects: string[];
+  piAgentHiddenProjects: string[];
 };
 
 type PluginStoreState = PluginState & {
@@ -21,6 +23,8 @@ type PluginStoreState = PluginState & {
 
 const STORE_PATH = "codev-plugins.json";
 const ENABLED_PLUGINS_KEY = "enabledPlugins";
+const PI_AGENT_PROJECTS_KEY = "piAgentProjects";
+const PI_AGENT_HIDDEN_PROJECTS_KEY = "piAgentHiddenProjects";
 const PLUGIN_CHANGED_EVENT = "codev://plugin-settings-changed";
 const DEFAULT_PLUGIN_STATE: PluginState = {
   enabled: {
@@ -28,30 +32,84 @@ const DEFAULT_PLUGIN_STATE: PluginState = {
     [TEXT_DIFF_PLUGIN_ID]: false,
     [PI_AGENT_PLUGIN_ID]: false,
   },
+  piAgentProjects: [],
+  piAgentHiddenProjects: [],
 };
 const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: 200 });
 let initPromise: Promise<void> | null = null;
 
 /** 规范化独立插件存储，未知插件配置不会进入运行时状态。 */
-function normalizePluginState(value: unknown): PluginState {
+/** 规范化插件开关、Pi Agent 项目目录和已隐藏项目。 */
+function normalizePluginState(
+  value: unknown,
+  projects: unknown = [],
+  hiddenProjects: unknown = [],
+): PluginState {
   const enabled =
     typeof value === "object" && value !== null
       ? (value as Partial<Record<PluginId, unknown>>)
       : {};
   return {
     enabled: {
-      [JSON_FORMATTER_PLUGIN_ID]:
-        enabled[JSON_FORMATTER_PLUGIN_ID] === true,
+      [JSON_FORMATTER_PLUGIN_ID]: enabled[JSON_FORMATTER_PLUGIN_ID] === true,
       [TEXT_DIFF_PLUGIN_ID]: enabled[TEXT_DIFF_PLUGIN_ID] === true,
       [PI_AGENT_PLUGIN_ID]: enabled[PI_AGENT_PLUGIN_ID] === true,
     },
+    piAgentProjects: Array.isArray(projects)
+      ? [
+          ...new Set(
+            projects
+              .filter(
+                (item): item is string =>
+                  typeof item === "string" && item.trim().length > 0,
+              )
+              .map((item) => item.replace(/\\/g, "/")),
+          ),
+        ]
+      : [],
+    piAgentHiddenProjects: Array.isArray(hiddenProjects)
+      ? [
+          ...new Set(
+            hiddenProjects
+              .filter(
+                (item): item is string =>
+                  typeof item === "string" && item.trim().length > 0,
+              )
+              .map((item) => item.replace(/\\/g, "/")),
+          ),
+        ]
+      : [],
   };
 }
 
 /** 读取插件独立配置文件，避免把插件状态混入常规设置。 */
 export async function loadPluginState(): Promise<PluginState> {
   const value = await store.get<unknown>(ENABLED_PLUGINS_KEY);
-  return normalizePluginState(value ?? DEFAULT_PLUGIN_STATE.enabled);
+  const projects = await store.get<unknown>(PI_AGENT_PROJECTS_KEY);
+  const hiddenProjects = await store.get<unknown>(PI_AGENT_HIDDEN_PROJECTS_KEY);
+  return normalizePluginState(
+    value ?? DEFAULT_PLUGIN_STATE.enabled,
+    projects,
+    hiddenProjects,
+  );
+}
+
+/** 持久化 Pi Agent 的项目目录列表，不写入常规设置。 */
+export async function setPiAgentProjects(projects: string[]): Promise<void> {
+  const next = [...new Set(projects.map((item) => item.replace(/\\/g, "/")))];
+  await store.set(PI_AGENT_PROJECTS_KEY, next);
+  await store.save();
+  usePluginStore.setState({ piAgentProjects: next });
+}
+
+/** 持久化 Pi Agent 中被用户隐藏的自动项目分组。 */
+export async function setPiAgentHiddenProjects(
+  projects: string[],
+): Promise<void> {
+  const next = [...new Set(projects.map((item) => item.replace(/\\/g, "/")))];
+  await store.set(PI_AGENT_HIDDEN_PROJECTS_KEY, next);
+  await store.save();
+  usePluginStore.setState({ piAgentHiddenProjects: next });
 }
 
 /** 持久化插件开关并通知主窗口与设置窗口同步状态。 */

@@ -16,6 +16,12 @@ export type PiSessionSummary = {
   messageCount: number;
 };
 
+export type PiModelsFile = {
+  path: string;
+  exists: boolean;
+  content: string;
+};
+
 export type PiStartResult = {
   sessionId: number;
   processId: number;
