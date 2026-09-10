@@ -1,0 +1,8 @@
+.pi-agent ::selection { background: rgb(112 149 184 / 48%); }
+.pi-agent ::highlight(codev-pi-search) { color: #201a09; background: #ffe681; }
+.pi-agent ::highlight(codev-pi-search-current) { color: #171004; background: #ffc94d; }
+.pi-agent .pi-markdown { overflow-wrap: anywhere; font-size: 13px; line-height: 1.75; }
+.pi-agent .pi-markdown pre { max-width: 100%; overflow: auto; }
+.pi-agent .pi-markdown :first-child { margin-top: 0; }
+.pi-agent .pi-markdown :last-child { margin-bottom: 0; }
+.pi-agent .pi-prompt { font-family: inherit; }

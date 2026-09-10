@@ -103,7 +103,7 @@ describe("TextDiffPane", () => {
       "utf8",
     );
     const piPane = readFileSync(path.join(here, "pi-agent/PiAgentPane.tsx"), "utf8");
-    expect(toolPanel).toMatch(/active=\{tool === "pi"\}/);
+    expect(toolPanel).toMatch(/active=\{active && tool === "pi"\}/);
     expect(piPane).toMatch(/if \(!active\) return;/);
   });
 });

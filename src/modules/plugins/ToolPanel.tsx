@@ -1,7 +1,12 @@
-import { useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { JsonFormatterPane } from "./JsonFormatterPane";
 import { TextDiffPane } from "./TextDiffPane";
-import { PiAgentPane } from "./pi-agent/PiAgentPane";
+import { PI_AGENT_PLUGIN_ID, usePluginStore } from "./store";
+const PiAgentPane = lazy(() =>
+  import("./pi-agent/PiAgentPane").then((module) => ({
+    default: module.PiAgentPane,
+  })),
+);
 
 const MAX_FORMATTER_PANES = 2;
 
@@ -44,20 +49,51 @@ function JsonFormatterTool() {
 export function ToolPanel({
   tool = "json",
   cwd,
+  active = true,
 }: {
   tool?: ToolId;
   cwd: string | null;
+  active?: boolean;
 }) {
+  const piEnabled = usePluginStore(
+    (state) => state.enabled[PI_AGENT_PLUGIN_ID],
+  );
+  const [piVisited, setPiVisited] = useState(active && tool === "pi");
+  useEffect(() => {
+    if (active && tool === "pi") setPiVisited(true);
+  }, [tool, active]);
   return (
     <div className="relative h-full min-h-0 min-w-0 overflow-hidden bg-card">
-      <div className={tool === "json" ? "absolute inset-0" : "hidden absolute inset-0"}>
+      <div
+        className={
+          tool === "json" ? "absolute inset-0" : "hidden absolute inset-0"
+        }
+      >
         <JsonFormatterTool />
       </div>
-      <div className={tool === "diff" ? "absolute inset-0" : "hidden absolute inset-0"}>
+      <div
+        className={
+          tool === "diff" ? "absolute inset-0" : "hidden absolute inset-0"
+        }
+      >
         <TextDiffPane />
       </div>
-      <div className={tool === "pi" ? "absolute inset-0" : "hidden absolute inset-0"}>
-        <PiAgentPane cwd={cwd} active={tool === "pi"} />
+      <div
+        className={
+          tool === "pi" ? "absolute inset-0" : "hidden absolute inset-0"
+        }
+      >
+        {piVisited && piEnabled && (
+          <Suspense
+            fallback={
+              <div className="p-4 text-xs text-muted-foreground">
+                正在加载 Pi Agent…
+              </div>
+            }
+          >
+            <PiAgentPane cwd={cwd} active={active && tool === "pi"} />
+          </Suspense>
+        )}
       </div>
     </div>
   );
