@@ -519,6 +519,10 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
                 components={components}
                 mode="static"
                 parseIncompleteMarkdown={false}
+                controls={{
+                  code: { copy: true, download: false },
+                  table: { copy: true, download: false, fullscreen: true },
+                }}
               >
                 {status.content}
               </Streamdown>

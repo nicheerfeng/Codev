@@ -39,6 +39,8 @@ export type PiModel = {
   name?: string;
 };
 
+export type PiStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
+
 export type PiMessageItem = {
   timestamp?: number;
   id: string;
@@ -48,14 +50,22 @@ export type PiMessageItem = {
   thinking: string;
   streaming: boolean;
   images?: PiImage[];
+  stopReason?: PiStopReason;
 };
 
 export type PiImage = { type: "image"; data: string; mimeType: string };
+export type PiQueueState = {
+  steering: string[];
+  followUp: string[];
+  pendingCount: number;
+};
+
 export type PiThinkingItem = {
   id: string;
   kind: "thinking";
   text: string;
   streaming: boolean;
+  timestamp?: number;
 };
 
 export type PiToolItem = {
@@ -66,6 +76,8 @@ export type PiToolItem = {
   status: "running" | "done" | "error";
   args: unknown;
   output: string;
+  startedAt?: number;
+  finishedAt?: number;
 };
 
 export type PiTranscriptItem = PiMessageItem | PiThinkingItem | PiToolItem;
@@ -91,6 +103,9 @@ export type PiViewState = {
   thinkingLevels: string[];
   contextPercent: number | null;
   contextTokens: number | null;
+  queue: PiQueueState;
   phase: string;
   error: string | null;
+  processStartedAt?: number;
+  processFinishedAt?: number;
 };

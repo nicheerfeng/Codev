@@ -48,10 +48,10 @@ type Props = {
   onNew: (cwd: string) => void;
   onSelect: (thread: SidebarThread) => void;
   onRename: (thread: SidebarThread) => void;
+  onFork: (thread: SidebarThread) => void;
   onExport: (thread: SidebarThread) => void;
   onClose: (thread: SidebarThread) => void;
   onCopyPath: (path: string) => void;
-  onClone: (thread: SidebarThread) => void;
 };
 
 /** 复用 mcode 左栏的组→项目→线程与底部归档收纳，使用 Codev 菜单和控件。 */
@@ -97,9 +97,6 @@ export function PiSidebar(props: Props) {
             onClick={() => props.onSelect(thread)}
             title={thread.name || thread.preview || "新线程"}
           >
-            <span className="min-w-0 flex-1 truncate text-xs">
-              {thread.name || thread.preview || "新线程"}
-            </span>
             <span
               role="img"
               aria-label={
@@ -116,14 +113,20 @@ export function PiSidebar(props: Props) {
                     ? "运行中"
                     : "就绪"
               }
-              className={`ml-auto size-2 shrink-0 rounded-full ${thread.waiting ? "bg-amber-600 ring-2 ring-amber-600/25 dark:bg-amber-300 dark:ring-amber-300/30" : thread.status === "running" ? "bg-[#477faf] ring-2 ring-[#477faf]/25 dark:bg-[#a6cceb] dark:ring-[#a6cceb]/30" : "bg-muted-foreground/50"}`}
+              className={`size-2 shrink-0 rounded-full ${thread.waiting ? "bg-amber-600 ring-2 ring-amber-600/25 dark:bg-amber-300" : thread.status === "running" ? "bg-[#477faf] ring-2 ring-[#477faf]/25 dark:bg-[#a6cceb]" : "bg-muted-foreground/50"}`}
             />
+            <span className="min-w-0 flex-1 truncate text-xs">
+              {thread.name || thread.preview || "新线程"}
+            </span>
           </button>
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="rounded-xl">
         <ContextMenuItem onSelect={() => props.onRename(thread)}>
           重命名
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => props.onFork(thread)}>
+          分叉线程
         </ContextMenuItem>
         <ContextMenuItem
           disabled={!thread.path}
@@ -135,9 +138,6 @@ export function PiSidebar(props: Props) {
           导出 HTML
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => props.onClone(thread)}>
-          分叉线程
-        </ContextMenuItem>
         <ContextMenuItem
           disabled={!thread.path}
           onSelect={() => archive(thread, !isArchived)}

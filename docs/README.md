@@ -1,6 +1,6 @@
 # Codev contributor documentation
 
-这些文档服务于当前最小产品：多项目工作区、文件树、代码/文档阅读器和集成终端。
+这些文档服务于当前产品：多项目工作区、文件树、代码/文档阅读器、集成终端，以及默认关闭的内置插件。
 
 ## Getting started
 
@@ -15,4 +15,8 @@
 - [安全模型](architecture/security-model.md) - IPC、路径、文件和终端转义序列边界
 - [终端渲染器池](architecture/terminal-renderer-pool.md) - 槽位复用、DormantRing 和隐藏终端保活
 
-开发过程中的裁剪记录见 [二开规划](二开规划.md)。
+## Product notes
+
+- [发布记录](发布记录.md) - 正式版本、验证结果与交付文件
+- [Codev 0.9.1 发布说明](Codev-0.9.1-发布说明.md) - 当前版本说明
+- [Pi Agent 插件专项](development/pi-agent-plugin/README.md) - 插件边界、RPC 模型与重构记录

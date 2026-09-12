@@ -38,3 +38,7 @@ artifacts/
 # Read-only upstream snapshots used during feature design; never shipped.
 .reference-cache/
 output/
+
+# Local Pi Agent design dumps and session transcripts; never shipped.
+docs/ref-piagent/
+docs/codev-pi-agent工作进展.md

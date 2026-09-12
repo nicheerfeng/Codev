@@ -1,6 +1,7 @@
 import type {
   PiEventEnvelope,
   PiModel,
+  PiStopReason,
   PiTranscriptItem,
   PiViewState,
 } from "./types";
@@ -18,6 +19,7 @@ export const INITIAL_PI_VIEW_STATE: PiViewState = {
   thinkingLevels: ["off"],
   contextPercent: null,
   contextTokens: null,
+  queue: { steering: [], followUp: [], pendingCount: 0 },
   phase: "",
   error: null,
 };
@@ -55,10 +57,43 @@ export function resultText(value: unknown): string {
   return value == null ? "" : JSON.stringify(value, null, 2);
 }
 
+/** 将 Pi 的毫秒、秒或 ISO 时间统一为毫秒时间戳。 */
+function timestampValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value))
+    return value < 1_000_000_000_000 ? value * 1000 : value;
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric))
+    return numeric < 1_000_000_000_000 ? numeric * 1000 : numeric;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+/** 读取单条 Pi 记录的时间，兼容外层记录和嵌套消息。 */
+function messageTimestamp(
+  value: Record<string, unknown>,
+  fallback?: Record<string, unknown> | null,
+): number | undefined {
+  return timestampValue(value.timestamp) ?? timestampValue(fallback?.timestamp);
+}
+
+/** 读取 Pi assistant 消息的结束原因，未知值不参与编辑判断。 */
+function stopReasonValue(value: unknown): PiStopReason | undefined {
+  return value === "stop" ||
+    value === "length" ||
+    value === "toolUse" ||
+    value === "error" ||
+    value === "aborted"
+    ? value
+    : undefined;
+}
+
 /** 按 Pi contentIndex 保留每一段正文、思考和工具的原始顺序。 */
 function normalizeMessage(message: unknown, id: string): PiTranscriptItem[] {
-  const value = objectValue(message);
+  const raw = objectValue(message);
+  const value = objectValue(raw?.message) ?? raw;
   if (!value) return [];
+  const timestamp = messageTimestamp(value, raw);
   if (value.role === "toolResult")
     return [
       {
@@ -69,10 +104,12 @@ function normalizeMessage(message: unknown, id: string): PiTranscriptItem[] {
         status: value.isError ? "error" : "done",
         args: null,
         output: resultText(value.content),
+        finishedAt: timestamp,
       },
     ];
   if (value.role !== "user" && value.role !== "assistant") return [];
   const role = value.role;
+  const stopReason = stopReasonValue(value.stopReason ?? raw?.stopReason);
   const content = Array.isArray(value.content)
     ? value.content
     : [{ type: "text", text: value.content ?? "" }];
@@ -88,8 +125,7 @@ function normalizeMessage(message: unknown, id: string): PiTranscriptItem[] {
         images: content.filter(
           (part) => part.type === "image" && typeof part.data === "string",
         ),
-        timestamp:
-          typeof value.timestamp === "number" ? value.timestamp : undefined,
+        timestamp,
       },
     ];
   return content.flatMap((part, index): PiTranscriptItem[] => {
@@ -100,6 +136,7 @@ function normalizeMessage(message: unknown, id: string): PiTranscriptItem[] {
           kind: "thinking",
           text: part.thinking ?? "",
           streaming: false,
+          timestamp,
         },
       ];
     if (part.type === "text")
@@ -111,8 +148,8 @@ function normalizeMessage(message: unknown, id: string): PiTranscriptItem[] {
           text: part.text ?? "",
           thinking: "",
           streaming: false,
-          timestamp:
-            typeof value.timestamp === "number" ? value.timestamp : undefined,
+          timestamp,
+          ...(stopReason ? { stopReason } : {}),
         },
       ];
     if (part.type === "toolCall")
@@ -125,6 +162,7 @@ function normalizeMessage(message: unknown, id: string): PiTranscriptItem[] {
           args: part.arguments,
           output: "",
           status: "running",
+          startedAt: timestamp,
         },
       ];
     return [];
@@ -144,7 +182,12 @@ function mergeItems(
       const previous = next[index];
       next[index] =
         previous.kind === "tool" && item.kind === "tool"
-          ? { ...item, args: item.args ?? previous.args }
+          ? {
+              ...item,
+              args: item.args ?? previous.args,
+              startedAt: item.startedAt ?? previous.startedAt,
+              finishedAt: item.finishedAt ?? previous.finishedAt,
+            }
           : item;
     }
   }
@@ -171,6 +214,11 @@ function streamBase(items: PiTranscriptItem[]): string {
   return streaming ? streaming.id.split(":")[0] : `message-${items.length}`;
 }
 
+/** 读取 RPC 事件时间，缺失时使用事件到达时间。 */
+function eventTimestamp(event: Record<string, unknown>): number {
+  return timestampValue(event.timestamp) ?? Date.now();
+}
+
 /** 根据 RPC 事件更新一个线程，保留工具调用与内容块的相对位置。 */
 function reduceEvent(
   state: PiViewState,
@@ -190,14 +238,34 @@ function reduceEvent(
       items: settleItems(state.items),
     };
   if (type === "agent_start")
-    return { ...state, status: "running", phase: "思考中", error: null };
+    return {
+      ...state,
+      status: "running",
+      phase: "思考中",
+      error: null,
+      processStartedAt: Date.now(),
+      processFinishedAt: undefined,
+    };
   if (type === "agent_settled")
     return {
       ...state,
       status: "idle",
       phase: "",
+      processFinishedAt: Date.now(),
       items: settleItems(state.items),
     };
+  if (type === "queue_update") {
+    const steering = Array.isArray(event.steering)
+      ? event.steering.filter((value): value is string => typeof value === "string")
+      : [];
+    const followUp = Array.isArray(event.followUp)
+      ? event.followUp.filter((value): value is string => typeof value === "string")
+      : [];
+    return {
+      ...state,
+      queue: { steering, followUp, pendingCount: steering.length + followUp.length },
+    };
+  }
   if (type === "auto_retry_start") return { ...state, phase: "正在重试" };
   if (type === "auto_compaction_start")
     return { ...state, phase: "正在压缩上下文" };
@@ -210,13 +278,14 @@ function reduceEvent(
     )
       return state;
     const id = `${streamBase(state.items)}:${Number(update.contentIndex ?? 0)}`;
+    const timestamp = timestampValue(update.timestamp);
     const previous = state.items.find((item) => item.id === id);
     const text =
       (previous && previous.kind !== "tool" ? previous.text : "") +
       update.delta;
     const item: PiTranscriptItem =
       update.type === "thinking_delta"
-        ? { id, kind: "thinking", text, streaming: true }
+        ? { id, kind: "thinking", text, streaming: true, timestamp }
         : {
             id,
             kind: "message",
@@ -224,6 +293,7 @@ function reduceEvent(
             text,
             thinking: "",
             streaming: true,
+            timestamp,
           };
     return {
       ...state,
@@ -258,6 +328,7 @@ function reduceEvent(
       (item) => item.kind === "tool" && item.toolCallId === id,
     );
     const old = previous?.kind === "tool" ? previous : null;
+    const currentTime = eventTimestamp(event);
     return {
       ...state,
       phase: "执行工具",
@@ -278,6 +349,12 @@ function reduceEvent(
               : event.isError
                 ? "error"
                 : "done",
+          startedAt:
+            type === "tool_execution_start"
+              ? currentTime
+              : (old?.startedAt ?? currentTime),
+          finishedAt:
+            type === "tool_execution_end" ? currentTime : old?.finishedAt,
         },
       ]),
     };
@@ -316,6 +393,18 @@ function reduceEvent(
           : state.sessionName,
       model: modelValue(data?.model),
       thinkingLevel: String(data?.thinkingLevel ?? state.thinkingLevel),
+      queue: {
+        ...state.queue,
+        pendingCount:
+          typeof data?.pendingMessageCount === "number"
+            ? data.pendingMessageCount
+            : state.queue.pendingCount,
+      },
+    };
+  if (event.command === "clear_queue")
+    return {
+      ...state,
+      queue: { steering: [], followUp: [], pendingCount: 0 },
     };
   if (event.command === "get_session_stats") {
     const usage = objectValue(data?.contextUsage);

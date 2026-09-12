@@ -36,6 +36,73 @@ describe("piViewReducer", () => {
       text: "answer",
     });
   });
+
+  it("preserves the assistant stop reason for natural edit eligibility", () => {
+    const state = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "event",
+      payload: rpc({
+        type: "response",
+        command: "get_messages",
+        success: true,
+        data: {
+          messages: [
+            {
+              role: "assistant",
+              stopReason: "stop",
+              content: [{ type: "text", text: "完成" }],
+            },
+          ],
+        },
+      }),
+    });
+    expect(state.items[0]).toMatchObject({
+      role: "assistant",
+      stopReason: "stop",
+    });
+  });
+
+  it("hydrates ISO record times for thinking, tool calls, and tool results", () => {
+    const state = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "event",
+      payload: rpc({
+        type: "response",
+        command: "get_messages",
+        success: true,
+        data: {
+          messages: [
+            {
+              timestamp: "2026-09-11T10:00:00.000Z",
+              message: {
+                role: "assistant",
+                timestamp: "2026-09-11T10:00:01.000Z",
+                content: [
+                  { type: "thinking", thinking: "plan" },
+                  {
+                    type: "toolCall",
+                    id: "read-1",
+                    name: "read",
+                    arguments: { path: "a.ts" },
+                  },
+                ],
+              },
+            },
+            {
+              timestamp: "2026-09-11T10:00:03.000Z",
+              message: {
+                role: "toolResult",
+                toolCallId: "read-1",
+                toolName: "read",
+                content: [{ type: "text", text: "ok" }],
+              },
+            },
+          ],
+        },
+      }),
+    });
+    expect(state.items[0]).toMatchObject({ timestamp: 1789120801000 });
+    expect(state.items[1]).toMatchObject({ startedAt: 1789120801000 });
+    expect(state.items[1]).toMatchObject({ finishedAt: 1789120803000 });
+  });
   it("preserves interleaved thinking, text and tools across hydration", () => {
     const state = piViewReducer(INITIAL_PI_VIEW_STATE, {
       type: "event",
@@ -119,6 +186,35 @@ describe("piViewReducer", () => {
       payload: rpc({ type: "agent_settled" }),
     });
     expect(state.status).toBe("idle");
+  });
+
+  it("shows native steering and follow-up queues", () => {
+    const state = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "event",
+      payload: rpc({
+        type: "queue_update",
+        steering: ["先修复这个"],
+        followUp: ["完成后总结", "完成后测试"],
+      }),
+    });
+    expect(state.queue).toEqual({
+      steering: ["先修复这个"],
+      followUp: ["完成后总结", "完成后测试"],
+      pendingCount: 3,
+    });
+  });
+
+  it("hydrates the native pending queue count from get_state", () => {
+    const state = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "event",
+      payload: rpc({
+        type: "response",
+        command: "get_state",
+        success: true,
+        data: { isStreaming: true, pendingMessageCount: 2 },
+      }),
+    });
+    expect(state.queue.pendingCount).toBe(2);
   });
   it("streams assistant text without selecting editor content", () => {
     const running = piViewReducer(INITIAL_PI_VIEW_STATE, {
