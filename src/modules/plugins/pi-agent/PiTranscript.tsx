@@ -10,6 +10,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Streamdown } from "streamdown";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Spinner } from "@/components/ui/spinner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -26,41 +27,101 @@ import {
   buildTimelineBlocks,
   itemText,
   type PiTimelineBlock,
+  type PiTimelineStep,
 } from "./timeline";
-import type { PiMessageItem, PiTranscriptItem, PiViewState } from "./types";
+import type {
+  PiMessageItem,
+  PiToolItem,
+  PiTranscriptItem,
+  PiViewState,
+} from "./types";
 
 type MessageActions = {
   onCopy?: (text: string) => void;
-  onEdit?: (item: PiMessageItem) => void;
-  onFork?: (item: PiMessageItem) => void;
+  onEdit?: (
+    item: PiMessageItem,
+    text: string,
+  ) => boolean | undefined | Promise<boolean | undefined>;
+  onFork?: () => void;
+  canEditLastUser?: boolean;
   lastUserId?: string;
 };
+
+/** 从工具参数提取可直接感知的命令、脚本或目标路径。 */
+function toolSummary(item: PiToolItem): string {
+  if (item.args && typeof item.args === "object") {
+    const args = item.args as Record<string, unknown>;
+    for (const key of [
+      "command",
+      "script",
+      "cmd",
+      "path",
+      "file_path",
+      "pattern",
+      "query",
+    ]) {
+      if (typeof args[key] === "string" && args[key]) return args[key];
+    }
+  }
+  return item.name;
+}
+
+/** 将毫秒耗时格式化为紧凑的中文时间。 */
+function formatElapsed(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes) return `${minutes}分${seconds}秒`;
+  return `${seconds}秒`;
+}
 
 /** 显示原始消息或工具内容，选中与搜索不改变输入焦点。 */
 const TranscriptItem = memo(function TranscriptItem({
   item,
   actions,
+  openForSearch = false,
+  showActions = false,
 }: {
   item: PiTranscriptItem;
   actions: MessageActions;
+  openForSearch?: boolean;
+  showActions?: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState(
+    item.kind === "message" && item.role === "user" ? item.text : "",
+  );
+  const [editSubmitting, setEditSubmitting] = useState(false);
+  useEffect(() => {
+    if (openForSearch) setExpanded(true);
+  }, [openForSearch]);
+  useEffect(() => {
+    if (item.kind === "message" && item.role === "user" && !editing)
+      setEditText(item.text);
+  }, [item, editing]);
   if (item.kind === "tool")
     return (
       <details
         data-pi-text={item.id}
-        className="my-2 rounded-lg border border-border/60 bg-muted/20"
+        className="pi-tool"
+        open={expanded}
+        onToggle={(event) => setExpanded(event.currentTarget.open)}
       >
-        <summary className="cursor-pointer px-3 py-2 text-xs text-muted-foreground">
-          <span className={item.status === "running" ? "text-[#8eacc9]" : ""}>
+        <summary className="pi-tool-summary cursor-pointer list-none text-xs text-muted-foreground [&::-webkit-details-marker]:hidden">
+          <span
+            className={`pi-tool-status ${item.status === "running" ? "pi-process-live" : ""}`}
+          >
             {item.status === "running"
               ? "执行中"
               : item.status === "error"
                 ? "执行失败"
                 : "已完成"}
-          </span>{" "}
-          · {item.name}
+          </span>
+          <span aria-hidden="true">·</span>
+          <span className="pi-tool-command">{toolSummary(item)}</span>
         </summary>
-        <div className="reader-scrollbar max-h-80 overflow-auto border-t border-border/50 px-3 py-2">
+        <div className="pi-tool-body reader-scrollbar max-h-80 overflow-auto">
           {item.args != null && (
             <pre className="mb-2 whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground">
               {JSON.stringify(item.args, null, 2)}
@@ -76,7 +137,7 @@ const TranscriptItem = memo(function TranscriptItem({
     <article
       className={
         item.kind === "message" && item.role === "user"
-          ? "ml-auto max-w-[90%] rounded-2xl bg-muted px-4 py-3"
+          ? "pi-user-message ml-auto max-w-[90%] rounded-2xl bg-muted px-4 py-3"
           : "min-w-0 py-2"
       }
     >
@@ -84,10 +145,26 @@ const TranscriptItem = memo(function TranscriptItem({
         data-pi-text={item.id}
         className={`pi-markdown select-text ${item.kind === "thinking" ? "text-muted-foreground" : ""}`}
       >
-        {item.kind === "message" && item.role === "user" ? (
+        {item.kind === "message" && item.role === "user" && editing ? (
+          <Textarea
+            autoFocus
+            aria-label="编辑最后一条输入"
+            value={editText}
+            disabled={editSubmitting}
+            className="pi-user-edit-input min-h-20 resize-y rounded-lg border-0 bg-transparent px-0 py-0 text-[13px] shadow-none focus-visible:ring-0"
+            onChange={(event) => setEditText(event.target.value)}
+          />
+        ) : item.kind === "message" && item.role === "user" ? (
           <div className="whitespace-pre-wrap">{item.text}</div>
         ) : (
-          <Streamdown>{item.text}</Streamdown>
+          <Streamdown
+            controls={{
+              code: { copy: true, download: false },
+              table: { copy: false, download: false, fullscreen: true },
+            }}
+          >
+            {item.text}
+          </Streamdown>
         )}
       </div>
       {item.kind === "message" &&
@@ -99,8 +176,43 @@ const TranscriptItem = memo(function TranscriptItem({
             alt="用户附件"
           />
         ))}
-      {item.kind === "message" && (
-        <div className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
+      {item.kind === "message" &&
+        item.role === "user" &&
+        editing && (
+          <div className="pi-user-edit-actions mt-2 flex justify-end gap-1">
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={editSubmitting}
+              onClick={() => {
+                setEditText(item.text);
+                setEditing(false);
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              size="xs"
+              disabled={editSubmitting || !editText.trim()}
+              onClick={async () => {
+                if (!actions.onEdit || editSubmitting) return;
+                setEditSubmitting(true);
+                try {
+                  const accepted = await actions.onEdit(item, editText.trim());
+                  if (accepted !== false) setEditing(false);
+                } catch {
+                  // 保留编辑态，父层负责展示原生操作错误。
+                } finally {
+                  setEditSubmitting(false);
+                }
+              }}
+            >
+              发送
+            </Button>
+          </div>
+        )}
+      {item.kind === "message" && showActions && !editing && (
+        <div className="pi-message-actions text-[10px] text-muted-foreground">
           {item.timestamp !== undefined && (
             <time
               dateTime={new Date(item.timestamp).toISOString()}
@@ -121,24 +233,29 @@ const TranscriptItem = memo(function TranscriptItem({
           >
             <HugeiconsIcon icon={Copy01Icon} size={13} />
           </Button>
-          {item.role === "user" && item.id === actions.lastUserId && (
+          {item.role === "user" &&
+            item.id === actions.lastUserId &&
+            actions.canEditLastUser && (
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                title="编辑最后一条输入"
+                aria-label="编辑最后一条输入"
+                onClick={() => {
+                  setEditText(item.text);
+                  setEditing(true);
+                }}
+              >
+                <HugeiconsIcon icon={PencilEdit01Icon} size={13} />
+              </Button>
+            )}
+          {item.role === "assistant" && !item.streaming && (
             <Button
               variant="ghost"
               size="icon-xs"
-              title="停止并编辑此输入"
-              aria-label="编辑最后一条输入"
-              onClick={() => actions.onEdit?.(item)}
-            >
-              <HugeiconsIcon icon={PencilEdit01Icon} size={13} />
-            </Button>
-          )}
-          {!item.streaming && (
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              title="分叉当前线程"
-              aria-label="分叉当前线程"
-              onClick={() => actions.onFork?.(item)}
+              title="从此线程分叉"
+              aria-label="从此线程分叉"
+              onClick={actions.onFork}
             >
               <HugeiconsIcon icon={GitForkIcon} size={13} />
             </Button>
@@ -149,7 +266,31 @@ const TranscriptItem = memo(function TranscriptItem({
   );
 });
 
-/** 展示一轮的可折叠过程，运行标记和展开状态相互独立。 */
+/** 将连续工具调用放入同一过程组，详情仍按单个工具点击展开。 */
+function ToolGroup({
+  items,
+  actions,
+  openForSearch,
+}: {
+  items: PiToolItem[];
+  actions: MessageActions;
+  openForSearch?: string;
+}) {
+  return (
+    <div className="pi-tool-group min-w-0 max-w-full">
+      {items.map((item) => (
+        <TranscriptItem
+          key={item.id}
+          item={item}
+          actions={actions}
+          openForSearch={item.id === openForSearch}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** 展示 Codex 风格的单行过程摘要，详细步骤只在用户展开后显示。 */
 function TimelineBlock({
   block,
   query,
@@ -160,51 +301,129 @@ function TimelineBlock({
   actions: MessageActions;
 }) {
   const [expanded, setExpanded] = useState(false);
-  if (block.kind === "item")
-    return <TranscriptItem item={block.item} actions={actions} />;
+  const [now, setNow] = useState(Date.now());
+  const isProcess = block.kind === "process";
+  const blockRunning = isProcess ? block.running : false;
+  const blockFinishedAt = isProcess ? block.finishedAt : undefined;
   const searchExpanded =
+    isProcess &&
     !!query &&
     block.items.some((item) =>
       itemText(item).toLocaleLowerCase().includes(query.toLocaleLowerCase()),
     );
-  const open = expanded || searchExpanded;
+  useEffect(() => {
+    if (searchExpanded) setExpanded(true);
+  }, [searchExpanded]);
+  useEffect(() => {
+    if (block.kind !== "process") return;
+    setExpanded(block.running || searchExpanded);
+  }, [block.kind, blockRunning, searchExpanded]);
+  useEffect(() => {
+    if (!isProcess || !blockRunning || blockFinishedAt) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [isProcess, blockRunning, blockFinishedAt]);
+  if (block.kind === "item")
+    return (
+      <TranscriptItem
+        item={block.item}
+        actions={actions}
+        showActions={block.item.kind === "message"}
+      />
+    );
   const tools = block.items.filter((item) => item.kind === "tool");
-  const live = tools.find(
-    (item) => item.kind === "tool" && item.status === "running",
-  );
+  const searchItem = searchExpanded
+    ? block.items.find((item) =>
+        itemText(item).toLocaleLowerCase().includes(query.toLocaleLowerCase()),
+      )
+    : undefined;
+  const firstStarted =
+    block.startedAt ?? tools.find((item) => item.startedAt)?.startedAt;
+  const lastFinished =
+    block.finishedAt ??
+    [...tools].reverse().find((item) => item.finishedAt)?.finishedAt;
+  const elapsed = firstStarted
+    ? Math.max(0, (lastFinished ?? now) - firstStarted)
+    : null;
+  const elapsedText =
+    elapsed === null ? "" : ` · 用时 ${formatElapsed(elapsed)}`;
   return (
-    <div className="py-2">
-      <button
-        type="button"
-        aria-expanded={open}
-        className="flex max-w-full items-center gap-2 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <HugeiconsIcon
-          icon={open ? ArrowUp01Icon : ArrowDown01Icon}
-          size={12}
-        />
-        <span className={block.running ? "text-[#8eacc9]" : ""}>
-          {block.running
-            ? live?.kind === "tool"
-              ? `正在执行 ${live.name}`
-              : "处理中"
-            : "已处理"}
+    <details
+      className="pi-process"
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary className="pi-process-summary flex max-w-full cursor-pointer list-none items-center gap-2 py-1.5 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+        <HugeiconsIcon icon={ArrowDown01Icon} size={12} />
+        <span className={`pi-process-title ${block.running ? "pi-process-live" : ""}`}>
+          {block.label}
         </span>
-        <span>
+        <span className="pi-process-meta">
           {block.items.length} 个步骤
           {tools.length ? ` · ${tools.length} 次工具调用` : ""}
+          {elapsedText}
         </span>
-      </button>
-      {open && (
-        <div className="ml-1.5 border-l border-border pl-4">
-          {block.items.map((item) => (
-            <TranscriptItem key={item.id} item={item} actions={actions} />
-          ))}
-        </div>
-      )}
-    </div>
+      </summary>
+      <div className="pi-process-body ml-1.5 pl-4">
+        {block.steps.map((step) => (
+          <ProcessStep
+            key={step.id}
+            step={step}
+            actions={actions}
+            openForSearch={
+              step.kind !== "tool-group" && step.item?.id === searchItem?.id
+            }
+            toolSearchId={
+              step.kind === "tool-group" ? searchItem?.id : undefined
+            }
+          />
+        ))}
+      </div>
+    </details>
   );
+}
+
+/** 将思考、叙述和工具分别收纳，避免过程详情堆成连续卡片。 */
+function ProcessStep({
+  step,
+  actions,
+  openForSearch = false,
+  toolSearchId,
+}: {
+  step: PiTimelineStep;
+  actions: MessageActions;
+  openForSearch?: boolean;
+  toolSearchId?: string;
+}) {
+  if (step.kind === "tool-group")
+    return (
+      <ToolGroup
+        items={step.items ?? []}
+        actions={actions}
+        openForSearch={toolSearchId}
+      />
+    );
+  if (step.kind === "thinking")
+    return (
+      <details className="pi-process-step" open={openForSearch || undefined}>
+        <summary className="cursor-pointer py-1 text-[11px] text-muted-foreground">
+          思考
+        </summary>
+        <div className="pi-process-step-body pi-markdown select-text">
+          <Streamdown
+            controls={{
+              code: { copy: true, download: false },
+              table: { copy: false, download: false, fullscreen: true },
+            }}
+          >
+          {step.item?.kind === "thinking" ? step.item.text : ""}
+          </Streamdown>
+        </div>
+      </details>
+    );
+  return step.item ? (
+    <TranscriptItem item={step.item} actions={actions} showActions={false} />
+  ) : null;
 }
 
 /** 收集渲染正文中的命中范围，可跨 Markdown 内联节点。 */
@@ -255,6 +474,7 @@ export function PiTranscript({
   onCopy,
   onEdit,
   onFork,
+  canEditLastUser,
 }: {
   view: PiViewState;
   loading?: boolean;
@@ -269,11 +489,12 @@ export function PiTranscript({
       onCopy,
       onEdit,
       onFork,
+      canEditLastUser,
       lastUserId: [...view.items]
         .reverse()
         .find((item) => item.kind === "message" && item.role === "user")?.id,
     }),
-    [view.items, onCopy, onEdit, onFork],
+    [view.items, onCopy, onEdit, onFork, canEditLastUser],
   );
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -288,8 +509,12 @@ export function PiTranscript({
   const seenSends = useRef(new Map<string, number>());
   const running = view.status === "running" || view.status === "stopping";
   const blocks = useMemo(
-    () => buildTimelineBlocks(view.items, running),
-    [view.items, running],
+    () =>
+      buildTimelineBlocks(view.items, running, {
+        startedAt: view.processStartedAt,
+        finishedAt: view.processFinishedAt,
+      }),
+    [view.items, running, view.processStartedAt, view.processFinishedAt],
   );
   const matches = useMemo(
     () =>
@@ -442,12 +667,6 @@ export function PiTranscript({
     );
     setJump((value) => value + 1);
   };
-  useEffect(() => {
-    if (!active || !query || !content.current) return;
-    for (const details of content.current.querySelectorAll("details"))
-      if (details.textContent?.toLowerCase().includes(query.toLowerCase()))
-        details.open = true;
-  }, [query, jump, active, view.items]);
   return (
     <div
       className="relative flex min-h-0 flex-1 flex-col overflow-hidden"

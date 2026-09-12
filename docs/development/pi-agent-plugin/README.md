@@ -17,6 +17,6 @@
 5. 复用 Pi 原生模型配置、凭据、扩展、技能和 `~/.pi/agent/sessions` 会话文件。
 6. UI 按 mcode 组/项目/归档和输入布局改用 Codev 控件；Zeno 提供逐 turn 聚合和滚动交互参考。原 pi-web 方案已被本轮替代。
 
-## 当前开发分支
+## 当前状态
 
-规划提交进入 `main` 后，在 `feat/pi-agent-panel` 分支实施。稳定前不创建正式版本标签。
+Pi Agent 已进入 `main`。组/项目/归档、逐 turn 过程聚合、运行计时与 Dock 标签拖拽已落地。本机参考源码仍可存在 `docs/ref-piagent/`，但不进仓库、不参与产品构建。

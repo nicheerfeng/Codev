@@ -63,7 +63,6 @@ export function PiComposer(props: Props) {
   draftRef.current = props.draft;
   const [modelFilter, setModelFilter] = useState("");
   const [modelOpen, setModelOpen] = useState(false);
-  const [behavior, setBehavior] = useState<"steer" | "followUp">("steer");
   const [commandIndex, setCommandIndex] = useState(0);
   const commandList = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -152,6 +151,38 @@ export function PiComposer(props: Props) {
           className="reader-scrollbar mx-auto mb-2 max-h-20 w-full max-w-3xl overflow-y-auto text-center text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]"
         >
           {props.status}
+        </div>
+      )}
+      {props.view.queue.pendingCount > 0 && (
+        <div
+          data-testid="pi-queue"
+          className="pi-queue reader-scrollbar mx-auto mb-2 max-h-28 w-full max-w-3xl overflow-y-auto rounded-lg border border-border/70 bg-muted/20 px-2 py-1.5 text-xs"
+        >
+          <div className="mb-1 text-[10px] text-muted-foreground">
+            待处理消息 · {props.view.queue.pendingCount}
+          </div>
+          {props.view.queue.steering.map((text, index) => (
+            <div
+              className="pi-queue-item"
+              key={`steer-${index}-${text}`}
+            >
+              <span className="pi-queue-mode">插入</span>
+              <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
+                {text}
+              </span>
+            </div>
+          ))}
+          {props.view.queue.followUp.map((text, index) => (
+            <div
+              className="pi-queue-item"
+              key={`follow-up-${index}-${text}`}
+            >
+              <span className="pi-queue-mode">排队</span>
+              <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
+                {text}
+              </span>
+            </div>
+          ))}
         </div>
       )}
       <div className="relative mx-auto w-full max-w-3xl rounded-2xl border border-border bg-card shadow-sm focus-within:border-ring/60">
@@ -278,7 +309,11 @@ export function PiComposer(props: Props) {
                 !props.busy &&
                 (props.draft.text.trim() || props.draft.images.length)
               )
-                props.onSend(behavior);
+                props.onSend(
+                  running && (event.ctrlKey || event.metaKey)
+                    ? "steer"
+                    : "followUp",
+                );
             }
           }}
         />
@@ -434,14 +469,14 @@ export function PiComposer(props: Props) {
             <Button
               size="icon-sm"
               className="rounded-full"
-              title={running ? "追加指令" : "发送"}
-              aria-label={running ? "追加指令" : "发送"}
+              title={running ? "排队发送" : "发送"}
+              aria-label={running ? "排队发送" : "发送"}
               disabled={
                 props.disabled ||
                 props.busy ||
                 (!props.draft.text.trim() && !props.draft.images.length)
               }
-              onClick={() => props.onSend(behavior)}
+              onClick={() => props.onSend("followUp")}
             >
               <HugeiconsIcon icon={ArrowUp01Icon} size={17} />
             </Button>
@@ -453,15 +488,7 @@ export function PiComposer(props: Props) {
           {props.project || "请添加项目"}
         </span>
         {running ? (
-          <button
-            type="button"
-            onClick={() =>
-              setBehavior(behavior === "steer" ? "followUp" : "steer")
-            }
-            title="切换追加指令时机"
-          >
-            {behavior === "steer" ? "执行中插入" : "完成后发送"}
-          </button>
+          <span className="shrink-0">Enter 排队 · Ctrl/Cmd + Enter 插入</span>
         ) : (
           <span className="shrink-0">Shift + Enter 换行</span>
         )}

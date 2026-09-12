@@ -38,11 +38,19 @@ vi.mock("./native", () => ({
                     cancelled: mock.cancelBranch,
                     text: command.type === "fork" ? "原始输入" : "",
                   }
+                : command.type === "get_fork_messages"
+                  ? { messages: [{ entryId: "entry-last", text: "原始输入" }] }
                 : command.type === "get_messages"
                   ? { messages: [] }
-                  : command.type === "get_state"
-                    ? { sessionFile: `session-${runtimeId}.jsonl` }
-                    : {},
+                  : command.type === "get_available_models"
+                    ? {
+                        models: [
+                          { provider: "openai", id: "gpt-test", name: "Test" },
+                        ],
+                      }
+                    : command.type === "get_state"
+                      ? { sessionFile: `session-${runtimeId}.jsonl` }
+                      : {},
         },
       }),
     );
@@ -64,8 +72,11 @@ describe("Pi RPC workspace", () => {
       client.open("one", "D:/one"),
       client.open("one", "D:/one"),
     ]);
+    expect(one.runtimeId).toBeNull();
+    await client.request(one, { type: "get_state" });
     expect(same.runtimeId).toBe(one.runtimeId);
     const two = await client.open("two", "D:/two");
+    await client.request(two, { type: "get_state" });
     mock.receive({
       sessionId: one.runtimeId!,
       stream: "stdout",
@@ -96,15 +107,56 @@ describe("Pi RPC workspace", () => {
     expect(one.view.error).toBe("prompt rejected");
     client.dispose();
   });
+  it("passes the selected streaming behavior to the native prompt RPC", async () => {
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const thread = await client.open("one", "D:/one");
+    await client.request(thread, { type: "get_state" });
+    mock.receive({
+      sessionId: thread.runtimeId!,
+      stream: "stdout",
+      event: { type: "agent_start" },
+    });
+    const native = await import("./native");
+    vi.mocked(native.sendPiCommand).mockClear();
+    await client.request(thread, {
+      type: "prompt",
+      message: "排队消息",
+      streamingBehavior: "followUp",
+    });
+    expect(
+      vi.mocked(native.sendPiCommand).mock.calls[
+        vi.mocked(native.sendPiCommand).mock.calls.length - 1
+      ]?.[1],
+    ).toMatchObject({
+      type: "prompt",
+      message: "排队消息",
+      streamingBehavior: "followUp",
+    });
+    client.dispose();
+  });
   it("starts model checks in an explicitly ephemeral test mode", async () => {
     const native = await import("./native");
     const client = new PiWorkspaceClient(vi.fn(), vi.fn(), true);
     await client.open("test", "D:/config");
+    await client.request(client.threads.get("test")!, { type: "get_state" });
     expect(native.startPiAgent).toHaveBeenLastCalledWith(
       "D:/config",
       undefined,
       true,
     );
+    client.dispose();
+  });
+  it("loads models when a lazy new thread opens its model picker", async () => {
+    const native = await import("./native");
+    vi.mocked(native.startPiAgent).mockClear();
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const thread = await client.open("new", "D:/config");
+    expect(thread.runtimeId).toBeNull();
+    await client.loadModels(thread);
+    expect(thread.view.models).toEqual([
+      { provider: "openai", id: "gpt-test", name: "Test" },
+    ]);
+    expect(native.startPiAgent).toHaveBeenCalledTimes(1);
     client.dispose();
   });
   it("keeps history loading visible until messages return after get_state", async () => {
@@ -121,11 +173,12 @@ describe("Pi RPC workspace", () => {
     });
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
     const opening = client.open("history", "D:/one", "history.jsonl");
-    await vi.waitFor(() =>
-      expect(client.threads.get("history")?.view.status).toBe("idle"),
-    );
+    const history = await opening;
+    const loading = client.request(history, { type: "get_state" });
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     expect(client.threads.get("history")?.loadingHistory).toBe(true);
     release?.();
+    await loading;
     const thread = await opening;
     expect(thread.loadingHistory).toBe(false);
     client.dispose();
@@ -136,6 +189,8 @@ describe("Pi RPC workspace", () => {
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
     const thread = await client.open("one", "D:/one");
     const two = await client.open("two", "D:/two");
+    await client.request(thread, { type: "get_state" });
+    await client.request(two, { type: "get_state" });
     vi.mocked(native.sendPiCommand).mockClear();
     const restored: string[][] = [];
     await client.stopAndRestore(thread, (texts) => {
@@ -158,6 +213,7 @@ describe("Pi RPC workspace", () => {
   it("forks into an independent UI key without overwriting the original transcript", async () => {
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
     const thread = await client.open("source", "D:/one");
+    await client.request(thread, { type: "get_state" });
     mock.receive({
       sessionId: thread.runtimeId!,
       stream: "stdout",
@@ -188,10 +244,31 @@ describe("Pi RPC workspace", () => {
   it("leaves the current thread intact when an extension cancels clone", async () => {
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
     const thread = await client.open("source", "D:/one");
+    await client.request(thread, { type: "get_state" });
     mock.cancelBranch = true;
     expect(await client.branch(thread)).toBeNull();
     expect(thread.key).toBe("source");
     expect(client.threads.size).toBe(1);
+    client.dispose();
+  });
+  it("forks before the last user message and resends the edited text", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const thread = await client.open("source", "D:/one");
+    await client.request(thread, { type: "get_state" });
+    vi.mocked(native.sendPiCommand).mockClear();
+    await expect(client.editLastUser(thread, "修改后的输入")).resolves.toBe(
+      true,
+    );
+    expect(
+      vi.mocked(native.sendPiCommand).mock.calls.map(([, command]) => command.type),
+    ).toEqual(["get_fork_messages", "fork", "get_messages", "get_state", "get_session_stats", "prompt"]);
+    expect(
+      vi.mocked(native.sendPiCommand).mock.calls.find(([, command]) => command.type === "fork")?.[1],
+    ).toMatchObject({ type: "fork", entryId: "entry-last" });
+    expect(
+      vi.mocked(native.sendPiCommand).mock.calls.find(([, command]) => command.type === "prompt")?.[1],
+    ).toMatchObject({ type: "prompt", message: "修改后的输入" });
     client.dispose();
   });
 });

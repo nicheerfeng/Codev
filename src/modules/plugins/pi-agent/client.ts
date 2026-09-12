@@ -5,7 +5,7 @@ import {
   startPiAgent,
 } from "./native";
 import { INITIAL_PI_VIEW_STATE, objectValue, piViewReducer } from "./reducer";
-import type { PiEventEnvelope, PiViewState } from "./types";
+import type { PiEventEnvelope, PiImage, PiViewState } from "./types";
 
 export type PiThread = {
   loadingHistory: boolean;
@@ -23,11 +23,14 @@ type Pending = {
 
 /** 管理 Pi 原生进程与请求关联，切换界面不会停止其他线程。 */
 export class PiWorkspaceClient {
+  /** 空闲 runtime 回收时间，线程数据仍保留在前端内存中。 */
+  private static readonly IDLE_RUNTIME_MS = 30 * 60 * 1000;
   readonly threads = new Map<string, PiThread>();
   private pending = new Map<string, Pending>();
   private opening = new Map<string, Promise<PiThread>>();
   private disposed = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private stop: Promise<() => void>;
 
   /** 注册一次事件监听，以 runtimeId 分发并合并流式渲染刷新。 */
@@ -50,6 +53,7 @@ export class PiWorkspaceClient {
     );
     if (!thread) return;
     thread.view = piViewReducer(thread.view, { type: "event", payload });
+    this.touchRuntime(thread);
     const event = payload.event;
     if (event.type === "response") {
       const id = String(event.id);
@@ -97,8 +101,39 @@ export class PiWorkspaceClient {
     thread: PiThread,
     command: Record<string, unknown>,
   ): Promise<unknown> {
+    return this.ensureRuntime(thread).then(() =>
+      this.sendRequest(thread, command),
+    );
+  }
+
+  /** 首次真实 RPC 操作时才为线程启动 Pi runtime。 */
+  private async ensureRuntime(thread: PiThread): Promise<void> {
+    if (thread.runtimeId !== null) {
+      this.touchRuntime(thread);
+      return;
+    }
+    const pending = this.opening.get(thread.key);
+    if (pending) {
+      await pending;
+      return;
+    }
+    const operation = this.start(
+      thread.key,
+      thread.cwd,
+      thread.view.sessionFile ?? undefined,
+    ).finally(() => this.opening.delete(thread.key));
+    this.opening.set(thread.key, operation);
+    await operation;
+  }
+
+  /** 向已经启动的 runtime 发送请求并维护请求生命周期。 */
+  private sendRequest(
+    thread: PiThread,
+    command: Record<string, unknown>,
+  ): Promise<unknown> {
     if (thread.runtimeId === null)
       return Promise.reject(new Error("Pi 会话未启动"));
+    this.touchRuntime(thread);
     const runtimeId = thread.runtimeId;
     const id = crypto.randomUUID();
     return new Promise((resolve, reject) => {
@@ -120,12 +155,20 @@ export class PiWorkspaceClient {
     const pending = this.opening.get(key);
     if (pending) return pending;
     const existing = this.threads.get(key);
-    if (existing?.runtimeId != null) return Promise.resolve(existing);
-    const operation = this.start(key, cwd, path).finally(() =>
-      this.opening.delete(key),
-    );
-    this.opening.set(key, operation);
-    return operation;
+    if (existing) return Promise.resolve(existing);
+    const thread: PiThread = {
+      loadingHistory: false,
+      key,
+      cwd,
+      runtimeId: null,
+      view: {
+        ...INITIAL_PI_VIEW_STATE,
+        sessionFile: path ?? null,
+      },
+    };
+    this.threads.set(key, thread);
+    this.publish();
+    return Promise.resolve(thread);
   }
 
   /** 在监听就绪后启动进程，再读取原生历史与模型。 */
@@ -136,17 +179,10 @@ export class PiWorkspaceClient {
   ): Promise<PiThread> {
     await this.stop;
     if (this.disposed) throw new Error("Pi 插件已关闭");
-    const thread: PiThread = {
-      loadingHistory: true,
-      key,
-      cwd,
-      runtimeId: null,
-      view: {
-        ...INITIAL_PI_VIEW_STATE,
-        status: "starting",
-        modelsLoading: true,
-      },
-    };
+    const thread = this.threads.get(key);
+    if (!thread) throw new Error("Pi 线程不存在");
+    thread.loadingHistory = true;
+    thread.view = { ...thread.view, status: "starting", modelsLoading: true };
     this.threads.set(key, thread);
     this.publish();
     try {
@@ -156,12 +192,14 @@ export class PiWorkspaceClient {
         throw new Error("Pi 插件已关闭");
       }
       thread.runtimeId = runtime.sessionId;
+      this.touchRuntime(thread);
       await Promise.all([
-        this.request(thread, { type: "get_available_models" }),
-        this.refreshState(thread),
-        this.request(thread, { type: "get_messages" }),
-        this.request(thread, { type: "get_available_thinking_levels" }),
-        this.request(thread, { type: "get_commands" }),
+        this.sendRequest(thread, { type: "get_available_models" }),
+        this.sendRequest(thread, { type: "get_state" }),
+        this.sendRequest(thread, { type: "get_session_stats" }),
+        this.sendRequest(thread, { type: "get_messages" }),
+        this.sendRequest(thread, { type: "get_available_thinking_levels" }),
+        this.sendRequest(thread, { type: "get_commands" }),
       ]);
       thread.loadingHistory = false;
       this.publish();
@@ -182,10 +220,21 @@ export class PiWorkspaceClient {
 
   /** 读取会话名称、模型、实际上下文用量。 */
   async refreshState(thread: PiThread) {
+    await this.ensureRuntime(thread);
     await Promise.all([
-      this.request(thread, { type: "get_state" }),
-      this.request(thread, { type: "get_session_stats" }),
+      this.sendRequest(thread, { type: "get_state" }),
+      this.sendRequest(thread, { type: "get_session_stats" }),
     ]);
+  }
+
+  /** 在模型选择器打开时预加载当前线程模型，避免新线程首次点击无列表。 */
+  async loadModels(thread: PiThread) {
+    await this.ensureRuntime(thread);
+    if (thread.view.models.length) return thread.view.models;
+    thread.view = { ...thread.view, modelsLoading: true, error: null };
+    this.publish();
+    await this.sendRequest(thread, { type: "get_available_models" });
+    return thread.view.models;
   }
 
   /** 先取回未执行的队列文本，再中断运行，恢复操作始终绑定原线程。 */
@@ -201,6 +250,40 @@ export class PiWorkspaceClient {
     this.publish();
     await this.request(thread, { type: "abort" });
     await this.refreshState(thread);
+  }
+
+  /** 在当前 Pi session 分叉到最后一条用户输入前，并重发编辑后的内容。 */
+  async editLastUser(
+    thread: PiThread,
+    text: string,
+    images: PiImage[] = [],
+  ): Promise<boolean> {
+    if (thread.view.status !== "idle")
+      throw new Error("只有自然结束的线程可以编辑");
+    if (!text.trim()) throw new Error("编辑内容不能为空");
+    const forkData = objectValue(
+      await this.request(thread, { type: "get_fork_messages" }),
+    );
+    const messages = Array.isArray(forkData?.messages)
+      ? forkData.messages
+          .map((value) => objectValue(value))
+          .filter((value): value is Record<string, unknown> => value !== null)
+      : [];
+    const target = messages[messages.length - 1];
+    const entryId = typeof target?.entryId === "string" ? target.entryId : "";
+    if (!entryId) throw new Error("无法定位最后一条用户输入");
+    const forkResult = objectValue(
+      await this.request(thread, { type: "fork", entryId }),
+    );
+    if (forkResult?.cancelled === true) return false;
+    await this.request(thread, { type: "get_messages" });
+    await this.refreshState(thread);
+    await this.request(thread, {
+      type: "prompt",
+      message: text,
+      ...(images.length ? { images } : {}),
+    });
+    return true;
   }
 
   /** 原生分叉会切换会话文件；为新会话分配独立界面键并保留原线程。 */
@@ -249,10 +332,26 @@ export class PiWorkspaceClient {
       }
   }
 
+  /** 延后回收空闲 runtime，运行中的线程和线程数据不受影响。 */
+  private touchRuntime(thread: PiThread) {
+    const old = this.idleTimers.get(thread.key);
+    if (old) clearTimeout(old);
+    if (thread.runtimeId === null || thread.view.status !== "idle") return;
+    const timer = setTimeout(() => {
+      this.idleTimers.delete(thread.key);
+      if (thread.runtimeId !== null && thread.view.status === "idle")
+        void this.close(thread.key);
+    }, PiWorkspaceClient.IDLE_RUNTIME_MS);
+    this.idleTimers.set(thread.key, timer);
+  }
+
   /** 用户显式关闭指定线程的进程，原生会话文件继续保留。 */
   async close(key: string) {
     const thread = this.threads.get(key);
     if (thread?.runtimeId == null) return;
+    const idleTimer = this.idleTimers.get(key);
+    if (idleTimer) clearTimeout(idleTimer);
+    this.idleTimers.delete(key);
     const id = thread.runtimeId;
     await closePiAgent(id);
     thread.runtimeId = null;
@@ -272,6 +371,8 @@ export class PiWorkspaceClient {
   dispose() {
     this.disposed = true;
     if (this.timer) clearTimeout(this.timer);
+    for (const timer of this.idleTimers.values()) clearTimeout(timer);
+    this.idleTimers.clear();
     void this.stop.then((stop) => stop());
     for (const thread of this.threads.values())
       if (thread.runtimeId !== null) {

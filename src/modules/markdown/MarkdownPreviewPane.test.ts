@@ -20,4 +20,11 @@ describe("MarkdownPreviewPane Streamdown configuration", () => {
   it("scopes table overflow handling to rendered markdown", () => {
     expect(streamdownJsx).toMatch(/markdown-rendered/);
   });
+
+  it("keeps copy and fullscreen controls while removing markdown downloads", () => {
+    expect(streamdownJsx).toMatch(/code: \{ copy: true, download: false \}/);
+    expect(streamdownJsx).toMatch(
+      /table: \{ copy: true, download: false, fullscreen: true \}/,
+    );
+  });
 });

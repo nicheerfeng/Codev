@@ -82,12 +82,9 @@ describe("TextDiffPane", () => {
   });
 
   it("keeps JSON and text diff tool tabs mutually exclusive", () => {
-    expect(appSource).toMatch(
-      /rightDockView === "tools" && toolView === "json"/,
-    );
-    expect(appSource).toMatch(
-      /rightDockView === "tools" && toolView === "diff"/,
-    );
+    expect(appSource).toMatch(/setToolView\(tab\)/);
+    expect(appSource).toMatch(/data-dock-tab=\{tab\}/);
+    expect(appSource).toMatch(/toolView === tab/);
   });
 
   it("hard-hides the inactive dock surface to prevent cross-pane selection", () => {
