@@ -70,20 +70,13 @@ describe("TextDiffPane", () => {
 
   it("keeps only the actual changed core of a broad diff range", () => {
     expect(
-      tightenDiffRange(
-        "same-old-same",
-        0,
-        13,
-        "same-new-same",
-        0,
-        13,
-      ),
+      tightenDiffRange("same-old-same", 0, 13, "same-new-same", 0, 13),
     ).toEqual({ from: 5, to: 8, peerFrom: 5, peerTo: 8 });
   });
 
   it("keeps JSON and text diff tool tabs mutually exclusive", () => {
     expect(appSource).toMatch(/setToolView\(tab\)/);
-    expect(appSource).toMatch(/data-dock-tab=\{tab\}/);
+    expect(appSource).toMatch(/useDockTabReorder\(dockTabs, setDockOrder\)/);
     expect(appSource).toMatch(/toolView === tab/);
   });
 
@@ -95,11 +88,11 @@ describe("TextDiffPane", () => {
   });
 
   it("does not probe Pi until its dock tab is active", () => {
-    const toolPanel = readFileSync(
-      path.join(here, "ToolPanel.tsx"),
+    const toolPanel = readFileSync(path.join(here, "ToolPanel.tsx"), "utf8");
+    const piPane = readFileSync(
+      path.join(here, "pi-agent/PiAgentPane.tsx"),
       "utf8",
     );
-    const piPane = readFileSync(path.join(here, "pi-agent/PiAgentPane.tsx"), "utf8");
     expect(toolPanel).toMatch(/active=\{active && tool === "pi"\}/);
     expect(piPane).toMatch(/if \(!active\) return;/);
   });

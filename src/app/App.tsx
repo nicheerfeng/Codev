@@ -89,47 +89,16 @@ import {
 import { CloseDialogs } from "./components/CloseDialogs";
 import { WorkspaceSurface } from "./components/WorkspaceSurface";
 import { useAppCloseGuard } from "./hooks/useAppCloseGuard";
+import { useDockTabReorder } from "./hooks/useDockTabReorder";
 import { useTabCloseGuards } from "./hooks/useTabCloseGuards";
 import { useWorkspaceSwitcher } from "./hooks/useWorkspaceSwitcher";
+import type { DockTab } from "./lib/dockTabs";
 
 /** 判断文件标签是否对应同一个规范化路径。 */
 function tabPathMatches(tab: Tab, path: string): boolean {
   if (tab.kind !== "editor" && tab.kind !== "markdown" && tab.kind !== "html")
     return false;
   return tab.path.replace(/\\/g, "/") === path.replace(/\\/g, "/");
-}
-
-type DockTab = "terminal" | "json" | "diff" | "pi";
-
-/** 将 Dock 标签按当前可见标签的间隙重排，隐藏插件仍保留在顺序列表中。 */
-function reorderDockTabsAtGap(
-  tabs: DockTab[],
-  visibleTabs: DockTab[],
-  source: DockTab,
-  gapIndex: number,
-): DockTab[] {
-  const remaining = visibleTabs.filter((tab) => tab !== source);
-  const sourceIndex = visibleTabs.indexOf(source);
-  if (sourceIndex < 0 || remaining.length === visibleTabs.length) return tabs;
-  const boundedGap = Math.max(0, Math.min(gapIndex, visibleTabs.length));
-  const gap = boundedGap - (sourceIndex < boundedGap ? 1 : 0);
-  const target = remaining[gap] ?? remaining[remaining.length - 1];
-  const next = tabs.filter((tab) => tab !== source);
-  const targetIndex = next.indexOf(target);
-  if (targetIndex < 0) return tabs;
-  next.splice(gap === remaining.length ? targetIndex + 1 : targetIndex, 0, source);
-  return next;
-}
-
-/** 根据鼠标横坐标计算 Dock header 当前拖拽标签的原始间隙。 */
-function dockDragGapIndex(
-  header: HTMLElement,
-  clientX: number,
-): number {
-  return [...header.querySelectorAll<HTMLElement>("[data-dock-tab]")].filter(
-    (button) =>
-      clientX >= button.getBoundingClientRect().left + button.offsetWidth / 2,
-  ).length;
 }
 
 export default function App() {
@@ -224,9 +193,6 @@ export default function App() {
     "diff",
     "pi",
   ]);
-  const [draggingDockTab, setDraggingDockTab] = useState<DockTab | null>(null);
-  const [dockDropIndex, setDockDropIndex] = useState<number | null>(null);
-  const dockDragRef = useRef<DockTab | null>(null);
 
   const availableDockTabs = useMemo<DockTab[]>(
     () => [
@@ -241,6 +207,7 @@ export default function App() {
     () => dockOrder.filter((tab) => availableDockTabs.includes(tab)),
     [availableDockTabs, dockOrder],
   );
+  const dockReorder = useDockTabReorder(dockTabs, setDockOrder);
 
   /** 处理右侧 dock 标签选择，插件标签共享同一内容面板。 */
   const selectDockTab = useCallback((tab: DockTab) => {
@@ -250,18 +217,6 @@ export default function App() {
       setRightDockView("tools");
     }
   }, []);
-
-  /** 在 Dock header 的任意间隙完成标签排序。 */
-  const dropDockTabAtGap = useCallback((gapIndex: number) => {
-    const source = dockDragRef.current;
-    if (source)
-      setDockOrder((tabs) =>
-        reorderDockTabsAtGap(tabs, dockTabs, source, gapIndex),
-      );
-    dockDragRef.current = null;
-    setDraggingDockTab(null);
-    setDockDropIndex(null);
-  }, [dockTabs]);
 
   useEffect(() => {
     void initPlugins();
@@ -1317,28 +1272,8 @@ export default function App() {
                 <div className="flex h-full min-h-0 flex-col bg-card">
                   {pluginEnabled && (
                     <header
+                      ref={dockReorder.headerRef}
                       className="flex h-8 shrink-0 items-center gap-1 border-b border-border/60 px-2"
-                      onDragOver={(event) => {
-                        if (!dockDragRef.current) return;
-                        event.preventDefault();
-                        event.dataTransfer.dropEffect = "move";
-                        setDockDropIndex(
-                          dockDragGapIndex(
-                            event.currentTarget,
-                            event.clientX,
-                          ),
-                        );
-                      }}
-                      onDrop={(event) => {
-                        if (!dockDragRef.current) return;
-                        event.preventDefault();
-                        dropDockTabAtGap(
-                          dockDragGapIndex(
-                            event.currentTarget,
-                            event.clientX,
-                          ),
-                        );
-                      }}
                     >
                       {dockTabs.map((tab, index) => {
                         const active =
@@ -1355,7 +1290,7 @@ export default function App() {
                                 : "Pi";
                         return (
                           <Fragment key={tab}>
-                            {dockDropIndex === index && (
+                            {dockReorder.dropIndex === index && (
                               <span
                                 aria-hidden="true"
                                 className="h-5 w-0.5 shrink-0 rounded-full bg-accent"
@@ -1363,32 +1298,20 @@ export default function App() {
                             )}
                             <button
                               type="button"
-                              draggable
-                              data-dock-tab={tab}
                               className={`h-6 cursor-grab rounded-sm px-2 text-[11px] active:cursor-grabbing ${
                                 active
                                   ? "bg-accent text-foreground"
                                   : "text-muted-foreground hover:bg-muted"
-                              } ${draggingDockTab === tab ? "opacity-50" : ""}`}
+                              } ${dockReorder.draggingTab === tab ? "opacity-50" : ""}`}
                               onClick={() => selectDockTab(tab)}
-                              onDragStart={(event) => {
-                                dockDragRef.current = tab;
-                                setDraggingDockTab(tab);
-                                event.dataTransfer.effectAllowed = "move";
-                                event.dataTransfer.setData("text/plain", tab);
-                              }}
-                              onDragEnd={() => {
-                                dockDragRef.current = null;
-                                setDraggingDockTab(null);
-                                setDockDropIndex(null);
-                              }}
+                              {...dockReorder.tabProps(tab)}
                             >
                               {label}
                             </button>
                           </Fragment>
                         );
                       })}
-                      {dockDropIndex === dockTabs.length && (
+                      {dockReorder.dropIndex === dockTabs.length && (
                         <span
                           aria-hidden="true"
                           className="h-5 w-0.5 shrink-0 rounded-full bg-accent"
@@ -1447,7 +1370,12 @@ export default function App() {
                         <ToolPanel
                           tool={toolView}
                           active={rightDockView === "tools"}
-                          cwd={explorerRoot ?? activeRoot ?? workspaceRoots[0] ?? null}
+                          cwd={
+                            explorerRoot ??
+                            activeRoot ??
+                            workspaceRoots[0] ??
+                            null
+                          }
                         />
                       </div>
                     )}
