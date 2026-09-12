@@ -19,4 +19,4 @@
 
 ## 当前状态
 
-Pi Agent 已进入 `main`。0.9.2 收敛运行时简约感知态、队列消息和 Dock 标签任意顺序拖拽。本机参考源码仍可存在 `docs/ref-piagent/`，但不进仓库、不参与产品构建。
+Pi Agent 已进入 `main`。0.9.2 收敛运行时简约感知态、队列消息和 Dock 标签任意顺序拖拽。界面核验使用 `pnpm tauri dev --config src-tauri/tauri.portable.conf.json`。本机参考源码仍可存在 `docs/ref-piagent/`，但不进仓库、不参与产品构建。

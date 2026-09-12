@@ -2,6 +2,8 @@
 
 Codev 是一个基于 Tauri 2 + Rust + React 的极简代码和文档阅读器。产品核心为多项目工作区、文件树、代码/Markdown 阅读器、集成终端，以及用户主动开启的内置轻量工具。
 
+开发窗口、核验方式和发版文案规范见 [AGENT.md](AGENT.md)。
+
 ## Product boundary
 
 保留多项目 spaces、多个 workspace roots、文件树和文件搜索、CodeMirror 语法高亮、Markdown 原文/渲染视图、xterm PTY、多标签/分屏、Shell 历史、主题和基础设置。
@@ -33,6 +35,14 @@ Rust backend modules are limited to `fs`, `history`, `proc`, `pty`, `workspace` 
 PTY shell integration emits OSC 7 for cwd and OSC 133 A/B/C/D for prompt/command state。Shell 初始化脚本只负责跨平台 Shell 启动、用户配置加载和这些终端标记；不得恢复已删除的命令块、CLI 控制或 Agent 注入。
 
 ## Development checks
+
+界面核验使用独立开发窗口，不打便携包：
+
+```bash
+pnpm tauri dev --config src-tauri/tauri.portable.conf.json
+```
+
+提交前：
 
 ```bash
 pnpm lint
