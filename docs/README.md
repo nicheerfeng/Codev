@@ -18,5 +18,5 @@
 ## Product notes
 
 - [发布记录](发布记录.md) - 正式版本、验证结果与交付文件
-- [Codev 0.9.1 发布说明](Codev-0.9.1-发布说明.md) - 当前版本说明
+- [Codev 0.9.2 发布说明](Codev-0.9.2-发布说明.md) - 当前版本说明
 - [Pi Agent 插件专项](development/pi-agent-plugin/README.md) - 插件边界、RPC 模型与重构记录
