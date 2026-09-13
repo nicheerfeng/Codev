@@ -42,6 +42,7 @@ export class PiWorkspaceClient {
   private draining = new Set<string>();
   private manualCompactions = new Set<string>();
   private compactionResume = new Set<string>();
+  private statsTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private stop: Promise<() => void>;
 
   /** 注册一次事件监听，以 runtimeId 分发并合并流式渲染刷新。 */
@@ -153,9 +154,10 @@ export class PiWorkspaceClient {
     thread: PiThread,
     command: Record<string, unknown>,
   ): Promise<unknown> {
-    return this.ensureRuntime(thread).then(() =>
-      this.sendRequest(thread, command),
-    );
+    return this.ensureRuntime(thread).then(() => {
+      if (command.type === "prompt") this.syncStats(thread);
+      return this.sendRequest(thread, command);
+    });
   }
 
   /** 点击发送后立刻进入运行态，不必等待 Pi runtime 或 agent_start。 */
@@ -331,7 +333,7 @@ export class PiWorkspaceClient {
 
   /** 保存完成状态与耗时，原生用量未更新时由界面显示待更新。 */
   private finishCompaction(thread: PiThread, success: boolean) {
-    thread.view = { ...thread.view, phase: thread.view.status === "running" ? "处理中" : "", compaction: { status: success ? "done" : "failed", startedAt: thread.view.compaction?.startedAt ?? Date.now(), finishedAt: Date.now() }, ...(success ? { contextPercent: null, contextTokens: null } : {}) };
+    thread.view = { ...thread.view, phase: thread.view.status === "running" ? "处理中" : "", compaction: { status: success ? "done" : "failed", startedAt: thread.view.compaction?.startedAt ?? Date.now(), finishedAt: Date.now() } };
     this.touchRuntime(thread);
     this.publish();
   }
@@ -352,6 +354,22 @@ export class PiWorkspaceClient {
     this.finishCompaction(thread, true);
     await this.refreshState(thread);
     await this.drainQueue(thread);
+  }
+
+  /** 运行期间定时读取实时上下文用量，停止后自动释放定时器。 */
+  private syncStats(thread: PiThread) {
+    if (this.statsTimers.has(thread.key)) return;
+    const tick = async () => {
+      this.statsTimers.delete(thread.key);
+      if (this.disposed || thread.runtimeId === null) return;
+      try { await this.sendRequest(thread, { type: "get_session_stats" }); } catch { return; }
+      if (thread.runtimeId !== null && thread.view.status === "running") {
+        const timer = setTimeout(() => void tick(), 1000);
+        this.statsTimers.set(thread.key, timer);
+      }
+    };
+    const timer = setTimeout(() => void tick(), 1000);
+    this.statsTimers.set(thread.key, timer);
   }
 
   /** 压缩期间输入只缓存于所属线程，包含图片和发送方式。 */
@@ -421,6 +439,7 @@ export class PiWorkspaceClient {
       this.applyCatalogModel(thread, fallback ?? thread.view.model);
     } finally {
       thread.loadingHistory = false;
+      this.syncStats(thread);
       this.publish();
     }
     return thread;
@@ -477,6 +496,8 @@ export class PiWorkspaceClient {
       sessionName: history.sessionName ?? thread.view.sessionName,
       model: history.model ?? thread.view.model,
       thinkingLevel: history.thinkingLevel ?? thread.view.thinkingLevel,
+      contextTokens: history.contextTokens ?? thread.view.contextTokens,
+      contextPercent: history.contextPercent ?? thread.view.contextPercent,
       status: thread.runtimeId === null ? "idle" : thread.view.status,
     };
     return thread;
@@ -734,6 +755,9 @@ export class PiWorkspaceClient {
     const idleTimer = this.idleTimers.get(key);
     if (idleTimer) clearTimeout(idleTimer);
     this.idleTimers.delete(key);
+    const statsTimer = this.statsTimers.get(key);
+    if (statsTimer) clearTimeout(statsTimer);
+    this.statsTimers.delete(key);
     const id = thread.runtimeId;
     await closePiAgent(id);
     thread.runtimeId = null;
@@ -757,6 +781,8 @@ export class PiWorkspaceClient {
     this.toolUpdates.clear();
     for (const timer of this.idleTimers.values()) clearTimeout(timer);
     this.idleTimers.clear();
+    for (const timer of this.statsTimers.values()) clearTimeout(timer);
+    this.statsTimers.clear();
     void this.stop.then((stop) => stop());
     for (const thread of this.threads.values())
       if (thread.runtimeId !== null)

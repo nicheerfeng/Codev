@@ -30,6 +30,8 @@ export type PiSessionHistory = {
   sessionFile: string;
   oldestOffset: number;
   hasMore: boolean;
+  contextTokens?: number | null;
+  contextPercent?: number | null;
 };
 
 export type PiClonedSession = {

@@ -487,13 +487,13 @@ export function PiComposer(props: Props) {
             </Select>
           )}
           <div className="ml-auto flex shrink-0 items-center gap-1">
-            {props.view.contextPercent === null && props.view.compaction?.status === "done" && <span className="text-[10px] text-muted-foreground" title="Pi 会在下一次模型回复后更新实际上下文用量">已压缩 · 用量待更新</span>}
-            {props.view.contextPercent !== null && (
+            {props.view.contextTokens == null && props.view.compaction?.status === "done" && <span className="text-[10px] text-muted-foreground" title="Pi 会在下一次模型回复后更新实际上下文用量">已压缩 · 用量待更新</span>}
+            {props.view.contextTokens != null && (
               <span
                 className="px-1 text-[10px] text-muted-foreground"
-                title={`${props.view.contextTokens?.toLocaleString() ?? "—"} tokens · 上下文 ${props.view.contextPercent.toFixed(1)}%`}
+                title={`${props.view.contextTokens.toLocaleString()} tokens${props.view.contextPercent == null ? "" : ` · 上下文 ${props.view.contextPercent.toFixed(1)}%`}`}
               >
-                {Math.round(props.view.contextPercent)}%
+                {props.view.contextPercent == null ? `${props.view.contextTokens.toLocaleString()} tokens` : `${Math.round(props.view.contextPercent)}%`}
               </span>
             )}
             {running && !compacting && (
