@@ -908,6 +908,84 @@ fn visit_jsonl_rev(
     Ok(())
 }
 
+fn usage_tokens(usage: &Value) -> Option<u64> {
+    usage
+        .get("totalTokens")
+        .or_else(|| usage.get("tokens"))
+        .or_else(|| usage.get("inputTokens"))
+        .or_else(|| usage.get("input"))
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_f64().map(|number| number.round() as u64))
+        })
+}
+
+fn context_ratio(tokens: u64, window: u64) -> f64 {
+    ((tokens as f64) / (window as f64) * 100.0).min(100.0)
+}
+
+fn find_listed_model<'a>(
+    models: &'a [PiListedModel],
+    provider: &str,
+    id: &str,
+) -> Option<&'a PiListedModel> {
+    if let Some(exact) = models
+        .iter()
+        .find(|listed| listed.provider == provider && listed.id == id)
+    {
+        return Some(exact);
+    }
+    let matches: Vec<_> = models.iter().filter(|listed| listed.id == id).collect();
+    match matches.as_slice() {
+        [] => None,
+        [only] => Some(*only),
+        many => many
+            .iter()
+            .copied()
+            .max_by_key(|listed| listed.context_window.unwrap_or(0)),
+    }
+}
+
+fn apply_catalog_window(
+    model: &mut Value,
+    context_tokens: Option<u64>,
+    context_percent: &mut Option<f64>,
+) {
+    let Some(provider) = model
+        .get("provider")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let Some(id) = model.get("id").and_then(Value::as_str).map(str::to_string) else {
+        return;
+    };
+    let Ok(models) = list_models_from_file() else {
+        return;
+    };
+    let Some(listed) = find_listed_model(&models, &provider, &id) else {
+        return;
+    };
+    if model.get("name").and_then(Value::as_str).is_none() {
+        if let Some(name) = &listed.name {
+            model["name"] = json!(name);
+        }
+    }
+    let Some(window) = listed.context_window.filter(|window| *window > 0) else {
+        return;
+    };
+    if model.get("contextWindow").is_none() {
+        model["contextWindow"] = json!(window);
+    }
+    if context_percent.is_none() {
+        if let Some(tokens) = context_tokens {
+            *context_percent = Some(context_ratio(tokens, window));
+        }
+    }
+}
+
 fn assistant_model(message: &Value) -> Option<Value> {
     if message.get("role").and_then(Value::as_str) != Some("assistant") {
         return None;
@@ -1023,9 +1101,13 @@ fn parse_session_history(
                 };
                 let usage = message.get("usage").or_else(|| record.value.get("usage"));
                 let context = usage.and_then(|value| value.get("contextUsage")).or(usage);
-                if context_tokens.is_none() {
-                    context_tokens = context.and_then(|value| value.get("tokens").or_else(|| value.get("inputTokens")).or_else(|| value.get("input"))).and_then(Value::as_u64);
-                    context_percent = context.and_then(|value| value.get("percent")).and_then(Value::as_f64);
+                if let Some(context) = context {
+                    if context_tokens.is_none() {
+                        context_tokens = usage_tokens(context);
+                    }
+                    if context_percent.is_none() {
+                        context_percent = context.get("percent").and_then(Value::as_f64);
+                    }
                 }
                 if model.is_none() {
                     model = assistant_model(&message);
@@ -1044,12 +1126,14 @@ fn parse_session_history(
                     || model.is_none()
                     || thinking_level.is_none()
                     || session_name.is_none()
+                    || context_tokens.is_none()
             }
             _ => {
                 newest_first.len() < page
                     || model.is_none()
                     || thinking_level.is_none()
                     || session_name.is_none()
+                    || context_tokens.is_none()
             }
         }
     })?;
@@ -1057,6 +1141,9 @@ fn parse_session_history(
         session_name = peek_session_name(&resolved);
     }
     newest_first.reverse();
+    if let Some(model) = model.as_mut() {
+        apply_catalog_window(model, context_tokens, &mut context_percent);
+    }
     Ok(PiSessionHistory {
         messages: newest_first,
         model,
@@ -1447,6 +1534,107 @@ mod tests {
         assert!(older.has_more);
         assert_eq!(older.messages[0]["message"]["content"], json!("q5"));
         assert_eq!(std::fs::read_to_string(&cloned.path).unwrap().contains("\"name\":\"Fork\""), true);
+    }
+
+    #[test]
+    /// 离线历史从 assistant.usage.totalTokens 和 models.json 窗口算出占比。
+    fn reads_session_history_usage_from_total_tokens() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let root = directory.path().join("sessions");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(
+            directory.path().join("models.json"),
+            r#"{"providers":{"openai":{"models":[{"id":"gpt-test","name":"GPT Test","contextWindow":500000}]}}}"#,
+        )
+        .unwrap();
+        let path = root.join("session.jsonl");
+        let mut file = std::fs::File::create(&path).expect("create session");
+        writeln!(file, "{}", json!({"type":"session","id":"s1","cwd":"C:/work"})).unwrap();
+        writeln!(file, "{}", json!({"type":"session_info","id":"n1","parentId":"s1","name":"Demo"})).unwrap();
+        writeln!(file, "{}", json!({"type":"model_change","id":"m1","parentId":"n1","provider":"openai","modelId":"gpt-test"})).unwrap();
+        writeln!(file, "{}", json!({"type":"message","id":"u1","parentId":"m1","message":{"role":"user","content":"q"}})).unwrap();
+        writeln!(
+            file,
+            "{}",
+            json!({
+                "type":"message",
+                "id":"a1",
+                "parentId":"u1",
+                "message":{
+                    "role":"assistant",
+                    "provider":"openai",
+                    "model":"gpt-test",
+                    "content":[{"type":"text","text":"a"}],
+                    "usage":{
+                        "input":26861,
+                        "output":385,
+                        "cacheRead":256,
+                        "cacheWrite":0,
+                        "reasoning":200,
+                        "totalTokens":27502
+                    }
+                }
+            }),
+        )
+        .unwrap();
+        let previous = std::env::var_os("PI_CODING_AGENT_DIR");
+        std::env::set_var("PI_CODING_AGENT_DIR", directory.path());
+        let history = parse_session_history(&path, None, 20).expect("history");
+        match previous {
+            Some(value) => std::env::set_var("PI_CODING_AGENT_DIR", value),
+            None => std::env::remove_var("PI_CODING_AGENT_DIR"),
+        }
+        assert_eq!(history.context_tokens, Some(27502));
+        assert_eq!(history.model.as_ref().unwrap()["contextWindow"], json!(500000));
+        let percent = history.context_percent.expect("percent");
+        assert!((percent - 5.5004).abs() < 0.0001, "{percent}");
+    }
+
+    #[test]
+    /// JSONL provider 对不上 catalog 时，按模型 id 回退窗口并算出占比。
+    fn reads_session_history_usage_when_provider_mismatches_catalog() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let root = directory.path().join("sessions");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(
+            directory.path().join("models.json"),
+            r#"{"providers":{"cp-lite":{"models":[{"id":"grok-4.6-PSYDO_GROK_SUPER","contextWindow":500000}]}}}"#,
+        )
+        .unwrap();
+        let path = root.join("session.jsonl");
+        let mut file = std::fs::File::create(&path).expect("create session");
+        writeln!(file, "{}", json!({"type":"session","id":"s1","cwd":"C:/work"})).unwrap();
+        writeln!(file, "{}", json!({"type":"session_info","id":"n1","parentId":"s1","name":"iris"})).unwrap();
+        writeln!(file, "{}", json!({"type":"model_change","id":"m1","parentId":"n1","provider":"provider","modelId":"grok-4.6-PSYDO_GROK_SUPER"})).unwrap();
+        writeln!(file, "{}", json!({"type":"message","id":"u1","parentId":"m1","message":{"role":"user","content":"q"}})).unwrap();
+        writeln!(
+            file,
+            "{}",
+            json!({
+                "type":"message",
+                "id":"a1",
+                "parentId":"u1",
+                "message":{
+                    "role":"assistant",
+                    "provider":"provider",
+                    "model":"grok-4.6-PSYDO_GROK_SUPER",
+                    "content":[{"type":"text","text":"a"}],
+                    "usage":{"input":1298,"output":275,"totalTokens":30501}
+                }
+            }),
+        )
+        .unwrap();
+        let previous = std::env::var_os("PI_CODING_AGENT_DIR");
+        std::env::set_var("PI_CODING_AGENT_DIR", directory.path());
+        let history = parse_session_history(&path, None, 20).expect("history");
+        match previous {
+            Some(value) => std::env::set_var("PI_CODING_AGENT_DIR", value),
+            None => std::env::remove_var("PI_CODING_AGENT_DIR"),
+        }
+        assert_eq!(history.context_tokens, Some(30501));
+        assert_eq!(history.model.as_ref().unwrap()["contextWindow"], json!(500000));
+        let percent = history.context_percent.expect("percent");
+        assert!((percent - 6.1002).abs() < 0.0001, "{percent}");
     }
 
     #[test]

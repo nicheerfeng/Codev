@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -27,7 +27,9 @@ import {
   Cancel01Icon,
 } from "@hugeicons/core-free-icons";
 import { pathKey, projectName, type PiOrganization } from "./organization";
+import { applySavedOrder, mergeOrder, moveByGap } from "./sidebarOrder";
 import type { PiSessionSummary, PiViewStatus } from "./types";
+import { usePiSidebarReorder } from "./usePiSidebarReorder";
 
 export type SidebarThread = PiSessionSummary & {
   key: string;
@@ -52,14 +54,14 @@ type Props = {
   onExport: (thread: SidebarThread) => void;
   onClose: (thread: SidebarThread) => void;
   onCopyPath: (path: string) => void;
+  projectOrder: string[];
+  sessionOrder: string[];
+  onProjectOrder: (order: string[]) => void;
+  onSessionOrder: (order: string[]) => void;
 };
 
-/** 读取侧栏排序缓存，缓存损坏时回退为空序列。 */
-function readOrder(key: string): string[] {
-  try {
-    const value = JSON.parse(localStorage.getItem(key) ?? "[]");
-    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-  } catch { return []; }
+function DropLine() {
+  return <div className="mx-1 h-0.5 rounded-full bg-ring" />;
 }
 
 /** 复用 mcode 左栏的组→项目→线程与底部归档收纳，使用 Codev 菜单和控件。 */
@@ -74,20 +76,53 @@ export function PiSidebar(props: Props) {
     id: string;
     name: string;
   } | null>(null);
-  const [projectOrder, setProjectOrder] = useState<string[]>(() => readOrder("codev.pi.projects.order"));
-  const [sessionOrder, setSessionOrder] = useState<string[]>(() => readOrder("codev.pi.sessions.order"));
-  const [dragKey, setDragKey] = useState<string | null>(null);
-  useEffect(() => localStorage.setItem("codev.pi.projects.order", JSON.stringify(projectOrder)), [projectOrder]);
-  useEffect(() => localStorage.setItem("codev.pi.sessions.order", JSON.stringify(sessionOrder)), [sessionOrder]);
-  const order = (values: string[], saved: string[]) => [...values].sort((a, b) => (saved.indexOf(a) < 0 ? 1 : saved.indexOf(b) < 0 ? -1 : saved.indexOf(a) - saved.indexOf(b)));
-  const move = (values: string[], setValues: (next: string[]) => void, from: string, to: string) => {
-    if (from === to) return;
-    const next = [...values.filter((value) => value !== from)];
-    next.splice(Math.max(0, next.indexOf(to)), 0, from);
-    setValues(next);
-  };
   const org = props.organization;
   const archived = new Set(org.archived);
+  const { position, itemProps } = usePiSidebarReorder(
+    (kind, source, gap, group) => {
+      if (kind === "project") {
+        const visible = applySavedOrder(
+          props.projects.filter(
+            (path) => (org.projectGroups[pathKey(path)] ?? "") === group,
+          ),
+          props.projectOrder,
+        );
+        props.onProjectOrder(
+          mergeOrder(props.projectOrder, moveByGap(visible, source, gap)),
+        );
+        return;
+      }
+      const visible = applySavedOrder(
+        props.threads
+          .filter(
+            (thread) =>
+              pathKey(thread.cwd) === pathKey(group) &&
+              !archived.has(thread.path),
+          )
+          .map((thread) => thread.path),
+        props.sessionOrder,
+      );
+      props.onSessionOrder(
+        mergeOrder(props.sessionOrder, moveByGap(visible, source, gap)),
+      );
+    },
+  );
+  const gapAt = (
+    kind: "project" | "session",
+    group: string,
+    source: string,
+    index: number,
+    list: string[],
+  ) => {
+    if (
+      position?.kind !== kind ||
+      position.group !== group ||
+      position.gap == null
+    )
+      return false;
+    const from = list.findIndex((item) => pathKey(item) === pathKey(source));
+    return position.gap === index && from !== index && from !== index - 1;
+  };
   /** 切换单个收纳节点，互不影响其他项目。 */
   const toggle = (key: string) =>
     setCollapsed((previous) => {
@@ -105,44 +140,59 @@ export function PiSidebar(props: Props) {
         : org.archived.filter((path) => path !== thread.path),
     });
   /** 渲染带状态和右键菜单的线程行。 */
-  const threadRow = (thread: SidebarThread, isArchived: boolean) => (
+  const threadRow = (
+    thread: SidebarThread,
+    isArchived: boolean,
+    group = "",
+    index = 0,
+    list: string[] = [],
+  ) => (
     <ContextMenu key={thread.key}>
       <ContextMenuTrigger asChild>
-        <div
-          draggable={!isArchived}
-          onDragStart={() => setDragKey(`session:${thread.path}`)}
-          onDragOver={(event) => event.preventDefault()}
-          onDrop={() => { if (dragKey?.startsWith("session:")) move(sessionOrder, setSessionOrder, dragKey.slice(8), thread.path); setDragKey(null); }}
-          className={`group/pi-thread flex min-w-0 items-center rounded-lg ${props.selectedKey === thread.key ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}
-        >
-          <button
-            type="button"
-            className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left"
-            onClick={() => props.onSelect(thread)}
-            title={thread.name || thread.preview || "新线程"}
+        <div>
+          {!isArchived && gapAt("session", group, thread.path, index, list) && (
+            <DropLine />
+          )}
+          <div
+            {...(!isArchived && !filter
+              ? itemProps("session", thread.path, group)
+              : {})}
+            className={`group/pi-thread flex min-w-0 items-center rounded-lg ${props.selectedKey === thread.key ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}
           >
-            <span
-              role="img"
-              aria-label={
-                thread.waiting
-                  ? "等待输入"
-                  : thread.status === "running"
-                    ? "运行中"
-                    : "就绪"
-              }
-              title={
-                thread.waiting
-                  ? "等待输入"
-                  : thread.status === "running"
-                    ? "运行中"
-                    : "就绪"
-              }
-              className={`size-2 shrink-0 rounded-full ${thread.waiting ? "bg-amber-600 ring-2 ring-amber-600/25 dark:bg-amber-300" : thread.status === "running" ? "pi-running-dot bg-[#477faf] text-[#477faf] dark:bg-[#a6cceb] dark:text-[#a6cceb]" : "bg-muted-foreground/50"}`}
-            />
-            <span className="min-w-0 flex-1 truncate text-xs">
-              {thread.name || thread.preview || "新线程"}
-            </span>
-          </button>
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left"
+              onClick={() => props.onSelect(thread)}
+              title={thread.name || thread.preview || "新线程"}
+            >
+              <span
+                role="img"
+                aria-label={
+                  thread.waiting
+                    ? "等待输入"
+                    : thread.status === "running"
+                      ? "运行中"
+                      : "就绪"
+                }
+                title={
+                  thread.waiting
+                    ? "等待输入"
+                    : thread.status === "running"
+                      ? "运行中"
+                      : "就绪"
+                }
+                className={`size-2 shrink-0 rounded-full ${thread.waiting ? "bg-amber-600 ring-2 ring-amber-600/25 dark:bg-amber-300" : thread.status === "running" ? "pi-running-dot bg-[#477faf] text-[#477faf] dark:bg-[#a6cceb] dark:text-[#a6cceb]" : "bg-muted-foreground/50"}`}
+              />
+              <span className="min-w-0 flex-1 truncate text-xs">
+                {thread.name || thread.preview || "新线程"}
+              </span>
+            </button>
+          </div>
+          {!isArchived &&
+            index === list.length - 1 &&
+            gapAt("session", group, thread.path, list.length, list) && (
+              <DropLine />
+            )}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="rounded-xl">
@@ -192,50 +242,93 @@ export function PiSidebar(props: Props) {
     if (isArchived && !rows.length) return null;
     const nodeKey = `${isArchived ? "archive:" : "project:"}${key}`;
     const closed = !filter && collapsed.has(nodeKey);
-    const visible = order(filter ? rows.map((row) => row.path) : rows.map((row) => row.path), sessionOrder).map((path) => rows.find((row) => row.path === path)!).filter(Boolean).slice(0, filter ? rows.length : counts[nodeKey] ?? 5);
+    const groupId = org.projectGroups[key] ?? "";
+    const groupProjects = applySavedOrder(
+      props.projects.filter(
+        (path) => (org.projectGroups[pathKey(path)] ?? "") === groupId,
+      ),
+      props.projectOrder,
+    );
+    const projectIndex = groupProjects.findIndex(
+      (path) => pathKey(path) === key,
+    );
+    const ordered = applySavedOrder(
+      rows.map((row) => row.path),
+      props.sessionOrder,
+    )
+      .map((path) => rows.find((row) => row.path === path)!)
+      .filter(Boolean);
+    const visible = ordered.slice(
+      0,
+      filter ? ordered.length : (counts[nodeKey] ?? 5),
+    );
     return (
       <div key={nodeKey} className="mb-1 min-w-0">
         <ContextMenu>
           <ContextMenuTrigger asChild>
-            <div draggable={!isArchived} onDragStart={() => setDragKey(`project:${cwd}`)} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (dragKey?.startsWith("project:")) move(projectOrder, setProjectOrder, dragKey.slice(8), cwd); setDragKey(null); }} className="group/pi-project flex min-w-0 items-center rounded-lg hover:bg-muted/70">
-              <button
-                type="button"
-                className={`flex min-w-0 flex-1 items-center gap-1.5 px-1.5 py-2 text-left text-xs ${pathKey(props.selectedProject ?? "") === key ? "text-foreground" : "text-muted-foreground"}`}
-                onClick={() => toggle(nodeKey)}
-                aria-expanded={!closed}
-                title={cwd}
+            <div>
+              {!isArchived &&
+                gapAt("project", groupId, cwd, projectIndex, groupProjects) && (
+                  <DropLine />
+                )}
+              <div
+                {...(!isArchived && !filter
+                  ? itemProps("project", cwd, org.projectGroups[key] ?? "")
+                  : {})}
+                className="group/pi-project flex min-w-0 items-center rounded-lg hover:bg-muted/70"
               >
-                <HugeiconsIcon
-                  icon={closed ? ArrowRight01Icon : ArrowDown01Icon}
-                  size={12}
-                />
-                <HugeiconsIcon icon={Folder01Icon} size={14} />
-                <span className="truncate font-medium">{projectName(cwd)}</span>
-              </button>
-              {!isArchived && (
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  title={`移除项目 ${projectName(cwd)}`}
-                  aria-label={`移除项目 ${projectName(cwd)}`}
-                  className="text-muted-foreground opacity-0 group-hover/pi-project:opacity-100 focus-visible:opacity-100"
-                  onClick={() => setRemoveTarget(cwd)}
+                <button
+                  type="button"
+                  className={`flex min-w-0 flex-1 items-center gap-1.5 px-1.5 py-2 text-left text-xs ${pathKey(props.selectedProject ?? "") === key ? "text-foreground" : "text-muted-foreground"}`}
+                  onClick={() => toggle(nodeKey)}
+                  aria-expanded={!closed}
+                  title={cwd}
                 >
-                  <HugeiconsIcon icon={Cancel01Icon} size={13} />
-                </Button>
-              )}
-              {!isArchived && (
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  title={`在 ${projectName(cwd)} 新建线程`}
-                  aria-label={`在 ${projectName(cwd)} 新建线程`}
-                  className="opacity-0 group-hover/pi-project:opacity-100 focus-visible:opacity-100"
-                  onClick={() => props.onNew(cwd)}
-                >
-                  <HugeiconsIcon icon={PlusSignIcon} size={13} />
-                </Button>
-              )}
+                  <HugeiconsIcon
+                    icon={closed ? ArrowRight01Icon : ArrowDown01Icon}
+                    size={12}
+                  />
+                  <HugeiconsIcon icon={Folder01Icon} size={14} />
+                  <span className="truncate font-medium">
+                    {projectName(cwd)}
+                  </span>
+                </button>
+                {!isArchived && (
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    title={`移除项目 ${projectName(cwd)}`}
+                    aria-label={`移除项目 ${projectName(cwd)}`}
+                    className="text-muted-foreground opacity-0 group-hover/pi-project:opacity-100 focus-visible:opacity-100"
+                    data-no-drag=""
+                    onClick={() => setRemoveTarget(cwd)}
+                  >
+                    <HugeiconsIcon icon={Cancel01Icon} size={13} />
+                  </Button>
+                )}
+                {!isArchived && (
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    title={`在 ${projectName(cwd)} 新建线程`}
+                    aria-label={`在 ${projectName(cwd)} 新建线程`}
+                    className="opacity-0 group-hover/pi-project:opacity-100 focus-visible:opacity-100"
+                    data-no-drag=""
+                    onClick={() => props.onNew(cwd)}
+                  >
+                    <HugeiconsIcon icon={PlusSignIcon} size={13} />
+                  </Button>
+                )}
+              </div>
+              {!isArchived &&
+                projectIndex === groupProjects.length - 1 &&
+                gapAt(
+                  "project",
+                  groupId,
+                  cwd,
+                  groupProjects.length,
+                  groupProjects,
+                ) && <DropLine />}
             </div>
           </ContextMenuTrigger>
           <ContextMenuContent className="rounded-xl">
@@ -274,7 +367,15 @@ export function PiSidebar(props: Props) {
         </ContextMenu>
         {!closed && (
           <div className="ml-3 border-l border-border/50 pl-1.5">
-            {visible.map((thread) => threadRow(thread, isArchived))}
+            {visible.map((thread, index) =>
+              threadRow(
+                thread,
+                isArchived,
+                cwd,
+                index,
+                visible.map((item) => item.path),
+              ),
+            )}
             {!rows.length && !isArchived && (
               <button
                 type="button"
@@ -453,13 +554,13 @@ export function PiSidebar(props: Props) {
               )}
             </ContextMenu>
             {(!collapsed.has(`group:${group.id}`) || filter) &&
-              order(
-                props.projects
-                .filter(
+              applySavedOrder(
+                props.projects.filter(
                   (path) =>
                     (org.projectGroups[pathKey(path)] ?? "") === group.id,
-                )
-                .map((path) => path), projectOrder).map((path) => projectRow(path))}
+                ),
+                props.projectOrder,
+              ).map((path) => projectRow(path))}
           </section>
         ))}
         <section className="border-t border-border pt-2">

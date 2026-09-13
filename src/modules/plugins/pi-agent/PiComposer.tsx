@@ -36,7 +36,12 @@ type Props = {
   onStop: () => void;
   onLocalQueueAction?: (id: string, action: "edit" | "delete") => void;
   onRetryQueue?: () => void;
-  onQueueAction: (kind: "steering" | "followUp", index: number, text: string, action: "edit" | "delete" | "steer") => void;
+  onQueueAction: (
+    kind: "steering" | "followUp",
+    index: number,
+    text: string,
+    action: "edit" | "delete" | "steer",
+  ) => void;
   onModel: (provider: string, id: string) => void;
   onLoadModels: () => void;
   onLoadCommands?: () => Promise<void>;
@@ -89,12 +94,22 @@ export function PiComposer(props: Props) {
   const commandsPending = useRef(false);
   /** 打开 slash 菜单时加载原生命令，并阻止连续按键重复请求。 */
   const loadCommands = async () => {
-    if (!props.onLoadCommands || commandsPending.current || props.view.commands.length) return;
+    if (
+      !props.onLoadCommands ||
+      commandsPending.current ||
+      props.view.commands.length
+    )
+      return;
     commandsPending.current = true;
     setCommandsLoading(true);
-    try { await props.onLoadCommands(); }
-    catch (error) { props.onError(error); }
-    finally { commandsPending.current = false; setCommandsLoading(false); }
+    try {
+      await props.onLoadCommands();
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      commandsPending.current = false;
+      setCommandsLoading(false);
+    }
   };
   const commands = [
     ...PI_LOCAL_COMMANDS,
@@ -121,7 +136,9 @@ export function PiComposer(props: Props) {
     if (props.focusRevision) input.current?.focus();
   }, [props.focusRevision]);
   const running =
-    compacting || props.view.status === "running" || props.view.status === "stopping";
+    compacting ||
+    props.view.status === "running" ||
+    props.view.status === "stopping";
   useLayoutEffect(() => {
     const node = input.current;
     if (!node) return;
@@ -171,22 +188,62 @@ export function PiComposer(props: Props) {
         </div>
       )}
       {props.view.compaction && (
-        <div role="status" className="mx-auto mb-2 max-w-3xl text-center text-xs text-muted-foreground">
-          {compacting ? "正在压缩上下文" : props.view.compaction.status === "done" ? "上下文已压缩" : "压缩未完成，待发送消息已保留"}
+        <div
+          role="status"
+          className="mx-auto mb-2 max-w-3xl text-center text-xs text-muted-foreground"
+        >
+          {compacting
+            ? "正在压缩上下文"
+            : props.view.compaction.status === "done"
+              ? "上下文已压缩"
+              : "压缩未完成，待发送消息已保留"}
           {` · 用时 ${Math.max(0, Math.floor(((props.view.compaction.finishedAt ?? now) - props.view.compaction.startedAt) / 1000))} 秒`}
         </div>
       )}
       {!!props.view.localQueue?.length && (
-        <div data-testid="pi-local-queue" className="reader-scrollbar mx-auto mb-2 max-h-32 max-w-3xl overflow-auto rounded-lg border border-border/70 px-2 py-1.5 text-xs">
+        <div
+          data-testid="pi-local-queue"
+          className="reader-scrollbar mx-auto mb-2 max-h-32 max-w-3xl overflow-auto rounded-lg border border-border/70 px-2 py-1.5 text-xs"
+        >
           <div className="flex items-center justify-between text-muted-foreground">
             <span>待发送 · {props.view.localQueue.length}</span>
-            {!compacting && <Button size="xs" variant="ghost" disabled={!!props.view.queueSendingId} onClick={props.onRetryQueue}>继续发送</Button>}
+            {!compacting && (
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={!!props.view.queueSendingId}
+                onClick={props.onRetryQueue}
+              >
+                继续发送
+              </Button>
+            )}
           </div>
-          {props.view.localQueue.map((item) => <div key={item.id} className="flex items-start gap-2 py-1">
-            <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{item.text}{item.images.length > 0 && ` · ${item.images.length} 张图片`}</span>
-            <Button variant="ghost" size="icon-xs" aria-label="退回编辑待发送消息" disabled={props.view.queueSendingId === item.id} onClick={() => props.onLocalQueueAction?.(item.id, "edit")}><HugeiconsIcon icon={PencilEdit01Icon} size={13} /></Button>
-            <Button variant="ghost" size="icon-xs" aria-label="删除待发送消息" disabled={props.view.queueSendingId === item.id} onClick={() => props.onLocalQueueAction?.(item.id, "delete")}><HugeiconsIcon icon={Delete02Icon} size={13} /></Button>
-          </div>)}
+          {props.view.localQueue.map((item) => (
+            <div key={item.id} className="flex items-start gap-2 py-1">
+              <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]">
+                {item.text}
+                {item.images.length > 0 && ` · ${item.images.length} 张图片`}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label="退回编辑待发送消息"
+                disabled={props.view.queueSendingId === item.id}
+                onClick={() => props.onLocalQueueAction?.(item.id, "edit")}
+              >
+                <HugeiconsIcon icon={PencilEdit01Icon} size={13} />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label="删除待发送消息"
+                disabled={props.view.queueSendingId === item.id}
+                onClick={() => props.onLocalQueueAction?.(item.id, "delete")}
+              >
+                <HugeiconsIcon icon={Delete02Icon} size={13} />
+              </Button>
+            </div>
+          ))}
         </div>
       )}
       {props.status && !compacting && (
@@ -205,22 +262,58 @@ export function PiComposer(props: Props) {
           <div className="mb-1 text-[10px] text-muted-foreground">
             待处理消息 · {props.view.queue.pendingCount}
           </div>
-          {(["steering", "followUp"] as const).flatMap((kind) => props.view.queue[kind].map((text, index) => (
-            <div
-              className="pi-queue-item"
-              key={`${kind}-${index}-${text}`}
-            >
-              <span className="pi-queue-mode">{kind === "steering" ? "插入" : "排队"}</span>
-              <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]">
-                {text}
-              </span>
-              <div className="flex shrink-0 items-center gap-0.5">
-                {kind === "followUp" && <Button variant="ghost" size="icon-xs" title="立即引导当前任务" aria-label="立即引导" disabled={props.busy || props.disabled} onClick={() => props.onQueueAction(kind, index, text, "steer")}><HugeiconsIcon icon={ArrowUp01Icon} size={13} /></Button>}
-                <Button variant="ghost" size="icon-xs" title="退回输入框编辑" aria-label="退回编辑" disabled={props.busy || props.disabled} onClick={() => props.onQueueAction(kind, index, text, "edit")}><HugeiconsIcon icon={PencilEdit01Icon} size={13} /></Button>
-                <Button variant="ghost" size="icon-xs" title="删除排队消息" aria-label="删除排队消息" disabled={props.busy || props.disabled} onClick={() => props.onQueueAction(kind, index, text, "delete")}><HugeiconsIcon icon={Delete02Icon} size={13} /></Button>
+          {(["steering", "followUp"] as const).flatMap((kind) =>
+            props.view.queue[kind].map((text, index) => (
+              <div className="pi-queue-item" key={`${kind}-${index}-${text}`}>
+                <span className="pi-queue-mode">
+                  {kind === "steering" ? "插入" : "排队"}
+                </span>
+                <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]">
+                  {text}
+                </span>
+                <div className="flex shrink-0 items-center gap-0.5">
+                  {kind === "followUp" && (
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      title="立即引导当前任务"
+                      aria-label="立即引导"
+                      disabled={props.busy || props.disabled}
+                      onClick={() =>
+                        props.onQueueAction(kind, index, text, "steer")
+                      }
+                    >
+                      <HugeiconsIcon icon={ArrowUp01Icon} size={13} />
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    title="退回输入框编辑"
+                    aria-label="退回编辑"
+                    disabled={props.busy || props.disabled}
+                    onClick={() =>
+                      props.onQueueAction(kind, index, text, "edit")
+                    }
+                  >
+                    <HugeiconsIcon icon={PencilEdit01Icon} size={13} />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    title="删除排队消息"
+                    aria-label="删除排队消息"
+                    disabled={props.busy || props.disabled}
+                    onClick={() =>
+                      props.onQueueAction(kind, index, text, "delete")
+                    }
+                  >
+                    <HugeiconsIcon icon={Delete02Icon} size={13} />
+                  </Button>
+                </div>
               </div>
-            </div>
-          )))}
+            )),
+          )}
         </div>
       )}
       <div className="relative mx-auto w-full max-w-3xl rounded-2xl border border-border bg-card shadow-sm focus-within:border-ring/60">
@@ -231,7 +324,14 @@ export function PiComposer(props: Props) {
             aria-label="Pi 命令"
             className="reader-scrollbar absolute bottom-full z-20 mb-2 max-h-52 w-full overflow-auto rounded-xl border border-border bg-popover p-1 shadow-md"
           >
-            {commandsLoading && <div role="status" className="px-3 py-2 text-xs text-muted-foreground">正在加载 Pi 命令…</div>}
+            {commandsLoading && (
+              <div
+                role="status"
+                className="px-3 py-2 text-xs text-muted-foreground"
+              >
+                正在加载 Pi 命令…
+              </div>
+            )}
             {commands.map((command, index) => (
               <button
                 key={command.name}
@@ -287,7 +387,9 @@ export function PiComposer(props: Props) {
           value={props.draft.text}
           className="pi-prompt reader-scrollbar min-h-18 max-h-45 rounded-none border-0 bg-transparent! px-3 py-3 text-[13px]! shadow-none focus-visible:ring-0 [field-sizing:fixed]"
           disabled={props.disabled}
-          onFocus={() => { if (props.draft.text.startsWith("/")) void loadCommands(); }}
+          onFocus={() => {
+            if (props.draft.text.startsWith("/")) void loadCommands();
+          }}
           onChange={(event) => {
             setCommandIndex(0);
             setCommandDismissed(false);
@@ -487,13 +589,21 @@ export function PiComposer(props: Props) {
             </Select>
           )}
           <div className="ml-auto flex shrink-0 items-center gap-1">
-            {props.view.contextTokens == null && props.view.compaction?.status === "done" && <span className="text-[10px] text-muted-foreground" title="Pi 会在下一次模型回复后更新实际上下文用量">已压缩 · 用量待更新</span>}
-            {props.view.contextTokens != null && (
+            {props.view.contextTokens == null &&
+              props.view.compaction?.status === "done" && (
+                <span
+                  className="text-[10px] text-muted-foreground"
+                  title="Pi 会在下一次模型回复后更新实际上下文用量"
+                >
+                  已压缩 · 用量待更新
+                </span>
+              )}
+            {props.view.contextPercent != null && (
               <span
                 className="px-1 text-[10px] text-muted-foreground"
-                title={`${props.view.contextTokens.toLocaleString()} tokens${props.view.contextPercent == null ? "" : ` · 上下文 ${props.view.contextPercent.toFixed(1)}%`}`}
+                title={`${props.view.contextTokens == null ? "" : `${props.view.contextTokens.toLocaleString()} tokens · `}上下文 ${props.view.contextPercent.toFixed(1)}%`}
               >
-                {props.view.contextPercent == null ? "—" : `${Math.round(props.view.contextPercent)}%`}
+                {`${Math.round(props.view.contextPercent)}%`}
               </span>
             )}
             {running && !compacting && (

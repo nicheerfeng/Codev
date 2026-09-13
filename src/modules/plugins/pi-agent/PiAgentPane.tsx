@@ -23,6 +23,8 @@ import {
   setPiAgentOrganization,
   setPiAgentLastModel,
   setPiAgentLastThinkingLevel,
+  setPiAgentProjectOrder,
+  setPiAgentSessionOrder,
 } from "../store";
 import { PiWorkspaceClient, type PiThread } from "./client";
 import { INITIAL_PI_VIEW_STATE, objectValue } from "./reducer";
@@ -51,11 +53,7 @@ import "./pi-agent.css";
 type ExtensionRequest = { key: string; event: Record<string, unknown> };
 
 /** 插件入口只协调原生会话与 Codev 组件，不接管外部文件树或终端。 */
-export function PiAgentPane({
-  active,
-}: {
-  active: boolean;
-}) {
+export function PiAgentPane({ active }: { active: boolean }) {
   const [initialized, setInitialized] = useState(false);
   const client = useRef<PiWorkspaceClient | null>(null);
   const activeRef = useRef(active);
@@ -69,7 +67,9 @@ export function PiAgentPane({
   }, [active]);
   const [sessions, setSessions] = useState<PiSessionSummary[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [project, setProject] = useState<string | null>(() => usePluginStore.getState().piAgentProjects[0] ?? null);
+  const [project, setProject] = useState<string | null>(
+    () => usePluginStore.getState().piAgentProjects[0] ?? null,
+  );
   const [drafts, setDrafts] = useState<Record<string, PiDraft>>({});
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [operations, setOperations] = useState<Record<string, string>>({});
@@ -103,7 +103,11 @@ export function PiAgentPane({
   const hiddenProjects = usePluginStore((state) => state.piAgentHiddenProjects);
   const organization = usePluginStore((state) => state.piAgentOrganization);
   const lastModel = usePluginStore((state) => state.piAgentLastModel);
-  const lastThinkingLevel = usePluginStore((state) => state.piAgentLastThinkingLevel);
+  const lastThinkingLevel = usePluginStore(
+    (state) => state.piAgentLastThinkingLevel,
+  );
+  const projectOrder = usePluginStore((state) => state.piAgentProjectOrder);
+  const sessionOrder = usePluginStore((state) => state.piAgentSessionOrder);
   const activeThread = threads.find(
     (thread) => thread.key === (selected ?? `draft:${project ?? ""}`),
   );
@@ -138,10 +142,7 @@ export function PiAgentPane({
   const projects = useMemo(
     () =>
       collectProjects(
-        [
-          ...pluginProjects,
-          ...threads.map((item) => item.cwd),
-        ],
+        [...pluginProjects, ...threads.map((item) => item.cwd)],
         sessions,
         hiddenProjects,
       ),
@@ -168,13 +169,27 @@ export function PiAgentPane({
         try {
           const result = await listAllPiSessions();
           if (!disposed) setSessions(result);
-        } catch (error) { if (!disposed) setNotice(String(error)); }
-        finally { reading = false; if (dirty && !disposed) schedule(); }
+        } catch (error) {
+          if (!disposed) setNotice(String(error));
+        } finally {
+          reading = false;
+          if (dirty && !disposed) schedule();
+        }
       }, 400);
     };
     const stop = watchPiSessions(schedule);
-    void stop.then(() => { if (!disposed) schedule(); }).catch((error) => { if (!disposed) setNotice(String(error)); });
-    return () => { disposed = true; clearTimeout(timer); void stop.then((cleanup) => cleanup()).catch(() => {}); };
+    void stop
+      .then(() => {
+        if (!disposed) schedule();
+      })
+      .catch((error) => {
+        if (!disposed) setNotice(String(error));
+      });
+    return () => {
+      disposed = true;
+      clearTimeout(timer);
+      void stop.then((cleanup) => cleanup()).catch(() => {});
+    };
   }, [initialized]);
   useEffect(() => {
     if (!active) return;
@@ -265,7 +280,10 @@ export function PiAgentPane({
         createdAt: old?.createdAt ?? "",
         updatedAt: old?.updatedAt ?? Date.now(),
         messageCount: thread.view.items.length,
-        status: thread.view.compaction?.status === "running" ? "running" : thread.view.status,
+        status:
+          thread.view.compaction?.status === "running"
+            ? "running"
+            : thread.view.status,
         waiting: requests.some((request) => request.key === thread.key),
       };
       if (index >= 0) result[index] = row;
@@ -355,7 +373,11 @@ export function PiAgentPane({
         await forkThread(target);
       } else
         await operate(thread, "正在压缩上下文…", async () => {
-          setDrafts((value) => ({ ...value, [draftKey]: value[draftKey] === draft ? EMPTY_DRAFT : value[draftKey] }));
+          setDrafts((value) => ({
+            ...value,
+            [draftKey]:
+              value[draftKey] === draft ? EMPTY_DRAFT : value[draftKey],
+          }));
           await client.current!.compact(thread, command.argument);
         });
       setDrafts((value) => ({
@@ -682,6 +704,10 @@ export function PiAgentPane({
             onExport={(thread) => run(exportThread(thread), thread.key)}
             onClose={setDeleteTarget}
             onCopyPath={(path) => run(writeText(path))}
+            projectOrder={projectOrder}
+            sessionOrder={sessionOrder}
+            onProjectOrder={(order) => run(setPiAgentProjectOrder(order))}
+            onSessionOrder={(order) => run(setPiAgentSessionOrder(order))}
           />
         )}
         <main className="relative order-first flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -747,12 +773,14 @@ export function PiAgentPane({
             onLoadModels={() =>
               run(
                 ensure(rows.find((row) => row.key === selected)).then(
-                  (thread) => client.current!.loadModels(thread),
+                  (thread) => client.current!.loadModels(thread, true),
                 ),
               )
             }
             onLoadCommands={async () => {
-              const thread = await ensure(rows.find((row) => row.key === selected));
+              const thread = await ensure(
+                rows.find((row) => row.key === selected),
+              );
               await client.current!.loadCommands(thread);
             }}
             onSend={(behavior) => run(submit(behavior))}
@@ -762,24 +790,59 @@ export function PiAgentPane({
               if (item && action === "edit") {
                 setDrafts((value) => {
                   const current = value[draftKey] ?? EMPTY_DRAFT;
-                  return { ...value, [draftKey]: { text: [item.text, current.text].filter(Boolean).join("\n\n"), images: [...item.images, ...current.images] } };
+                  return {
+                    ...value,
+                    [draftKey]: {
+                      text: [item.text, current.text]
+                        .filter(Boolean)
+                        .join("\n\n"),
+                      images: [...item.images, ...current.images],
+                    },
+                  };
                 });
-                setFocusRevisions((value) => ({ ...value, [draftKey]: (value[draftKey] ?? 0) + 1 }));
+                setFocusRevisions((value) => ({
+                  ...value,
+                  [draftKey]: (value[draftKey] ?? 0) + 1,
+                }));
               }
             }}
-            onRetryQueue={() => { if (activeThread) run(client.current!.drainQueue(activeThread), activeThread.key); }}
+            onRetryQueue={() => {
+              if (activeThread)
+                run(client.current!.drainQueue(activeThread), activeThread.key);
+            }}
             onQueueAction={(kind, index, text, action) => {
               if (!activeThread) return;
               const thread = activeThread;
-              run(operate(thread, "正在更新队列…", () =>
-                client.current!.updateQueuedMessage(thread, kind, index, text, action, (texts) => {
-                  setDrafts((value) => {
-                    const current = value[thread.key] ?? EMPTY_DRAFT;
-                    return { ...value, [thread.key]: { ...current, text: [...texts, current.text].filter(Boolean).join("\n\n") } };
-                  });
-                  setFocusRevisions((value) => ({ ...value, [thread.key]: (value[thread.key] ?? 0) + 1 }));
-                }),
-              ), thread.key);
+              run(
+                operate(thread, "正在更新队列…", () =>
+                  client.current!.updateQueuedMessage(
+                    thread,
+                    kind,
+                    index,
+                    text,
+                    action,
+                    (texts) => {
+                      setDrafts((value) => {
+                        const current = value[thread.key] ?? EMPTY_DRAFT;
+                        return {
+                          ...value,
+                          [thread.key]: {
+                            ...current,
+                            text: [...texts, current.text]
+                              .filter(Boolean)
+                              .join("\n\n"),
+                          },
+                        };
+                      });
+                      setFocusRevisions((value) => ({
+                        ...value,
+                        [thread.key]: (value[thread.key] ?? 0) + 1,
+                      }));
+                    },
+                  ),
+                ),
+                thread.key,
+              );
             }}
             onStop={() => {
               if (activeThread) run(stopEditing(activeThread));
@@ -833,6 +896,11 @@ export function PiAgentPane({
       <PiSettings
         open={settingsOpen && active}
         onClose={() => setSettingsOpen(false)}
+        onModelsChanged={() => {
+          void client.current?.reloadCatalog().catch((error) => {
+            setNotice(String(error));
+          });
+        }}
       />
       <Dialog
         open={!!deleteTarget && active}

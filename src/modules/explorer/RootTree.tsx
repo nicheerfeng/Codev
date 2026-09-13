@@ -454,7 +454,9 @@ export const RootTree = memo(
           if (rootPath) tree.beginCreate(rootPath, "dir");
         },
         refresh: () => {
-          if (rootPath) tree.refresh(rootPath);
+          if (!rootPath) return;
+          tree.refresh(rootPath);
+          for (const path of tree.expanded) tree.refresh(path);
         },
         refreshPath: (path: string) => tree.refresh(path),
         revealPath: queueRevealPath,
