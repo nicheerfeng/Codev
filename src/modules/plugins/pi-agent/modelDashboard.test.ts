@@ -5,10 +5,22 @@ import {
   modelDraftLabel,
   mergeCardSave,
   duplicateModel,
+  updateProviderDraft,
 } from "./modelDashboard";
 import { plainStatusText } from "./statusText";
 
 describe("Pi 模型看板", () => {
+  // 验证公共 JSON 名称与标题双向同步，并保存为 Pi 原生 provider 键名。
+  it("公共配置 name 同步服务商名称且保留模型", () => {
+    const dashboard = splitModelConfig('{"providers":{"provider":{"models":[{"id":"a"}]}}}');
+    const original = dashboard.providers[0];
+    expect(JSON.parse(original.text).name).toBe("provider");
+    const renamed = updateProviderDraft(original, { text: '{"name":"cp-lite"}' });
+    expect(renamed.name).toBe("cp-lite");
+    dashboard.providers[0] = renamed;
+    expect(JSON.parse(joinModelConfig(dashboard)).providers).toEqual({ "cp-lite": { models: [{ id: "a" }] } });
+    expect(JSON.parse(updateProviderDraft(renamed, { name: "renamed" }).text).name).toBe("renamed");
+  });
   it("单模型保存不带入其他卡片未保存或非法的编辑", () => {
     const saved = splitModelConfig(
       '{"customRoot":true,"providers":{"one":{"headers":{"X-Test":"keep"},"models":[{"id":"a"},{"id":"b"}]},"two":{"models":[]}}}',

@@ -2,11 +2,32 @@
 .pi-agent ::highlight(codev-pi-search) { color: #201a09; background: #ffe681; }
 .pi-agent ::highlight(codev-pi-search-current) { color: #171004; background: #ffc94d; }
 .pi-agent .pi-markdown { overflow-wrap: anywhere; font-size: 13px; line-height: 1.75; }
-.pi-agent .pi-markdown pre { max-width: 100%; overflow: auto; }
-.pi-agent .pi-markdown [data-streamdown="code-block"] {
-  position: relative;
+.pi-agent .pi-user-text { line-height: 1.45; }
+.pi-agent .pi-running-dot { position: relative; }
+.pi-agent .pi-running-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-bottom-color: transparent;
+  border-radius: 50%;
+  animation: pi-running-spin 1s linear infinite;
 }
-.pi-agent .pi-markdown [data-streamdown="code-block-header"] {
+@keyframes pi-running-spin { to { transform: rotate(360deg); } }
+.pi-agent .pi-markdown pre { max-width: 100%; overflow: auto; }
+.pi-agent .pi-markdown [data-streamdown="code-block"],
+.pi-agent .pi-markdown [data-streamdown="table-wrapper"],
+.pi-agent .pi-markdown [data-streamdown="mermaid-block"] {
+  position: relative;
+  margin: 0.5rem 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  gap: 0;
+}
+.pi-agent .pi-markdown [data-streamdown="code-block-header"],
+.pi-agent .pi-markdown [data-streamdown="mermaid-block"] > div:first-child:not(:has([data-streamdown="mermaid"])) {
   display: none;
 }
 .pi-agent .pi-markdown [data-streamdown="code-block"] > div:has(> [data-streamdown="code-block-actions"]) {
@@ -47,7 +68,7 @@
 }
 .pi-agent .pi-markdown :first-child { margin-top: 0; }
 .pi-agent .pi-markdown :last-child { margin-bottom: 0; }
-.pi-agent .pi-user-message { position: relative; padding-bottom: 2.25rem; }
+.pi-agent .pi-user-message { position: relative; padding-bottom: 0.5rem; }
 .pi-agent .pi-message-actions {
   position: absolute;
   right: 10px;
@@ -86,6 +107,7 @@
 .pi-agent .pi-tool-status { flex: 0 0 auto; }
 .pi-agent .pi-tool-summary:hover { color: var(--foreground); }
 .pi-agent .pi-tool-body { padding: 4px 0 8px; }
-.pi-agent .pi-tool-command { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.pi-agent .pi-tool-group { min-width: 0; max-width: 100%; margin: 3px 0; padding-left: 14px; border-left: 1px solid var(--border); }
+.pi-agent .pi-tool-command { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pi-agent .pi-tool-group { min-width: 0; max-width: 100%; margin: 2px 0; }
 .pi-agent .pi-tool-group .pi-tool { margin: 0; }
+.pi-agent .pi-tool[open] .pi-tool-command { white-space: pre-wrap; overflow-wrap: anywhere; text-overflow: unset; }

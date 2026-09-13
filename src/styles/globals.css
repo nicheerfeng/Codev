@@ -405,6 +405,18 @@ html *::-webkit-scrollbar {
 }
 
 /* Keep rendered Markdown tables inside the reader and usable with long URLs. */
+.markdown-rendered [data-streamdown="code-block"],
+.markdown-rendered [data-streamdown="table-wrapper"],
+.markdown-rendered [data-streamdown="mermaid-block"] {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  gap: 0;
+}
+.markdown-rendered [data-streamdown="code-block-header"],
+.markdown-rendered [data-streamdown="mermaid-block"] > div:first-child:not(:has([data-streamdown="mermaid"])) {
+  display: none;
+}
 .markdown-rendered [data-streamdown="table-wrapper"] > div:last-child {
   max-width: 100%;
   min-width: 0;

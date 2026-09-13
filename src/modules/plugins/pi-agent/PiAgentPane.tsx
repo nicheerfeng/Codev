@@ -21,6 +21,7 @@ import {
   setPiAgentProjects,
   setPiAgentHiddenProjects,
   setPiAgentOrganization,
+  setPiAgentLastModel,
 } from "../store";
 import { PiWorkspaceClient, type PiThread } from "./client";
 import { INITIAL_PI_VIEW_STATE, objectValue } from "./reducer";
@@ -30,7 +31,12 @@ import {
   sendPiCommand,
   deletePiSession,
 } from "./native";
-import { collectProjects, pathKey, projectName } from "./organization";
+import {
+  collectProjects,
+  nextDraftKey,
+  pathKey,
+  projectName,
+} from "./organization";
 import { PiSidebar, type SidebarThread } from "./PiSidebar";
 import { PiComposer, EMPTY_DRAFT, type PiDraft } from "./PiComposer";
 import { PiTranscript } from "./PiTranscript";
@@ -96,6 +102,7 @@ export function PiAgentPane({
   const pluginProjects = usePluginStore((state) => state.piAgentProjects);
   const hiddenProjects = usePluginStore((state) => state.piAgentHiddenProjects);
   const organization = usePluginStore((state) => state.piAgentOrganization);
+  const lastModel = usePluginStore((state) => state.piAgentLastModel);
   const activeThread = threads.find(
     (thread) => thread.key === (selected ?? `draft:${project ?? cwd ?? ""}`),
   );
@@ -154,9 +161,7 @@ export function PiAgentPane({
     const runtime = new PiWorkspaceClient(
       () => {
         if (!disposed && activeRef.current)
-          setThreads(
-            [...runtime.threads.values()].map((thread) => ({ ...thread })),
-          );
+          setThreads([...runtime.threads.values()]);
       },
       (key, event) => {
         if (
@@ -194,6 +199,9 @@ export function PiAgentPane({
         if (!disposed) setNotice(String(error));
       });
     void refreshSessions().catch((error) => {
+      if (!disposed) setNotice(String(error));
+    });
+    void runtime.loadCatalog().catch((error) => {
       if (!disposed) setNotice(String(error));
     });
     return () => {
@@ -236,7 +244,7 @@ export function PiAgentPane({
         waiting: requests.some((request) => request.key === thread.key),
       };
       if (index >= 0) result[index] = row;
-      else result.unshift(row);
+      else if (thread.view.items.length || path) result.unshift(row);
     }
     return result;
   }, [sessions, threads, requests]);
@@ -258,17 +266,20 @@ export function PiAgentPane({
   /** 新线程建立后绑定该项目，其他线程的进程继续运行。 */
   const create = async (path: string) => {
     setProject(path);
-    setSelected(null);
+    const key = nextDraftKey(path);
+    setSelected(key);
     setSearchOpen(false);
+    const target = await client.current!.open(key, path);
+    client.current!.applyCatalogModel(target, lastModel);
   };
-  /** 选择已有线程，恢复时保留另一线程的草稿与运行状态。 */
+  /** 选择已有线程只读历史，必须发送后才启动 runtime。 */
   const select = async (thread: SidebarThread) => {
     setProject(thread.cwd);
     setSelected(thread.key);
     setSearchOpen(false);
     const target = await ensure(thread);
-    // 选择已有会话需要立即恢复历史和模型；空白新线程仍保持惰性启动。
-    await client.current!.request(target, { type: "get_state" });
+    if (target.runtimeId !== null) return;
+    await client.current!.hydrateFromDisk(target, lastModel);
   };
   /** 添加原生目录并选择项目，空文件夹也可直接开始任务。 */
   const addProject = async () => {
@@ -283,7 +294,7 @@ export function PiAgentPane({
       hiddenProjects.filter((item) => pathKey(item) !== pathKey(result)),
     );
     setProject(result);
-    setSelected(null);
+    setSelected(nextDraftKey(result));
     setSidebarOpen(true);
   };
   /** 从插件列表移除项目，磁盘文件与会话保持原样。 */
@@ -331,39 +342,42 @@ export function PiAgentPane({
     }
     if (pending.has(draftKey) || (!draft.text.trim() && !draft.images.length))
       return;
+    const text = draft.text.replace(/\s+$/u, "");
     const sourceKey = draftKey;
     let runtimeKey = sourceKey;
     setPending((value) => new Set([...value, sourceKey]));
     try {
       const thread = await ensure(rows.find((row) => row.key === selected));
       runtimeKey = thread.key;
+      const queued =
+        thread.view.status === "running" || thread.view.status === "stopping";
       setPending((value) => new Set([...value, runtimeKey]));
       setSelected((current) => (current === selected ? thread.key : current));
-      setDrafts((value) => ({
-        ...value,
-        [thread.key]: value[sourceKey] ?? draft,
-      }));
       setNotice("", thread.key);
       setSendRevisions((value) => ({
         ...value,
         [thread.key]: (value[thread.key] ?? 0) + 1,
       }));
+      client.current!.beginPrompt(thread, text, draft.images, queued);
+      setDrafts((value) => ({
+        ...value,
+        [sourceKey]: EMPTY_DRAFT,
+        [thread.key]: EMPTY_DRAFT,
+      }));
       await client.current!.request(thread, {
         type: "prompt",
-        message: draft.text,
+        message: text,
         ...(draft.images.length ? { images: draft.images } : {}),
-        ...(thread.view.status === "running"
-          ? { streamingBehavior: behavior }
-          : {}),
+        ...(queued ? { streamingBehavior: behavior } : {}),
       });
+      await client.current!.refreshState(thread);
+    } catch (error) {
       setDrafts((value) => ({
         ...value,
         [sourceKey]:
-          value[sourceKey] === draft ? EMPTY_DRAFT : value[sourceKey],
-        [thread.key]:
-          value[thread.key] === draft ? EMPTY_DRAFT : value[thread.key],
+          value[sourceKey] === EMPTY_DRAFT ? draft : value[sourceKey],
       }));
-      await client.current!.refreshState(thread);
+      throw error;
     } finally {
       setPending((value) => {
         const next = new Set(value);
@@ -428,14 +442,10 @@ export function PiAgentPane({
     if (operationKeys.current.has(key)) return false;
     const lastUser = [...thread.view.items]
       .reverse()
-      .find(
-        (entry) => entry.kind === "message" && entry.role === "user",
-      );
+      .find((entry) => entry.kind === "message" && entry.role === "user");
     const lastAssistant = [...thread.view.items]
       .reverse()
-      .find(
-        (entry) => entry.kind === "message" && entry.role === "assistant",
-      );
+      .find((entry) => entry.kind === "message" && entry.role === "assistant");
     if (
       thread.view.status !== "idle" ||
       lastUser?.id !== item.id ||
@@ -512,11 +522,9 @@ export function PiAgentPane({
       setDeleting(false);
     }
   };
-  /** 无确认创建同名序号分叉，并将新线程切换为当前线程。 */
+  /** 无确认创建同名序号分叉，复制会话文件，不启动 runtime。 */
   const forkThread = async (target: SidebarThread) => {
     const source = await ensure(target);
-    const result = await client.current!.branch(source);
-    if (!result) return;
     const base = target.name || target.preview || projectName(target.cwd);
     const used = new Set(
       rows
@@ -526,26 +534,10 @@ export function PiAgentPane({
     let index = 1;
     let name = `${base} · 分叉 ${index}`;
     while (used.has(name)) name = `${base} · 分叉 ${++index}`;
-    await client.current!.request(result.thread, {
-      type: "set_session_name",
-      name,
-    });
-    await client.current!.refreshState(result.thread);
+    const result = await client.current!.branch(source, name);
     setProject(result.thread.cwd);
     setSelected(result.thread.key);
     await refreshSessions();
-  };
-  /** 模型和思考设置发送到原生 Pi，成功后读取实际状态。 */
-  const configure = async (command: Record<string, unknown>) => {
-    const thread = await ensure(rows.find((row) => row.key === selected));
-    setSelected(thread.key);
-    await client.current!.request(thread, command);
-    await Promise.all([
-      client.current!.refreshState(thread),
-      client.current!.request(thread, {
-        type: "get_available_thinking_levels",
-      }),
-    ]);
   };
   /** 导出明确目标的原生 HTML，由用户选择输出文件路径。 */
   const exportThread = async (target: SidebarThread) => {
@@ -568,11 +560,7 @@ export function PiAgentPane({
   const renameThread = async () => {
     if (!rename?.name.trim()) return;
     const thread = await ensure(rename.thread);
-    await client.current!.request(thread, {
-      type: "set_session_name",
-      name: rename.name.trim(),
-    });
-    await client.current!.refreshState(thread);
+    await client.current!.rename(thread, rename.name.trim());
     setRename(null);
     await refreshSessions();
   };
@@ -627,11 +615,6 @@ export function PiAgentPane({
             rows.find((row) => row.key === selected)?.preview ||
             (activeCwd ? projectName(activeCwd) : "Pi Agent")}
         </div>
-        {view.status === "running" && (
-          <span className="order-2 truncate text-[11px] text-[#8eacc9]">
-            {view.phase || "运行中"}
-          </span>
-        )}
         <Button
           variant="ghost"
           size="icon-sm"
@@ -701,6 +684,13 @@ export function PiAgentPane({
               if (target) run(forkThread(target), target.key);
             }}
             canEditLastUser={canEditLastUser}
+            onLoadOlder={() => {
+              if (activeThread)
+                run(
+                  client.current!.loadOlderHistory(activeThread),
+                  activeThread.key,
+                );
+            }}
           />
           <PiComposer
             key={draftKey}
@@ -737,14 +727,51 @@ export function PiAgentPane({
               )
             }
             onSend={(behavior) => run(submit(behavior))}
+            onQueueAction={(kind, index, text, action) => {
+              if (!activeThread) return;
+              const thread = activeThread;
+              run(operate(thread, "正在更新队列…", () =>
+                client.current!.updateQueuedMessage(thread, kind, index, text, action, (texts) => {
+                  setDrafts((value) => {
+                    const current = value[thread.key] ?? EMPTY_DRAFT;
+                    return { ...value, [thread.key]: { ...current, text: [...texts, current.text].filter(Boolean).join("\n\n") } };
+                  });
+                  setFocusRevisions((value) => ({ ...value, [thread.key]: (value[thread.key] ?? 0) + 1 }));
+                }),
+              ), thread.key);
+            }}
             onStop={() => {
               if (activeThread) run(stopEditing(activeThread));
             }}
             onModel={(provider, modelId) =>
-              run(configure({ type: "set_model", provider, modelId }))
+              run(
+                ensure(rows.find((row) => row.key === selected)).then(
+                  async (thread) => {
+                    const name = view.models.find(
+                      (model) =>
+                        model.provider === provider && model.id === modelId,
+                    )?.name;
+                    await client.current!.setModel(
+                      thread,
+                      provider,
+                      modelId,
+                      name,
+                    );
+                    await setPiAgentLastModel({
+                      provider,
+                      id: modelId,
+                      name,
+                    });
+                  },
+                ),
+              )
             }
             onThinking={(level) =>
-              run(configure({ type: "set_thinking_level", level }))
+              run(
+                ensure(rows.find((row) => row.key === selected)).then(
+                  (thread) => client.current!.setThinkingLevel(thread, level),
+                ),
+              )
             }
             onSettings={() => setSettingsOpen(true)}
             onError={(error) => setNotice(String(error))}

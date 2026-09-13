@@ -145,7 +145,7 @@ export function useTabCloseGuards({
         ? tabsRef.current.filter((tab) => scopeIds.includes(tab.id))
         : tabsRef.current;
       return kind === "right"
-        ? planCloseTabsToRight(source, anchorId, activeIdRef.current)
+        ? planCloseTabsToRight(source, anchorId, activeIdRef.current, scopeIds)
         : planCloseOtherTabs(source, anchorId, activeIdRef.current);
     },
     [],
@@ -153,7 +153,7 @@ export function useTabCloseGuards({
 
   const withCurrentActive = useCallback(
     (plan: CloseTabsPlan): CloseTabsPlan => ({
-      closeIds: plan.closeIds,
+      ...plan,
       nextActiveId: activeIdRef.current,
     }),
     [],

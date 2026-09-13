@@ -596,7 +596,7 @@ fn inside(path: &Path, parent: &Path) -> bool {
 fn same_volume(source: &Path, destination: &Path) -> bool {
     #[cfg(windows)]
     {
-        return source.components().next() == destination.components().next();
+        source.components().next() == destination.components().next()
     }
     #[cfg(unix)]
     {

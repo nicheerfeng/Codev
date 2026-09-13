@@ -25,6 +25,15 @@ function terminal(id: number, leafId: number, spaceId = "a"): Tab {
 }
 
 describe("applyCloseTabsPlan", () => {
+  // 合并标签栏按显示顺序关闭跨空间文件，保留自身、左侧及其他分屏。
+  it("closes every tab to the right in the visible group across spaces", () => {
+    const tabs = [editor(1, "a"), editor(2, "b"), editor(3, "a"), editor(4, "c"), editor(5, "b")];
+    const plan = planCloseTabsToRight(tabs, 2, 4, [3, 2, 1, 4]);
+    expect(plan.closeIds).toEqual([1, 4]);
+    const result = applyCloseTabsPlan(tabs, 2, plan);
+    expect(result?.tabs.map((tab) => tab.id)).toEqual([2, 3, 5]);
+    expect(result?.nextActiveId).toBe(2);
+  });
   it("plans every tab strictly to the right of the anchor", () => {
     const plan = planCloseTabsToRight(
       [editor(1), editor(2), editor(3), editor(4)],

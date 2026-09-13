@@ -15,6 +15,7 @@ export type ModelDashboard = {
 
 export const PROVIDER_EXAMPLE = JSON.stringify(
   {
+    name: "provider",
     baseUrl: "https://api.example.com/v1",
     api: "openai-completions",
     apiKey: "替换为你的 API Key",
@@ -30,6 +31,25 @@ export const MODEL_EXAMPLE = JSON.stringify(
   null,
   2,
 );
+
+/** 同步公共 JSON 名称和标题，保留尚未输入完整的 JSON 草稿。 */
+export function updateProviderDraft(
+  provider: ProviderDraft,
+  change: Partial<ProviderDraft>,
+): ProviderDraft {
+  const next = { ...provider, ...change };
+  try {
+    const config = parseConfigObject(next.text, "公共配置");
+    if (change.name !== undefined) {
+      next.text = JSON.stringify({ ...config, name: change.name }, null, 2);
+    } else if (change.text !== undefined && typeof config.name === "string") {
+      next.name = config.name;
+    }
+  } catch {
+    // JSON 输入未完成时保留草稿，保存时由现有校验提示。
+  }
+  return next;
+}
 
 /** 从已有模型复制配置并生成不重复的新 ID，不更改原卡片。 */
 export function duplicateModel(
@@ -131,8 +151,8 @@ export function splitModelConfig(text: string): ModelDashboard {
         throw new Error(`providers.${name}.models 必须是数组`);
       return {
         key: crypto.randomUUID(),
-        name,
-        text: JSON.stringify(config, null, 2),
+        name: typeof config.name === "string" ? config.name : name,
+        text: JSON.stringify({ name, ...config }, null, 2),
         hasModels: models !== undefined,
         models: ((models as unknown[]) ?? []).map((model) => ({
           key: crypto.randomUUID(),
@@ -156,6 +176,7 @@ export function joinModelConfig(
         throw new Error(`Provider 名称为空或重复：${name}`);
       names.add(name);
       const config = parseConfigObject(provider.text, `providers.${name}`);
+      delete config.name;
       if ("models" in config)
         throw new Error(`${name} 的 models 请在模型编辑区修改`);
       const ids = new Set<string>();

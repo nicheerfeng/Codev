@@ -1,11 +1,16 @@
 import {
+  appendPiSession,
+  clonePiSession,
+  closeAllPiAgents,
   closePiAgent,
+  listPiModels,
   listenPiEvents,
+  readPiSession,
   sendPiCommand,
   startPiAgent,
 } from "./native";
 import { INITIAL_PI_VIEW_STATE, objectValue, piViewReducer } from "./reducer";
-import type { PiEventEnvelope, PiImage, PiViewState } from "./types";
+import type { PiEventEnvelope, PiImage, PiModel, PiViewState } from "./types";
 
 export type PiThread = {
   loadingHistory: boolean;
@@ -24,13 +29,16 @@ type Pending = {
 /** 管理 Pi 原生进程与请求关联，切换界面不会停止其他线程。 */
 export class PiWorkspaceClient {
   /** 空闲 runtime 回收时间，线程数据仍保留在前端内存中。 */
-  private static readonly IDLE_RUNTIME_MS = 30 * 60 * 1000;
+  private static readonly IDLE_RUNTIME_MS = 20 * 60 * 1000;
   readonly threads = new Map<string, PiThread>();
   private pending = new Map<string, Pending>();
   private opening = new Map<string, Promise<PiThread>>();
   private disposed = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private toolUpdates = new Map<string, PiEventEnvelope>();
+  private toolTimer: ReturnType<typeof setTimeout> | null = null;
+  private catalogModels: PiModel[] = [];
   private stop: Promise<() => void>;
 
   /** 注册一次事件监听，以 runtimeId 分发并合并流式渲染刷新。 */
@@ -52,6 +60,37 @@ export class PiWorkspaceClient {
       (item) => item.runtimeId === payload.sessionId,
     );
     if (!thread) return;
+    if (payload.event.type === "tool_execution_update") {
+      this.toolUpdates.set(
+        `${thread.key}:${String(payload.event.toolCallId)}`,
+        payload,
+      );
+      if (!this.toolTimer)
+        this.toolTimer = setTimeout(() => this.flushToolUpdates(), 150);
+      return;
+    }
+    this.applyEvent(thread, payload);
+  }
+
+  /** 高频工具快照按线程合并后再刷新，避免累计输出叠三份。 */
+  private flushToolUpdates() {
+    this.toolTimer = null;
+    const pending = [...this.toolUpdates.values()];
+    this.toolUpdates.clear();
+    for (const payload of pending) {
+      const thread = [...this.threads.values()].find(
+        (item) => item.runtimeId === payload.sessionId,
+      );
+      if (thread) this.applyEvent(thread, payload, true);
+    }
+  }
+
+  /** 将一条已归属的 Pi 事件写入线程并通知界面。 */
+  private applyEvent(
+    thread: PiThread,
+    payload: PiEventEnvelope,
+    streaming = false,
+  ) {
     thread.view = piViewReducer(thread.view, { type: "event", payload });
     this.touchRuntime(thread);
     const event = payload.event;
@@ -77,9 +116,7 @@ export class PiWorkspaceClient {
         this.error(thread.key, error),
       );
     }
-    this.publish(
-      event.type === "message_update" || event.type === "tool_execution_update",
-    );
+    this.publish(streaming || event.type === "message_update");
   }
 
   /** 每帧最多通知一次高频内容变化，命令和生命周期立即生效。 */
@@ -104,6 +141,22 @@ export class PiWorkspaceClient {
     return this.ensureRuntime(thread).then(() =>
       this.sendRequest(thread, command),
     );
+  }
+
+  /** 点击发送后立刻进入运行态，不必等待 Pi runtime 或 agent_start。 */
+  beginPrompt(
+    thread: PiThread,
+    text: string,
+    images?: PiImage[],
+    queued = false,
+  ) {
+    thread.view = piViewReducer(thread.view, {
+      type: "prompt",
+      text,
+      images,
+      queued,
+    });
+    this.publish();
   }
 
   /** 首次真实 RPC 操作时才为线程启动 Pi runtime。 */
@@ -171,7 +224,7 @@ export class PiWorkspaceClient {
     return Promise.resolve(thread);
   }
 
-  /** 在监听就绪后启动进程，再读取原生历史与模型。 */
+  /** 启动进程并同步状态；已有消息保持可见，发送中的计时继续。 */
   private async start(
     key: string,
     cwd: string,
@@ -181,8 +234,12 @@ export class PiWorkspaceClient {
     if (this.disposed) throw new Error("Pi 插件已关闭");
     const thread = this.threads.get(key);
     if (!thread) throw new Error("Pi 线程不存在");
-    thread.loadingHistory = true;
-    thread.view = { ...thread.view, status: "starting", modelsLoading: true };
+    thread.loadingHistory = thread.view.items.length === 0;
+    thread.view = {
+      ...thread.view,
+      status: thread.view.status === "running" ? "running" : "starting",
+      modelsLoading: true,
+    };
     this.threads.set(key, thread);
     this.publish();
     try {
@@ -193,14 +250,45 @@ export class PiWorkspaceClient {
       }
       thread.runtimeId = runtime.sessionId;
       this.touchRuntime(thread);
-      await Promise.all([
-        this.sendRequest(thread, { type: "get_available_models" }),
+      const hydrates: Promise<unknown>[] = [
         this.sendRequest(thread, { type: "get_state" }),
         this.sendRequest(thread, { type: "get_session_stats" }),
-        this.sendRequest(thread, { type: "get_messages" }),
         this.sendRequest(thread, { type: "get_available_thinking_levels" }),
         this.sendRequest(thread, { type: "get_commands" }),
-      ]);
+      ];
+      if (!thread.view.items.length)
+        hydrates.push(this.sendRequest(thread, { type: "get_messages" }));
+      else {
+        const last = thread.view.items[thread.view.items.length - 1];
+        if (
+          last?.id &&
+          !last.id.startsWith("history-") &&
+          !last.id.startsWith("local-user-")
+        )
+          hydrates.push(
+            this.sendRequest(thread, { type: "get_entries", since: last.id }),
+          );
+      }
+      if (!thread.view.models.length && !this.catalogModels.length)
+        hydrates.push(
+          this.sendRequest(thread, { type: "get_available_models" }),
+        );
+      if (thread.view.model)
+        hydrates.push(
+          this.sendRequest(thread, {
+            type: "set_model",
+            provider: thread.view.model.provider,
+            modelId: thread.view.model.id,
+          }),
+        );
+      if (thread.view.thinkingLevel && thread.view.thinkingLevel !== "off")
+        hydrates.push(
+          this.sendRequest(thread, {
+            type: "set_thinking_level",
+            level: thread.view.thinkingLevel,
+          }),
+        );
+      await Promise.all(hydrates);
       thread.loadingHistory = false;
       this.publish();
       return thread;
@@ -227,14 +315,162 @@ export class PiWorkspaceClient {
     ]);
   }
 
-  /** 在模型选择器打开时预加载当前线程模型，避免新线程首次点击无列表。 */
+  /** 浏览历史只读 JSONL，必须有发送等交互后才启动 runtime。 */
+  async hydrateFromDisk(thread: PiThread, fallback?: PiModel | null) {
+    const path = thread.view.sessionFile;
+    if (!path) {
+      this.applyCatalogModel(thread, fallback ?? null);
+      this.publish();
+      return thread;
+    }
+    thread.loadingHistory = true;
+    this.publish();
+    try {
+      await this.applyHistoryPage(thread, await readPiSession(path), false);
+      this.applyCatalogModel(thread, fallback ?? thread.view.model);
+    } finally {
+      thread.loadingHistory = false;
+      this.publish();
+    }
+    return thread;
+  }
+
+  /** 上翻时再读更早的 20 条，不启动 runtime。 */
+  async loadOlderHistory(thread: PiThread) {
+    const path = thread.view.sessionFile;
+    if (
+      !path ||
+      !thread.view.historyHasMore ||
+      thread.view.historyLoadingMore ||
+      thread.view.historyOffset == null
+    )
+      return thread;
+    thread.view = { ...thread.view, historyLoadingMore: true };
+    this.publish();
+    try {
+      await this.applyHistoryPage(
+        thread,
+        await readPiSession(path, thread.view.historyOffset),
+        true,
+      );
+    } catch (error) {
+      thread.view = {
+        ...thread.view,
+        historyLoadingMore: false,
+        error: String(error),
+      };
+      this.publish();
+      throw error;
+    }
+    this.publish();
+    return thread;
+  }
+
+  /** 把一页磁盘历史写入线程，prepend 表示插到已有消息前面。 */
+  private applyHistoryPage(
+    thread: PiThread,
+    history: Awaited<ReturnType<typeof readPiSession>>,
+    prepend: boolean,
+  ) {
+    const path = thread.view.sessionFile ?? history.sessionFile;
+    thread.view = piViewReducer(thread.view, {
+      type: "history",
+      messages: history.messages,
+      prepend,
+      offset: history.oldestOffset,
+      hasMore: history.hasMore,
+    });
+    thread.view = {
+      ...thread.view,
+      sessionFile: history.sessionFile || path,
+      sessionName: history.sessionName ?? thread.view.sessionName,
+      model: history.model ?? thread.view.model,
+      thinkingLevel: history.thinkingLevel ?? thread.view.thinkingLevel,
+      status: thread.runtimeId === null ? "idle" : thread.view.status,
+    };
+    return thread;
+  }
+
+  /** 预读 models.json，供新线程和选择器复用，不启动 runtime。 */
+  async loadCatalog() {
+    if (!this.catalogModels.length) this.catalogModels = await listPiModels();
+    return this.catalogModels;
+  }
+
+  /** 模型列表从 models.json 读取，不为此启动会话。 */
   async loadModels(thread: PiThread) {
-    await this.ensureRuntime(thread);
     if (thread.view.models.length) return thread.view.models;
     thread.view = { ...thread.view, modelsLoading: true, error: null };
     this.publish();
-    await this.sendRequest(thread, { type: "get_available_models" });
+    try {
+      await this.loadCatalog();
+      thread.view = {
+        ...thread.view,
+        models: this.catalogModels,
+        modelsLoading: false,
+      };
+      if (!thread.view.model && this.catalogModels[0])
+        thread.view = { ...thread.view, model: this.catalogModels[0] };
+    } catch (error) {
+      thread.view = {
+        ...thread.view,
+        modelsLoading: false,
+        error: String(error),
+      };
+      throw error;
+    } finally {
+      this.publish();
+    }
     return thread.view.models;
+  }
+
+  /** 新线程使用最近模型；历史线程保留自身模型。 */
+  applyCatalogModel(thread: PiThread, fallback: PiModel | null) {
+    thread.view = {
+      ...thread.view,
+      models: thread.view.models.length
+        ? thread.view.models
+        : this.catalogModels,
+      model: thread.view.model ?? fallback ?? this.catalogModels[0] ?? null,
+      thinkingLevels:
+        thread.view.thinkingLevels.length > 1
+          ? thread.view.thinkingLevels
+          : ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+    };
+  }
+
+  /** 按原生队列快照修改单条消息，重建失败时将未发送文本退回草稿。 */
+  async updateQueuedMessage(
+    thread: PiThread,
+    kind: "steering" | "followUp",
+    index: number,
+    text: string,
+    action: "edit" | "delete" | "steer",
+    restore: (texts: string[]) => void,
+  ) {
+    const snapshot = objectValue(await this.request(thread, { type: "clear_queue" }));
+    const entries = (["steering", "followUp"] as const).flatMap((mode) =>
+      (Array.isArray(snapshot?.[mode]) ? snapshot[mode] as string[] : []).map(
+        (message, position) => ({ mode, position, message }),
+      ),
+    );
+    const target = entries.find((entry) => entry.mode === kind && entry.position === index && entry.message === text);
+    const remaining = entries.filter((entry) => entry !== target);
+    if (target && action === "edit") restore([target.message]);
+    if (target && action === "steer") remaining.unshift({ ...target, mode: "steering" });
+    for (let position = 0; position < remaining.length; position++) {
+      const entry = remaining[position];
+      try {
+        await this.request(thread, {
+          type: entry.mode === "steering" ? "steer" : "follow_up",
+          message: entry.message,
+        });
+      } catch (error) {
+        restore(remaining.slice(position).map((item) => item.message));
+        throw error;
+      }
+    }
+    if (!target) throw new Error("这条消息已开始处理或队列已变化，请查看最新队列");
   }
 
   /** 先取回未执行的队列文本，再中断运行，恢复操作始终绑定原线程。 */
@@ -286,31 +522,85 @@ export class PiWorkspaceClient {
     return true;
   }
 
-  /** 原生分叉会切换会话文件；为新会话分配独立界面键并保留原线程。 */
-  async branch(thread: PiThread) {
+  /** 复制会话文件为新线程，不启动 runtime。 */
+  async branch(thread: PiThread, name?: string) {
     if (thread.view.status !== "idle")
       throw new Error("请先停止当前任务再分叉");
-    const original = { ...thread, runtimeId: null };
-    const result = objectValue(await this.request(thread, { type: "clone" }));
-    if (result?.cancelled) return null;
-    this.threads.set(original.key, original);
-    thread.key = crypto.randomUUID();
-    thread.view = {
-      ...INITIAL_PI_VIEW_STATE,
-      models: original.view.models,
-      commands: original.view.commands,
+    const source = thread.view.sessionFile;
+    if (!source) throw new Error("当前线程尚未写入会话文件");
+    const cloned = await clonePiSession(source);
+    if (name) {
+      await appendPiSession({
+        path: cloned.path,
+        kind: "session_info",
+        name,
+      });
+    }
+    const key = cloned.path;
+    const next = await this.open(key, thread.cwd, cloned.path);
+    next.view = {
+      ...next.view,
+      models: thread.view.models,
+      thinkingLevels: thread.view.thinkingLevels,
+      thinkingLevel: thread.view.thinkingLevel,
+      model: thread.view.model,
+      sessionName: name ?? cloned.name ?? thread.view.sessionName,
     };
-    this.threads.set(thread.key, thread);
-    await Promise.all([
-      this.refreshState(thread),
-      this.request(thread, { type: "get_messages" }),
-      this.request(thread, { type: "get_available_thinking_levels" }),
-    ]);
+    await this.hydrateFromDisk(next, thread.view.model);
     this.publish();
-    return {
-      thread,
-      text: typeof result?.text === "string" ? result.text : "",
-    };
+    return { thread: next, text: "" };
+  }
+
+  /** 改模型只写会话文件或前端草稿，发送时才交给 runtime。 */
+  async setModel(thread: PiThread, provider: string, modelId: string, name?: string) {
+    const model = { provider, id: modelId, name };
+    thread.view = { ...thread.view, model };
+    this.publish();
+    if (thread.runtimeId !== null) {
+      await this.sendRequest(thread, { type: "set_model", provider, modelId });
+      return;
+    }
+    if (thread.view.sessionFile)
+      await appendPiSession({
+        path: thread.view.sessionFile,
+        kind: "model_change",
+        provider,
+        modelId,
+      });
+  }
+
+  /** 改思考等级只写会话文件或前端草稿，发送时才交给 runtime。 */
+  async setThinkingLevel(thread: PiThread, level: string) {
+    thread.view = { ...thread.view, thinkingLevel: level };
+    this.publish();
+    if (thread.runtimeId !== null) {
+      await this.sendRequest(thread, { type: "set_thinking_level", level });
+      return;
+    }
+    if (thread.view.sessionFile)
+      await appendPiSession({
+        path: thread.view.sessionFile,
+        kind: "thinking_level_change",
+        thinkingLevel: level,
+      });
+  }
+
+  /** 重命名只追加 session_info，不启动 runtime。 */
+  async rename(thread: PiThread, name: string) {
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("线程名称不能为空");
+    thread.view = { ...thread.view, sessionName: trimmed };
+    this.publish();
+    if (thread.runtimeId !== null) {
+      await this.sendRequest(thread, { type: "set_session_name", name: trimmed });
+      return;
+    }
+    if (!thread.view.sessionFile) return;
+    await appendPiSession({
+      path: thread.view.sessionFile,
+      kind: "session_info",
+      name: trimmed,
+    });
   }
 
   /** 展示当前操作错误，不覆盖已有消息。 */
@@ -371,13 +661,14 @@ export class PiWorkspaceClient {
   dispose() {
     this.disposed = true;
     if (this.timer) clearTimeout(this.timer);
+    if (this.toolTimer) clearTimeout(this.toolTimer);
+    this.toolUpdates.clear();
     for (const timer of this.idleTimers.values()) clearTimeout(timer);
     this.idleTimers.clear();
     void this.stop.then((stop) => stop());
     for (const thread of this.threads.values())
-      if (thread.runtimeId !== null) {
+      if (thread.runtimeId !== null)
         this.rejectRequests(thread.runtimeId, "Pi 插件已关闭");
-        void closePiAgent(thread.runtimeId);
-      }
+    void closeAllPiAgents();
   }
 }

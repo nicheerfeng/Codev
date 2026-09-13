@@ -13,7 +13,7 @@ pub struct ExternalFileClipboard {
 pub fn fs_get_file_clipboard() -> ExternalFileClipboard {
     #[cfg(windows)]
     {
-        return read_windows_file_clipboard();
+        read_windows_file_clipboard()
     }
     #[cfg(not(windows))]
     {

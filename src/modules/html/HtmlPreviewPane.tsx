@@ -32,6 +32,9 @@ type HtmlSearchMessage = {
   count?: unknown;
   index?: unknown;
   truncated?: unknown;
+  x?: number;
+  y?: number;
+  text?: string;
 };
 
 type Props = {
@@ -191,6 +194,15 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
         if (event.source !== iframeRef.current?.contentWindow) return;
         const data = event.data as HtmlSearchMessage | null;
         if (!data || data.channel !== HTML_SEARCH_CHANNEL) return;
+        if (data.type === "contextmenu") {
+          const frame = iframeRef.current;
+          if (!frame || typeof data.x !== "number" || typeof data.y !== "number" || typeof data.text !== "string") return;
+          const bounds = frame.getBoundingClientRect();
+          const menuEvent = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: bounds.left + data.x, clientY: bounds.top + data.y, button: 2 });
+          Object.assign(menuEvent, { readerText: data.text });
+          frame.dispatchEvent(menuEvent);
+          return;
+        }
         if (data.type === "focus") {
           onFocusSearch();
           return;
