@@ -448,6 +448,12 @@ html *::-webkit-scrollbar {
 .markdown-rendered [data-streamdown="table-wrapper"] td {
   overflow-wrap: anywhere;
 }
+.markdown-rendered .markdown-toc-target {
+  border-radius: 4px;
+  outline: 2px solid color-mix(in srgb, var(--ring) 70%, transparent);
+  outline-offset: 4px;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
 
 /* Keep both text-diff editors fully interactive with one scroll layer each. */
 .codev-diff-view {

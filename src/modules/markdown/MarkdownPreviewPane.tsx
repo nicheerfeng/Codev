@@ -19,6 +19,7 @@ import {
 } from "react";
 import { Streamdown } from "streamdown";
 import { MarkdownLink } from "./MarkdownLink";
+import { MarkdownToc } from "./MarkdownToc";
 import { MarkdownViewToggle } from "./MarkdownViewToggle";
 
 type ReadResult =
@@ -478,6 +479,25 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
         )}
       >
         <MarkdownViewToggle mode="rendered" onChange={onSetView} />
+        {status.kind === "ready" && (
+          <MarkdownToc
+            path={path}
+            source={status.content}
+            viewportRef={rootRef}
+            onJump={(_heading, index) => {
+              const heading = contentRootRef.current?.querySelectorAll(
+                "h1, h2, h3, h4, h5, h6",
+              )[index];
+              if (!(heading instanceof HTMLElement)) return;
+              heading.scrollIntoView({ block: "start", inline: "nearest" });
+              heading.classList.add("markdown-toc-target");
+              window.setTimeout(
+                () => heading.classList.remove("markdown-toc-target"),
+                1200,
+              );
+            }}
+          />
+        )}
         <div
           ref={scrollRootRef}
           className="reader-scrollbar flex-1 overflow-auto"

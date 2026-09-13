@@ -25,6 +25,13 @@ import {
 } from "@hugeicons/core-free-icons";
 import type { PiImage, PiViewState } from "./types";
 import { PI_LOCAL_COMMANDS } from "./commands";
+import {
+  mergePromptHistory,
+  nextHistoryIndex,
+  prependPrompt,
+  shouldRecallNext,
+  shouldRecallPrevious,
+} from "./promptHistory";
 
 export type PiDraft = { text: string; images: PiImage[] };
 export const EMPTY_DRAFT: PiDraft = { text: "", images: [] };
@@ -80,6 +87,15 @@ export function PiComposer(props: Props) {
   const files = useRef<HTMLInputElement>(null);
   const draftRef = useRef(props.draft);
   draftRef.current = props.draft;
+  const [submitted, setSubmitted] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const historyIndexRef = useRef(-1);
+  historyIndexRef.current = historyIndex;
+  const historyDraft = useRef<PiDraft | null>(null);
+  const applyingHistory = useRef(false);
+  const [recallRevision, setRecallRevision] = useState(0);
+  const recallCaret = useRef<"start" | "end" | null>(null);
+  const history = mergePromptHistory(submitted, props.view.items);
   const [modelFilter, setModelFilter] = useState("");
   const [modelOpen, setModelOpen] = useState(false);
   const [commandIndex, setCommandIndex] = useState(0);
@@ -127,8 +143,48 @@ export function PiComposer(props: Props) {
     /^\/[^\s]*$/.test(props.draft.text) &&
     (commands.length > 0 || commandsLoading);
   /** 选择命令后保留输入焦点，允许补写参数再发送。 */
+  const changeDraft = (value: PiDraft) => {
+    if (!applyingHistory.current && historyIndexRef.current !== -1) {
+      historyIndexRef.current = -1;
+      setHistoryIndex(-1);
+      historyDraft.current = null;
+    }
+    props.onChange(value);
+  };
+  const recallHistory = (direction: -1 | 1) => {
+    const next = nextHistoryIndex(
+      historyIndexRef.current,
+      direction,
+      history.length,
+    );
+    if (next == null) return;
+    applyingHistory.current = true;
+    if (historyIndexRef.current === -1 && next >= 0)
+      historyDraft.current = { ...draftRef.current };
+    historyIndexRef.current = next;
+    setHistoryIndex(next);
+    if (next === -1) {
+      const restored = historyDraft.current ?? EMPTY_DRAFT;
+      historyDraft.current = null;
+      recallCaret.current = null;
+      changeDraft(restored);
+    } else {
+      recallCaret.current = direction === -1 ? "start" : "end";
+      changeDraft({ text: history[next] ?? "", images: [] });
+    }
+    applyingHistory.current = false;
+    setRecallRevision((value) => value + 1);
+  };
+  const sendDraft = (behavior: "steer" | "followUp") => {
+    const text = draftRef.current.text;
+    historyIndexRef.current = -1;
+    setHistoryIndex(-1);
+    historyDraft.current = null;
+    if (text.trim()) setSubmitted((value) => prependPrompt(value, text));
+    props.onSend(behavior);
+  };
   const chooseCommand = (name: string) => {
-    props.onChange({ ...props.draft, text: `/${name} ` });
+    changeDraft({ ...props.draft, text: `/${name} ` });
     setCommandIndex(0);
     input.current?.focus();
   };
@@ -144,7 +200,12 @@ export function PiComposer(props: Props) {
     if (!node) return;
     node.style.height = "0px";
     node.style.height = `${Math.min(180, Math.max(72, node.scrollHeight))}px`;
-  }, [props.draft.text]);
+    const caret = recallCaret.current;
+    if (!caret || historyIndex < 0) return;
+    const pos = caret === "start" ? 0 : node.value.length;
+    node.setSelectionRange(pos, pos);
+    recallCaret.current = null;
+  }, [historyIndex, props.draft.text, recallRevision]);
   /** 保留读取期间新输入的文字，追加图片后聚焦原输入框。 */
   const addImages = async (selected: File[]) => {
     try {
@@ -153,7 +214,7 @@ export function PiComposer(props: Props) {
           .filter((file) => file.type.startsWith("image/"))
           .map(readImage),
       );
-      props.onChange({
+      changeDraft({
         ...draftRef.current,
         images: [...draftRef.current.images, ...images],
       });
@@ -368,7 +429,7 @@ export function PiComposer(props: Props) {
                   className="absolute -top-1 -right-1"
                   aria-label={`移除图片 ${index + 1}`}
                   onClick={() =>
-                    props.onChange({
+                    changeDraft({
                       ...props.draft,
                       images: props.draft.images.filter((_, i) => i !== index),
                     })
@@ -394,7 +455,7 @@ export function PiComposer(props: Props) {
             setCommandIndex(0);
             setCommandDismissed(false);
             if (event.target.value.startsWith("/")) void loadCommands();
-            props.onChange({ ...props.draft, text: event.target.value });
+            changeDraft({ ...props.draft, text: event.target.value });
           }}
           onPaste={(event) => {
             const images = [...event.clipboardData.files].filter((file) =>
@@ -441,6 +502,33 @@ export function PiComposer(props: Props) {
                 );
               return;
             }
+            const caret = event.currentTarget.selectionStart ?? 0;
+            if (
+              event.key === "ArrowUp" &&
+              shouldRecallPrevious({
+                showCommands,
+                browsing: historyIndex !== -1,
+                text: props.draft.text,
+                caret,
+              })
+            ) {
+              event.preventDefault();
+              recallHistory(-1);
+              return;
+            }
+            if (
+              event.key === "ArrowDown" &&
+              shouldRecallNext({
+                showCommands,
+                browsing: historyIndex !== -1,
+                text: props.draft.text,
+                caret,
+              })
+            ) {
+              event.preventDefault();
+              recallHistory(1);
+              return;
+            }
             if (
               event.key === "Enter" &&
               !event.shiftKey &&
@@ -452,7 +540,7 @@ export function PiComposer(props: Props) {
                 (!props.busy || compacting) &&
                 (props.draft.text.trim() || props.draft.images.length)
               )
-                props.onSend(
+                sendDraft(
                   running && (event.ctrlKey || event.metaKey)
                     ? "steer"
                     : "followUp",
@@ -628,7 +716,7 @@ export function PiComposer(props: Props) {
                 (props.busy && !compacting) ||
                 (!props.draft.text.trim() && !props.draft.images.length)
               }
-              onClick={() => props.onSend("followUp")}
+              onClick={() => sendDraft("followUp")}
             >
               <HugeiconsIcon icon={ArrowUp01Icon} size={17} />
             </Button>
