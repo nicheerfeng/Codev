@@ -1,5 +1,5 @@
 import { cn, isHtmlPath, isMarkdownPath } from "@/lib/utils";
-import { MarkdownViewToggle } from "@/modules/markdown";
+import { MarkdownToc, MarkdownViewToggle } from "@/modules/markdown";
 import type { EditorTab, HtmlTab, MarkdownTab, Tab } from "@/modules/tabs";
 import { useEffect, useRef } from "react";
 import type { EditorPaneHandle } from "./EditorPane";
@@ -30,8 +30,7 @@ export function EditorStack({
     (t): t is EditorTab | MarkdownTab | HtmlTab =>
       !t.cold &&
       (t.kind === "editor" ||
-        ((t.kind === "markdown" || t.kind === "html") &&
-          t.viewMode === "raw")),
+        ((t.kind === "markdown" || t.kind === "html") && t.viewMode === "raw")),
   );
   // 仅保留当前文件和未保存文件的编辑器实例，干净后台标签重新激活时再加载。
   const mountedEditors = editors.filter((t) => t.id === activeId || t.dirty);
@@ -54,11 +53,16 @@ export function EditorStack({
     new Map<number, (h: EditorPaneHandle | null) => void>(),
   );
   const dirtyCallbacks = useRef(new Map<number, (dirty: boolean) => void>());
+  const handles = useRef(new Map<number, EditorPaneHandle | null>());
+  const paneRefs = useRef(new Map<number, HTMLDivElement | null>());
 
   const getRefCallback = (id: number) => {
     let cb = refCallbacks.current.get(id);
     if (!cb) {
-      cb = (h: EditorPaneHandle | null) => registerRef.current(id, h, "editor");
+      cb = (h: EditorPaneHandle | null) => {
+        handles.current.set(id, h);
+        registerRef.current(id, h, "editor");
+      };
       refCallbacks.current.set(id, cb);
     }
     return cb;
@@ -97,14 +101,32 @@ export function EditorStack({
             )}
             aria-hidden={!visible}
           >
-            <div className="relative h-full overflow-hidden rounded-md border border-border/60 bg-background">
+            <div
+              ref={(node) => {
+                paneRefs.current.set(t.id, node);
+              }}
+              className="relative h-full overflow-hidden rounded-md border border-border/60 bg-background"
+            >
               {isMarkdownPath(t.path) && (
-                <MarkdownViewToggle
-                  mode={t.kind === "markdown" ? t.viewMode : "raw"}
-                  onChange={(mode) => onSetMarkdownView(t.id, mode)}
-                  renderedDisabled={t.dirty}
-                  renderedHint="Save to preview"
-                />
+                <>
+                  <MarkdownViewToggle
+                    mode={t.kind === "markdown" ? t.viewMode : "raw"}
+                    onChange={(mode) => onSetMarkdownView(t.id, mode)}
+                    renderedDisabled={t.dirty}
+                    renderedHint="Save to preview"
+                  />
+                  <MarkdownToc
+                    path={t.path}
+                    viewportRef={{
+                      get current() {
+                        return paneRefs.current.get(t.id) ?? null;
+                      },
+                    }}
+                    onJump={(heading) => {
+                      handles.current.get(t.id)?.gotoLine(heading.line);
+                    }}
+                  />
+                </>
               )}
               {isHtmlPath(t.path) && (
                 <MarkdownViewToggle
