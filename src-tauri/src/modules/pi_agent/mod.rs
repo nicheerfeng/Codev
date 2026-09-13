@@ -113,6 +113,7 @@ pub struct PiListedModel {
     provider: String,
     id: String,
     name: Option<String>,
+    context_window: Option<u64>,
 }
 
 struct PiProcess {
@@ -1164,6 +1165,7 @@ fn list_models_from_file() -> Result<Vec<PiListedModel>, String> {
                     .get("name")
                     .and_then(Value::as_str)
                     .map(str::to_string),
+                context_window: model.get("contextWindow").and_then(Value::as_u64),
             });
         }
     }
