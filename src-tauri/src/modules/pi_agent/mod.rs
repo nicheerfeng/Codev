@@ -102,7 +102,7 @@ pub struct PiClonedSession {
     name: Option<String>,
 }
 
-const HISTORY_PAGE_SIZE: usize = 20;
+const HISTORY_PAGE_SIZE: usize = 150;
 const JSONL_CHUNK: u64 = 64 * 1024;
 
 #[derive(Serialize)]
@@ -1150,7 +1150,7 @@ pub fn pi_agent_delete_session(path: String) -> Result<(), String> {
     delete_session_file(&root, Path::new(&path))
 }
 
-/// 浏览历史时只读 JSONL，不启动 Pi runtime。默认从末尾取最近 20 条。
+/// 浏览历史时只读 JSONL，不启动 Pi runtime。默认从末尾取最近 150 条。
 #[tauri::command]
 pub fn pi_agent_read_session(
     path: String,

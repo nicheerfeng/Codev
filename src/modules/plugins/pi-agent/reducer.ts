@@ -63,9 +63,7 @@ export function resultText(value: unknown): string {
         const item = objectValue(part);
         return typeof item?.text === "string"
           ? item.text
-          : item?.type === "image"
-            ? "[图片结果]"
-            : "";
+          : "";
       })
       .filter(Boolean)
       .join("\n");

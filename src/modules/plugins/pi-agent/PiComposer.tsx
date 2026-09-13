@@ -37,6 +37,7 @@ type Props = {
   onQueueAction: (kind: "steering" | "followUp", index: number, text: string, action: "edit" | "delete" | "steer") => void;
   onModel: (provider: string, id: string) => void;
   onLoadModels: () => void;
+  onLoadCommands?: () => Promise<void>;
   onThinking: (level: string) => void;
   onSettings: () => void;
   onError: (error: unknown) => void;
@@ -74,6 +75,17 @@ export function PiComposer(props: Props) {
       ?.scrollIntoView({ block: "nearest" });
   }, [commandIndex]);
   const [commandDismissed, setCommandDismissed] = useState(false);
+  const [commandsLoading, setCommandsLoading] = useState(false);
+  const commandsPending = useRef(false);
+  /** 打开 slash 菜单时加载原生命令，并阻止连续按键重复请求。 */
+  const loadCommands = async () => {
+    if (!props.onLoadCommands || commandsPending.current || props.view.commands.length) return;
+    commandsPending.current = true;
+    setCommandsLoading(true);
+    try { await props.onLoadCommands(); }
+    catch (error) { props.onError(error); }
+    finally { commandsPending.current = false; setCommandsLoading(false); }
+  };
   const commands = [
     ...PI_LOCAL_COMMANDS,
     ...props.view.commands.filter(
@@ -88,7 +100,7 @@ export function PiComposer(props: Props) {
   const showCommands =
     !commandDismissed &&
     /^\/[^\s]*$/.test(props.draft.text) &&
-    commands.length > 0;
+    (commands.length > 0 || commandsLoading);
   /** 选择命令后保留输入焦点，允许补写参数再发送。 */
   const chooseCommand = (name: string) => {
     props.onChange({ ...props.draft, text: `/${name} ` });
@@ -190,6 +202,7 @@ export function PiComposer(props: Props) {
             aria-label="Pi 命令"
             className="reader-scrollbar absolute bottom-full z-20 mb-2 max-h-52 w-full overflow-auto rounded-xl border border-border bg-popover p-1 shadow-md"
           >
+            {commandsLoading && <div role="status" className="px-3 py-2 text-xs text-muted-foreground">正在加载 Pi 命令…</div>}
             {commands.map((command, index) => (
               <button
                 key={command.name}
@@ -245,9 +258,11 @@ export function PiComposer(props: Props) {
           value={props.draft.text}
           className="pi-prompt reader-scrollbar min-h-18 max-h-45 rounded-none border-0 bg-transparent! px-3 py-3 text-[13px]! shadow-none focus-visible:ring-0 [field-sizing:fixed]"
           disabled={props.disabled}
+          onFocus={() => { if (props.draft.text.startsWith("/")) void loadCommands(); }}
           onChange={(event) => {
             setCommandIndex(0);
             setCommandDismissed(false);
+            if (event.target.value.startsWith("/")) void loadCommands();
             props.onChange({ ...props.draft, text: event.target.value });
           }}
           onPaste={(event) => {
