@@ -1,4 +1,4 @@
-# Codev 0.9.4
+# Codev 0.9.3
 
 本次更新继续优化 Pi Agent 的会话交互，并加入技能与插件只读展示。
 
@@ -16,7 +16,7 @@
 
 ## 下载
 
-- Codev-0.9.4-Windows-x64-Setup.exe
-- Codev-0.9.4-Windows-x64-Portable.exe
+- Codev-0.9.3-Windows-x64-Setup.exe
+- Codev-0.9.3-Windows-x64-Portable.exe
 
 Pi 功能需要本机安装 Pi Coding Agent 并配置可用模型。
