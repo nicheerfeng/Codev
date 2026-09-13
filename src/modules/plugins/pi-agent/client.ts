@@ -528,6 +528,7 @@ export class PiWorkspaceClient {
           ? thread.view.thinkingLevels
           : ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
     };
+    this.publish();
   }
 
   /** 按原生队列快照修改单条消息，重建失败时将未发送文本退回草稿。 */

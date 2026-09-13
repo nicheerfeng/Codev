@@ -38,6 +38,24 @@ function dirname(path: string): string {
 
 const EXPANSION_CACHE_LIMIT = 8;
 const expansionCache = new Map<string, string[]>();
+const EXPANSION_STORAGE_KEY = "codev.file-tree.expanded";
+
+/** 读取跨重载保存的目录展开状态。 */
+function readStoredExpansion(root: string): string[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(EXPANSION_STORAGE_KEY) ?? "{}");
+    return Array.isArray(value[root]) ? value[root].filter((item: unknown): item is string => typeof item === "string") : [];
+  } catch { return []; }
+}
+
+/** 保存当前根目录的目录展开状态。 */
+function writeStoredExpansion(root: string, expanded: Set<string>): void {
+  try {
+    const value = JSON.parse(localStorage.getItem(EXPANSION_STORAGE_KEY) ?? "{}");
+    value[root] = [...expanded];
+    localStorage.setItem(EXPANSION_STORAGE_KEY, JSON.stringify(value));
+  } catch { /* storage unavailable */ }
+}
 
 function rememberExpansion(root: string, expanded: Set<string>): void {
   expansionCache.delete(root);
@@ -204,7 +222,8 @@ export function useFileTree(rootPath: string | null, options?: Options) {
     setRenaming(null);
 
     const restored = recallExpansion(rootPath);
-    setExpanded(new Set(restored));
+    const persisted = restored.length ? restored : readStoredExpansion(rootPath);
+    setExpanded(new Set(persisted));
     setNodes({});
     // Sync the ref synchronously: nodesRef only updates after the next render,
     // so without this a fast (cached) fetchChildren below would read the stale
@@ -213,14 +232,15 @@ export function useFileTree(rootPath: string | null, options?: Options) {
     // changes rapidly (e.g. switching folders in quick succession).
     nodesRef.current = {};
 
-    const toWatch = [rootPath, ...restored];
+    const toWatch = [rootPath, ...persisted];
     void fetchChildren(rootPath);
-    for (const d of restored) void fetchChildren(d);
+    for (const d of persisted) void fetchChildren(d);
     for (const p of toWatch) watchedRef.current.add(p);
     watchAdd(toWatch);
 
     return () => {
       rememberExpansion(rootPath, expandedRef.current);
+      writeStoredExpansion(rootPath, expandedRef.current);
       if (watchedRef.current.size > 0) {
         watchRemove([...watchedRef.current]);
         watchedRef.current.clear();

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -66,6 +66,18 @@ export function PiSidebar(props: Props) {
     id: string;
     name: string;
   } | null>(null);
+  const [projectOrder, setProjectOrder] = useState<string[]>(() => JSON.parse(localStorage.getItem("codev.pi.projects.order") ?? "[]"));
+  const [sessionOrder, setSessionOrder] = useState<string[]>(() => JSON.parse(localStorage.getItem("codev.pi.sessions.order") ?? "[]"));
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  useEffect(() => localStorage.setItem("codev.pi.projects.order", JSON.stringify(projectOrder)), [projectOrder]);
+  useEffect(() => localStorage.setItem("codev.pi.sessions.order", JSON.stringify(sessionOrder)), [sessionOrder]);
+  const order = (values: string[], saved: string[]) => [...values].sort((a, b) => (saved.indexOf(a) < 0 ? 1 : saved.indexOf(b) < 0 ? -1 : saved.indexOf(a) - saved.indexOf(b)));
+  const move = (values: string[], setValues: (next: string[]) => void, from: string, to: string) => {
+    if (from === to) return;
+    const next = [...values.filter((value) => value !== from)];
+    next.splice(Math.max(0, next.indexOf(to)), 0, from);
+    setValues(next);
+  };
   const org = props.organization;
   const archived = new Set(org.archived);
   /** 切换单个收纳节点，互不影响其他项目。 */
@@ -89,6 +101,10 @@ export function PiSidebar(props: Props) {
     <ContextMenu key={thread.key}>
       <ContextMenuTrigger asChild>
         <div
+          draggable={!isArchived}
+          onDragStart={() => setDragKey(`session:${thread.path}`)}
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={() => { if (dragKey?.startsWith("session:")) move(sessionOrder, setSessionOrder, dragKey.slice(8), thread.path); setDragKey(null); }}
           className={`group/pi-thread flex min-w-0 items-center rounded-lg ${props.selectedKey === thread.key ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}
         >
           <button
@@ -168,12 +184,12 @@ export function PiSidebar(props: Props) {
     if (isArchived && !rows.length) return null;
     const nodeKey = `${isArchived ? "archive:" : "project:"}${key}`;
     const closed = !filter && collapsed.has(nodeKey);
-    const visible = filter ? rows : rows.slice(0, counts[nodeKey] ?? 5);
+    const visible = order(filter ? rows.map((row) => row.path) : rows.map((row) => row.path), sessionOrder).map((path) => rows.find((row) => row.path === path)!).filter(Boolean).slice(0, filter ? rows.length : counts[nodeKey] ?? 5);
     return (
       <div key={nodeKey} className="mb-1 min-w-0">
         <ContextMenu>
           <ContextMenuTrigger asChild>
-            <div className="group/pi-project flex min-w-0 items-center rounded-lg hover:bg-muted/70">
+            <div draggable={!isArchived} onDragStart={() => setDragKey(`project:${cwd}`)} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (dragKey?.startsWith("project:")) move(projectOrder, setProjectOrder, dragKey.slice(8), cwd); setDragKey(null); }} className="group/pi-project flex min-w-0 items-center rounded-lg hover:bg-muted/70">
               <button
                 type="button"
                 className={`flex min-w-0 flex-1 items-center gap-1.5 px-1.5 py-2 text-left text-xs ${pathKey(props.selectedProject ?? "") === key ? "text-foreground" : "text-muted-foreground"}`}
@@ -429,12 +445,13 @@ export function PiSidebar(props: Props) {
               )}
             </ContextMenu>
             {(!collapsed.has(`group:${group.id}`) || filter) &&
-              props.projects
+              order(
+                props.projects
                 .filter(
                   (path) =>
                     (org.projectGroups[pathKey(path)] ?? "") === group.id,
                 )
-                .map((path) => projectRow(path))}
+                .map((path) => path), projectOrder).map((path) => projectRow(path))}
           </section>
         ))}
         <section className="border-t border-border pt-2">
