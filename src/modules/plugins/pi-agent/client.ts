@@ -39,6 +39,9 @@ export class PiWorkspaceClient {
   private toolUpdates = new Map<string, PiEventEnvelope>();
   private toolTimer: ReturnType<typeof setTimeout> | null = null;
   private catalogModels: PiModel[] = [];
+  private draining = new Set<string>();
+  private manualCompactions = new Set<string>();
+  private compactionResume = new Set<string>();
   private stop: Promise<() => void>;
 
   /** 注册一次事件监听，以 runtimeId 分发并合并流式渲染刷新。 */
@@ -94,6 +97,17 @@ export class PiWorkspaceClient {
     thread.view = piViewReducer(thread.view, { type: "event", payload });
     this.touchRuntime(thread);
     const event = payload.event;
+    if (event.type === "auto_compaction_start" || event.type === "compaction_start") this.startCompaction(thread);
+    if ((event.type === "auto_compaction_end" || event.type === "compaction_end") && !this.manualCompactions.has(thread.key)) {
+      const success = !event.aborted && !event.errorMessage && !!event.result;
+      this.finishCompaction(thread, success);
+      if (success && event.willRetry) this.compactionResume.add(thread.key);
+      else this.compactionResume.delete(thread.key);
+      void this.refreshState(thread).then(() => {
+        if (success && !event.willRetry) return this.drainQueue(thread);
+      }).catch((error) => this.error(thread.key, error));
+    }
+    if (event.type === "process_exit" && thread.view.compaction?.status === "running") this.finishCompaction(thread, false);
     if (event.type === "response") {
       const id = String(event.id);
       const request = this.pending.get(id);
@@ -112,6 +126,7 @@ export class PiWorkspaceClient {
       thread.runtimeId = null;
     }
     if (event.type === "agent_settled" && thread.runtimeId !== null) {
+      if (this.compactionResume.delete(thread.key)) void this.drainQueue(thread).catch((error) => this.error(thread.key, error));
       void this.refreshState(thread).catch((error) =>
         this.error(thread.key, error),
       );
@@ -303,6 +318,74 @@ export class PiWorkspaceClient {
       };
       this.publish();
       throw error;
+    }
+  }
+
+  /** 压缩状态独立于对话运行状态，保留已有时间线。 */
+  private startCompaction(thread: PiThread) {
+    if (thread.view.compaction?.status === "running") return;
+    thread.view = { ...thread.view, compaction: { status: "running", startedAt: Date.now() }, error: null };
+    this.touchRuntime(thread);
+    this.publish();
+  }
+
+  /** 保存完成状态与耗时，原生用量未更新时由界面显示待更新。 */
+  private finishCompaction(thread: PiThread, success: boolean) {
+    thread.view = { ...thread.view, phase: thread.view.status === "running" ? "处理中" : "", compaction: { status: success ? "done" : "failed", startedAt: thread.view.compaction?.startedAt ?? Date.now(), finishedAt: Date.now() }, ...(success ? { contextPercent: null, contextTokens: null } : {}) };
+    this.touchRuntime(thread);
+    this.publish();
+  }
+
+  /** 手动压缩不重载聊天消息，刷新完成后发送压缩期间缓存的输入。 */
+  async compact(thread: PiThread, instructions?: string) {
+    if (thread.view.status === "running" || thread.view.status === "stopping" || thread.view.compaction?.status === "running") throw new Error("请等待当前任务完成后再压缩");
+    this.startCompaction(thread);
+    this.manualCompactions.add(thread.key);
+    try {
+      await this.request(thread, { type: "compact", ...(instructions ? { customInstructions: instructions } : {}) });
+    } catch (error) {
+      this.finishCompaction(thread, false);
+      throw error;
+    } finally {
+      this.manualCompactions.delete(thread.key);
+    }
+    this.finishCompaction(thread, true);
+    await this.refreshState(thread);
+    await this.drainQueue(thread);
+  }
+
+  /** 压缩期间输入只缓存于所属线程，包含图片和发送方式。 */
+  enqueue(thread: PiThread, text: string, images: PiImage[], behavior: "steer" | "followUp") {
+    thread.view = { ...thread.view, localQueue: [...(thread.view.localQueue ?? []), { id: crypto.randomUUID(), text, images, behavior }] };
+    this.publish();
+  }
+
+  /** 删除或取回尚未投递的本地消息。 */
+  removeQueued(thread: PiThread, id: string) {
+    if (thread.view.queueSendingId === id) return;
+    const item = thread.view.localQueue?.find((entry) => entry.id === id);
+    thread.view = { ...thread.view, localQueue: thread.view.localQueue?.filter((entry) => entry.id !== id) };
+    this.publish();
+    return item;
+  }
+
+  /** 原生明确接受后移除缓存；失败保留当前及后续消息，允许用户重试。 */
+  async drainQueue(thread: PiThread) {
+    if (this.draining.has(thread.key) || thread.view.compaction?.status === "running" || !thread.view.localQueue?.length) return;
+    this.draining.add(thread.key);
+    try {
+      while (thread.view.localQueue?.length && thread.view.compaction?.status !== "running") {
+        const item = thread.view.localQueue[0];
+        thread.view = { ...thread.view, queueSendingId: item.id };
+        this.publish();
+        await this.request(thread, { type: "prompt", message: item.text, images: item.images, streamingBehavior: item.behavior });
+        thread.view = { ...thread.view, localQueue: thread.view.localQueue?.filter((entry) => entry.id !== item.id) };
+        this.publish();
+      }
+    } finally {
+      this.draining.delete(thread.key);
+      thread.view = { ...thread.view, queueSendingId: undefined };
+      this.publish();
     }
   }
 
@@ -634,7 +717,7 @@ export class PiWorkspaceClient {
   private touchRuntime(thread: PiThread) {
     const old = this.idleTimers.get(thread.key);
     if (old) clearTimeout(old);
-    if (thread.runtimeId === null || thread.view.status !== "idle") return;
+    if (thread.runtimeId === null || thread.view.status !== "idle" || thread.view.compaction?.status === "running" || thread.view.localQueue?.length) return;
     const timer = setTimeout(() => {
       this.idleTimers.delete(thread.key);
       if (thread.runtimeId !== null && thread.view.status === "idle")

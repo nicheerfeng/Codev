@@ -13,6 +13,21 @@ import type {
 
 const PI_EVENT = "codev://pi-agent-event";
 
+export type PiAsset = { name: string; path: string; source: string; summary?: string | null };
+
+/** 读取 Pi 技能或插件目录的只读展示数据。 */
+export function listPiAssets(kind: "skills" | "plugins"): Promise<PiAsset[]> {
+  return invoke<PiAsset[]>("pi_agent_list_assets", { kind });
+}
+
+/** 订阅原生会话目录变化，无需认识外部插件。 */
+export async function watchPiSessions(changed: () => void): Promise<UnlistenFn> {
+  const stop = await listen("codev://pi-sessions-changed", changed);
+  try { await invoke("pi_agent_watch_sessions", { enabled: true }); }
+  catch (error) { stop(); throw error; }
+  return () => { stop(); void invoke("pi_agent_watch_sessions", { enabled: false }); };
+}
+
 /** 删除已经确认的 Pi 原生会话文件。 */
 export function deletePiSession(path: string): Promise<void> {
   return invoke("pi_agent_delete_session", { path });

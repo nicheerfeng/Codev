@@ -33,6 +33,7 @@ import {
 import { PiModelCard } from "./PiModelCard";
 import { PiModelsHelp } from "./PiModelsHelp";
 import { testSavedModel } from "./modelTest";
+import { PiAssetsPanel } from "./PiAssetsPanel";
 
 /** 检查公共配置卡片，错误就地展示且不覆盖用户输入。 */
 function providerError(text: string): string {
@@ -63,6 +64,7 @@ export function PiSettings({
   const saving = useRef(false);
   const [confirm, setConfirm] = useState(false);
   const [help, setHelp] = useState(false);
+  const [panel, setPanel] = useState<"models" | "skills" | "plugins">("models");
   const [testing, setTesting] = useState(false);
   const [testResults, setTestResults] = useState<Record<string, string>>({});
   const testAbort = useRef<AbortController | null>(null);
@@ -363,19 +365,23 @@ export function PiSettings({
             className="w-24 shrink-0 border-r border-border bg-muted/15 p-2 sm:w-36"
           >
             <Button
-              variant="secondary"
+              variant={panel === "models" ? "secondary" : "ghost"}
               size="sm"
-              aria-current="page"
+              aria-current={panel === "models" ? "page" : undefined}
               className="w-full justify-start gap-1.5 rounded-lg px-2 text-xs"
+              onClick={() => setPanel("models")}
             >
               <HugeiconsIcon icon={CpuIcon} size={14} />
               模型选择
             </Button>
+            <Button variant={panel === "skills" ? "secondary" : "ghost"} size="sm" aria-current={panel === "skills" ? "page" : undefined} className="mt-1 w-full justify-start rounded-lg px-2 text-xs" onClick={() => setPanel("skills")}>技能</Button>
+            <Button variant={panel === "plugins" ? "secondary" : "ghost"} size="sm" aria-current={panel === "plugins" ? "page" : undefined} className="mt-1 w-full justify-start rounded-lg px-2 text-xs" onClick={() => setPanel("plugins")}>插件</Button>
           </nav>
           <main
             className="flex min-h-0 min-w-0 flex-1 flex-col"
             aria-label="模型看板"
           >
+            {panel !== "models" ? <PiAssetsPanel kind={panel} /> : <>
             <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 pt-3 sm:px-4">
               <h2 className="min-w-0 flex-1 text-sm font-medium">模型选择</h2>
               <Button
@@ -569,6 +575,7 @@ export function PiSettings({
                 </p>
               </div>
             </footer>
+            </>}
           </main>
         </div>
         <Dialog open={help && open} onOpenChange={setHelp}>
