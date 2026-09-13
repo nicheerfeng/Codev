@@ -55,6 +55,7 @@ export type PiModel = {
   provider: string;
   id: string;
   name?: string;
+  contextWindow?: number;
 };
 
 export type PiStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
