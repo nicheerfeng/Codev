@@ -5,6 +5,7 @@ import {
   EMPTY_ORGANIZATION,
   type PiOrganization,
 } from "./pi-agent/organization";
+import { readOrderList } from "./pi-agent/sidebarOrder";
 import type { PiModel } from "./pi-agent/types";
 
 export const JSON_FORMATTER_PLUGIN_ID = "json-formatter" as const;
@@ -22,6 +23,8 @@ export type PluginState = {
   piAgentOrganization: PiOrganization;
   piAgentLastModel: PiModel | null;
   piAgentLastThinkingLevel: string;
+  piAgentProjectOrder: string[];
+  piAgentSessionOrder: string[];
 };
 
 type PluginStoreState = PluginState & {
@@ -35,6 +38,8 @@ const PI_AGENT_PROJECTS_KEY = "piAgentProjects";
 const PI_AGENT_HIDDEN_PROJECTS_KEY = "piAgentHiddenProjects";
 const PI_AGENT_LAST_MODEL_KEY = "piAgentLastModel";
 const PI_AGENT_LAST_THINKING_KEY = "piAgentLastThinkingLevel";
+const PI_AGENT_PROJECT_ORDER_KEY = "piAgentProjectOrder";
+const PI_AGENT_SESSION_ORDER_KEY = "piAgentSessionOrder";
 const PLUGIN_CHANGED_EVENT = "codev://plugin-settings-changed";
 const DEFAULT_PLUGIN_STATE: PluginState = {
   enabled: {
@@ -47,6 +52,8 @@ const DEFAULT_PLUGIN_STATE: PluginState = {
   piAgentOrganization: EMPTY_ORGANIZATION,
   piAgentLastModel: null,
   piAgentLastThinkingLevel: "off",
+  piAgentProjectOrder: [],
+  piAgentSessionOrder: [],
 };
 const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: 200 });
 let initPromise: Promise<void> | null = null;
@@ -111,6 +118,8 @@ function normalizePluginState(
       typeof lastThinkingLevel === "string" && lastThinkingLevel.trim()
         ? lastThinkingLevel
         : "off",
+    piAgentProjectOrder: [],
+    piAgentSessionOrder: [],
   };
 }
 
@@ -120,7 +129,9 @@ export async function loadPluginState(): Promise<PluginState> {
   const projects = await store.get<unknown>(PI_AGENT_PROJECTS_KEY);
   const hiddenProjects = await store.get<unknown>(PI_AGENT_HIDDEN_PROJECTS_KEY);
   const lastModel = await store.get<unknown>(PI_AGENT_LAST_MODEL_KEY);
-  const lastThinkingLevel = await store.get<unknown>(PI_AGENT_LAST_THINKING_KEY);
+  const lastThinkingLevel = await store.get<unknown>(
+    PI_AGENT_LAST_THINKING_KEY,
+  );
   const state = normalizePluginState(
     value ?? DEFAULT_PLUGIN_STATE.enabled,
     projects,
@@ -133,11 +144,35 @@ export async function loadPluginState(): Promise<PluginState> {
     piAgentOrganization:
       (await store.get<PiOrganization>("piAgentOrganization")) ??
       EMPTY_ORGANIZATION,
+    piAgentProjectOrder: readOrderList(
+      await store.get<unknown>(PI_AGENT_PROJECT_ORDER_KEY),
+    ),
+    piAgentSessionOrder: readOrderList(
+      await store.get<unknown>(PI_AGENT_SESSION_ORDER_KEY),
+    ),
   };
 }
 
+/** 记住 Pi 项目拖拽顺序，重启后按缓存排列。 */
+export async function setPiAgentProjectOrder(order: string[]): Promise<void> {
+  const next = readOrderList(order);
+  await store.set(PI_AGENT_PROJECT_ORDER_KEY, next);
+  await store.save();
+  usePluginStore.setState({ piAgentProjectOrder: next });
+}
+
+/** 记住 Pi session 拖拽顺序，归档项不写入此缓存。 */
+export async function setPiAgentSessionOrder(order: string[]): Promise<void> {
+  const next = readOrderList(order);
+  await store.set(PI_AGENT_SESSION_ORDER_KEY, next);
+  await store.save();
+  usePluginStore.setState({ piAgentSessionOrder: next });
+}
+
 /** 记住最近一次思考等级，新线程直接复用。 */
-export async function setPiAgentLastThinkingLevel(level: string): Promise<void> {
+export async function setPiAgentLastThinkingLevel(
+  level: string,
+): Promise<void> {
   await store.set(PI_AGENT_LAST_THINKING_KEY, level);
   await store.save();
   usePluginStore.setState({ piAgentLastThinkingLevel: level });

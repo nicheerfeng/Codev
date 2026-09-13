@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { replacePathPrefix } from "@/lib/pathPrefix";
+import { closestLoadedTreePath } from "./treePath";
 import { listenFsChanged, watchAdd, watchRemove } from "./watch";
 
 export type DirEntry = {
@@ -43,18 +44,30 @@ const EXPANSION_STORAGE_KEY = "codev.file-tree.expanded";
 /** 读取跨重载保存的目录展开状态。 */
 function readStoredExpansion(root: string): string[] {
   try {
-    const value = JSON.parse(localStorage.getItem(EXPANSION_STORAGE_KEY) ?? "{}");
-    return Array.isArray(value[root]) ? value[root].filter((item: unknown): item is string => typeof item === "string") : [];
-  } catch { return []; }
+    const value = JSON.parse(
+      localStorage.getItem(EXPANSION_STORAGE_KEY) ?? "{}",
+    );
+    return Array.isArray(value[root])
+      ? value[root].filter(
+          (item: unknown): item is string => typeof item === "string",
+        )
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 /** 保存当前根目录的目录展开状态。 */
 function writeStoredExpansion(root: string, expanded: Set<string>): void {
   try {
-    const value = JSON.parse(localStorage.getItem(EXPANSION_STORAGE_KEY) ?? "{}");
+    const value = JSON.parse(
+      localStorage.getItem(EXPANSION_STORAGE_KEY) ?? "{}",
+    );
     value[root] = [...expanded];
     localStorage.setItem(EXPANSION_STORAGE_KEY, JSON.stringify(value));
-  } catch { /* storage unavailable */ }
+  } catch {
+    /* storage unavailable */
+  }
 }
 
 function rememberExpansion(root: string, expanded: Set<string>): void {
@@ -222,7 +235,9 @@ export function useFileTree(rootPath: string | null, options?: Options) {
     setRenaming(null);
 
     const restored = recallExpansion(rootPath);
-    const persisted = restored.length ? restored : readStoredExpansion(rootPath);
+    const persisted = restored.length
+      ? restored
+      : readStoredExpansion(rootPath);
     setExpanded(new Set(persisted));
     setNodes({});
     // Sync the ref synchronously: nodesRef only updates after the next render,
@@ -255,9 +270,8 @@ export function useFileTree(rootPath: string | null, options?: Options) {
       const current = nodesRef.current;
       const dirs = new Set<string>();
       for (const p of paths) {
-        const parent = dirname(p);
-        if (current[parent]?.status === "loaded") dirs.add(parent);
-        if (current[p]?.status === "loaded") dirs.add(p);
+        const loaded = closestLoadedTreePath(current, p, rootPath);
+        if (loaded) dirs.add(loaded);
       }
       for (const d of dirs) void fetchChildren(d);
     }).then((un) => {
@@ -268,7 +282,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
       alive = false;
       unlisten?.();
     };
-  }, [fetchChildren]);
+  }, [fetchChildren, rootPath]);
 
   useEffect(() => {
     if (!rootPath) return;

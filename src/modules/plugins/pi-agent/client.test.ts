@@ -100,28 +100,52 @@ describe("Pi RPC workspace", () => {
       await client.request(thread, { type: "get_state" });
       const items = thread.view.items;
       vi.mocked(native.sendPiCommand).mockClear();
-      vi.mocked(native.sendPiCommand).mockImplementation(async (id, command) => {
-        if (command.type === "compact") await new Promise<void>((resolve) => { release = resolve; });
-        return original(id, command);
-      });
+      vi.mocked(native.sendPiCommand).mockImplementation(
+        async (id, command) => {
+          if (command.type === "compact")
+            await new Promise<void>((resolve) => {
+              release = resolve;
+            });
+          return original(id, command);
+        },
+      );
       const operation = client.compact(thread);
       await vi.waitFor(() => expect(release).toBeTypeOf("function"));
       expect(thread.view.compaction?.status).toBe("running");
-      const images = [{ type: "image" as const, data: "image-data", mimeType: "image/png" }];
+      const images = [
+        { type: "image" as const, data: "image-data", mimeType: "image/png" },
+      ];
       client.enqueue(thread, "one", images, "followUp");
       client.enqueue(thread, "two", [], "steer");
-      expect(vi.mocked(native.sendPiCommand).mock.calls.some(([, cmd]) => cmd.type === "prompt")).toBe(false);
+      expect(
+        vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.some(([, cmd]) => cmd.type === "prompt"),
+      ).toBe(false);
       release();
       await operation;
-      const prompts = vi.mocked(native.sendPiCommand).mock.calls.filter(([, cmd]) => cmd.type === "prompt");
+      const prompts = vi
+        .mocked(native.sendPiCommand)
+        .mock.calls.filter(([, cmd]) => cmd.type === "prompt");
       expect(prompts.map(([, cmd]) => cmd.message)).toEqual(["one", "two"]);
       expect(prompts[0][1].images).toEqual(images);
       expect(prompts[1][1].streamingBehavior).toBe("steer");
       expect(thread.view.localQueue).toEqual([]);
       expect(thread.view.compaction?.status).toBe("done");
       expect(thread.view.items).toBe(items);
-      expect(vi.mocked(native.sendPiCommand).mock.calls.some(([, cmd]) => cmd.type === "get_messages")).toBe(false);
-    } finally { release?.(); vi.mocked(native.sendPiCommand).mockImplementation(original); client.dispose(); }
+      client.beginPrompt(thread, "下一轮");
+      await client.request(thread, { type: "prompt", message: "下一轮" });
+      expect(thread.view.compaction).toBeUndefined();
+      expect(
+        vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.some(([, cmd]) => cmd.type === "get_messages"),
+      ).toBe(false);
+    } finally {
+      release?.();
+      vi.mocked(native.sendPiCommand).mockImplementation(original);
+      client.dispose();
+    }
   });
   // 压缩失败不消耗缓存，退回编辑可完整获取附件。
   it("retains local inputs after failed compaction", async () => {
@@ -133,50 +157,91 @@ describe("Pi RPC workspace", () => {
       const thread = await client.open("failed", "D:/one", "history.jsonl");
       await client.hydrateFromDisk(thread);
       await client.request(thread, { type: "get_state" });
-      vi.mocked(native.sendPiCommand).mockImplementation(async (id, command) => {
-        if (command.type === "compact") return new Promise((_, reject) => { fail = reject; });
-        return original(id, command);
-      });
+      vi.mocked(native.sendPiCommand).mockImplementation(
+        async (id, command) => {
+          if (command.type === "compact")
+            return new Promise((_, reject) => {
+              fail = reject;
+            });
+          return original(id, command);
+        },
+      );
       const operation = client.compact(thread);
       const rejected = expect(operation).rejects.toThrow("compact failed");
       await vi.waitFor(() => expect(fail).toBeTypeOf("function"));
-      client.enqueue(thread, "keep", [{ type: "image", data: "png", mimeType: "image/png" }], "followUp");
+      client.enqueue(
+        thread,
+        "keep",
+        [{ type: "image", data: "png", mimeType: "image/png" }],
+        "followUp",
+      );
       fail(new Error("compact failed"));
       await rejected;
       expect(thread.view.compaction?.status).toBe("failed");
       expect(thread.view.localQueue).toHaveLength(1);
-      expect(client.removeQueued(thread, thread.view.localQueue![0].id)?.images).toHaveLength(1);
+      expect(
+        client.removeQueued(thread, thread.view.localQueue![0].id)?.images,
+      ).toHaveLength(1);
       expect(thread.view.localQueue).toEqual([]);
-    } finally { vi.mocked(native.sendPiCommand).mockImplementation(original); client.dispose(); }
+    } finally {
+      vi.mocked(native.sendPiCommand).mockImplementation(original);
+      client.dispose();
+    }
   });
   // 新旧自动压缩事件都维持可见状态，发送失败不移除待发送消息。
-  it.each(["compaction", "auto_compaction"])("handles %s events and retains a rejected queued prompt", async (prefix) => {
-    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
-    try {
-      const thread = await client.open(prefix, "D:/one");
-      await client.request(thread, { type: "get_state" });
-      mock.receive({ sessionId: thread.runtimeId!, stream: "stdout", event: { type: `${prefix}_start` } });
-      expect(thread.view.compaction?.status).toBe("running");
-      client.enqueue(thread, "keep", [], "followUp");
-      mock.rejectPrompt = true;
-      mock.receive({ sessionId: thread.runtimeId!, stream: "stdout", event: { type: `${prefix}_end`, result: {}, aborted: false, willRetry: false } });
-      await vi.waitFor(() => expect(thread.view.error).toContain("prompt rejected"));
-      expect(thread.view.compaction?.status).toBe("done");
-      expect(thread.view.localQueue).toHaveLength(1);
-      expect(thread.view.queueSendingId).toBeUndefined();
-    } finally { client.dispose(); }
-  });
+  it.each(["compaction", "auto_compaction"])(
+    "handles %s events and retains a rejected queued prompt",
+    async (prefix) => {
+      const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+      try {
+        const thread = await client.open(prefix, "D:/one");
+        await client.request(thread, { type: "get_state" });
+        mock.receive({
+          sessionId: thread.runtimeId!,
+          stream: "stdout",
+          event: { type: `${prefix}_start` },
+        });
+        expect(thread.view.compaction?.status).toBe("running");
+        client.enqueue(thread, "keep", [], "followUp");
+        mock.rejectPrompt = true;
+        mock.receive({
+          sessionId: thread.runtimeId!,
+          stream: "stdout",
+          event: {
+            type: `${prefix}_end`,
+            result: {},
+            aborted: false,
+            willRetry: false,
+          },
+        });
+        await vi.waitFor(() =>
+          expect(thread.view.error).toContain("prompt rejected"),
+        );
+        expect(thread.view.compaction?.status).toBe("done");
+        expect(thread.view.localQueue).toHaveLength(1);
+        expect(thread.view.queueSendingId).toBeUndefined();
+      } finally {
+        client.dispose();
+      }
+    },
+  );
   // runtime 冷启动未完成时也能获取缓存线程并立即进入发送状态。
   it("returns cached history immediately while the runtime is starting", async () => {
     const native = await import("./native");
     let release!: () => void;
     vi.mocked(native.startPiAgent).mockImplementationOnce(async () => {
-      await new Promise<void>((resolve) => { release = resolve; });
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
       return { sessionId: ++mock.next, processId: 1 };
     });
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
     try {
-      const thread = await client.open("history", "D:/project", "history.jsonl");
+      const thread = await client.open(
+        "history",
+        "D:/project",
+        "history.jsonl",
+      );
       await client.hydrateFromDisk(thread);
       const loading = client.loadCommands(thread);
       await vi.waitFor(() => expect(release).toBeTypeOf("function"));
@@ -188,7 +253,10 @@ describe("Pi RPC workspace", () => {
       release();
       await loading;
       expect(thread.view.status).toBe("running");
-    } finally { release?.(); client.dispose(); }
+    } finally {
+      release?.();
+      client.dispose();
+    }
   });
   // 首次展开 slash 菜单启动命令读取，已有命令后重复展开不重复请求。
   it("loads native commands before any prompt and reuses the command cache", async () => {
@@ -198,13 +266,22 @@ describe("Pi RPC workspace", () => {
       const thread = await client.open("commands", "D:/project");
       vi.mocked(native.sendPiCommand).mockClear();
       await client.loadCommands(thread);
-      expect(native.sendPiCommand).toHaveBeenCalledWith(thread.runtimeId, expect.objectContaining({ type: "get_commands" }));
-      expect(vi.mocked(native.sendPiCommand).mock.calls.some(([, command]) => command.type === "prompt")).toBe(false);
+      expect(native.sendPiCommand).toHaveBeenCalledWith(
+        thread.runtimeId,
+        expect.objectContaining({ type: "get_commands" }),
+      );
+      expect(
+        vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.some(([, command]) => command.type === "prompt"),
+      ).toBe(false);
       thread.view = { ...thread.view, commands: [{ name: "skill:review" }] };
       vi.mocked(native.sendPiCommand).mockClear();
       await client.loadCommands(thread);
       expect(native.sendPiCommand).not.toHaveBeenCalled();
-    } finally { client.dispose(); }
+    } finally {
+      client.dispose();
+    }
   });
   beforeEach(() => {
     mock.next = 0;
@@ -308,6 +385,7 @@ describe("Pi RPC workspace", () => {
   it("loads models when a lazy new thread opens its model picker", async () => {
     const native = await import("./native");
     vi.mocked(native.startPiAgent).mockClear();
+    vi.mocked(native.listPiModels).mockClear();
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
     const thread = await client.open("new", "D:/config");
     expect(thread.runtimeId).toBeNull();
@@ -317,6 +395,113 @@ describe("Pi RPC workspace", () => {
     ]);
     expect(native.startPiAgent).not.toHaveBeenCalled();
     expect(native.listPiModels).toHaveBeenCalledTimes(1);
+    client.dispose();
+  });
+  it("reloads catalog names from models.json without starting a runtime", async () => {
+    const native = await import("./native");
+    vi.mocked(native.startPiAgent).mockClear();
+    vi.mocked(native.listPiModels).mockClear();
+    vi.mocked(native.listPiModels)
+      .mockResolvedValueOnce([
+        {
+          provider: "cp-lite",
+          id: "grok-4.6-PSYDO_GROK_SUPER",
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          provider: "cp-lite",
+          id: "grok-4.6-PSYDO_GROK_SUPER",
+          name: "grok-4.6",
+          contextWindow: 500000,
+        },
+      ]);
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const thread = await client.open("new", "D:/one");
+    await client.loadModels(thread);
+    expect(thread.view.model).toMatchObject({
+      id: "grok-4.6-PSYDO_GROK_SUPER",
+    });
+    expect(thread.view.model?.name).toBeUndefined();
+    await client.reloadCatalog();
+    expect(native.startPiAgent).not.toHaveBeenCalled();
+    expect(native.listPiModels).toHaveBeenCalledTimes(2);
+    expect(thread.view.model).toMatchObject({
+      id: "grok-4.6-PSYDO_GROK_SUPER",
+      name: "grok-4.6",
+      contextWindow: 500000,
+    });
+    client.dispose();
+  });
+  it("fills idle history context percent from catalog window without starting a runtime", async () => {
+    const native = await import("./native");
+    vi.mocked(native.startPiAgent).mockClear();
+    vi.mocked(native.listPiModels).mockResolvedValueOnce([
+      {
+        provider: "openai",
+        id: "gpt-history",
+        name: "History",
+        contextWindow: 500000,
+      },
+    ]);
+    vi.mocked(native.readPiSession).mockResolvedValueOnce({
+      messages: [{ id: "latest", role: "user", content: "disk history" }],
+      model: { provider: "openai", id: "gpt-history", name: "History" },
+      thinkingLevel: "high",
+      sessionName: "Disk",
+      sessionFile: "history.jsonl",
+      oldestOffset: 80,
+      hasMore: true,
+      contextTokens: 27502,
+      contextPercent: null,
+    });
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const thread = await client.open("history", "D:/one", "history.jsonl");
+    await client.hydrateFromDisk(thread);
+    expect(native.startPiAgent).not.toHaveBeenCalled();
+    expect(thread.runtimeId).toBeNull();
+    expect(thread.view.contextTokens).toBe(27502);
+    expect(thread.view.model).toMatchObject({
+      id: "gpt-history",
+      contextWindow: 500000,
+    });
+    expect(thread.view.contextPercent).toBeCloseTo(5.5004, 3);
+    client.dispose();
+  });
+  it("fills idle history percent when JSONL provider does not match catalog", async () => {
+    const native = await import("./native");
+    vi.mocked(native.startPiAgent).mockClear();
+    vi.mocked(native.listPiModels).mockResolvedValueOnce([
+      {
+        provider: "cp-lite",
+        id: "grok-4.6-PSYDO_GROK_SUPER",
+        contextWindow: 500000,
+      },
+    ]);
+    vi.mocked(native.readPiSession).mockResolvedValueOnce({
+      messages: [{ id: "latest", role: "user", content: "disk history" }],
+      model: {
+        provider: "provider",
+        id: "grok-4.6-PSYDO_GROK_SUPER",
+      },
+      thinkingLevel: "high",
+      sessionName: "iris-dataset-analysis",
+      sessionFile: "history.jsonl",
+      oldestOffset: 80,
+      hasMore: false,
+      contextTokens: 30501,
+      contextPercent: null,
+    });
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const thread = await client.open("history", "D:/one", "history.jsonl");
+    await client.hydrateFromDisk(thread);
+    expect(native.startPiAgent).not.toHaveBeenCalled();
+    expect(thread.view.model).toMatchObject({
+      provider: "provider",
+      id: "grok-4.6-PSYDO_GROK_SUPER",
+      contextWindow: 500000,
+    });
+    expect(thread.view.contextPercent).toBeCloseTo(6.1002, 3);
     client.dispose();
   });
   it("hydrates history from disk without starting a runtime", async () => {
@@ -386,35 +571,55 @@ describe("Pi RPC workspace", () => {
         thread.runtimeId,
         expect.objectContaining({ type: "prompt", message: "继续处理" }),
       );
-      expect(vi.mocked(native.sendPiCommand).mock.calls.some(
-        ([, command]) => command.type === "get_messages",
-      )).toBe(false);
+      expect(
+        vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.some(([, command]) => command.type === "get_messages"),
+      ).toBe(false);
     } finally {
       client.dispose();
     }
   });
   // 验证单条队列操作只影响目标，其他消息继续按原模式入队。
-  it.each(["edit", "delete", "steer"] as const)("updates one queued message: %s", async (action) => {
-    const native = await import("./native");
-    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
-    try {
-      const thread = await client.open("queue", "D:/one");
-      await client.request(thread, { type: "get_state" });
-      vi.mocked(native.sendPiCommand).mockClear();
-      const restore = vi.fn();
-      await client.updateQueuedMessage(thread, "followUp", 0, "后续任务", action, restore);
-      const commands = vi.mocked(native.sendPiCommand).mock.calls.map(([, command]) => ({ type: command.type, message: command.message }));
-      expect(commands).toEqual([
-        { type: "clear_queue", message: undefined },
-        ...(action === "steer" ? [{ type: "steer", message: "后续任务" }] : []),
-        { type: "steer", message: "排队指令" },
-      ]);
-      if (action === "edit") expect(restore).toHaveBeenCalledWith(["后续任务"]);
-      else expect(restore).not.toHaveBeenCalled();
-    } finally {
-      client.dispose();
-    }
-  });
+  it.each(["edit", "delete", "steer"] as const)(
+    "updates one queued message: %s",
+    async (action) => {
+      const native = await import("./native");
+      const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+      try {
+        const thread = await client.open("queue", "D:/one");
+        await client.request(thread, { type: "get_state" });
+        vi.mocked(native.sendPiCommand).mockClear();
+        const restore = vi.fn();
+        await client.updateQueuedMessage(
+          thread,
+          "followUp",
+          0,
+          "后续任务",
+          action,
+          restore,
+        );
+        const commands = vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.map(([, command]) => ({
+            type: command.type,
+            message: command.message,
+          }));
+        expect(commands).toEqual([
+          { type: "clear_queue", message: undefined },
+          ...(action === "steer"
+            ? [{ type: "steer", message: "后续任务" }]
+            : []),
+          { type: "steer", message: "排队指令" },
+        ]);
+        if (action === "edit")
+          expect(restore).toHaveBeenCalledWith(["后续任务"]);
+        else expect(restore).not.toHaveBeenCalled();
+      } finally {
+        client.dispose();
+      }
+    },
+  );
   it("restores queue before abort and leaves other threads untouched", async () => {
     const native = await import("./native");
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());

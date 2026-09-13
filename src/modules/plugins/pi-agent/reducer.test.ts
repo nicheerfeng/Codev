@@ -393,4 +393,34 @@ describe("piViewReducer", () => {
     expect(older.historyOffset).toBe(10);
     expect(older.historyHasMore).toBe(false);
   });
+
+  it("clears a finished compaction notice on the next prompt", () => {
+    const compacted = {
+      ...INITIAL_PI_VIEW_STATE,
+      compaction: {
+        status: "done" as const,
+        startedAt: 1,
+        finishedAt: 2,
+      },
+    };
+    const next = piViewReducer(compacted, {
+      type: "prompt",
+      text: "下一轮输入",
+    });
+    expect(next.compaction).toBeUndefined();
+    expect(next.status).toBe("running");
+  });
+
+  it("keeps a running compaction notice while buffering the next prompt", () => {
+    const compacting = {
+      ...INITIAL_PI_VIEW_STATE,
+      compaction: { status: "running" as const, startedAt: 1 },
+    };
+    const next = piViewReducer(compacting, {
+      type: "prompt",
+      text: "缓存输入",
+      queued: true,
+    });
+    expect(next.compaction?.status).toBe("running");
+  });
 });

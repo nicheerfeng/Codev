@@ -50,9 +50,11 @@ function providerError(text: string): string {
 export function PiSettings({
   open,
   onClose,
+  onModelsChanged,
 }: {
   open: boolean;
   onClose: () => void;
+  onModelsChanged?: () => void;
 }) {
   const [dashboard, setDashboard] = useState<ModelDashboard | null>(null);
   const [saved, setSaved] = useState<ModelDashboard | null>(null);
@@ -109,7 +111,9 @@ export function PiSettings({
         ? {
             ...current,
             providers: current.providers.map((item) =>
-              item.key === providerKey ? updateProviderDraft(item, change) : item,
+              item.key === providerKey
+                ? updateProviderDraft(item, change)
+                : item,
             ),
           }
         : current,
@@ -269,8 +273,10 @@ export function PiSettings({
           : current.providers.filter((item) => item.key !== providerKey),
       });
       const nextSaved = change(saved);
-      if (JSON.stringify(nextSaved) !== JSON.stringify(saved))
+      if (JSON.stringify(nextSaved) !== JSON.stringify(saved)) {
         await writePiModels(joinModelConfig(nextSaved));
+        onModelsChanged?.();
+      }
       const next = change(dashboard);
       if (!next.providers.length) next.hasProviders = nextSaved.hasProviders;
       const remaining = next.providers.find((item) => item.key === providerKey);
@@ -296,6 +302,7 @@ export function PiSettings({
       const next = mergeCardSave(dashboard, saved, providerKey, modelKey);
       const text = joinModelConfig(next);
       await writePiModels(text);
+      onModelsChanged?.();
       setSaved(next);
       setTestResults((value) =>
         Object.fromEntries(
@@ -374,208 +381,230 @@ export function PiSettings({
               <HugeiconsIcon icon={CpuIcon} size={14} />
               模型选择
             </Button>
-            <Button variant={panel === "skills" ? "secondary" : "ghost"} size="sm" aria-current={panel === "skills" ? "page" : undefined} className="mt-1 w-full justify-start rounded-lg px-2 text-xs" onClick={() => setPanel("skills")}>技能</Button>
-            <Button variant={panel === "plugins" ? "secondary" : "ghost"} size="sm" aria-current={panel === "plugins" ? "page" : undefined} className="mt-1 w-full justify-start rounded-lg px-2 text-xs" onClick={() => setPanel("plugins")}>插件</Button>
+            <Button
+              variant={panel === "skills" ? "secondary" : "ghost"}
+              size="sm"
+              aria-current={panel === "skills" ? "page" : undefined}
+              className="mt-1 w-full justify-start rounded-lg px-2 text-xs"
+              onClick={() => setPanel("skills")}
+            >
+              技能
+            </Button>
+            <Button
+              variant={panel === "plugins" ? "secondary" : "ghost"}
+              size="sm"
+              aria-current={panel === "plugins" ? "page" : undefined}
+              className="mt-1 w-full justify-start rounded-lg px-2 text-xs"
+              onClick={() => setPanel("plugins")}
+            >
+              插件
+            </Button>
           </nav>
           <main
             className="flex min-h-0 min-w-0 flex-1 flex-col"
             aria-label="模型看板"
           >
-            {panel !== "models" ? <PiAssetsPanel kind={panel} /> : <>
-            <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 pt-3 sm:px-4">
-              <h2 className="min-w-0 flex-1 text-sm font-medium">模型选择</h2>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="text-xs"
-                disabled={!saved || busy || testing}
-                title="对全部已保存模型各发送一次短请求"
-                onClick={() => void testModels()}
-              >
-                {testing ? "测试中…" : "测试全部"}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="gap-1 text-xs"
-                aria-haspopup="dialog"
-                onClick={() => setHelp(true)}
-              >
-                <HugeiconsIcon icon={HelpCircleIcon} size={14} />
-                使用说明
-              </Button>
-            </div>
-            <div
-              role="tablist"
-              aria-label="服务商"
-              className="reader-scrollbar flex max-h-[22vh] shrink-0 flex-wrap items-center gap-1.5 overflow-y-auto border-b border-border p-3 sm:px-4"
-            >
-              {dashboard?.providers.map((item) => (
-                <Button
-                  key={item.key}
-                  role="tab"
-                  aria-selected={providerKey === item.key}
-                  aria-controls="pi-model-cards"
-                  id={`provider-${item.key}`}
-                  variant={providerKey === item.key ? "secondary" : "ghost"}
-                  size="sm"
-                  className="max-w-full gap-2 rounded-lg text-xs"
-                  disabled={busy}
-                  onClick={() => {
-                    setProviderKey(item.key);
-                    setMessage("");
-                  }}
-                >
-                  <span className="truncate">
-                    {item.name || "未命名服务商"}
-                  </span>
-                  <span className="text-muted-foreground">
-                    {item.models.length}
-                  </span>
-                </Button>
-              ))}
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-1 rounded-lg text-xs"
-                disabled={!dashboard || busy || testing}
-                onClick={addProvider}
-              >
-                <HugeiconsIcon icon={PlusSignIcon} size={13} />
-                增加
-              </Button>
-            </div>
-            <div className="reader-scrollbar min-h-0 flex-1 overflow-auto p-3 sm:p-4">
-              {loadError && (
-                <p
-                  role="alert"
-                  className="text-xs text-amber-600 dark:text-amber-300"
-                >
-                  {loadError}
-                </p>
-              )}
-              {!dashboard && !loadError && (
-                <div className="flex items-center justify-center gap-2 py-16 text-xs text-muted-foreground">
-                  <Spinner />
-                  正在读取模型配置…
+            {panel !== "models" ? (
+              <PiAssetsPanel kind={panel} />
+            ) : (
+              <>
+                <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 pt-3 sm:px-4">
+                  <h2 className="min-w-0 flex-1 text-sm font-medium">
+                    模型选择
+                  </h2>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-xs"
+                    disabled={!saved || busy || testing}
+                    title="对全部已保存模型各发送一次短请求"
+                    onClick={() => void testModels()}
+                  >
+                    {testing ? "测试中…" : "测试全部"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="gap-1 text-xs"
+                    aria-haspopup="dialog"
+                    onClick={() => setHelp(true)}
+                  >
+                    <HugeiconsIcon icon={HelpCircleIcon} size={14} />
+                    使用说明
+                  </Button>
                 </div>
-              )}
-              {dashboard && !provider && (
-                <div className="py-16 text-center text-xs text-muted-foreground">
-                  暂无服务商，点击上方“增加”开始；“使用说明”中有完整步骤和样例。
-                </div>
-              )}
-              {provider && (
                 <div
-                  id="pi-model-cards"
-                  role="tabpanel"
-                  aria-labelledby={`provider-${provider.key}`}
+                  role="tablist"
+                  aria-label="服务商"
+                  className="reader-scrollbar flex max-h-[22vh] shrink-0 flex-wrap items-center gap-1.5 overflow-y-auto border-b border-border p-3 sm:px-4"
                 >
-                  <div className="mb-3 flex items-center gap-2">
-                    <span className="min-w-0 flex-1 text-xs text-muted-foreground">
-                      公共配置与模型清单 · {provider.models.length} 个模型
-                    </span>
+                  {dashboard?.providers.map((item) => (
                     <Button
-                      variant="ghost"
+                      key={item.key}
+                      role="tab"
+                      aria-selected={providerKey === item.key}
+                      aria-controls="pi-model-cards"
+                      id={`provider-${item.key}`}
+                      variant={providerKey === item.key ? "secondary" : "ghost"}
                       size="sm"
-                      className="gap-1 text-xs"
-                      disabled={busy || testing}
-                      onClick={addModel}
+                      className="max-w-full gap-2 rounded-lg text-xs"
+                      disabled={busy}
+                      onClick={() => {
+                        setProviderKey(item.key);
+                        setMessage("");
+                      }}
                     >
-                      <HugeiconsIcon icon={PlusSignIcon} size={13} />
-                      新增模型
+                      <span className="truncate">
+                        {item.name || "未命名服务商"}
+                      </span>
+                      <span className="text-muted-foreground">
+                        {item.models.length}
+                      </span>
                     </Button>
-                  </div>
-                  <div className="grid min-w-[924px] grid-cols-3 items-stretch gap-3">
-                    <PiModelCard
-                      key={provider.key}
-                      label="公共配置"
-                      title={
-                        <div className="flex min-w-0 items-center gap-1">
-                          <span className="shrink-0 text-[10px] text-muted-foreground">
-                            公共
-                          </span>
-                          <Input
-                            aria-label="服务商名称"
-                            className="h-7 min-w-0 rounded-md border-0 bg-transparent text-xs!"
-                            disabled={busy || testing}
-                            value={provider.name}
-                            onChange={(event) =>
-                              updateProvider({ name: event.target.value })
-                            }
-                          />
-                        </div>
-                      }
-                      text={provider.text}
-                      error={providerError(provider.text)}
-                      dirty={
-                        !savedProvider ||
-                        savedProvider.text !== provider.text ||
-                        savedProvider.name !== provider.name
-                      }
-                      busy={busy || testing}
-                      onChange={(text) => updateProvider({ text })}
-                      onSave={() => void save()}
-                      onRemove={() => void remove()}
-                    />
-                    {provider.models.map((model) => {
-                      const label = modelDraftLabel(model);
-                      return (
+                  ))}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1 rounded-lg text-xs"
+                    disabled={!dashboard || busy || testing}
+                    onClick={addProvider}
+                  >
+                    <HugeiconsIcon icon={PlusSignIcon} size={13} />
+                    增加
+                  </Button>
+                </div>
+                <div className="reader-scrollbar min-h-0 flex-1 overflow-auto p-3 sm:p-4">
+                  {loadError && (
+                    <p
+                      role="alert"
+                      className="text-xs text-amber-600 dark:text-amber-300"
+                    >
+                      {loadError}
+                    </p>
+                  )}
+                  {!dashboard && !loadError && (
+                    <div className="flex items-center justify-center gap-2 py-16 text-xs text-muted-foreground">
+                      <Spinner />
+                      正在读取模型配置…
+                    </div>
+                  )}
+                  {dashboard && !provider && (
+                    <div className="py-16 text-center text-xs text-muted-foreground">
+                      暂无服务商，点击上方“增加”开始；“使用说明”中有完整步骤和样例。
+                    </div>
+                  )}
+                  {provider && (
+                    <div
+                      id="pi-model-cards"
+                      role="tabpanel"
+                      aria-labelledby={`provider-${provider.key}`}
+                    >
+                      <div className="mb-3 flex items-center gap-2">
+                        <span className="min-w-0 flex-1 text-xs text-muted-foreground">
+                          公共配置与模型清单 · {provider.models.length} 个模型
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="gap-1 text-xs"
+                          disabled={busy || testing}
+                          onClick={addModel}
+                        >
+                          <HugeiconsIcon icon={PlusSignIcon} size={13} />
+                          新增模型
+                        </Button>
+                      </div>
+                      <div className="grid min-w-[924px] grid-cols-3 items-stretch gap-3">
                         <PiModelCard
-                          key={model.key}
-                          label={`模型 ${label.detail}`}
+                          key={provider.key}
+                          label="公共配置"
                           title={
-                            <span
-                              className="block truncate"
-                              title={label.detail}
-                            >
-                              {label.title}
-                              <span className="block truncate text-[10px] text-muted-foreground">
-                                {label.detail}
+                            <div className="flex min-w-0 items-center gap-1">
+                              <span className="shrink-0 text-[10px] text-muted-foreground">
+                                公共
                               </span>
-                            </span>
+                              <Input
+                                aria-label="服务商名称"
+                                className="h-7 min-w-0 rounded-md border-0 bg-transparent text-xs!"
+                                disabled={busy || testing}
+                                value={provider.name}
+                                onChange={(event) =>
+                                  updateProvider({ name: event.target.value })
+                                }
+                              />
+                            </div>
                           }
-                          text={model.text}
-                          error={label.valid ? "" : label.detail}
+                          text={provider.text}
+                          error={providerError(provider.text)}
                           dirty={
-                            savedProvider?.models.find(
-                              (item) => item.key === model.key,
-                            )?.text !== model.text
+                            !savedProvider ||
+                            savedProvider.text !== provider.text ||
+                            savedProvider.name !== provider.name
                           }
                           busy={busy || testing}
-                          onTest={() => void testModels(model.key)}
-                          testStatus={testResults[model.key]}
-                          onChange={(text) => updateModel(model.key, text)}
-                          onSave={() => void save(model.key)}
-                          onDuplicate={() => copyModel(model)}
-                          onRemove={() => void remove(model.key)}
+                          onChange={(text) => updateProvider({ text })}
+                          onSave={() => void save()}
+                          onRemove={() => void remove()}
                         />
-                      );
-                    })}
-                  </div>
+                        {provider.models.map((model) => {
+                          const label = modelDraftLabel(model);
+                          return (
+                            <PiModelCard
+                              key={model.key}
+                              label={`模型 ${label.detail}`}
+                              title={
+                                <span
+                                  className="block truncate"
+                                  title={label.detail}
+                                >
+                                  {label.title}
+                                  <span className="block truncate text-[10px] text-muted-foreground">
+                                    {label.detail}
+                                  </span>
+                                </span>
+                              }
+                              text={model.text}
+                              error={label.valid ? "" : label.detail}
+                              dirty={
+                                savedProvider?.models.find(
+                                  (item) => item.key === model.key,
+                                )?.text !== model.text
+                              }
+                              busy={busy || testing}
+                              onTest={() => void testModels(model.key)}
+                              testStatus={testResults[model.key]}
+                              onChange={(text) => updateModel(model.key, text)}
+                              onSave={() => void save(model.key)}
+                              onDuplicate={() => copyModel(model)}
+                              onRemove={() => void remove(model.key)}
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-            <footer className="flex shrink-0 items-center gap-2 border-t border-border p-3 sm:px-4">
-              <div className="min-w-0 flex-1">
-                <p
-                  role="status"
-                  className="reader-scrollbar max-h-16 overflow-auto break-words text-xs text-muted-foreground"
-                >
-                  {message ||
-                    (dirty
-                      ? "有未保存修改 · 点击对应卡片的保存图标"
-                      : "每张模型卡片独立编辑，共用上方选定服务商的公共配置")}
-                </p>
-                <p
-                  title={path}
-                  className="mt-1 truncate text-[10px] text-muted-foreground"
-                >
-                  {path}
-                </p>
-              </div>
-            </footer>
-            </>}
+                <footer className="flex shrink-0 items-center gap-2 border-t border-border p-3 sm:px-4">
+                  <div className="min-w-0 flex-1">
+                    <p
+                      role="status"
+                      className="reader-scrollbar max-h-16 overflow-auto break-words text-xs text-muted-foreground"
+                    >
+                      {message ||
+                        (dirty
+                          ? "有未保存修改 · 点击对应卡片的保存图标"
+                          : "每张模型卡片独立编辑，共用上方选定服务商的公共配置")}
+                    </p>
+                    <p
+                      title={path}
+                      className="mt-1 truncate text-[10px] text-muted-foreground"
+                    >
+                      {path}
+                    </p>
+                  </div>
+                </footer>
+              </>
+            )}
           </main>
         </div>
         <Dialog open={help && open} onOpenChange={setHelp}>

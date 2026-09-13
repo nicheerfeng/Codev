@@ -28,7 +28,6 @@ export const INITIAL_PI_VIEW_STATE: PiViewState = {
   historyLoadingMore: false,
 };
 
-
 type PiViewAction =
   | { type: "reset"; status?: PiViewState["status"] }
   | { type: "stopping" }
@@ -62,9 +61,7 @@ export function resultText(value: unknown): string {
     return value
       .map((part) => {
         const item = objectValue(part);
-        return typeof item?.text === "string"
-          ? item.text
-          : "";
+        return typeof item?.text === "string" ? item.text : "";
       })
       .filter(Boolean)
       .join("\n");
@@ -225,8 +222,11 @@ function modelValue(value: unknown): PiModel | null {
     ? {
         provider: model.provider,
         id: model.id,
-      name: typeof model.name === "string" ? model.name : undefined,
-      contextWindow: typeof model.contextWindow === "number" ? model.contextWindow : undefined,
+        name: typeof model.name === "string" ? model.name : undefined,
+        contextWindow:
+          typeof model.contextWindow === "number"
+            ? model.contextWindow
+            : undefined,
       }
     : null;
 }
@@ -463,10 +463,18 @@ function reduceEvent(
   if (event.command === "get_session_stats") {
     const usage = objectValue(data?.contextUsage);
     const tokens = typeof usage?.tokens === "number" ? usage.tokens : null;
-    const window = typeof state.model?.contextWindow === "number" ? state.model.contextWindow : null;
+    const window =
+      typeof state.model?.contextWindow === "number"
+        ? state.model.contextWindow
+        : null;
     return {
       ...state,
-      contextPercent: typeof usage?.percent === "number" ? usage.percent : (tokens !== null && window ? Math.min(100, tokens / window * 100) : null),
+      contextPercent:
+        typeof usage?.percent === "number"
+          ? usage.percent
+          : tokens !== null && window
+            ? Math.min(100, (tokens / window) * 100)
+            : null,
       contextTokens: tokens,
     };
   }
@@ -601,6 +609,8 @@ function beginPrompt(
     last?.kind === "message" && last.role === "user" && last.text === cleaned;
   return {
     ...state,
+    compaction:
+      state.compaction?.status === "running" ? state.compaction : undefined,
     status: "running",
     phase: queued ? state.phase || "处理中" : "处理中",
     error: null,
