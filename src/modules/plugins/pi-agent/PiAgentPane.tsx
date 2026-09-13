@@ -22,6 +22,7 @@ import {
   setPiAgentHiddenProjects,
   setPiAgentOrganization,
   setPiAgentLastModel,
+  setPiAgentLastThinkingLevel,
 } from "../store";
 import { PiWorkspaceClient, type PiThread } from "./client";
 import { INITIAL_PI_VIEW_STATE, objectValue } from "./reducer";
@@ -102,6 +103,7 @@ export function PiAgentPane({
   const hiddenProjects = usePluginStore((state) => state.piAgentHiddenProjects);
   const organization = usePluginStore((state) => state.piAgentOrganization);
   const lastModel = usePluginStore((state) => state.piAgentLastModel);
+  const lastThinkingLevel = usePluginStore((state) => state.piAgentLastThinkingLevel);
   const activeThread = threads.find(
     (thread) => thread.key === (selected ?? `draft:${project ?? ""}`),
   );
@@ -294,6 +296,7 @@ export function PiAgentPane({
     setSearchOpen(false);
     const target = await client.current!.open(key, path);
     client.current!.applyCatalogModel(target, lastModel);
+    target.view = { ...target.view, thinkingLevel: lastThinkingLevel };
   };
   /** 选择已有线程只读历史，必须发送后才启动 runtime。 */
   const select = async (thread: SidebarThread) => {
@@ -807,7 +810,10 @@ export function PiAgentPane({
             onThinking={(level) =>
               run(
                 ensure(rows.find((row) => row.key === selected)).then(
-                  (thread) => client.current!.setThinkingLevel(thread, level),
+                  async (thread) => {
+                    await client.current!.setThinkingLevel(thread, level);
+                    await setPiAgentLastThinkingLevel(level);
+                  },
                 ),
               )
             }

@@ -21,6 +21,7 @@ export type PluginState = {
   piAgentHiddenProjects: string[];
   piAgentOrganization: PiOrganization;
   piAgentLastModel: PiModel | null;
+  piAgentLastThinkingLevel: string;
 };
 
 type PluginStoreState = PluginState & {
@@ -33,6 +34,7 @@ const ENABLED_PLUGINS_KEY = "enabledPlugins";
 const PI_AGENT_PROJECTS_KEY = "piAgentProjects";
 const PI_AGENT_HIDDEN_PROJECTS_KEY = "piAgentHiddenProjects";
 const PI_AGENT_LAST_MODEL_KEY = "piAgentLastModel";
+const PI_AGENT_LAST_THINKING_KEY = "piAgentLastThinkingLevel";
 const PLUGIN_CHANGED_EVENT = "codev://plugin-settings-changed";
 const DEFAULT_PLUGIN_STATE: PluginState = {
   enabled: {
@@ -44,6 +46,7 @@ const DEFAULT_PLUGIN_STATE: PluginState = {
   piAgentHiddenProjects: [],
   piAgentOrganization: EMPTY_ORGANIZATION,
   piAgentLastModel: null,
+  piAgentLastThinkingLevel: "off",
 };
 const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: 200 });
 let initPromise: Promise<void> | null = null;
@@ -55,6 +58,7 @@ function normalizePluginState(
   projects: unknown = [],
   hiddenProjects: unknown = [],
   lastModel: unknown = null,
+  lastThinkingLevel: unknown = "off",
 ): PluginState {
   const enabled =
     typeof value === "object" && value !== null
@@ -103,6 +107,10 @@ function normalizePluginState(
             name: typeof model.name === "string" ? model.name : undefined,
           }
         : null,
+    piAgentLastThinkingLevel:
+      typeof lastThinkingLevel === "string" && lastThinkingLevel.trim()
+        ? lastThinkingLevel
+        : "off",
   };
 }
 
@@ -112,11 +120,13 @@ export async function loadPluginState(): Promise<PluginState> {
   const projects = await store.get<unknown>(PI_AGENT_PROJECTS_KEY);
   const hiddenProjects = await store.get<unknown>(PI_AGENT_HIDDEN_PROJECTS_KEY);
   const lastModel = await store.get<unknown>(PI_AGENT_LAST_MODEL_KEY);
+  const lastThinkingLevel = await store.get<unknown>(PI_AGENT_LAST_THINKING_KEY);
   const state = normalizePluginState(
     value ?? DEFAULT_PLUGIN_STATE.enabled,
     projects,
     hiddenProjects,
     lastModel,
+    lastThinkingLevel,
   );
   return {
     ...state,
@@ -124,6 +134,13 @@ export async function loadPluginState(): Promise<PluginState> {
       (await store.get<PiOrganization>("piAgentOrganization")) ??
       EMPTY_ORGANIZATION,
   };
+}
+
+/** 记住最近一次思考等级，新线程直接复用。 */
+export async function setPiAgentLastThinkingLevel(level: string): Promise<void> {
+  await store.set(PI_AGENT_LAST_THINKING_KEY, level);
+  await store.save();
+  usePluginStore.setState({ piAgentLastThinkingLevel: level });
 }
 
 /** 记住最近一次选用的模型，新线程不必先启动 runtime。 */
