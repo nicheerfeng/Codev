@@ -122,6 +122,7 @@ struct PiProcess {
 }
 
 pub struct PiAgentState {
+    watcher: Mutex<Option<notify::RecommendedWatcher>>,
     next_id: AtomicU64,
     sessions: Arc<Mutex<HashMap<u64, PiProcess>>>,
 }
@@ -130,10 +131,75 @@ impl Default for PiAgentState {
     /// 创建空的 Pi RPC 进程注册表。
     fn default() -> Self {
         Self {
+            watcher: Mutex::new(None),
             next_id: AtomicU64::new(1),
             sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PiAsset {
+    name: String,
+    path: String,
+    source: String,
+    summary: Option<String>,
+}
+
+/// 扫描 Pi 技能或插件目录，返回只读展示所需的轻量元数据。
+#[tauri::command]
+pub fn pi_agent_list_assets(kind: String) -> Result<Vec<PiAsset>, String> {
+    let home = dirs::home_dir().ok_or("无法定位用户目录")?;
+    let roots: Vec<(PathBuf, String)> = match kind.as_str() {
+        "skills" => vec![
+            (home.join(".pi").join("agent").join("skills"), "Pi 技能".into()),
+            (home.join(".agents").join("skills"), "共享技能".into()),
+        ],
+        "plugins" => vec![(home.join(".pi").join("agent").join("extensions"), "Pi 插件".into())],
+        _ => return Err("kind 必须是 skills 或 plugins".into()),
+    };
+    let mut assets = Vec::new();
+    for (root, source) in roots {
+        let entries = match fs::read_dir(&root) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() { continue; }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let summary = ["README.md", "README.txt", "package.json"]
+                .iter()
+                .find_map(|file| fs::read_to_string(path.join(file)).ok())
+                .map(|text| text.lines().take(3).collect::<Vec<_>>().join(" "))
+                .map(|text| text.chars().take(240).collect());
+            assets.push(PiAsset { name, path: canonical_display(&path), source: source.clone(), summary });
+        }
+    }
+    assets.sort_by_key(|asset| asset.name.to_lowercase());
+    Ok(assets)
+}
+
+/// 监听原生会话目录，兼容任何 Pi 客户端新建或更新的会话。
+#[tauri::command]
+pub fn pi_agent_watch_sessions(app: AppHandle, state: State<'_, PiAgentState>, enabled: bool) -> Result<(), String> {
+    use notify::Watcher;
+    let mut slot = state.watcher.lock().map_err(|_| "会话监听锁不可用")?;
+    if !enabled { *slot = None; return Ok(()); }
+    if slot.is_some() { return Ok(()); }
+    let root = pi_sessions_dir().ok_or("Pi 会话目录不可用")?;
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if let Ok(event) = event {
+            if matches!(event.kind, notify::EventKind::Create(_) | notify::EventKind::Modify(_) | notify::EventKind::Remove(_)) {
+                let _ = app.emit("codev://pi-sessions-changed", ());
+            }
+        }
+    }).map_err(|error| error.to_string())?;
+    watcher.watch(&root, notify::RecursiveMode::Recursive).map_err(|error| error.to_string())?;
+    *slot = Some(watcher);
+    Ok(())
 }
 
 impl Drop for PiAgentState {

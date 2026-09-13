@@ -27,6 +27,7 @@ import { PiWorkspaceClient, type PiThread } from "./client";
 import { INITIAL_PI_VIEW_STATE, objectValue } from "./reducer";
 import {
   listAllPiSessions,
+  watchPiSessions,
   probePiAgent,
   sendPiCommand,
   deletePiSession,
@@ -149,6 +150,31 @@ export function PiAgentPane({
     setSessions(await listAllPiSessions());
   }, []);
   useEffect(() => {
+    if (!initialized) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let reading = false;
+    let dirty = false;
+    /** 合并事件并串行刷新，持续写入时最多每 400ms 刷新一次。 */
+    const schedule = () => {
+      dirty = true;
+      if (disposed || timer || reading) return;
+      timer = setTimeout(async () => {
+        timer = undefined;
+        reading = true;
+        dirty = false;
+        try {
+          const result = await listAllPiSessions();
+          if (!disposed) setSessions(result);
+        } catch (error) { if (!disposed) setNotice(String(error)); }
+        finally { reading = false; if (dirty && !disposed) schedule(); }
+      }, 400);
+    };
+    const stop = watchPiSessions(schedule);
+    void stop.then(() => { if (!disposed) schedule(); }).catch((error) => { if (!disposed) setNotice(String(error)); });
+    return () => { disposed = true; clearTimeout(timer); void stop.then((cleanup) => cleanup()).catch(() => {}); };
+  }, [initialized]);
+  useEffect(() => {
     if (!active) return;
     setInitialized(true);
   }, [active]);
@@ -237,7 +263,7 @@ export function PiAgentPane({
         createdAt: old?.createdAt ?? "",
         updatedAt: old?.updatedAt ?? Date.now(),
         messageCount: thread.view.items.length,
-        status: thread.view.status,
+        status: thread.view.compaction?.status === "running" ? "running" : thread.view.status,
         waiting: requests.some((request) => request.key === thread.key),
       };
       if (index >= 0) result[index] = row;
@@ -309,6 +335,12 @@ export function PiAgentPane({
   };
   /** 待 Pi 确认接受后清除当前草稿，失败时原输入仍可编辑重发。 */
   const submit = async (behavior: "steer" | "followUp") => {
+    if (activeThread?.view.compaction?.status === "running") {
+      if (!draft.text.trim() && !draft.images.length) return;
+      client.current!.enqueue(activeThread, draft.text, draft.images, behavior);
+      setDrafts((value) => ({ ...value, [draftKey]: EMPTY_DRAFT }));
+      return;
+    }
     if (operationKeys.current.has(draftKey)) return;
     const command = localCommand(draft.text);
     if (command) {
@@ -320,16 +352,8 @@ export function PiAgentPane({
         await forkThread(target);
       } else
         await operate(thread, "正在压缩上下文…", async () => {
-          if (thread.view.status !== "idle")
-            throw new Error("请先停止当前任务再压缩上下文");
-          await client.current!.request(thread, {
-            type: "compact",
-            ...(command.argument
-              ? { customInstructions: command.argument }
-              : {}),
-          });
-          await client.current!.request(thread, { type: "get_messages" });
-          await client.current!.refreshState(thread);
+          setDrafts((value) => ({ ...value, [draftKey]: value[draftKey] === draft ? EMPTY_DRAFT : value[draftKey] }));
+          await client.current!.compact(thread, command.argument);
         });
       setDrafts((value) => ({
         ...value,
@@ -729,6 +753,18 @@ export function PiAgentPane({
               await client.current!.loadCommands(thread);
             }}
             onSend={(behavior) => run(submit(behavior))}
+            onLocalQueueAction={(id, action) => {
+              if (!activeThread) return;
+              const item = client.current!.removeQueued(activeThread, id);
+              if (item && action === "edit") {
+                setDrafts((value) => {
+                  const current = value[draftKey] ?? EMPTY_DRAFT;
+                  return { ...value, [draftKey]: { text: [item.text, current.text].filter(Boolean).join("\n\n"), images: [...item.images, ...current.images] } };
+                });
+                setFocusRevisions((value) => ({ ...value, [draftKey]: (value[draftKey] ?? 0) + 1 }));
+              }
+            }}
+            onRetryQueue={() => { if (activeThread) run(client.current!.drainQueue(activeThread), activeThread.key); }}
             onQueueAction={(kind, index, text, action) => {
               if (!activeThread) return;
               const thread = activeThread;

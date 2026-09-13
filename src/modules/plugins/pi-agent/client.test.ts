@@ -88,6 +88,84 @@ vi.mock("./native", () => ({
 import { PiWorkspaceClient } from "./client";
 
 describe("Pi RPC workspace", () => {
+  // 延迟压缩期间不发送图片队列，完成后顺序投递且不重载原聊天。
+  it("buffers compaction inputs with images and flushes after success without reloading history", async () => {
+    const native = await import("./native");
+    const original = vi.mocked(native.sendPiCommand).getMockImplementation()!;
+    let release!: () => void;
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("compact", "D:/one", "history.jsonl");
+      await client.hydrateFromDisk(thread);
+      await client.request(thread, { type: "get_state" });
+      const items = thread.view.items;
+      vi.mocked(native.sendPiCommand).mockClear();
+      vi.mocked(native.sendPiCommand).mockImplementation(async (id, command) => {
+        if (command.type === "compact") await new Promise<void>((resolve) => { release = resolve; });
+        return original(id, command);
+      });
+      const operation = client.compact(thread);
+      await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+      expect(thread.view.compaction?.status).toBe("running");
+      const images = [{ type: "image" as const, data: "image-data", mimeType: "image/png" }];
+      client.enqueue(thread, "one", images, "followUp");
+      client.enqueue(thread, "two", [], "steer");
+      expect(vi.mocked(native.sendPiCommand).mock.calls.some(([, cmd]) => cmd.type === "prompt")).toBe(false);
+      release();
+      await operation;
+      const prompts = vi.mocked(native.sendPiCommand).mock.calls.filter(([, cmd]) => cmd.type === "prompt");
+      expect(prompts.map(([, cmd]) => cmd.message)).toEqual(["one", "two"]);
+      expect(prompts[0][1].images).toEqual(images);
+      expect(prompts[1][1].streamingBehavior).toBe("steer");
+      expect(thread.view.localQueue).toEqual([]);
+      expect(thread.view.compaction?.status).toBe("done");
+      expect(thread.view.items).toBe(items);
+      expect(vi.mocked(native.sendPiCommand).mock.calls.some(([, cmd]) => cmd.type === "get_messages")).toBe(false);
+    } finally { release?.(); vi.mocked(native.sendPiCommand).mockImplementation(original); client.dispose(); }
+  });
+  // 压缩失败不消耗缓存，退回编辑可完整获取附件。
+  it("retains local inputs after failed compaction", async () => {
+    const native = await import("./native");
+    const original = vi.mocked(native.sendPiCommand).getMockImplementation()!;
+    let fail!: (error: Error) => void;
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("failed", "D:/one", "history.jsonl");
+      await client.hydrateFromDisk(thread);
+      await client.request(thread, { type: "get_state" });
+      vi.mocked(native.sendPiCommand).mockImplementation(async (id, command) => {
+        if (command.type === "compact") return new Promise((_, reject) => { fail = reject; });
+        return original(id, command);
+      });
+      const operation = client.compact(thread);
+      const rejected = expect(operation).rejects.toThrow("compact failed");
+      await vi.waitFor(() => expect(fail).toBeTypeOf("function"));
+      client.enqueue(thread, "keep", [{ type: "image", data: "png", mimeType: "image/png" }], "followUp");
+      fail(new Error("compact failed"));
+      await rejected;
+      expect(thread.view.compaction?.status).toBe("failed");
+      expect(thread.view.localQueue).toHaveLength(1);
+      expect(client.removeQueued(thread, thread.view.localQueue![0].id)?.images).toHaveLength(1);
+      expect(thread.view.localQueue).toEqual([]);
+    } finally { vi.mocked(native.sendPiCommand).mockImplementation(original); client.dispose(); }
+  });
+  // 新旧自动压缩事件都维持可见状态，发送失败不移除待发送消息。
+  it.each(["compaction", "auto_compaction"])("handles %s events and retains a rejected queued prompt", async (prefix) => {
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open(prefix, "D:/one");
+      await client.request(thread, { type: "get_state" });
+      mock.receive({ sessionId: thread.runtimeId!, stream: "stdout", event: { type: `${prefix}_start` } });
+      expect(thread.view.compaction?.status).toBe("running");
+      client.enqueue(thread, "keep", [], "followUp");
+      mock.rejectPrompt = true;
+      mock.receive({ sessionId: thread.runtimeId!, stream: "stdout", event: { type: `${prefix}_end`, result: {}, aborted: false, willRetry: false } });
+      await vi.waitFor(() => expect(thread.view.error).toContain("prompt rejected"));
+      expect(thread.view.compaction?.status).toBe("done");
+      expect(thread.view.localQueue).toHaveLength(1);
+      expect(thread.view.queueSendingId).toBeUndefined();
+    } finally { client.dispose(); }
+  });
   // runtime 冷启动未完成时也能获取缓存线程并立即进入发送状态。
   it("returns cached history immediately while the runtime is starting", async () => {
     const native = await import("./native");

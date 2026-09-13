@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -34,6 +34,8 @@ type Props = {
   view: PiViewState;
   onSend: (behavior: "steer" | "followUp") => void;
   onStop: () => void;
+  onLocalQueueAction?: (id: string, action: "edit" | "delete") => void;
+  onRetryQueue?: () => void;
   onQueueAction: (kind: "steering" | "followUp", index: number, text: string, action: "edit" | "delete" | "steer") => void;
   onModel: (provider: string, id: string) => void;
   onLoadModels: () => void;
@@ -61,6 +63,14 @@ async function readImage(file: File): Promise<PiImage> {
 
 /** 用 Codev 控件承载 mcode 输入卡片布局：正文上方、模型/用量与发送在卡片内。 */
 export function PiComposer(props: Props) {
+  const compacting = props.view.compaction?.status === "running";
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!compacting) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [compacting]);
   const input = useRef<HTMLTextAreaElement>(null);
   const files = useRef<HTMLInputElement>(null);
   const draftRef = useRef(props.draft);
@@ -111,7 +121,7 @@ export function PiComposer(props: Props) {
     if (props.focusRevision) input.current?.focus();
   }, [props.focusRevision]);
   const running =
-    props.view.status === "running" || props.view.status === "stopping";
+    compacting || props.view.status === "running" || props.view.status === "stopping";
   useLayoutEffect(() => {
     const node = input.current;
     if (!node) return;
@@ -160,7 +170,26 @@ export function PiComposer(props: Props) {
           </Button>
         </div>
       )}
-      {props.status && (
+      {props.view.compaction && (
+        <div role="status" className="mx-auto mb-2 max-w-3xl text-center text-xs text-muted-foreground">
+          {compacting ? "正在压缩上下文" : props.view.compaction.status === "done" ? "上下文已压缩" : "压缩未完成，待发送消息已保留"}
+          {` · 用时 ${Math.max(0, Math.floor(((props.view.compaction.finishedAt ?? now) - props.view.compaction.startedAt) / 1000))} 秒`}
+        </div>
+      )}
+      {!!props.view.localQueue?.length && (
+        <div data-testid="pi-local-queue" className="reader-scrollbar mx-auto mb-2 max-h-32 max-w-3xl overflow-auto rounded-lg border border-border/70 px-2 py-1.5 text-xs">
+          <div className="flex items-center justify-between text-muted-foreground">
+            <span>待发送 · {props.view.localQueue.length}</span>
+            {!compacting && <Button size="xs" variant="ghost" disabled={!!props.view.queueSendingId} onClick={props.onRetryQueue}>继续发送</Button>}
+          </div>
+          {props.view.localQueue.map((item) => <div key={item.id} className="flex items-start gap-2 py-1">
+            <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{item.text}{item.images.length > 0 && ` · ${item.images.length} 张图片`}</span>
+            <Button variant="ghost" size="icon-xs" aria-label="退回编辑待发送消息" disabled={props.view.queueSendingId === item.id} onClick={() => props.onLocalQueueAction?.(item.id, "edit")}><HugeiconsIcon icon={PencilEdit01Icon} size={13} /></Button>
+            <Button variant="ghost" size="icon-xs" aria-label="删除待发送消息" disabled={props.view.queueSendingId === item.id} onClick={() => props.onLocalQueueAction?.(item.id, "delete")}><HugeiconsIcon icon={Delete02Icon} size={13} /></Button>
+          </div>)}
+        </div>
+      )}
+      {props.status && !compacting && (
         <div
           data-testid="pi-status"
           className="reader-scrollbar mx-auto mb-2 max-h-20 w-full max-w-3xl overflow-y-auto text-center text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]"
@@ -318,7 +347,7 @@ export function PiComposer(props: Props) {
             ) {
               event.preventDefault();
               if (
-                !props.busy &&
+                (!props.busy || compacting) &&
                 (props.draft.text.trim() || props.draft.images.length)
               )
                 props.onSend(
@@ -458,6 +487,7 @@ export function PiComposer(props: Props) {
             </Select>
           )}
           <div className="ml-auto flex shrink-0 items-center gap-1">
+            {props.view.contextPercent === null && props.view.compaction?.status === "done" && <span className="text-[10px] text-muted-foreground" title="Pi 会在下一次模型回复后更新实际上下文用量">已压缩 · 用量待更新</span>}
             {props.view.contextPercent !== null && (
               <span
                 className="px-1 text-[10px] text-muted-foreground"
@@ -466,7 +496,7 @@ export function PiComposer(props: Props) {
                 {Math.round(props.view.contextPercent)}%
               </span>
             )}
-            {running && (
+            {running && !compacting && (
               <Button
                 variant="secondary"
                 size="icon-sm"
@@ -485,7 +515,7 @@ export function PiComposer(props: Props) {
               aria-label={running ? "排队发送" : "发送"}
               disabled={
                 props.disabled ||
-                props.busy ||
+                (props.busy && !compacting) ||
                 (!props.draft.text.trim() && !props.draft.images.length)
               }
               onClick={() => props.onSend("followUp")}
