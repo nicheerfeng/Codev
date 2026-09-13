@@ -493,7 +493,7 @@ export function PiComposer(props: Props) {
                 className="px-1 text-[10px] text-muted-foreground"
                 title={`${props.view.contextTokens.toLocaleString()} tokens${props.view.contextPercent == null ? "" : ` · 上下文 ${props.view.contextPercent.toFixed(1)}%`}`}
               >
-                {props.view.contextPercent == null ? "—" : `${props.view.contextPercent.toFixed(1)}%`}
+                {props.view.contextPercent == null ? "—" : `${Math.round(props.view.contextPercent)}%`}
               </span>
             )}
             {running && !compacting && (
