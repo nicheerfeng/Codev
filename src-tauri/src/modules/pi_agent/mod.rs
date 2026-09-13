@@ -81,6 +81,8 @@ pub struct PiSessionHistory {
     session_file: String,
     oldest_offset: u64,
     has_more: bool,
+    context_tokens: Option<u64>,
+    context_percent: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -981,6 +983,8 @@ fn parse_session_history(
     let mut session_name = None;
     let mut oldest_offset = 0;
     let mut has_more = false;
+    let mut context_tokens = None;
+    let mut context_percent = None;
     visit_jsonl_rev(&resolved, end, |record| {
         match record.value.get("type").and_then(Value::as_str) {
             Some("session_info") if session_name.is_none() => {
@@ -1016,6 +1020,12 @@ fn parse_session_history(
                 let Some(message) = record.value.get("message").cloned() else {
                     return true;
                 };
+                let usage = message.get("usage").or_else(|| record.value.get("usage"));
+                let context = usage.and_then(|value| value.get("contextUsage")).or(usage);
+                if context_tokens.is_none() {
+                    context_tokens = context.and_then(|value| value.get("tokens").or_else(|| value.get("inputTokens")).or_else(|| value.get("input"))).and_then(Value::as_u64);
+                    context_percent = context.and_then(|value| value.get("percent")).and_then(Value::as_f64);
+                }
                 if model.is_none() {
                     model = assistant_model(&message);
                 }
@@ -1054,6 +1064,8 @@ fn parse_session_history(
         session_file: canonical_display(&resolved),
         oldest_offset,
         has_more,
+        context_tokens,
+        context_percent,
     })
 }
 
