@@ -28,6 +28,8 @@ export const INITIAL_PI_VIEW_STATE: PiViewState = {
   historyLoadingMore: false,
 };
 
+const DEFAULT_CONTEXT_WINDOW = 500_000;
+
 type PiViewAction =
   | { type: "reset"; status?: PiViewState["status"] }
   | { type: "stopping" }
@@ -460,10 +462,14 @@ function reduceEvent(
     };
   if (event.command === "get_session_stats") {
     const usage = objectValue(data?.contextUsage);
+    const tokens = typeof usage?.tokens === "number"
+      ? usage.tokens
+      : typeof usage?.inputTokens === "number" ? usage.inputTokens : null;
+    const reportedPercent = typeof usage?.percent === "number" ? usage.percent : null;
     return {
       ...state,
-      contextPercent: typeof usage?.percent === "number" ? usage.percent : null,
-      contextTokens: typeof usage?.tokens === "number" ? usage.tokens : null,
+      contextPercent: reportedPercent ?? (tokens === null ? null : Math.min(100, tokens / DEFAULT_CONTEXT_WINDOW * 100)),
+      contextTokens: tokens,
     };
   }
   if (event.command === "get_available_models")
