@@ -98,11 +98,11 @@ export function closeAllPiAgents(): Promise<number> {
   return invoke<number>("pi_agent_close_all");
 }
 
-/** 浏览历史时只读 JSONL，默认最近 20 条，不启动 Pi runtime。 */
+/** 浏览历史时只读 JSONL，默认最近 150 条，不启动 Pi runtime。 */
 export function readPiSession(
   path: string,
   before?: number | null,
-  limit = 20,
+  limit = 150,
 ): Promise<PiSessionHistory> {
   return invoke<PiSessionHistory>("pi_agent_read_session", {
     path,

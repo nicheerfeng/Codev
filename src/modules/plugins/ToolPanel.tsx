@@ -48,11 +48,9 @@ function JsonFormatterTool() {
 /** 渲染互相隔离的内置插件页面，并在切换时保留各自状态。 */
 export function ToolPanel({
   tool = "json",
-  cwd,
   active = true,
 }: {
   tool?: ToolId;
-  cwd: string | null;
   active?: boolean;
 }) {
   const piEnabled = usePluginStore(
@@ -91,7 +89,7 @@ export function ToolPanel({
               </div>
             }
           >
-            <PiAgentPane cwd={cwd} active={active && tool === "pi"} />
+            <PiAgentPane active={active && tool === "pi"} />
           </Suspense>
         )}
       </div>

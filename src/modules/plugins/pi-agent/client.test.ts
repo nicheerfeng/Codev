@@ -88,6 +88,46 @@ vi.mock("./native", () => ({
 import { PiWorkspaceClient } from "./client";
 
 describe("Pi RPC workspace", () => {
+  // runtime 冷启动未完成时也能获取缓存线程并立即进入发送状态。
+  it("returns cached history immediately while the runtime is starting", async () => {
+    const native = await import("./native");
+    let release!: () => void;
+    vi.mocked(native.startPiAgent).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      return { sessionId: ++mock.next, processId: 1 };
+    });
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("history", "D:/project", "history.jsonl");
+      await client.hydrateFromDisk(thread);
+      const loading = client.loadCommands(thread);
+      await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+      const cached = await client.open("history", "D:/project");
+      client.beginPrompt(cached, "继续");
+      expect(cached).toBe(thread);
+      expect(thread.view.status).toBe("running");
+      expect(thread.view.processStartedAt).toBeTypeOf("number");
+      release();
+      await loading;
+      expect(thread.view.status).toBe("running");
+    } finally { release?.(); client.dispose(); }
+  });
+  // 首次展开 slash 菜单启动命令读取，已有命令后重复展开不重复请求。
+  it("loads native commands before any prompt and reuses the command cache", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("commands", "D:/project");
+      vi.mocked(native.sendPiCommand).mockClear();
+      await client.loadCommands(thread);
+      expect(native.sendPiCommand).toHaveBeenCalledWith(thread.runtimeId, expect.objectContaining({ type: "get_commands" }));
+      expect(vi.mocked(native.sendPiCommand).mock.calls.some(([, command]) => command.type === "prompt")).toBe(false);
+      thread.view = { ...thread.view, commands: [{ name: "skill:review" }] };
+      vi.mocked(native.sendPiCommand).mockClear();
+      await client.loadCommands(thread);
+      expect(native.sendPiCommand).not.toHaveBeenCalled();
+    } finally { client.dispose(); }
+  });
   beforeEach(() => {
     mock.next = 0;
     mock.close.mockClear();

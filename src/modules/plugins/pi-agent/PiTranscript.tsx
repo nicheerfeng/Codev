@@ -8,6 +8,7 @@ import {
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Streamdown } from "streamdown";
+import { PiFileOperations } from "./PiFileOperations";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -264,7 +265,7 @@ const TranscriptItem = memo(function TranscriptItem({
   );
 });
 
-/** 将连续工具调用放入同一过程组，详情仍按单个工具点击展开。 */
+/** 连续工具默认压缩为一行，展开组后再按单条查看详情。 */
 function ToolGroup({
   items,
   actions,
@@ -274,9 +275,26 @@ function ToolGroup({
   actions: MessageActions;
   openForSearch?: string;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    if (openForSearch) setExpanded(true);
+  }, [openForSearch]);
+  const runningCount = items.filter((item) => item.status === "running").length;
+  const errorCount = items.filter((item) => item.status === "error").length;
   return (
-    <div className="pi-tool-group min-w-0 max-w-full">
-      {items.map((item) => (
+    <details className="pi-tool-group min-w-0 max-w-full" open={expanded}>
+      <summary
+        className="cursor-pointer py-1 text-xs text-muted-foreground hover:text-foreground"
+        onClick={(event) => {
+          event.preventDefault();
+          setExpanded((value) => !value);
+        }}
+      >
+        {runningCount ? "正在调用工具" : "已调用工具"} · {items.length} 次
+        {runningCount > 0 && ` · ${runningCount} 项执行中`}
+        {errorCount > 0 && ` · ${errorCount} 项失败`}
+      </summary>
+      {expanded && items.map((item) => (
         <TranscriptItem
           key={item.id}
           item={item}
@@ -284,7 +302,7 @@ function ToolGroup({
           openForSearch={item.id === openForSearch}
         />
       ))}
-    </div>
+    </details>
   );
 }
 
@@ -293,7 +311,9 @@ function TimelineBlock({
   block,
   query,
   actions,
+  cwd,
 }: {
+  cwd: string;
   block: PiTimelineBlock;
   query: string;
   actions: MessageActions;
@@ -347,6 +367,7 @@ function TimelineBlock({
   const elapsedText =
     elapsed === null ? "" : ` · 用时 ${formatElapsed(elapsed)}`;
   return (
+    <>
     <details className="pi-process" open={expanded}>
       <summary
         className="pi-process-summary flex max-w-full cursor-pointer list-none items-center gap-2 py-1.5 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
@@ -385,6 +406,8 @@ function TimelineBlock({
         ))}
       </div>
     </details>
+    <PiFileOperations items={block.items} cwd={cwd} />
+    </>
   );
 }
 
@@ -470,6 +493,7 @@ export function PiTranscript({
   loading = false,
   sendRevision = 0,
   threadKey,
+  cwd = "",
   active,
   searchOpen,
   onCloseSearch,
@@ -483,6 +507,7 @@ export function PiTranscript({
   loading?: boolean;
   sendRevision?: number;
   threadKey: string;
+  cwd?: string;
   active: boolean;
   searchOpen: boolean;
   onCloseSearch: () => void;
@@ -555,6 +580,15 @@ export function PiTranscript({
     follow.current = false;
     setFollowing(false);
   };
+  /** 顶部滚轮也可翻页，内容不足一屏时无需等待 scroll 事件。 */
+  const loadEarlier = () => {
+    const node = viewport.current;
+    if (!node || node.scrollTop >= 80 || !view.historyHasMore || loading || view.historyLoadingMore || loadingOlder.current || !onLoadOlder) return;
+    pauseFollow();
+    loadingOlder.current = true;
+    pendingOlderRestore.current = virtualizer.getTotalSize();
+    onLoadOlder();
+  };
   /** 返回最新消息并重新启用后续流式跟随。 */
   const scrollBottom = () => {
     follow.current = true;
@@ -565,6 +599,8 @@ export function PiTranscript({
   useLayoutEffect(() => {
     const node = viewport.current;
     const position = positions.current.get(threadKey);
+    pendingOlderRestore.current = null;
+    loadingOlder.current = false;
     follow.current = position?.follow ?? true;
     setFollowing(follow.current);
     setQuery("");
@@ -750,28 +786,22 @@ export function PiTranscript({
         data-testid="pi-transcript"
         className="reader-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden outline-none [overflow-anchor:none]"
         onWheel={(event) => {
-          if (event.deltaY < 0) pauseFollow();
+          if (event.deltaY < 0) {
+            pauseFollow();
+            loadEarlier();
+          }
         }}
         onPointerDown={pauseFollow}
         onKeyDown={(event) => {
-          if (["PageUp", "ArrowUp", "Home"].includes(event.key)) pauseFollow();
+          if (["PageUp", "ArrowUp", "Home"].includes(event.key)) {
+            pauseFollow();
+            loadEarlier();
+          }
         }}
         onScroll={(event) => {
           const node = event.currentTarget;
-          if (
-            node.scrollTop < 80 &&
-            view.historyHasMore &&
-            !view.historyLoadingMore
-          ) {
-            if (!loadingOlder.current) {
-              loadingOlder.current = true;
-              pendingOlderRestore.current = virtualizer.getTotalSize();
-              onLoadOlder?.();
-            }
-          } else if (!view.historyLoadingMore) {
-            loadingOlder.current = false;
-          }
-          if (node.scrollHeight - node.scrollTop - node.clientHeight < 32) {
+          if (!follow.current) loadEarlier();
+          if (!loadingOlder.current && !view.historyLoadingMore && node.scrollTop > 0 && node.scrollHeight - node.scrollTop - node.clientHeight < 32) {
             follow.current = true;
             setFollowing(true);
           }
@@ -804,6 +834,7 @@ export function PiTranscript({
               style={{ transform: `translateY(${row.start}px)` }}
             >
               <TimelineBlock
+                cwd={cwd}
                 block={blocks[row.index]}
                 query={searchOpen ? query : ""}
                 actions={actions}

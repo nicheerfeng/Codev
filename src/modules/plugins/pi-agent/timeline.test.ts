@@ -16,6 +16,18 @@ function message(id: string, role: "assistant" | "user"): PiMessageItem {
 }
 
 describe("Pi turn grouping", () => {
+  // 历史过程块不能阻止新一轮在首个模型事件前显示计时占位。
+  it("shows an immediate live process after completed history", () => {
+    const blocks = buildTimelineBlocks([
+      message("old-user", "user"),
+      { id: "old-thinking", kind: "thinking", text: "done", streaming: false },
+      message("old-answer", "assistant"),
+      message("new-user", "user"),
+    ], true, { startedAt: 1234 });
+    expect(blocks.filter((block) => block.kind === "process")).toHaveLength(2);
+    expect(blocks[blocks.length - 1]).toMatchObject({ kind: "process", running: true, startedAt: 1234, label: "处理中" });
+    expect(blocks[1]).toMatchObject({ kind: "process", running: false });
+  });
   it("groups intermediate narrative and tools once, retaining final answer", () => {
     const blocks = buildTimelineBlocks(
       [

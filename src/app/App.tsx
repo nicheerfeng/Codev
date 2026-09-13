@@ -1370,12 +1370,6 @@ export default function App() {
                         <ToolPanel
                           tool={toolView}
                           active={rightDockView === "tools"}
-                          cwd={
-                            explorerRoot ??
-                            activeRoot ??
-                            workspaceRoots[0] ??
-                            null
-                          }
                         />
                       </div>
                     )}

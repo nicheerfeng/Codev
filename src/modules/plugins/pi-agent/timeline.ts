@@ -133,7 +133,7 @@ export function buildTimelineBlocks(
     } else turn.push(item);
   }
   flush(running, true);
-  if (running && !blocks.some((block) => block.kind === "process"))
+  if (running && !blocks.some((block) => block.kind === "process" && block.running))
     blocks.push({
       id: "process-live",
       kind: "process",

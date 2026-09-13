@@ -205,10 +205,10 @@ export class PiWorkspaceClient {
 
   /** 新建或恢复指定线程，多次点击同一线程共用启动任务。 */
   open(key: string, cwd: string, path?: string): Promise<PiThread> {
-    const pending = this.opening.get(key);
-    if (pending) return pending;
     const existing = this.threads.get(key);
     if (existing) return Promise.resolve(existing);
+    const pending = this.opening.get(key);
+    if (pending) return pending;
     const thread: PiThread = {
       loadingHistory: false,
       key,
@@ -306,6 +306,14 @@ export class PiWorkspaceClient {
     }
   }
 
+  /** 用户打开命令菜单时按需连接 Pi，复用启动阶段获取的原生命令。 */
+  async loadCommands(thread: PiThread) {
+    if (thread.view.commands.length) return;
+    const alreadyRunning = thread.runtimeId !== null;
+    await this.ensureRuntime(thread);
+    if (alreadyRunning) await this.sendRequest(thread, { type: "get_commands" });
+  }
+
   /** 读取会话名称、模型、实际上下文用量。 */
   async refreshState(thread: PiThread) {
     await this.ensureRuntime(thread);
@@ -335,7 +343,7 @@ export class PiWorkspaceClient {
     return thread;
   }
 
-  /** 上翻时再读更早的 20 条，不启动 runtime。 */
+  /** 上翻时再读更早的 150 条，不启动 runtime。 */
   async loadOlderHistory(thread: PiThread) {
     const path = thread.view.sessionFile;
     if (

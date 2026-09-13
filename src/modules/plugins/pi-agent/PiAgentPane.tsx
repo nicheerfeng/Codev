@@ -50,10 +50,8 @@ type ExtensionRequest = { key: string; event: Record<string, unknown> };
 
 /** 插件入口只协调原生会话与 Codev 组件，不接管外部文件树或终端。 */
 export function PiAgentPane({
-  cwd,
   active,
 }: {
-  cwd: string | null;
   active: boolean;
 }) {
   const [initialized, setInitialized] = useState(false);
@@ -69,7 +67,7 @@ export function PiAgentPane({
   }, [active]);
   const [sessions, setSessions] = useState<PiSessionSummary[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [project, setProject] = useState<string | null>(cwd);
+  const [project, setProject] = useState<string | null>(() => usePluginStore.getState().piAgentProjects[0] ?? null);
   const [drafts, setDrafts] = useState<Record<string, PiDraft>>({});
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [operations, setOperations] = useState<Record<string, string>>({});
@@ -104,10 +102,10 @@ export function PiAgentPane({
   const organization = usePluginStore((state) => state.piAgentOrganization);
   const lastModel = usePluginStore((state) => state.piAgentLastModel);
   const activeThread = threads.find(
-    (thread) => thread.key === (selected ?? `draft:${project ?? cwd ?? ""}`),
+    (thread) => thread.key === (selected ?? `draft:${project ?? ""}`),
   );
   const view = activeThread?.view ?? INITIAL_PI_VIEW_STATE;
-  const activeCwd = activeThread?.cwd ?? project ?? cwd;
+  const activeCwd = activeThread?.cwd ?? project;
   const draftKey = selected ?? `draft:${activeCwd ?? ""}`;
   const draft = drafts[draftKey] ?? EMPTY_DRAFT;
   const notice = notices[draftKey] ?? "";
@@ -138,14 +136,13 @@ export function PiAgentPane({
     () =>
       collectProjects(
         [
-          ...(cwd ? [cwd] : []),
           ...pluginProjects,
           ...threads.map((item) => item.cwd),
         ],
         sessions,
         hiddenProjects,
       ),
-    [cwd, pluginProjects, threads, sessions, hiddenProjects],
+    [pluginProjects, threads, sessions, hiddenProjects],
   );
   /** 刷新原生会话目录，只在首次激活和显式文件操作后执行。 */
   const refreshSessions = useCallback(async () => {
@@ -662,6 +659,7 @@ export function PiAgentPane({
         )}
         <main className="relative order-first flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <PiTranscript
+            cwd={activeCwd ?? ""}
             view={view}
             sendRevision={sendRevisions[draftKey] ?? 0}
             loading={activeThread?.loadingHistory ?? false}
@@ -726,6 +724,10 @@ export function PiAgentPane({
                 ),
               )
             }
+            onLoadCommands={async () => {
+              const thread = await ensure(rows.find((row) => row.key === selected));
+              await client.current!.loadCommands(thread);
+            }}
             onSend={(behavior) => run(submit(behavior))}
             onQueueAction={(kind, index, text, action) => {
               if (!activeThread) return;
