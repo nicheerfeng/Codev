@@ -54,6 +54,14 @@ type Props = {
   onCopyPath: (path: string) => void;
 };
 
+/** 读取侧栏排序缓存，缓存损坏时回退为空序列。 */
+function readOrder(key: string): string[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) ?? "[]");
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  } catch { return []; }
+}
+
 /** 复用 mcode 左栏的组→项目→线程与底部归档收纳，使用 Codev 菜单和控件。 */
 export function PiSidebar(props: Props) {
   const { width, onWidthChange: setWidth } = props;
@@ -66,8 +74,8 @@ export function PiSidebar(props: Props) {
     id: string;
     name: string;
   } | null>(null);
-  const [projectOrder, setProjectOrder] = useState<string[]>(() => JSON.parse(localStorage.getItem("codev.pi.projects.order") ?? "[]"));
-  const [sessionOrder, setSessionOrder] = useState<string[]>(() => JSON.parse(localStorage.getItem("codev.pi.sessions.order") ?? "[]"));
+  const [projectOrder, setProjectOrder] = useState<string[]>(() => readOrder("codev.pi.projects.order"));
+  const [sessionOrder, setSessionOrder] = useState<string[]>(() => readOrder("codev.pi.sessions.order"));
   const [dragKey, setDragKey] = useState<string | null>(null);
   useEffect(() => localStorage.setItem("codev.pi.projects.order", JSON.stringify(projectOrder)), [projectOrder]);
   useEffect(() => localStorage.setItem("codev.pi.sessions.order", JSON.stringify(sessionOrder)), [sessionOrder]);
