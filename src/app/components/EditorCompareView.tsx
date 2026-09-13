@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { EditorStack, type EditorPaneHandle } from "@/modules/editor";
 import { MarkdownStack } from "@/modules/markdown";
 import { HtmlStack } from "@/modules/html";
+import { ReaderContextMenu } from "@/modules/editor/ReaderContextMenu";
 import { TabBar } from "@/modules/tabs";
 import type { Tab } from "@/modules/tabs";
 
@@ -99,8 +100,9 @@ function EditorGroup({
           />
         </div>
       )}
+      <ReaderContextMenu>
       <div
-        className="relative min-h-0 min-w-0 flex-1"
+        className="absolute inset-0"
         onFocusCapture={() => {
           if (activeTab) onFocusEditor(activeTab.id);
         }}
@@ -148,6 +150,7 @@ function EditorGroup({
           />
         </div>
       </div>
+      </ReaderContextMenu>
     </div>
   );
 }

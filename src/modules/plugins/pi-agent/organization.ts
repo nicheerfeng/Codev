@@ -19,6 +19,11 @@ export function pathKey(path: string): string {
     : normalized;
 }
 
+/** 每次新建线程使用独立草稿键，避免同一项目复用上一次对话。 */
+export function nextDraftKey(path: string): string {
+  return `draft:${pathKey(path)}:${crypto.randomUUID()}`;
+}
+
 /** 使用路径的最后一级作为默认项目标题。 */
 export function projectName(path: string): string {
   return (

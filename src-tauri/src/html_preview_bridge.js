@@ -321,6 +321,12 @@
     window.parent.postMessage({ channel: CHANNEL, type: "focus" }, "*");
   }
 
+  /** 将 HTML 选区和右键位置交给 Codev 阅读菜单。 */
+  function openReaderMenu(event) {
+    event.preventDefault();
+    window.parent.postMessage({ channel: CHANNEL, type: "contextmenu", x: event.clientX, y: event.clientY, text: window.getSelection()?.toString() || "" }, "*");
+  }
+  window.addEventListener("contextmenu", openReaderMenu, true);
   window.addEventListener("message", handleSearchMessage);
   window.addEventListener("keydown", handleFindShortcut, true);
   if (document.readyState === "loading") {

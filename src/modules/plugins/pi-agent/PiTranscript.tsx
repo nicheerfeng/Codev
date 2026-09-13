@@ -36,6 +36,11 @@ import type {
   PiViewState,
 } from "./types";
 
+const STREAMDOWN_CONTROLS = {
+  code: { copy: true, download: false },
+  table: { copy: true, download: false, fullscreen: false },
+} as const;
+
 type MessageActions = {
   onCopy?: (text: string) => void;
   onEdit?: (
@@ -137,7 +142,7 @@ const TranscriptItem = memo(function TranscriptItem({
     <article
       className={
         item.kind === "message" && item.role === "user"
-          ? "pi-user-message ml-auto max-w-[90%] rounded-2xl bg-muted px-4 py-3"
+          ? "pi-user-message ml-auto w-fit max-w-[80%] rounded-2xl bg-muted px-3 py-2"
           : "min-w-0 py-2"
       }
     >
@@ -155,16 +160,11 @@ const TranscriptItem = memo(function TranscriptItem({
             onChange={(event) => setEditText(event.target.value)}
           />
         ) : item.kind === "message" && item.role === "user" ? (
-          <div className="whitespace-pre-wrap">{item.text}</div>
+          <div className="pi-user-text whitespace-pre-wrap">
+            {item.text.replace(/\s+$/u, "")}
+          </div>
         ) : (
-          <Streamdown
-            controls={{
-              code: { copy: true, download: false },
-              table: { copy: false, download: false, fullscreen: true },
-            }}
-          >
-            {item.text}
-          </Streamdown>
+          <Streamdown controls={STREAMDOWN_CONTROLS}>{item.text}</Streamdown>
         )}
       </div>
       {item.kind === "message" &&
@@ -176,41 +176,39 @@ const TranscriptItem = memo(function TranscriptItem({
             alt="用户附件"
           />
         ))}
-      {item.kind === "message" &&
-        item.role === "user" &&
-        editing && (
-          <div className="pi-user-edit-actions mt-2 flex justify-end gap-1">
-            <Button
-              variant="ghost"
-              size="xs"
-              disabled={editSubmitting}
-              onClick={() => {
-                setEditText(item.text);
-                setEditing(false);
-              }}
-            >
-              取消
-            </Button>
-            <Button
-              size="xs"
-              disabled={editSubmitting || !editText.trim()}
-              onClick={async () => {
-                if (!actions.onEdit || editSubmitting) return;
-                setEditSubmitting(true);
-                try {
-                  const accepted = await actions.onEdit(item, editText.trim());
-                  if (accepted !== false) setEditing(false);
-                } catch {
-                  // 保留编辑态，父层负责展示原生操作错误。
-                } finally {
-                  setEditSubmitting(false);
-                }
-              }}
-            >
-              发送
-            </Button>
-          </div>
-        )}
+      {item.kind === "message" && item.role === "user" && editing && (
+        <div className="pi-user-edit-actions mt-2 flex justify-end gap-1">
+          <Button
+            variant="ghost"
+            size="xs"
+            disabled={editSubmitting}
+            onClick={() => {
+              setEditText(item.text);
+              setEditing(false);
+            }}
+          >
+            取消
+          </Button>
+          <Button
+            size="xs"
+            disabled={editSubmitting || !editText.trim()}
+            onClick={async () => {
+              if (!actions.onEdit || editSubmitting) return;
+              setEditSubmitting(true);
+              try {
+                const accepted = await actions.onEdit(item, editText.trim());
+                if (accepted !== false) setEditing(false);
+              } catch {
+                // 保留编辑态，父层负责展示原生操作错误。
+              } finally {
+                setEditSubmitting(false);
+              }
+            }}
+          >
+            发送
+          </Button>
+        </div>
+      )}
       {item.kind === "message" && showActions && !editing && (
         <div className="pi-message-actions text-[10px] text-muted-foreground">
           {item.timestamp !== undefined && (
@@ -300,10 +298,11 @@ function TimelineBlock({
   query: string;
   actions: MessageActions;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const [now, setNow] = useState(Date.now());
   const isProcess = block.kind === "process";
   const blockRunning = isProcess ? block.running : false;
+  const [expanded, setExpanded] = useState(blockRunning);
+  const userToggled = useRef(false);
+  const [now, setNow] = useState(Date.now());
   const blockFinishedAt = isProcess ? block.finishedAt : undefined;
   const searchExpanded =
     isProcess &&
@@ -315,9 +314,9 @@ function TimelineBlock({
     if (searchExpanded) setExpanded(true);
   }, [searchExpanded]);
   useEffect(() => {
-    if (block.kind !== "process") return;
-    setExpanded(block.running || searchExpanded);
-  }, [block.kind, blockRunning, searchExpanded]);
+    if (userToggled.current || !isProcess) return;
+    setExpanded(blockRunning);
+  }, [blockRunning, isProcess]);
   useEffect(() => {
     if (!isProcess || !blockRunning || blockFinishedAt) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -337,30 +336,36 @@ function TimelineBlock({
         itemText(item).toLocaleLowerCase().includes(query.toLocaleLowerCase()),
       )
     : undefined;
-  const firstStarted =
-    block.startedAt ?? tools.find((item) => item.startedAt)?.startedAt;
-  const lastFinished =
-    block.finishedAt ??
-    [...tools].reverse().find((item) => item.finishedAt)?.finishedAt;
-  const elapsed = firstStarted
-    ? Math.max(0, (lastFinished ?? now) - firstStarted)
-    : null;
+  const firstStarted = block.startedAt;
+  const lastFinished = block.finishedAt;
+  let elapsed: number | null = null;
+  if (firstStarted != null) {
+    if (block.running) elapsed = Math.max(0, now - firstStarted);
+    else if (lastFinished != null)
+      elapsed = Math.max(0, lastFinished - firstStarted);
+  }
   const elapsedText =
     elapsed === null ? "" : ` · 用时 ${formatElapsed(elapsed)}`;
   return (
-    <details
-      className="pi-process"
-      open={expanded}
-      onToggle={(event) => setExpanded(event.currentTarget.open)}
-    >
-      <summary className="pi-process-summary flex max-w-full cursor-pointer list-none items-center gap-2 py-1.5 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+    <details className="pi-process" open={expanded}>
+      <summary
+        className="pi-process-summary flex max-w-full cursor-pointer list-none items-center gap-2 py-1.5 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
+        onClick={(event) => {
+          event.preventDefault();
+          userToggled.current = true;
+          setExpanded((value) => !value);
+        }}
+      >
         <HugeiconsIcon icon={ArrowDown01Icon} size={12} />
-        <span className={`pi-process-title ${block.running ? "pi-process-live" : ""}`}>
+        <span
+          className={`pi-process-title ${block.running ? "pi-process-live" : ""}`}
+        >
           {block.label}
         </span>
         <span className="pi-process-meta">
-          {block.items.length} 个步骤
-          {tools.length ? ` · ${tools.length} 次工具调用` : ""}
+          {block.items.length
+            ? `${block.items.length} 个步骤${tools.length ? ` · ${tools.length} 次工具调用` : ""}`
+            : "等待模型响应"}
           {elapsedText}
         </span>
       </summary>
@@ -407,16 +412,13 @@ function ProcessStep({
     return (
       <details className="pi-process-step" open={openForSearch || undefined}>
         <summary className="cursor-pointer py-1 text-[11px] text-muted-foreground">
-          思考
+          {step.item?.kind === "thinking" && step.item.streaming
+            ? "思考中"
+            : "已思考"}
         </summary>
         <div className="pi-process-step-body pi-markdown select-text">
-          <Streamdown
-            controls={{
-              code: { copy: true, download: false },
-              table: { copy: false, download: false, fullscreen: true },
-            }}
-          >
-          {step.item?.kind === "thinking" ? step.item.text : ""}
+          <Streamdown controls={STREAMDOWN_CONTROLS}>
+            {step.item?.kind === "thinking" ? step.item.text : ""}
           </Streamdown>
         </div>
       </details>
@@ -474,6 +476,7 @@ export function PiTranscript({
   onCopy,
   onEdit,
   onFork,
+  onLoadOlder,
   canEditLastUser,
 }: {
   view: PiViewState;
@@ -483,6 +486,7 @@ export function PiTranscript({
   active: boolean;
   searchOpen: boolean;
   onCloseSearch: () => void;
+  onLoadOlder?: () => void;
 } & MessageActions) {
   const actions: MessageActions = useMemo(
     () => ({
@@ -507,6 +511,8 @@ export function PiTranscript({
   const appliedJump = useRef(0);
   const revealPending = useRef(false);
   const seenSends = useRef(new Map<string, number>());
+  const loadingOlder = useRef(false);
+  const pendingOlderRestore = useRef<number | null>(null);
   const running = view.status === "running" || view.status === "stopping";
   const blocks = useMemo(
     () =>
@@ -585,11 +591,17 @@ export function PiTranscript({
     if (node) node.scrollTop = node.scrollHeight;
   }, [threadKey, sendRevision, jump]);
   useLayoutEffect(() => {
-    if (active && follow.current) {
-      const node = viewport.current;
-      if (node) node.scrollTop = node.scrollHeight;
+    const node = viewport.current;
+    if (!node) return;
+    const previous = pendingOlderRestore.current;
+    if (previous != null && !view.historyLoadingMore) {
+      node.scrollTop += virtualizer.getTotalSize() - previous;
+      pendingOlderRestore.current = null;
+      loadingOlder.current = false;
+      return;
     }
-  }, [active, view.items, virtualizer.getTotalSize()]);
+    if (active && follow.current) node.scrollTop = node.scrollHeight;
+  }, [active, view.items, view.historyLoadingMore, virtualizer]);
   useEffect(() => {
     const node = viewport.current;
     if (!active || !node) return;
@@ -746,6 +758,19 @@ export function PiTranscript({
         }}
         onScroll={(event) => {
           const node = event.currentTarget;
+          if (
+            node.scrollTop < 80 &&
+            view.historyHasMore &&
+            !view.historyLoadingMore
+          ) {
+            if (!loadingOlder.current) {
+              loadingOlder.current = true;
+              pendingOlderRestore.current = virtualizer.getTotalSize();
+              onLoadOlder?.();
+            }
+          } else if (!view.historyLoadingMore) {
+            loadingOlder.current = false;
+          }
           if (node.scrollHeight - node.scrollTop - node.clientHeight < 32) {
             follow.current = true;
             setFollowing(true);
@@ -765,6 +790,11 @@ export function PiTranscript({
           className="relative mx-auto w-full max-w-3xl"
           style={{ height: virtualizer.getTotalSize() }}
         >
+          {view.historyLoadingMore && (
+            <div className="px-4 py-2 text-center text-[11px] text-muted-foreground">
+              正在加载更早记录…
+            </div>
+          )}
           {virtualizer.getVirtualItems().map((row) => (
             <div
               key={row.key}

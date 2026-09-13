@@ -23,6 +23,7 @@ import {
   parseConfigObject,
   mergeCardSave,
   duplicateModel,
+  updateProviderDraft,
   PROVIDER_EXAMPLE,
   MODEL_EXAMPLE,
   type ModelDashboard,
@@ -106,7 +107,7 @@ export function PiSettings({
         ? {
             ...current,
             providers: current.providers.map((item) =>
-              item.key === providerKey ? { ...item, ...change } : item,
+              item.key === providerKey ? updateProviderDraft(item, change) : item,
             ),
           }
         : current,
@@ -209,7 +210,7 @@ export function PiSettings({
     const next: ProviderDraft = {
       key: crypto.randomUUID(),
       name,
-      text: PROVIDER_EXAMPLE,
+      text: JSON.stringify({ ...JSON.parse(PROVIDER_EXAMPLE), name }, null, 2),
       hasModels: true,
       models: [],
     };

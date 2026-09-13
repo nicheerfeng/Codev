@@ -178,19 +178,16 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
     }, []);
 
     /** 计算当前 Markdown 原文的字面量搜索状态。 */
-    const getSearchStatus = useCallback(
-      (): TextSearchStatus => {
-        const count = renderedSearchReadyRef.current
-          ? renderedMatchesRef.current.length
-          : matchesRef.current.length;
-        const index =
-          count > 0 && currentMatchRef.current >= 0
-            ? Math.min(currentMatchRef.current + 1, count)
-            : 0;
-        return { count, index };
-      },
-      [],
-    );
+    const getSearchStatus = useCallback((): TextSearchStatus => {
+      const count = renderedSearchReadyRef.current
+        ? renderedMatchesRef.current.length
+        : matchesRef.current.length;
+      const index =
+        count > 0 && currentMatchRef.current >= 0
+          ? Math.min(currentMatchRef.current + 1, count)
+          : 0;
+      return { count, index };
+    }, []);
 
     /** 通知 Header 当前 Markdown 搜索状态已经变化。 */
     const emitSearchStatus = useCallback(() => {
@@ -366,11 +363,7 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
         scheduleRenderedSearch();
         emitSearchStatus();
       },
-      [
-        clearRenderedHighlights,
-        emitSearchStatus,
-        scheduleRenderedSearch,
-      ],
+      [clearRenderedHighlights, emitSearchStatus, scheduleRenderedSearch],
     );
 
     useEffect(() => {
@@ -386,8 +379,7 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
         findNext: () => {
           const count = getRenderedMatchCount();
           if (count === 0) return;
-          currentMatchRef.current =
-            (currentMatchRef.current + 1) % count;
+          currentMatchRef.current = (currentMatchRef.current + 1) % count;
           selectRenderedMatch();
           emitSearchStatus();
         },
@@ -521,7 +513,7 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
                 parseIncompleteMarkdown={false}
                 controls={{
                   code: { copy: true, download: false },
-                  table: { copy: true, download: false, fullscreen: true },
+                  table: { copy: true, download: false, fullscreen: false },
                 }}
               >
                 {status.content}

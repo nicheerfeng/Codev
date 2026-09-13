@@ -20,6 +20,8 @@ import {
   PlusSignIcon,
   Cancel01Icon,
   ArrowDown01Icon,
+  PencilEdit01Icon,
+  Delete02Icon,
 } from "@hugeicons/core-free-icons";
 import type { PiImage, PiViewState } from "./types";
 import { PI_LOCAL_COMMANDS } from "./commands";
@@ -32,6 +34,7 @@ type Props = {
   view: PiViewState;
   onSend: (behavior: "steer" | "followUp") => void;
   onStop: () => void;
+  onQueueAction: (kind: "steering" | "followUp", index: number, text: string, action: "edit" | "delete" | "steer") => void;
   onModel: (provider: string, id: string) => void;
   onLoadModels: () => void;
   onThinking: (level: string) => void;
@@ -161,28 +164,22 @@ export function PiComposer(props: Props) {
           <div className="mb-1 text-[10px] text-muted-foreground">
             待处理消息 · {props.view.queue.pendingCount}
           </div>
-          {props.view.queue.steering.map((text, index) => (
+          {(["steering", "followUp"] as const).flatMap((kind) => props.view.queue[kind].map((text, index) => (
             <div
               className="pi-queue-item"
-              key={`steer-${index}-${text}`}
+              key={`${kind}-${index}-${text}`}
             >
-              <span className="pi-queue-mode">插入</span>
-              <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
+              <span className="pi-queue-mode">{kind === "steering" ? "插入" : "排队"}</span>
+              <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]">
                 {text}
               </span>
+              <div className="flex shrink-0 items-center gap-0.5">
+                {kind === "followUp" && <Button variant="ghost" size="icon-xs" title="立即引导当前任务" aria-label="立即引导" disabled={props.busy || props.disabled} onClick={() => props.onQueueAction(kind, index, text, "steer")}><HugeiconsIcon icon={ArrowUp01Icon} size={13} /></Button>}
+                <Button variant="ghost" size="icon-xs" title="退回输入框编辑" aria-label="退回编辑" disabled={props.busy || props.disabled} onClick={() => props.onQueueAction(kind, index, text, "edit")}><HugeiconsIcon icon={PencilEdit01Icon} size={13} /></Button>
+                <Button variant="ghost" size="icon-xs" title="删除排队消息" aria-label="删除排队消息" disabled={props.busy || props.disabled} onClick={() => props.onQueueAction(kind, index, text, "delete")}><HugeiconsIcon icon={Delete02Icon} size={13} /></Button>
+              </div>
             </div>
-          ))}
-          {props.view.queue.followUp.map((text, index) => (
-            <div
-              className="pi-queue-item"
-              key={`follow-up-${index}-${text}`}
-            >
-              <span className="pi-queue-mode">排队</span>
-              <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
-                {text}
-              </span>
-            </div>
-          ))}
+          )))}
         </div>
       )}
       <div className="relative mx-auto w-full max-w-3xl rounded-2xl border border-border bg-card shadow-sm focus-within:border-ring/60">

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { INITIAL_PI_VIEW_STATE, piViewReducer } from "./reducer";
 import type { PiEventEnvelope } from "./types";
 
@@ -204,6 +204,69 @@ describe("piViewReducer", () => {
     });
   });
 
+  it("marks a prompt as running before agent_start and keeps trailing blanks off user text", () => {
+    const state = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "prompt",
+      text: "先修复拖拽\n\n",
+    });
+    expect(state.status).toBe("running");
+    expect(state.processStartedAt).toEqual(expect.any(Number));
+    expect(state.items[0]).toMatchObject({
+      role: "user",
+      text: "先修复拖拽",
+    });
+    const started = piViewReducer(state, {
+      type: "event",
+      payload: rpc({ type: "agent_start" }),
+    });
+    expect(started.processStartedAt).toBe(state.processStartedAt);
+    const hydrated = piViewReducer(started, {
+      type: "event",
+      payload: rpc({
+        type: "response",
+        command: "get_state",
+        success: true,
+        data: { isStreaming: false },
+      }),
+    });
+    expect(hydrated.status).toBe("running");
+  });
+
+  it("resets process timing for a new turn and keeps the previous turn timestamps", () => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const first = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "prompt",
+      text: "第一轮",
+    });
+    expect(first.processStartedAt).toBe(1_000);
+    now = 4_000;
+    const settled = piViewReducer(first, {
+      type: "event",
+      payload: rpc({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "完成" }],
+        },
+      }),
+    });
+    const done = piViewReducer(settled, {
+      type: "event",
+      payload: rpc({ type: "agent_settled" }),
+    });
+    expect(done.processFinishedAt).toBe(4_000);
+    expect(done.items[0]).toMatchObject({ timestamp: 1_000 });
+    expect(done.items[1]).toMatchObject({ timestamp: 4_000 });
+    now = 9_000;
+    const next = piViewReducer(done, { type: "prompt", text: "第二轮" });
+    expect(next.processStartedAt).toBe(9_000);
+    expect(next.processFinishedAt).toBeUndefined();
+    expect(next.items[0]).toMatchObject({ timestamp: 1_000 });
+    expect(next.items[1]).toMatchObject({ timestamp: 4_000 });
+    clock.mockRestore();
+  });
+
   it("hydrates the native pending queue count from get_state", () => {
     const state = piViewReducer(INITIAL_PI_VIEW_STATE, {
       type: "event",
@@ -306,5 +369,28 @@ describe("piViewReducer", () => {
     expect(state.items[0]).toMatchObject({ role: "user", text: "hello" });
     expect(state.sessionFile).toBe("session.jsonl");
     expect(state.thinkingLevel).toBe("high");
+  });
+
+  it("prepends older history pages without replacing the latest messages", () => {
+    const latest = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "history",
+      messages: [{ id: "u2", role: "user", content: "latest" }],
+      offset: 80,
+      hasMore: true,
+    });
+    const older = piViewReducer(latest, {
+      type: "history",
+      prepend: true,
+      messages: [{ id: "u1", role: "user", content: "older" }],
+      offset: 10,
+      hasMore: false,
+    });
+    expect(
+      older.items.map((item) =>
+        item.kind === "message" || item.kind === "thinking" ? item.text : "",
+      ),
+    ).toEqual(["older", "latest"]);
+    expect(older.historyOffset).toBe(10);
+    expect(older.historyHasMore).toBe(false);
   });
 });

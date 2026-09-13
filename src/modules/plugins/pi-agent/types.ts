@@ -22,6 +22,22 @@ export type PiModelsFile = {
   content: string;
 };
 
+export type PiSessionHistory = {
+  messages: unknown[];
+  model: PiModel | null;
+  thinkingLevel?: string | null;
+  sessionName: string | null;
+  sessionFile: string;
+  oldestOffset: number;
+  hasMore: boolean;
+};
+
+export type PiClonedSession = {
+  path: string;
+  id: string;
+  name: string | null;
+};
+
 export type PiStartResult = {
   sessionId: number;
   processId: number;
@@ -108,4 +124,7 @@ export type PiViewState = {
   error: string | null;
   processStartedAt?: number;
   processFinishedAt?: number;
+  historyOffset: number | null;
+  historyHasMore: boolean;
+  historyLoadingMore: boolean;
 };

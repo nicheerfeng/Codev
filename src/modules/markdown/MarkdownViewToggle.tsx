@@ -10,6 +10,7 @@ type Props = {
   className?: string;
 };
 
+/** 切换文档渲染与原文视图，右侧留出滚动条空间。 */
 export function MarkdownViewToggle({
   mode,
   onChange,
@@ -20,7 +21,7 @@ export function MarkdownViewToggle({
   return (
     <div
       className={cn(
-        "absolute right-3 top-3 z-10 inline-flex items-center gap-0.5 rounded-md border border-border/60 bg-card/85 p-0.5 text-[11px] shadow-sm backdrop-blur",
+        "absolute right-6 top-3 z-10 inline-flex items-center gap-0.5 rounded-md border border-border/60 bg-card/85 p-0.5 text-[11px] shadow-sm backdrop-blur",
         className,
       )}
     >

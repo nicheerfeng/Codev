@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildTimelineBlocks } from "./timeline";
-import { collectProjects, pathKey } from "./organization";
+import { collectProjects, nextDraftKey, pathKey } from "./organization";
 import type { PiMessageItem } from "./types";
 
 /** 构造纯文本消息作为过程分组输入。 */
@@ -77,19 +77,28 @@ describe("Pi turn grouping", () => {
     });
   });
   it("keeps a visible collapsed process summary before the first stream event", () => {
-    const blocks = buildTimelineBlocks([message("u1", "user")], true);
+    const blocks = buildTimelineBlocks([message("u1", "user")], true, {
+      startedAt: 1000,
+    });
     expect(blocks[blocks.length - 1]).toMatchObject({
       kind: "process",
       running: true,
       label: "处理中",
       items: [],
+      startedAt: 1000,
     });
   });
   it("uses user and final assistant timestamps for historical turn duration", () => {
     const blocks = buildTimelineBlocks(
       [
         { ...message("u1", "user"), timestamp: 1789120800000 },
-        { id: "thinking", kind: "thinking", text: "plan", streaming: false, timestamp: 1789120801000 },
+        {
+          id: "thinking",
+          kind: "thinking",
+          text: "plan",
+          streaming: false,
+          timestamp: 1789120801000,
+        },
         { ...message("a1", "assistant"), timestamp: 1789120805000 },
       ],
       false,
@@ -98,6 +107,61 @@ describe("Pi turn grouping", () => {
       kind: "process",
       startedAt: 1789120800000,
       finishedAt: 1789120805000,
+    });
+  });
+  it("does not apply live process timing to earlier completed turns", () => {
+    const blocks = buildTimelineBlocks(
+      [
+        { ...message("u1", "user"), timestamp: 1000 },
+        {
+          id: "t1",
+          kind: "thinking",
+          text: "old",
+          streaming: false,
+          timestamp: 1500,
+        },
+        { ...message("a1", "assistant"), timestamp: 2000 },
+        { ...message("u2", "user"), timestamp: 9000 },
+        { ...message("a2", "assistant"), timestamp: 9500, streaming: true },
+      ],
+      true,
+      { startedAt: 9000 },
+    );
+    const processes = blocks.filter((block) => block.kind === "process");
+    expect(processes[0]).toMatchObject({
+      kind: "process",
+      running: false,
+      startedAt: 1000,
+      finishedAt: 2000,
+    });
+    expect(processes[1]).toMatchObject({
+      kind: "process",
+      running: true,
+      startedAt: 9000,
+      finishedAt: undefined,
+    });
+  });
+  it("keeps completed duration on the current turn instead of collapsing to zero", () => {
+    const blocks = buildTimelineBlocks(
+      [
+        { ...message("u1", "user"), timestamp: 1000 },
+        {
+          id: "thought",
+          kind: "thinking",
+          text: "plan",
+          streaming: false,
+          timestamp: 1400,
+        },
+        { ...message("a1", "assistant"), timestamp: 1000 },
+      ],
+      false,
+      { startedAt: 1000, finishedAt: 5000 },
+    );
+    expect(blocks[1]).toMatchObject({
+      kind: "process",
+      running: false,
+      startedAt: 1000,
+      finishedAt: 5000,
     });
   });
   it("preserves empty projects and normalizes Windows paths without lowercasing Unix paths", () => {
@@ -110,5 +174,12 @@ describe("Pi turn grouping", () => {
     ).toHaveLength(3);
     expect(collectProjects(["D:/Work/One"], [], ["d:/work/one"])).toEqual([]);
     expect(pathKey("D:\\Work\\One\\")).toBe("d:/work/one");
+  });
+  it("gives each new thread a unique draft key in the same project", () => {
+    const one = nextDraftKey("D:\\Work\\One\\");
+    const two = nextDraftKey("d:/work/one");
+    expect(one).toMatch(/^draft:d:\/work\/one:[0-9a-f-]{36}$/i);
+    expect(two).toMatch(/^draft:d:\/work\/one:[0-9a-f-]{36}$/i);
+    expect(one).not.toBe(two);
   });
 });

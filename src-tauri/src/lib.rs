@@ -3,9 +3,9 @@ pub mod modules;
 use modules::{fs, history, pi_agent, pty, workspace};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 #[cfg(target_os = "macos")]
-use tauri::{PhysicalPosition, WindowEvent};
+use tauri::PhysicalPosition;
 #[cfg(target_os = "windows")]
 use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
 #[cfg(target_os = "windows")]
@@ -13,7 +13,7 @@ use windows::core::Interface;
 
 const HTML_PREVIEW_BRIDGE: &str = include_str!("html_preview_bridge.js");
 
-/// 关闭 WebView2 浏览器级快捷键，让 HTML 预览的 Ctrl+F 交给 Codev 搜索。
+/// 关闭 WebView2 原生菜单与浏览器快捷键，覆盖阅读器和所有 iframe。
 #[cfg(target_os = "windows")]
 fn disable_browser_accelerator_keys(
     window: &tauri::WebviewWindow<tauri::Wry>,
@@ -30,6 +30,11 @@ fn disable_browser_accelerator_keys(
                 let settings = unsafe {
                     core_webview
                         .Settings()
+                        .map_err(|error| error.to_string())?
+                };
+                unsafe {
+                    settings
+                        .SetAreDefaultContextMenusEnabled(false)
                         .map_err(|error| error.to_string())?
                 };
                 let settings3 = settings
@@ -271,20 +276,17 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .setup(move |_app| {
-            #[cfg(target_os = "windows")]
             if let Some(main) = _app.get_webview_window("main") {
+                #[cfg(target_os = "windows")]
                 let _ = disable_browser_accelerator_keys(&main);
-            }
-            // macOS skips parent() for the settings window, so tie its lifecycle
-            // to the main window here instead. Other platforms keep parent().
-            #[cfg(target_os = "macos")]
-            if let Some(main) = _app.get_webview_window("main") {
                 let handle = _app.handle().clone();
                 main.on_window_event(move |event| {
                     if matches!(
                         event,
                         WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed
                     ) {
+                        let _ = pi_agent::pi_agent_close_all(handle.state());
+                        #[cfg(target_os = "macos")]
                         if let Some(settings) = handle.get_webview_window("settings") {
                             let _ = settings.close();
                         }
@@ -366,6 +368,10 @@ pub fn run() {
             pi_agent::pi_agent_delete_session,
             pi_agent::pi_agent_read_models,
             pi_agent::pi_agent_write_models,
+            pi_agent::pi_agent_read_session,
+            pi_agent::pi_agent_clone_session,
+            pi_agent::pi_agent_append_session,
+            pi_agent::pi_agent_list_models,
             pi_agent::pi_agent_start,
             pi_agent::pi_agent_send,
             pi_agent::pi_agent_close,

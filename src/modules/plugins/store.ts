@@ -5,6 +5,7 @@ import {
   EMPTY_ORGANIZATION,
   type PiOrganization,
 } from "./pi-agent/organization";
+import type { PiModel } from "./pi-agent/types";
 
 export const JSON_FORMATTER_PLUGIN_ID = "json-formatter" as const;
 export const TEXT_DIFF_PLUGIN_ID = "text-diff" as const;
@@ -19,6 +20,7 @@ export type PluginState = {
   piAgentProjects: string[];
   piAgentHiddenProjects: string[];
   piAgentOrganization: PiOrganization;
+  piAgentLastModel: PiModel | null;
 };
 
 type PluginStoreState = PluginState & {
@@ -30,6 +32,7 @@ const STORE_PATH = "codev-plugins.json";
 const ENABLED_PLUGINS_KEY = "enabledPlugins";
 const PI_AGENT_PROJECTS_KEY = "piAgentProjects";
 const PI_AGENT_HIDDEN_PROJECTS_KEY = "piAgentHiddenProjects";
+const PI_AGENT_LAST_MODEL_KEY = "piAgentLastModel";
 const PLUGIN_CHANGED_EVENT = "codev://plugin-settings-changed";
 const DEFAULT_PLUGIN_STATE: PluginState = {
   enabled: {
@@ -40,6 +43,7 @@ const DEFAULT_PLUGIN_STATE: PluginState = {
   piAgentProjects: [],
   piAgentHiddenProjects: [],
   piAgentOrganization: EMPTY_ORGANIZATION,
+  piAgentLastModel: null,
 };
 const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: 200 });
 let initPromise: Promise<void> | null = null;
@@ -50,11 +54,16 @@ function normalizePluginState(
   value: unknown,
   projects: unknown = [],
   hiddenProjects: unknown = [],
+  lastModel: unknown = null,
 ): PluginState {
   const enabled =
     typeof value === "object" && value !== null
       ? (value as Partial<Record<PluginId, unknown>>)
       : {};
+  const model =
+    lastModel && typeof lastModel === "object" && !Array.isArray(lastModel)
+      ? (lastModel as Partial<PiModel>)
+      : null;
   return {
     piAgentOrganization: EMPTY_ORGANIZATION,
     enabled: {
@@ -86,6 +95,14 @@ function normalizePluginState(
           ),
         ]
       : [],
+    piAgentLastModel:
+      typeof model?.provider === "string" && typeof model.id === "string"
+        ? {
+            provider: model.provider,
+            id: model.id,
+            name: typeof model.name === "string" ? model.name : undefined,
+          }
+        : null,
   };
 }
 
@@ -94,10 +111,12 @@ export async function loadPluginState(): Promise<PluginState> {
   const value = await store.get<unknown>(ENABLED_PLUGINS_KEY);
   const projects = await store.get<unknown>(PI_AGENT_PROJECTS_KEY);
   const hiddenProjects = await store.get<unknown>(PI_AGENT_HIDDEN_PROJECTS_KEY);
+  const lastModel = await store.get<unknown>(PI_AGENT_LAST_MODEL_KEY);
   const state = normalizePluginState(
     value ?? DEFAULT_PLUGIN_STATE.enabled,
     projects,
     hiddenProjects,
+    lastModel,
   );
   return {
     ...state,
@@ -105,6 +124,15 @@ export async function loadPluginState(): Promise<PluginState> {
       (await store.get<PiOrganization>("piAgentOrganization")) ??
       EMPTY_ORGANIZATION,
   };
+}
+
+/** 记住最近一次选用的模型，新线程不必先启动 runtime。 */
+export async function setPiAgentLastModel(
+  model: PiModel | null,
+): Promise<void> {
+  await store.set(PI_AGENT_LAST_MODEL_KEY, model);
+  await store.save();
+  usePluginStore.setState({ piAgentLastModel: model });
 }
 
 /** 保存 Pi 组和归档展示信息，不修改 Pi 原生会话。 */

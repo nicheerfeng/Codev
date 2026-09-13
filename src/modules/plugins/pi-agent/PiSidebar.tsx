@@ -113,7 +113,7 @@ export function PiSidebar(props: Props) {
                     ? "运行中"
                     : "就绪"
               }
-              className={`size-2 shrink-0 rounded-full ${thread.waiting ? "bg-amber-600 ring-2 ring-amber-600/25 dark:bg-amber-300" : thread.status === "running" ? "bg-[#477faf] ring-2 ring-[#477faf]/25 dark:bg-[#a6cceb]" : "bg-muted-foreground/50"}`}
+              className={`size-2 shrink-0 rounded-full ${thread.waiting ? "bg-amber-600 ring-2 ring-amber-600/25 dark:bg-amber-300" : thread.status === "running" ? "pi-running-dot bg-[#477faf] text-[#477faf] dark:bg-[#a6cceb] dark:text-[#a6cceb]" : "bg-muted-foreground/50"}`}
             />
             <span className="min-w-0 flex-1 truncate text-xs">
               {thread.name || thread.preview || "新线程"}

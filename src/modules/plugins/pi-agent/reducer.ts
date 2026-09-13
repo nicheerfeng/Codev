@@ -1,5 +1,6 @@
 import type {
   PiEventEnvelope,
+  PiImage,
   PiModel,
   PiStopReason,
   PiTranscriptItem,
@@ -22,12 +23,28 @@ export const INITIAL_PI_VIEW_STATE: PiViewState = {
   queue: { steering: [], followUp: [], pendingCount: 0 },
   phase: "",
   error: null,
+  historyOffset: null,
+  historyHasMore: false,
+  historyLoadingMore: false,
 };
 
 type PiViewAction =
   | { type: "reset"; status?: PiViewState["status"] }
   | { type: "stopping" }
   | { type: "error"; message: string }
+  | {
+      type: "prompt";
+      text: string;
+      images?: PiImage[];
+      queued?: boolean;
+    }
+  | {
+      type: "history";
+      messages: unknown[];
+      prepend?: boolean;
+      offset: number;
+      hasMore: boolean;
+    }
   | { type: "event"; payload: PiEventEnvelope };
 
 /** 读取 RPC 对象，不把数组当成消息。 */
@@ -119,7 +136,7 @@ function normalizeMessage(message: unknown, id: string): PiTranscriptItem[] {
         id,
         kind: "message",
         role,
-        text: resultText(content),
+        text: resultText(content).replace(/\s+$/u, ""),
         thinking: "",
         streaming: false,
         images: content.filter(
@@ -176,7 +193,15 @@ function mergeItems(
 ): PiTranscriptItem[] {
   const next = [...items];
   for (const item of incoming) {
-    const index = next.findIndex((existing) => existing.id === item.id);
+    let index = next.findIndex((existing) => existing.id === item.id);
+    if (index < 0 && item.kind === "message" && item.role === "user")
+      index = next.findIndex(
+        (existing) =>
+          existing.kind === "message" &&
+          existing.role === "user" &&
+          existing.id.startsWith("local-user-") &&
+          existing.text === item.text,
+      );
     if (index < 0) next.push(item);
     else {
       const previous = next[index];
@@ -230,40 +255,66 @@ function reduceEvent(
     return { ...state, error: String(event.message ?? "Pi 运行输出异常") };
   if (payload.stream === "protocol")
     return { ...state, error: String(event.error), status: "failed" };
-  if (type === "process_exit")
+  if (type === "process_exit") {
+    const finishedAt = Date.now();
     return {
       ...state,
       status: "stopped",
       phase: "",
-      items: settleItems(state.items),
+      processFinishedAt: finishedAt,
+      items: stampTurnTiming(
+        settleItems(state.items),
+        state.processStartedAt,
+        finishedAt,
+      ),
     };
-  if (type === "agent_start")
+  }
+  if (type === "agent_start") {
+    const continuing =
+      state.status === "running" && state.processFinishedAt == null;
     return {
       ...state,
       status: "running",
       phase: "思考中",
       error: null,
-      processStartedAt: Date.now(),
+      processStartedAt: continuing
+        ? (state.processStartedAt ?? Date.now())
+        : Date.now(),
       processFinishedAt: undefined,
     };
-  if (type === "agent_settled")
+  }
+  if (type === "agent_settled") {
+    const finishedAt = Date.now();
     return {
       ...state,
       status: "idle",
       phase: "",
-      processFinishedAt: Date.now(),
-      items: settleItems(state.items),
+      processFinishedAt: finishedAt,
+      items: stampTurnTiming(
+        settleItems(state.items),
+        state.processStartedAt,
+        finishedAt,
+      ),
     };
+  }
   if (type === "queue_update") {
     const steering = Array.isArray(event.steering)
-      ? event.steering.filter((value): value is string => typeof value === "string")
+      ? event.steering.filter(
+          (value): value is string => typeof value === "string",
+        )
       : [];
     const followUp = Array.isArray(event.followUp)
-      ? event.followUp.filter((value): value is string => typeof value === "string")
+      ? event.followUp.filter(
+          (value): value is string => typeof value === "string",
+        )
       : [];
     return {
       ...state,
-      queue: { steering, followUp, pendingCount: steering.length + followUp.length },
+      queue: {
+        steering,
+        followUp,
+        pendingCount: steering.length + followUp.length,
+      },
     };
   }
   if (type === "auto_retry_start") return { ...state, phase: "正在重试" };
@@ -369,20 +420,23 @@ function reduceEvent(
       commands: Array.isArray(data?.commands) ? data.commands : [],
     };
   if (event.command === "get_messages") {
-    const messages = Array.isArray(data?.messages) ? data.messages : [];
-    return {
-      ...state,
-      items: messages.reduce(
-        (items: PiTranscriptItem[], message, index) =>
-          mergeItems(items, normalizeMessage(message, `history-${index}`)),
-        [],
-      ),
-    };
+    return hydrateHistory(
+      state,
+      Array.isArray(data?.messages) ? data.messages : [],
+      false,
+      state.historyOffset,
+      false,
+    );
   }
   if (event.command === "get_state")
     return {
       ...state,
-      status: data?.isStreaming === true ? "running" : "idle",
+      status:
+        data?.isStreaming === true
+          ? "running"
+          : state.status === "running" || state.status === "stopping"
+            ? state.status
+            : "idle",
       sessionFile:
         typeof data?.sessionFile === "string"
           ? data.sessionFile
@@ -451,6 +505,130 @@ function settleItems(items: PiTranscriptItem[]): PiTranscriptItem[] {
   );
 }
 
+/** 把本轮起止时间写回消息，下一轮开始后仍能算出当轮耗时。 */
+function stampTurnTiming(
+  items: PiTranscriptItem[],
+  startedAt?: number,
+  finishedAt?: number,
+): PiTranscriptItem[] {
+  if (!items.length || (startedAt == null && finishedAt == null)) return items;
+  let lastUser = -1;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.kind === "message" && item.role === "user") {
+      lastUser = index;
+      break;
+    }
+  }
+  return items.map((item, index) => {
+    if (lastUser >= 0 && index < lastUser) return item;
+    if (
+      item.kind === "message" &&
+      item.role === "user" &&
+      item.timestamp == null &&
+      startedAt != null
+    )
+      return { ...item, timestamp: startedAt };
+    if (index !== items.length - 1) return item;
+    if (item.kind === "tool")
+      return { ...item, finishedAt: item.finishedAt ?? finishedAt };
+    if (finishedAt == null) return item;
+    return {
+      ...item,
+      timestamp: Math.max(item.timestamp ?? 0, finishedAt),
+    };
+  });
+}
+
+/** 把磁盘或 RPC 历史合并进当前线程，分页时把更早消息插到前面。 */
+function hydrateHistory(
+  state: PiViewState,
+  messages: unknown[],
+  prepend: boolean,
+  offset: number | null,
+  hasMore: boolean,
+): PiViewState {
+  const incoming = messages.reduce(
+    (next: PiTranscriptItem[], message, index) => {
+      const record = objectValue(message);
+      const nested = objectValue(record?.message) ?? record;
+      const id =
+        typeof record?.id === "string"
+          ? record.id
+          : typeof nested?.id === "string"
+            ? nested.id
+            : `history-${index}`;
+      return mergeItems(next, normalizeMessage(message, id));
+    },
+    [],
+  );
+  const last = state.items[state.items.length - 1];
+  let items = prepend ? mergeItems(incoming, state.items) : incoming;
+  if (
+    last?.kind === "message" &&
+    last.role === "user" &&
+    last.id.startsWith("local-user-") &&
+    !items.some(
+      (item) =>
+        item.kind === "message" &&
+        item.role === "user" &&
+        item.text === last.text,
+    )
+  )
+    items = [...items, last];
+  return {
+    ...state,
+    items,
+    historyOffset: offset,
+    historyHasMore: hasMore,
+    historyLoadingMore: false,
+  };
+}
+
+/** 点击发送后立刻进入运行态，不必等待 Pi 的 agent_start。 */
+function beginPrompt(
+  state: PiViewState,
+  text: string,
+  images: PiImage[] | undefined,
+  queued = false,
+): PiViewState {
+  const cleaned = text.replace(/\s+$/u, "");
+  const now = Date.now();
+  const last = state.items[state.items.length - 1];
+  const duplicate =
+    last?.kind === "message" && last.role === "user" && last.text === cleaned;
+  return {
+    ...state,
+    status: "running",
+    phase: queued ? state.phase || "处理中" : "处理中",
+    error: null,
+    processStartedAt:
+      queued && state.status === "running" && state.processFinishedAt == null
+        ? (state.processStartedAt ?? now)
+        : now,
+    processFinishedAt:
+      queued && state.status === "running"
+        ? state.processFinishedAt
+        : undefined,
+    items:
+      queued || duplicate || !cleaned
+        ? state.items
+        : [
+            ...state.items,
+            {
+              id: `local-user-${now}`,
+              kind: "message",
+              role: "user",
+              text: cleaned,
+              thinking: "",
+              streaming: false,
+              images,
+              timestamp: now,
+            },
+          ],
+  };
+}
+
 /** 维护单个 Pi 会话的纯状态，供前端与协议回归共用。 */
 export function piViewReducer(
   state: PiViewState,
@@ -460,5 +638,15 @@ export function piViewReducer(
     return { ...INITIAL_PI_VIEW_STATE, status: action.status ?? "stopped" };
   if (action.type === "stopping") return { ...state, status: "stopping" };
   if (action.type === "error") return { ...state, error: action.message };
+  if (action.type === "prompt")
+    return beginPrompt(state, action.text, action.images, action.queued);
+  if (action.type === "history")
+    return hydrateHistory(
+      state,
+      action.messages,
+      action.prepend === true,
+      action.offset,
+      action.hasMore,
+    );
   return reduceEvent(state, action.payload);
 }

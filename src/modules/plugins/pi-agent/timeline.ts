@@ -37,6 +37,14 @@ function itemTime(item: PiTranscriptItem): number | undefined {
   return item.startedAt ?? item.finishedAt;
 }
 
+/** 从后往前取本轮最后一个可用时间，避免完成后退回当前时刻。 */
+function lastItemTime(items: PiTranscriptItem[]): number | undefined {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const time = itemTime(items[index]);
+    if (time !== undefined) return time;
+  }
+}
+
 /** 将连续工具项收纳为一个时间线步骤，保留工具调用顺序。 */
 function groupTimelineSteps(items: PiTranscriptItem[]): PiTimelineStep[] {
   const steps: PiTimelineStep[] = [];
@@ -71,13 +79,12 @@ export function buildTimelineBlocks(
   let turn: PiTranscriptItem[] = [];
   let turnStartedAt: number | undefined;
   /** 将一轮执行记录折叠到一个过程块中。 */
-  const flush = (open: boolean) => {
+  const flush = (open: boolean, useLiveTiming = false) => {
     if (!turn.length) return;
     const last = turn[turn.length - 1];
+    if (!last) return;
     const final =
-      last.kind === "message" &&
-      last.role === "assistant" &&
-      !last.streaming
+      last.kind === "message" && last.role === "assistant" && !last.streaming
         ? last
         : null;
     const steps = final ? turn.slice(0, -1) : turn;
@@ -86,21 +93,26 @@ export function buildTimelineBlocks(
       const liveTool = steps.find(
         (item) => item.kind === "tool" && item.status === "running",
       );
+      const itemStart =
+        turnStartedAt ?? toolTime(steps, "startedAt") ?? itemTime(steps[0]);
+      const itemEnd =
+        (final ? itemTime(final) : undefined) ??
+        toolTime(steps, "finishedAt") ??
+        lastItemTime(final ? [final, ...steps] : steps);
+      const startedAt = useLiveTiming
+        ? (timing.startedAt ?? itemStart)
+        : itemStart;
+      let finishedAt: number | undefined;
+      if (!open)
+        finishedAt = useLiveTiming ? (timing.finishedAt ?? itemEnd) : itemEnd;
       blocks.push({
         id: `process-${steps[0].id}`,
         kind: "process",
         items: steps,
         steps: timelineSteps,
         running: open,
-        startedAt:
-          (open ? timing.startedAt : undefined) ??
-          turnStartedAt ??
-          toolTime(steps, "startedAt") ??
-          itemTime(steps[0]),
-        finishedAt:
-          (final ? itemTime(final) : undefined) ??
-          (!open ? timing.finishedAt : undefined) ??
-          toolTime(steps, "finishedAt"),
+        startedAt,
+        finishedAt,
         label:
           liveTool?.kind === "tool"
             ? `正在执行 ${liveTool.name}`
@@ -120,7 +132,7 @@ export function buildTimelineBlocks(
       turnStartedAt = item.timestamp;
     } else turn.push(item);
   }
-  flush(running);
+  flush(running, true);
   if (running && !blocks.some((block) => block.kind === "process"))
     blocks.push({
       id: "process-live",

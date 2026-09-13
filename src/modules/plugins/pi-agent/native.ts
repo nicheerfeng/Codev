@@ -6,6 +6,9 @@ import type {
   PiSessionSummary,
   PiStartResult,
   PiModelsFile,
+  PiSessionHistory,
+  PiClonedSession,
+  PiModel,
 } from "./types";
 
 const PI_EVENT = "codev://pi-agent-event";
@@ -43,12 +46,21 @@ export function writePiModels(content: string): Promise<void> {
   return invoke("pi_agent_write_models", { content });
 }
 
-/** 重命名当前 Pi 会话，写入 Pi 原生 session_info 记录。 */
-export function renamePiSession(
-  sessionId: number,
-  name: string,
-): Promise<void> {
-  return sendPiCommand(sessionId, { type: "set_session_name", name });
+/** 向会话 JSONL 追加名称、模型或思考等级，不启动 runtime。 */
+export function appendPiSession(request: {
+  path: string;
+  kind: "session_info" | "model_change" | "thinking_level_change";
+  name?: string;
+  provider?: string;
+  modelId?: string;
+  thinkingLevel?: string;
+}): Promise<void> {
+  return invoke("pi_agent_append_session", { request });
+}
+
+/** 复制会话 JSONL 为新线程，不启动 runtime。 */
+export function clonePiSession(path: string): Promise<PiClonedSession> {
+  return invoke<PiClonedSession>("pi_agent_clone_session", { path });
 }
 
 /** 启动新建或恢复的 Pi RPC 会话。 */
@@ -79,6 +91,29 @@ export function sendPiCommand(
 /** 关闭指定 Pi RPC 进程。 */
 export function closePiAgent(sessionId: number): Promise<boolean> {
   return invoke<boolean>("pi_agent_close", { sessionId });
+}
+
+/** 结束 Codev 当前管理的全部 Pi RPC 进程树。 */
+export function closeAllPiAgents(): Promise<number> {
+  return invoke<number>("pi_agent_close_all");
+}
+
+/** 浏览历史时只读 JSONL，默认最近 20 条，不启动 Pi runtime。 */
+export function readPiSession(
+  path: string,
+  before?: number | null,
+  limit = 20,
+): Promise<PiSessionHistory> {
+  return invoke<PiSessionHistory>("pi_agent_read_session", {
+    path,
+    before: before ?? null,
+    limit,
+  });
+}
+
+/** 从 models.json 列出可选模型，不启动 Pi runtime。 */
+export function listPiModels(): Promise<PiModel[]> {
+  return invoke<PiModel[]>("pi_agent_list_models");
 }
 
 /** 监听所有 Pi RPC 事件并由调用方按会话过滤。 */

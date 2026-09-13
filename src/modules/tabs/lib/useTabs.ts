@@ -142,6 +142,7 @@ type OpenMarkdownTabOptions = OpenFileTabOptions & {
 export type CloseTabsPlan = {
   closeIds: number[];
   nextActiveId: number;
+  scopeIds?: number[];
 };
 
 type CloseTabsPlanResult = {
@@ -386,25 +387,26 @@ export function reorderTabsByGroup(
   return next;
 }
 
-/**
- * Plans a Chrome-style "close tabs to the right" within the anchor's space.
- * Returns the ids strictly to the right of the anchor plus the id to keep
- * active: the anchor when the active tab is being closed, unchanged otherwise.
- */
+/** 按指定标签栏显示顺序关闭目标右侧全部标签，默认沿用空间范围。 */
 export function planCloseTabsToRight(
   tabs: Tab[],
   anchorId: number,
   activeId: number,
+  scopeIds?: number[],
 ): CloseTabsPlan {
   const anchor = tabs.find((t) => t.id === anchorId);
   if (!anchor) return { closeIds: [], nextActiveId: activeId };
-  const sameSpace = tabs.filter((t) => t.spaceId === anchor.spaceId);
+  const sameSpace = scopeIds
+    ? scopeIds.flatMap((id) => tabs.filter((tab) => tab.id === id))
+    : tabs.filter((t) => t.spaceId === anchor.spaceId);
   const idx = sameSpace.findIndex((t) => t.id === anchorId);
+  if (idx < 0) return { closeIds: [], nextActiveId: activeId };
   const closeIds = sameSpace.slice(idx + 1).map((t) => t.id);
   if (closeIds.length === 0) return { closeIds, nextActiveId: activeId };
   return {
     closeIds,
     nextActiveId: closeIds.includes(activeId) ? anchorId : activeId,
+    ...(scopeIds ? { scopeIds } : {}),
   };
 }
 
@@ -429,6 +431,7 @@ export function planCloseOtherTabs(
   };
 }
 
+/** 按已确定的标签栏范围批量关闭；未指定范围时保留原空间边界。 */
 export function applyCloseTabsPlan(
   tabs: Tab[],
   anchorId: number,
@@ -441,7 +444,7 @@ export function applyCloseTabsPlan(
   const closing = tabs.filter(
     (tab) =>
       tab.id !== anchorId &&
-      tab.spaceId === anchor.spaceId &&
+      (plan.scopeIds ? plan.scopeIds.includes(tab.id) : tab.spaceId === anchor.spaceId) &&
       requested.has(tab.id),
   );
   if (closing.length === 0) return null;

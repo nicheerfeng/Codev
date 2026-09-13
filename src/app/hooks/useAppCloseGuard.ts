@@ -9,6 +9,7 @@ import {
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import type { Tab } from "@/modules/tabs";
 import { leafHasForegroundProcess, leafIds } from "@/modules/terminal";
+import { closeAllPiAgents } from "@/modules/plugins/pi-agent/native";
 
 async function anyTerminalBusy(tabs: Tab[]): Promise<boolean> {
   const leaves = tabs.flatMap((t) =>
@@ -61,6 +62,7 @@ export function useAppCloseGuard(tabsRef: RefObject<Tab[]>) {
           setPendingAppClose({ dirtyEditors, busyTerminal });
         } else {
           forceClose.current = true;
+          await closeAllPiAgents().catch(() => undefined);
           void getCurrentWindow().close();
         }
       })
@@ -77,7 +79,9 @@ export function useAppCloseGuard(tabsRef: RefObject<Tab[]>) {
   const confirmAppClose = useCallback(() => {
     setPendingAppClose(null);
     forceClose.current = true;
-    void getCurrentWindow().close();
+    void closeAllPiAgents()
+      .catch(() => undefined)
+      .finally(() => void getCurrentWindow().close());
   }, []);
 
   const cancelAppClose = useCallback(() => setPendingAppClose(null), []);
