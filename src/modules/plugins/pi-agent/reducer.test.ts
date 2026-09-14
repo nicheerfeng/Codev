@@ -279,6 +279,26 @@ describe("piViewReducer", () => {
     });
     expect(state.queue.pendingCount).toBe(2);
   });
+  it("keeps the frontend model when get_state returns a process model", () => {
+    const selected = piViewReducer(
+      {
+        ...INITIAL_PI_VIEW_STATE,
+        model: { provider: "openai", id: "gpt-new", name: "New" },
+      },
+      {
+        type: "event",
+        payload: rpc({
+          type: "response",
+          command: "get_state",
+          success: true,
+          data: {
+            model: { provider: "openai", id: "gpt-old", name: "Old" },
+          },
+        }),
+      },
+    );
+    expect(selected.model).toMatchObject({ id: "gpt-new" });
+  });
   it("streams assistant text without selecting editor content", () => {
     const running = piViewReducer(INITIAL_PI_VIEW_STATE, {
       type: "event",

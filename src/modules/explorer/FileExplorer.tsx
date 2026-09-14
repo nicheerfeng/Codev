@@ -41,6 +41,12 @@ import { ExplorerStatusBar } from "./ExplorerStatusBar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { InlineInput } from "./InlineInput";
 import { cacheRenamedExpansion } from "./lib/useFileTree";
+import {
+  mergeNewCollapsedRoots,
+  readFileTreeRootCollapsed,
+  rootCollapseKey,
+  writeFileTreeRootCollapsed,
+} from "./lib/rootCollapse";
 import { useRootReorder } from "./lib/useRootReorder";
 import { replacePathPrefix } from "@/lib/pathPrefix";
 import {
@@ -148,6 +154,8 @@ function RootSection({
   onAddFolder,
   onOpenTerminal,
   onPaste,
+  open,
+  onOpenChange,
   children,
 }: {
   reorderHeaderProps: React.HTMLAttributes<HTMLDivElement>;
@@ -165,10 +173,11 @@ function RootSection({
   onAddFolder: () => void;
   onOpenTerminal?: () => void;
   onPaste?: () => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   children: React.ReactNode;
 }) {
   const t = useT();
-  const [open, setOpen] = useState(true);
   const [renaming, setRenaming] = useState(false);
   const [rootHeaderHovered, setRootHeaderHovered] = useState(false);
   const color = rootColor(root);
@@ -176,12 +185,12 @@ function RootSection({
 
   useEffect(() => {
     if (!revealRequest) return;
-    setOpen(true);
+    onOpenChange(true);
     const frame = requestAnimationFrame(() =>
       onRevealPath(root, revealRequest.path),
     );
     return () => cancelAnimationFrame(frame);
-  }, [onRevealPath, revealRequest, root]);
+  }, [onOpenChange, onRevealPath, revealRequest, root]);
 
   return (
     <div
@@ -190,7 +199,9 @@ function RootSection({
       data-fs-path={root}
       data-fs-kind="dir"
     >
-      {insertBefore && <span className="pointer-events-none absolute inset-x-0 top-0 z-20 h-0.5 bg-[#7894b0]" />}
+      {insertBefore && (
+        <span className="pointer-events-none absolute inset-x-0 top-0 z-20 h-0.5 bg-[#7894b0]" />
+      )}
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
@@ -206,49 +217,49 @@ function RootSection({
             onMouseLeave={() => setRootHeaderHovered(false)}
             onClick={() => {
               onActivate();
-              setOpen((value) => !value);
+              onOpenChange(!open);
             }}
             title={root}
           >
-              <button
-                type="button"
-                className="size-4 shrink-0 text-muted-foreground hover:text-foreground"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setOpen((value) => !value);
-                }}
-                aria-label={open ? t("Collapse") : t("Expand")}
+            <button
+              type="button"
+              className="size-4 shrink-0 text-muted-foreground hover:text-foreground"
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenChange(!open);
+              }}
+              aria-label={open ? t("Collapse") : t("Expand")}
+            >
+              <span className="inline-block text-[10px] leading-4">
+                {open ? "▾" : "▸"}
+              </span>
+            </button>
+            <img
+              src={folderIconUrl(basename(root), false)}
+              alt=""
+              height={14}
+              width={14}
+              className="mx-0.5 shrink-0"
+            />
+            {renaming ? (
+              <span
+                className="flex min-w-0 flex-1"
+                onClick={(event) => event.stopPropagation()}
               >
-                <span className="inline-block text-[10px] leading-4">
-                  {open ? "▾" : "▸"}
-                </span>
-              </button>
-              <img
-                src={folderIconUrl(basename(root), false)}
-                alt=""
-                height={14}
-                width={14}
-                className="mx-0.5 shrink-0"
-              />
-              {renaming ? (
-                <span
-                  className="flex min-w-0 flex-1"
-                  onClick={(event) => event.stopPropagation()}
-                >
-                  <InlineInput
-                    initial={basename(root)}
-                    onCommit={(name) => {
-                      setRenaming(false);
-                      onRename(name);
-                    }}
-                    onCancel={() => setRenaming(false)}
-                  />
-                </span>
-              ) : (
-                <span className="min-w-0 flex-1 truncate pr-1">
-                  {basename(root) || root}
-                </span>
-              )}
+                <InlineInput
+                  initial={basename(root)}
+                  onCommit={(name) => {
+                    setRenaming(false);
+                    onRename(name);
+                  }}
+                  onCancel={() => setRenaming(false)}
+                />
+              </span>
+            ) : (
+              <span className="min-w-0 flex-1 truncate pr-1">
+                {basename(root) || root}
+              </span>
+            )}
             <button
               type="button"
               data-root-remove=""
@@ -272,7 +283,7 @@ function RootSection({
           <ContextMenuItem
             className={COMPACT_ITEM}
             onSelect={() => {
-              setOpen(true);
+              onOpenChange(true);
               requestAnimationFrame(onCreateFile);
             }}
           >
@@ -281,7 +292,7 @@ function RootSection({
           <ContextMenuItem
             className={COMPACT_ITEM}
             onSelect={() => {
-              setOpen(true);
+              onOpenChange(true);
               requestAnimationFrame(onCreateFolder);
             }}
           >
@@ -338,7 +349,53 @@ export const FileExplorer = memo(
     ref,
   ) {
     const t = useT();
+    const storedRootCollapsed = useRef(readFileTreeRootCollapsed());
+    const [collapsedRoots, setCollapsedRoots] = useState<Set<string>>(
+      () => storedRootCollapsed.current.keys,
+    );
+    const knownCollapsedRoots = useRef(
+      new Set(storedRootCollapsed.current.keys),
+    );
+    const seededCollapsedRoots = useRef(false);
     const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+    useEffect(() => {
+      const keys = roots.map(rootCollapseKey);
+      if (!seededCollapsedRoots.current) {
+        seededCollapsedRoots.current = true;
+        if (!storedRootCollapsed.current.ready) {
+          knownCollapsedRoots.current = new Set(keys);
+          setCollapsedRoots(new Set(keys));
+          return;
+        }
+        knownCollapsedRoots.current = new Set([
+          ...knownCollapsedRoots.current,
+          ...keys,
+        ]);
+        return;
+      }
+      setCollapsedRoots((current) => {
+        const next = mergeNewCollapsedRoots(
+          current,
+          knownCollapsedRoots.current,
+          keys,
+        );
+        knownCollapsedRoots.current = next.known;
+        return next.changed ? next.collapsed : current;
+      });
+    }, [roots]);
+    useEffect(() => {
+      if (!seededCollapsedRoots.current) return;
+      writeFileTreeRootCollapsed(collapsedRoots);
+    }, [collapsedRoots]);
+    const setRootOpen = useCallback((root: string, nextOpen: boolean) => {
+      const key = rootCollapseKey(root);
+      setCollapsedRoots((current) => {
+        const next = new Set(current);
+        if (nextOpen) next.delete(key);
+        else next.add(key);
+        return next;
+      });
+    }, []);
     const [clipboard, setClipboard] = useState<{
       paths: string[];
       mode: "copy" | "move";
@@ -352,14 +409,19 @@ export const FileExplorer = memo(
     const containerRef = useRef<HTMLDivElement>(null);
     /** 保存排序失败时提示用户，避免静默丢失顺序。 */
     const persistRootOrder = async (source: string, gap: number) => {
-      try { await onReorderRoot(source, gap); }
-      catch (error) { toast.error(`根目录排序保存失败：${String(error)}`); }
+      try {
+        await onReorderRoot(source, gap);
+      } catch (error) {
+        toast.error(`根目录排序保存失败：${String(error)}`);
+      }
     };
     const rootReorder = useRootReorder(containerRef, persistRootOrder);
     const sourceIndex = roots.indexOf(rootReorder.position?.source ?? "");
     /** 仅显示实际改变顺序的根目录插入位置。 */
-    const showRootGap = (gap: number) => rootReorder.position?.gap === gap &&
-      gap !== sourceIndex && gap !== sourceIndex + 1;
+    const showRootGap = (gap: number) =>
+      rootReorder.position?.gap === gap &&
+      gap !== sourceIndex &&
+      gap !== sourceIndex + 1;
     const treeRefs = useRef<Map<string, RootTreeHandle>>(new Map());
     const rootRevealNonceRef = useRef(0);
     const [rootRevealRequest, setRootRevealRequest] = useState<{
@@ -679,6 +741,19 @@ export const FileExplorer = memo(
             to,
             treeRefs.current.get(root)?.expandedPaths() ?? [],
           );
+          const fromKey = rootCollapseKey(root);
+          const toKey = rootCollapseKey(to);
+          if (fromKey !== toKey) {
+            knownCollapsedRoots.current.delete(fromKey);
+            knownCollapsedRoots.current.add(toKey);
+            setCollapsedRoots((current) => {
+              if (!current.has(fromKey)) return current;
+              const next = new Set(current);
+              next.delete(fromKey);
+              next.add(toKey);
+              return next;
+            });
+          }
           handleTreePathRenamed(root, to);
           await onRenameRoot(root, to);
         } catch (error) {
@@ -968,6 +1043,8 @@ export const FileExplorer = memo(
                           ? () => void pasteClipboard(root)
                           : undefined
                       }
+                      open={!collapsedRoots.has(rootCollapseKey(root))}
+                      onOpenChange={(nextOpen) => setRootOpen(root, nextOpen)}
                     >
                       <RootTree
                         ref={(h) => {
@@ -996,7 +1073,11 @@ export const FileExplorer = memo(
                       />
                     </RootSection>
                   ))}
-                  {showRootGap(roots.length) && <div className="relative h-0"><span className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-[#7894b0]" /></div>}
+                  {showRootGap(roots.length) && (
+                    <div className="relative h-0">
+                      <span className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-[#7894b0]" />
+                    </div>
+                  )}
                 </div>
               </ScrollArea>
             </div>

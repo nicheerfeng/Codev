@@ -12,11 +12,15 @@ import {
 import { INITIAL_PI_VIEW_STATE, objectValue, piViewReducer } from "./reducer";
 import type { PiEventEnvelope, PiImage, PiModel, PiViewState } from "./types";
 
+export const CATALOG_ADAPT_NOTICE =
+  "当前选择不在历史会话配置中，正在更新以适配";
+
 export type PiThread = {
   loadingHistory: boolean;
   key: string;
   cwd: string;
   runtimeId: number | null;
+  catalogEpoch: number;
   view: PiViewState;
 };
 type Pending = {
@@ -39,6 +43,7 @@ export class PiWorkspaceClient {
   private toolUpdates = new Map<string, PiEventEnvelope>();
   private toolTimer: ReturnType<typeof setTimeout> | null = null;
   private catalogModels: PiModel[] = [];
+  private catalogEpoch = 0;
   private draining = new Set<string>();
   private manualCompactions = new Set<string>();
   private compactionResume = new Set<string>();
@@ -54,7 +59,7 @@ export class PiWorkspaceClient {
     this.stop = listenPiEvents((payload) => this.receive(payload));
     void this.stop.catch((error) => {
       if (!this.disposed)
-        this.extension("", { method: "notify", message: String(error) });
+        this.extension("", { method: "error", message: String(error) });
     });
   }
 
@@ -171,10 +176,16 @@ export class PiWorkspaceClient {
     thread: PiThread,
     command: Record<string, unknown>,
   ): Promise<unknown> {
-    return this.ensureRuntime(thread).then(() => {
-      if (command.type === "prompt") this.syncStats(thread);
-      return this.sendRequest(thread, command);
-    });
+    const adapt =
+      command.type === "prompt"
+        ? this.adaptCatalogRuntime(thread)
+        : Promise.resolve(false);
+    return adapt.then(() =>
+      this.ensureRuntime(thread).then(() => {
+        if (command.type === "prompt") this.syncStats(thread);
+        return this.sendRequest(thread, command);
+      }),
+    );
   }
 
   /** 点击发送后立刻进入运行态，不必等待 Pi runtime 或 agent_start。 */
@@ -191,6 +202,25 @@ export class PiWorkspaceClient {
       queued,
     });
     this.publish();
+  }
+
+  /** 空闲发送才按 catalog 代次重建当前线程；运行中的进程不跟随。 */
+  private async adaptCatalogRuntime(thread: PiThread): Promise<boolean> {
+    if (
+      thread.runtimeId === null ||
+      thread.catalogEpoch === this.catalogEpoch ||
+      thread.view.status === "running" ||
+      thread.view.status === "stopping" ||
+      thread.view.status === "starting" ||
+      thread.view.compaction?.status === "running"
+    )
+      return false;
+    thread.view = { ...thread.view, error: CATALOG_ADAPT_NOTICE };
+    this.publish();
+    await this.close(thread.key);
+    thread.view = { ...thread.view, error: CATALOG_ADAPT_NOTICE };
+    this.publish();
+    return true;
   }
 
   /** 首次真实 RPC 操作时才为线程启动 Pi runtime。 */
@@ -248,6 +278,7 @@ export class PiWorkspaceClient {
       key,
       cwd,
       runtimeId: null,
+      catalogEpoch: 0,
       view: {
         ...INITIAL_PI_VIEW_STATE,
         sessionFile: path ?? null,
@@ -283,7 +314,10 @@ export class PiWorkspaceClient {
         throw new Error("Pi 插件已关闭");
       }
       thread.runtimeId = runtime.sessionId;
+      thread.catalogEpoch = this.catalogEpoch;
       this.touchRuntime(thread);
+      const intendedModel = thread.view.model;
+      const intendedThinking = thread.view.thinkingLevel;
       const hydrates: Promise<unknown>[] = [
         this.sendRequest(thread, { type: "get_state" }),
         this.sendRequest(thread, { type: "get_session_stats" }),
@@ -307,22 +341,21 @@ export class PiWorkspaceClient {
         hydrates.push(
           this.sendRequest(thread, { type: "get_available_models" }),
         );
-      if (thread.view.model)
-        hydrates.push(
-          this.sendRequest(thread, {
-            type: "set_model",
-            provider: thread.view.model.provider,
-            modelId: thread.view.model.id,
-          }),
-        );
-      if (thread.view.thinkingLevel && thread.view.thinkingLevel !== "off")
-        hydrates.push(
-          this.sendRequest(thread, {
-            type: "set_thinking_level",
-            level: thread.view.thinkingLevel,
-          }),
-        );
       await Promise.all(hydrates);
+      const model = this.withCatalogWindow(intendedModel ?? thread.view.model);
+      if (model) {
+        thread.view = { ...thread.view, model };
+        await this.sendRequest(thread, {
+          type: "set_model",
+          provider: model.provider,
+          modelId: model.id,
+        });
+      }
+      if (intendedThinking && intendedThinking !== "off")
+        await this.sendRequest(thread, {
+          type: "set_thinking_level",
+          level: intendedThinking,
+        });
       thread.loadingHistory = false;
       this.publish();
       return thread;
@@ -585,6 +618,10 @@ export class PiWorkspaceClient {
     return this.catalogModels;
   }
 
+  catalog(): PiModel[] {
+    return this.catalogModels;
+  }
+
   /** 模型列表从 models.json 读取，不为此启动会话。 */
   async loadModels(thread: PiThread, force = false) {
     if (!force && thread.view.models.length) return thread.view.models;
@@ -596,9 +633,10 @@ export class PiWorkspaceClient {
         ...thread.view,
         models: this.catalogModels,
         modelsLoading: false,
-        model: this.withCatalogWindow(
-          thread.view.model ?? this.catalogModels[0] ?? null,
-        ),
+        model:
+          this.withCatalogWindow(thread.view.model) ??
+          this.catalogModels[0] ??
+          thread.view.model,
       };
       this.fillContextPercent(thread);
     } catch (error) {
@@ -614,16 +652,18 @@ export class PiWorkspaceClient {
     return thread.view.models;
   }
 
-  /** 设置页改完 models.json 后，刷新所有线程的模型和显示名。 */
+  /** 设置页改完 models.json 后，刷新选择器并增加代次，不关闭任何进程。 */
   async reloadCatalog() {
+    this.catalogEpoch += 1;
     await this.loadCatalog(true);
     for (const thread of this.threads.values()) {
       thread.view = {
         ...thread.view,
         models: this.catalogModels,
-        model: this.withCatalogWindow(
-          thread.view.model ?? this.catalogModels[0] ?? null,
-        ),
+        model:
+          this.withCatalogWindow(thread.view.model) ??
+          this.catalogModels[0] ??
+          thread.view.model,
       };
       this.fillContextPercent(thread);
     }
@@ -638,9 +678,12 @@ export class PiWorkspaceClient {
       models: thread.view.models.length
         ? thread.view.models
         : this.catalogModels,
-      model: this.withCatalogWindow(
-        thread.view.model ?? fallback ?? this.catalogModels[0] ?? null,
-      ),
+      model:
+        this.withCatalogWindow(thread.view.model) ??
+        this.withCatalogWindow(fallback) ??
+        this.catalogModels[0] ??
+        thread.view.model ??
+        fallback,
       thinkingLevels:
         thread.view.thinkingLevels.length > 1
           ? thread.view.thinkingLevels
@@ -650,13 +693,14 @@ export class PiWorkspaceClient {
     this.publish();
   }
 
-  /** 历史 model_change 没有 contextWindow，用 models.json 同名模型补上。 */
+  /** 用当前 models.json 对齐 provider/窗口；已删除的模型返回 null。 */
   private withCatalogWindow(model: PiModel | null): PiModel | null {
     if (!model) return null;
     const listed = catalogModelFor(this.catalogModels, model);
-    if (!listed) return model;
+    if (!listed) return null;
     return {
-      ...model,
+      provider: listed.provider,
+      id: listed.id,
       name: listed.name ?? model.name,
       contextWindow: listed.contextWindow ?? model.contextWindow,
     };
@@ -795,27 +839,49 @@ export class PiWorkspaceClient {
     return { thread: next, text: "" };
   }
 
-  /** 改模型只写会话文件或前端草稿，发送时才交给 runtime。 */
+  /** 空闲发送前按 catalog 代次重建当前线程；运行中的进程不跟随。 */
+  async prepareCatalogRuntime(thread: PiThread) {
+    return this.adaptCatalogRuntime(thread);
+  }
+
+  /** 改模型只写会话文件或前端草稿；运行中的进程不跟随，发送时再适配。 */
   async setModel(
     thread: PiThread,
     provider: string,
     modelId: string,
     name?: string,
   ) {
-    const model = this.withCatalogWindow({ provider, id: modelId, name });
+    const model = this.withCatalogWindow({ provider, id: modelId, name }) ?? {
+      provider,
+      id: modelId,
+      name,
+    };
     thread.view = { ...thread.view, model };
     this.fillContextPercent(thread);
     this.publish();
-    if (thread.runtimeId !== null) {
-      await this.sendRequest(thread, { type: "set_model", provider, modelId });
+    const busy =
+      thread.view.status === "running" ||
+      thread.view.status === "stopping" ||
+      thread.view.status === "starting" ||
+      thread.view.compaction?.status === "running";
+    if (
+      !busy &&
+      thread.runtimeId !== null &&
+      thread.catalogEpoch === this.catalogEpoch
+    ) {
+      await this.sendRequest(thread, {
+        type: "set_model",
+        provider: model.provider,
+        modelId: model.id,
+      });
       return;
     }
     if (thread.view.sessionFile)
       await appendPiSession({
         path: thread.view.sessionFile,
         kind: "model_change",
-        provider,
-        modelId,
+        provider: model.provider,
+        modelId: model.id,
       });
   }
 

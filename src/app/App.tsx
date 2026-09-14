@@ -93,6 +93,13 @@ import { useDockTabReorder } from "./hooks/useDockTabReorder";
 import { useTabCloseGuards } from "./hooks/useTabCloseGuards";
 import { useWorkspaceSwitcher } from "./hooks/useWorkspaceSwitcher";
 import type { DockTab } from "./lib/dockTabs";
+import {
+  completeWelcome,
+  firstLayoutSizes,
+  needsFirstLayout,
+  shouldShowWelcome,
+} from "./lib/firstWorkspaceLayout";
+import { codevInstallStamp } from "@/modules/plugins/pi-agent/native";
 
 /** 判断文件标签是否对应同一个规范化路径。 */
 function tabPathMatches(tab: Tab, path: string): boolean {
@@ -102,6 +109,14 @@ function tabPathMatches(tab: Tab, path: string): boolean {
 }
 
 export default function App() {
+  const [installStamp, setInstallStamp] = useState<string | null>(null);
+  const [showWelcome, setShowWelcome] = useState(() => shouldShowWelcome(null));
+  const [needsInitialLayout] = useState(() => needsFirstLayout());
+  const [initialFirstSizes] = useState(() =>
+    firstLayoutSizes(typeof window === "undefined" ? 1200 : window.innerWidth),
+  );
+  const firstLayoutPending = useRef(needsInitialLayout);
+  const seededFirstLayout = useRef(false);
   const {
     tabs,
     activeId,
@@ -479,12 +494,17 @@ export default function App() {
     persistTerminalWidth,
     expandTerminalPanel,
   } = useTerminalPanelLayout();
+  if (needsInitialLayout && !seededFirstLayout.current) {
+    seededFirstLayout.current = true;
+    sidebarWidthRef.current = initialFirstSizes.sidebar;
+    terminalWidthRef.current = initialFirstSizes.terminal;
+  }
   const previousTerminalCountRef = useRef(0);
   useEffect(() => {
     const panel = terminalPanelRef.current;
     if (!panel) return;
     if (terminalTabs.length === 0) {
-      panel.collapse();
+      if (!firstLayoutPending.current) panel.collapse();
       previousTerminalCountRef.current = 0;
       return;
     }
@@ -498,10 +518,15 @@ export default function App() {
   }, [expandTerminalPanel, terminalTabs.length]);
 
   useEffect(() => {
-    if (!pluginEnabled) return;
-    setRightDockView("tools");
-    expandTerminalPanel();
-  }, [expandTerminalPanel, pluginEnabled]);
+    void codevInstallStamp()
+      .then((stamp) => {
+        setInstallStamp(stamp);
+        setShowWelcome(shouldShowWelcome(stamp));
+      })
+      .catch(() => {
+        setShowWelcome(shouldShowWelcome(null));
+      });
+  }, []);
   const isTerminalTab = activeTab?.kind === "terminal";
   const isSearchableDocumentTab =
     activeTab?.kind === "editor" ||
@@ -1153,6 +1178,50 @@ export default function App() {
 
   const shell = (
     <ThemeProvider>
+      {showWelcome && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background">
+          <div className="w-[min(640px,90vw)] rounded-2xl border bg-card p-10 text-center shadow-2xl">
+            <h1 className="mb-5 text-3xl font-semibold tracking-tight">
+              欢迎使用 Codev
+            </h1>
+            <p className="mb-3 text-[15px] leading-7 text-foreground/85">
+              Codev 遵循
+              <span className="font-medium text-foreground">
+                人类注意力优先
+              </span>
+              的原则设计，致力于搭建和适配面向下一代 agentic
+              业务生产的高效桌面工作台。
+            </p>
+            <p className="mb-8 text-sm leading-6 text-muted-foreground">
+              支持文件树、阅读器、终端，以及 Pi Agent 等插件系统。
+            </p>
+            <button
+              type="button"
+              className="rounded-lg bg-primary px-6 py-2 text-primary-foreground"
+              onClick={() => {
+                const sizes = completeWelcome(installStamp, window.innerWidth);
+                persistSidebarCollapsed(false);
+                persistTerminalCollapsed(false);
+                sidebarWidthRef.current = sizes.sidebar;
+                terminalWidthRef.current = sizes.terminal;
+                firstLayoutPending.current = true;
+                setRightDockView("terminal");
+                if (terminalTabs.length === 0) openNewTab();
+                requestAnimationFrame(() => {
+                  requestAnimationFrame(() => {
+                    sidebarRef.current?.resize(`${sizes.sidebar}px`);
+                    terminalPanelRef.current?.resize(`${sizes.terminal}px`);
+                    firstLayoutPending.current = false;
+                  });
+                });
+                setShowWelcome(false);
+              }}
+            >
+              进入工作区
+            </button>
+          </div>
+        </div>
+      )}
       <TooltipProvider>
         <div className="relative flex h-screen flex-col overflow-hidden bg-background text-foreground">
           {!zenMode && (
@@ -1192,9 +1261,11 @@ export default function App() {
                 id="sidebar"
                 panelRef={sidebarRef}
                 defaultSize={
-                  initialSidebarCollapsed
-                    ? "0px"
-                    : `${sidebarWidthRef.current}px`
+                  needsInitialLayout
+                    ? `${initialFirstSizes.sidebar}px`
+                    : initialSidebarCollapsed
+                      ? "0px"
+                      : `${sidebarWidthRef.current}px`
                 }
                 minSize={`${SIDEBAR_MIN_WIDTH}px`}
                 collapsible
@@ -1258,9 +1329,11 @@ export default function App() {
                 id="terminal-panel"
                 panelRef={terminalPanelRef}
                 defaultSize={
-                  initialTerminalCollapsed || terminalTabs.length === 0
-                    ? "0px"
-                    : `${terminalWidthRef.current}px`
+                  needsInitialLayout
+                    ? `${initialFirstSizes.terminal}px`
+                    : initialTerminalCollapsed || terminalTabs.length === 0
+                      ? "0px"
+                      : `${terminalWidthRef.current}px`
                 }
                 minSize={`${TERMINAL_MIN_WIDTH}px`}
                 collapsible

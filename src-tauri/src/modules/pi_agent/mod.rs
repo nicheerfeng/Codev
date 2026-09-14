@@ -639,12 +639,32 @@ pub fn pi_agent_close_all(state: State<'_, PiAgentState>) -> usize {
     close_all_processes(&state.sessions)
 }
 
-/// 返回 Pi 原生会话目录。
-fn pi_sessions_dir() -> Option<PathBuf> {
+/// 返回 Pi 主目录，不含 sessions 子目录。
+fn pi_home_dir() -> Option<PathBuf> {
     std::env::var_os("PI_CODING_AGENT_DIR")
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|home| home.join(".pi").join("agent")))
-        .map(|path| path.join("sessions"))
+}
+
+/// 返回 Pi 原生会话目录。
+fn pi_sessions_dir() -> Option<PathBuf> {
+    pi_home_dir().map(|path| path.join("sessions"))
+}
+
+/// 给临时聊天提供稳定的工作目录。
+#[tauri::command]
+pub fn pi_agent_home_dir() -> Option<String> {
+    pi_home_dir().map(|path| canonical_display(&path))
+}
+
+/// 安装程序写入的戳，覆盖安装后可再次显示起始页。
+#[tauri::command]
+pub fn codev_install_stamp() -> Option<String> {
+    dirs::data_local_dir()
+        .map(|path| path.join("Codev").join("install-stamp"))
+        .and_then(|path| fs::read_to_string(path).ok())
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
 }
 
 /// 将路径标准化后进行当前平台语义下的比较。

@@ -26,7 +26,11 @@ import {
   setPiAgentProjectOrder,
   setPiAgentSessionOrder,
 } from "../store";
-import { PiWorkspaceClient, type PiThread } from "./client";
+import {
+  CATALOG_ADAPT_NOTICE,
+  PiWorkspaceClient,
+  type PiThread,
+} from "./client";
 import { INITIAL_PI_VIEW_STATE, objectValue } from "./reducer";
 import {
   listAllPiSessions,
@@ -34,19 +38,22 @@ import {
   probePiAgent,
   sendPiCommand,
   deletePiSession,
+  piAgentHomeDir,
 } from "./native";
 import {
   collectProjects,
+  isTemporaryCwd,
   nextDraftKey,
   pathKey,
   projectName,
+  visiblePiProjects,
 } from "./organization";
 import { PiSidebar, type SidebarThread } from "./PiSidebar";
 import { PiComposer, EMPTY_DRAFT, type PiDraft } from "./PiComposer";
 import { PiTranscript } from "./PiTranscript";
 import { PiSettings } from "./PiSettings";
 import { plainStatusText } from "./statusText";
-import type { PiMessageItem, PiSessionSummary } from "./types";
+import type { PiMessageItem, PiModel, PiSessionSummary } from "./types";
 import { localCommand } from "./commands";
 import "./pi-agent.css";
 
@@ -66,10 +73,11 @@ export function PiAgentPane({ active }: { active: boolean }) {
       );
   }, [active]);
   const [sessions, setSessions] = useState<PiSessionSummary[]>([]);
+  const [sessionsReady, setSessionsReady] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
-  const [project, setProject] = useState<string | null>(
-    () => usePluginStore.getState().piAgentProjects[0] ?? null,
-  );
+  const [project, setProject] = useState<string | null>(null);
+  const [piHome, setPiHome] = useState<string | null>(null);
+  const [catalog, setCatalog] = useState<PiModel[]>([]);
   const [drafts, setDrafts] = useState<Record<string, PiDraft>>({});
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [operations, setOperations] = useState<Record<string, string>>({});
@@ -108,12 +116,10 @@ export function PiAgentPane({ active }: { active: boolean }) {
   );
   const projectOrder = usePluginStore((state) => state.piAgentProjectOrder);
   const sessionOrder = usePluginStore((state) => state.piAgentSessionOrder);
-  const activeThread = threads.find(
-    (thread) => thread.key === (selected ?? `draft:${project ?? ""}`),
-  );
+  const activeThread = threads.find((thread) => thread.key === selected);
   const view = activeThread?.view ?? INITIAL_PI_VIEW_STATE;
   const activeCwd = activeThread?.cwd ?? project;
-  const draftKey = selected ?? `draft:${activeCwd ?? ""}`;
+  const draftKey = selected ?? "";
   const draft = drafts[draftKey] ?? EMPTY_DRAFT;
   const notice = notices[draftKey] ?? "";
   const lastUserPosition = view.items.reduce(
@@ -141,16 +147,20 @@ export function PiAgentPane({ active }: { active: boolean }) {
     setNotices((current) => ({ ...current, [key]: message }));
   const projects = useMemo(
     () =>
-      collectProjects(
-        [...pluginProjects, ...threads.map((item) => item.cwd)],
-        sessions,
-        hiddenProjects,
+      visiblePiProjects(
+        collectProjects(
+          [...pluginProjects, ...threads.map((item) => item.cwd)],
+          sessions,
+          hiddenProjects,
+        ),
+        piHome,
       ),
-    [pluginProjects, threads, sessions, hiddenProjects],
+    [pluginProjects, threads, sessions, hiddenProjects, piHome],
   );
   /** 刷新原生会话目录，只在首次激活和显式文件操作后执行。 */
   const refreshSessions = useCallback(async () => {
     setSessions(await listAllPiSessions());
+    setSessionsReady(true);
   }, []);
   useEffect(() => {
     if (!initialized) return;
@@ -168,9 +178,15 @@ export function PiAgentPane({ active }: { active: boolean }) {
         dirty = false;
         try {
           const result = await listAllPiSessions();
-          if (!disposed) setSessions(result);
+          if (!disposed) {
+            setSessions(result);
+            setSessionsReady(true);
+          }
         } catch (error) {
-          if (!disposed) setNotice(String(error));
+          if (!disposed) {
+            setNotice(String(error));
+            setSessionsReady(true);
+          }
         } finally {
           reading = false;
           if (dirty && !disposed) schedule();
@@ -183,7 +199,10 @@ export function PiAgentPane({ active }: { active: boolean }) {
         if (!disposed) schedule();
       })
       .catch((error) => {
-        if (!disposed) setNotice(String(error));
+        if (!disposed) {
+          setNotice(String(error));
+          setSessionsReady(true);
+        }
       });
     return () => {
       disposed = true;
@@ -218,7 +237,7 @@ export function PiAgentPane({ active }: { active: boolean }) {
               text: String(event.text ?? ""),
             },
           }));
-        if (event.method === "notify")
+        if (event.method === "error")
           setNotice(String(event.message ?? ""), key);
         if (event.method === "setStatus")
           setExtensionStatus((value) => ({
@@ -239,11 +258,26 @@ export function PiAgentPane({ active }: { active: boolean }) {
         if (!disposed) setNotice(String(error));
       });
     void refreshSessions().catch((error) => {
-      if (!disposed) setNotice(String(error));
+      if (!disposed) {
+        setNotice(String(error));
+        setSessionsReady(true);
+      }
     });
-    void runtime.loadCatalog().catch((error) => {
-      if (!disposed) setNotice(String(error));
-    });
+    void piAgentHomeDir()
+      .then((path) => {
+        if (!disposed && path) setPiHome(path);
+      })
+      .catch((error) => {
+        if (!disposed) setNotice(String(error));
+      });
+    void runtime
+      .loadCatalog()
+      .then((models) => {
+        if (!disposed) setCatalog(models);
+      })
+      .catch((error) => {
+        if (!disposed) setNotice(String(error));
+      });
     return () => {
       disposed = true;
       runtime.dispose();
@@ -270,7 +304,7 @@ export function PiAgentPane({ active }: { active: boolean }) {
       );
       const row: SidebarThread = {
         id: old?.id ?? thread.key,
-        path,
+        path: path || old?.path || "",
         key: thread.key,
         cwd: thread.cwd,
         name: thread.view.sessionName ?? old?.name ?? null,
@@ -279,7 +313,7 @@ export function PiAgentPane({ active }: { active: boolean }) {
           (first && first.kind === "message" ? first.text.slice(0, 80) : null),
         createdAt: old?.createdAt ?? "",
         updatedAt: old?.updatedAt ?? Date.now(),
-        messageCount: thread.view.items.length,
+        messageCount: thread.view.items.length || old?.messageCount || 0,
         status:
           thread.view.compaction?.status === "running"
             ? "running"
@@ -287,10 +321,11 @@ export function PiAgentPane({ active }: { active: boolean }) {
         waiting: requests.some((request) => request.key === thread.key),
       };
       if (index >= 0) result[index] = row;
-      else if (thread.view.items.length || path) result.unshift(row);
+      else if (thread.view.items.length || path || thread.key === selected)
+        result.unshift(row);
     }
     return result;
-  }, [sessions, threads, requests]);
+  }, [sessions, threads, requests, selected]);
   /** 用统一提示处理操作异常，避免无响应按钮。 */
   const run = (operation: Promise<unknown>, key = draftKey) => {
     void operation.catch((error) => setNotice(String(error), key));
@@ -298,8 +333,8 @@ export function PiAgentPane({ active }: { active: boolean }) {
   /** 获取指定会话的进程，操作始终指向右键目标。 */
   const ensure = async (thread?: SidebarThread): Promise<PiThread> => {
     const runtime = client.current;
-    const targetCwd = thread?.cwd ?? activeCwd;
-    if (!runtime || !targetCwd) throw new Error("请先添加项目，等待 Pi 初始化");
+    const targetCwd = thread?.cwd ?? activeCwd ?? piHome;
+    if (!runtime || !targetCwd) throw new Error("请先等待 Pi 初始化");
     return runtime.open(
       thread?.key ?? selected ?? draftKey,
       targetCwd,
@@ -315,7 +350,35 @@ export function PiAgentPane({ active }: { active: boolean }) {
     const target = await client.current!.open(key, path);
     client.current!.applyCatalogModel(target, lastModel);
     target.view = { ...target.view, thinkingLevel: lastThinkingLevel };
+    setThreads([...client.current!.threads.values()]);
   };
+  const bootstrapped = useRef(false);
+  useEffect(() => {
+    if (
+      !active ||
+      !piHome ||
+      !client.current ||
+      bootstrapped.current ||
+      !sessionsReady
+    )
+      return;
+    if (selected) {
+      bootstrapped.current = true;
+      return;
+    }
+    const latest = [...sessions]
+      .filter((session) => isTemporaryCwd(session.cwd, piHome))
+      .sort((left, right) => right.updatedAt - left.updatedAt)[0];
+    bootstrapped.current = true;
+    if (latest) {
+      void select({
+        ...latest,
+        key: latest.path,
+      });
+      return;
+    }
+    void create(piHome);
+  }, [active, piHome, selected, sessions, sessionsReady]);
   /** 选择已有线程只读历史，必须发送后才启动 runtime。 */
   const select = async (thread: SidebarThread) => {
     setProject(thread.cwd);
@@ -399,7 +462,10 @@ export function PiAgentPane({ active }: { active: boolean }) {
         thread.view.status === "running" || thread.view.status === "stopping";
       setPending((value) => new Set([...value, runtimeKey]));
       setSelected((current) => (current === selected ? thread.key : current));
-      setNotice("", thread.key);
+      const adapted = queued
+        ? false
+        : await client.current!.prepareCatalogRuntime(thread);
+      setNotice(adapted ? CATALOG_ADAPT_NOTICE : "", thread.key);
       setSendRevisions((value) => ({
         ...value,
         [thread.key]: (value[thread.key] ?? 0) + 1,
@@ -708,6 +774,7 @@ export function PiAgentPane({ active }: { active: boolean }) {
             sessionOrder={sessionOrder}
             onProjectOrder={(order) => run(setPiAgentProjectOrder(order))}
             onSessionOrder={(order) => run(setPiAgentSessionOrder(order))}
+            temporaryHome={piHome}
           />
         )}
         <main className="relative order-first flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -772,9 +839,14 @@ export function PiAgentPane({ active }: { active: boolean }) {
             }
             onLoadModels={() =>
               run(
-                ensure(rows.find((row) => row.key === selected)).then(
-                  (thread) => client.current!.loadModels(thread, true),
-                ),
+                (async () => {
+                  const models = await client.current!.loadCatalog(true);
+                  setCatalog(models);
+                  const thread = await ensure(
+                    rows.find((row) => row.key === selected),
+                  );
+                  await client.current!.loadModels(thread, true);
+                })(),
               )
             }
             onLoadCommands={async () => {
@@ -851,7 +923,9 @@ export function PiAgentPane({ active }: { active: boolean }) {
               run(
                 ensure(rows.find((row) => row.key === selected)).then(
                   async (thread) => {
-                    const name = view.models.find(
+                    const name = (
+                      view.models.length ? view.models : catalog
+                    ).find(
                       (model) =>
                         model.provider === provider && model.id === modelId,
                     )?.name;
@@ -888,8 +962,10 @@ export function PiAgentPane({ active }: { active: boolean }) {
               view.status === "starting"
             }
             focusRevision={focusRevisions[draftKey] ?? 0}
-            disabled={!activeCwd || probe?.available === false}
-            project={activeCwd ?? ""}
+            disabled={(!activeCwd && !piHome) || probe?.available === false}
+            project={activeCwd ?? piHome ?? ""}
+            catalogModel={lastModel}
+            catalogModels={catalog}
           />
         </main>
       </div>
@@ -897,9 +973,12 @@ export function PiAgentPane({ active }: { active: boolean }) {
         open={settingsOpen && active}
         onClose={() => setSettingsOpen(false)}
         onModelsChanged={() => {
-          void client.current?.reloadCatalog().catch((error) => {
-            setNotice(String(error));
-          });
+          void client.current
+            ?.reloadCatalog()
+            .then((models) => setCatalog(models))
+            .catch((error) => {
+              setNotice(String(error));
+            });
         }}
       />
       <Dialog
