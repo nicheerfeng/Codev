@@ -497,7 +497,7 @@ describe("Pi RPC workspace", () => {
     await client.hydrateFromDisk(thread);
     expect(native.startPiAgent).not.toHaveBeenCalled();
     expect(thread.view.model).toMatchObject({
-      provider: "provider",
+      provider: "cp-lite",
       id: "grok-4.6-PSYDO_GROK_SUPER",
       contextWindow: 500000,
     });
@@ -516,7 +516,7 @@ describe("Pi RPC workspace", () => {
       role: "user",
       text: "disk history",
     });
-    expect(thread.view.model).toMatchObject({ id: "gpt-history" });
+    expect(thread.view.model).toMatchObject({ id: "gpt-test" });
     client.dispose();
   });
   it("keeps history loading visible until messages return after get_state", async () => {
@@ -743,6 +743,89 @@ describe("Pi RPC workspace", () => {
         .mocked(native.sendPiCommand)
         .mock.calls.find(([, command]) => command.type === "prompt")?.[1],
     ).toMatchObject({ type: "prompt", message: "修改后的输入" });
+    client.dispose();
+  });
+  it("reloads catalog without closing a live runtime", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const thread = await client.open("one", "D:/one");
+    await client.request(thread, { type: "get_state" });
+    const runtimeId = thread.runtimeId;
+    vi.mocked(native.listPiModels).mockResolvedValueOnce([
+      { provider: "openai", id: "gpt-new", name: "New" },
+    ]);
+    await client.reloadCatalog();
+    expect(thread.runtimeId).toBe(runtimeId);
+    expect(mock.close).not.toHaveBeenCalled();
+    expect(thread.view.model).toMatchObject({ id: "gpt-new" });
+    client.dispose();
+  });
+  it("restarts an idle runtime on the next send after catalog reload", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const thread = await client.open("one", "D:/one");
+    await client.request(thread, { type: "get_state" });
+    const previous = thread.runtimeId;
+    vi.mocked(native.listPiModels).mockResolvedValueOnce([
+      { provider: "openai", id: "gpt-new", name: "New" },
+    ]);
+    await client.reloadCatalog();
+    mock.close.mockClear();
+    vi.mocked(native.sendPiCommand).mockClear();
+    await client.request(thread, { type: "prompt", message: "下一轮" });
+    expect(mock.close).toHaveBeenCalledWith(previous);
+    expect(thread.runtimeId).not.toBe(previous);
+    expect(thread.view.error).toBe(
+      "当前选择不在历史会话配置中，正在更新以适配",
+    );
+    expect(
+      vi
+        .mocked(native.sendPiCommand)
+        .mock.calls.some(([, command]) => command.type === "prompt"),
+    ).toBe(true);
+    client.dispose();
+  });
+  it("does not restart a running runtime after catalog reload", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const thread = await client.open("one", "D:/one");
+    await client.request(thread, { type: "get_state" });
+    client.beginPrompt(thread, "进行中");
+    const previous = thread.runtimeId;
+    vi.mocked(native.listPiModels).mockResolvedValueOnce([
+      { provider: "openai", id: "gpt-new", name: "New" },
+    ]);
+    await client.reloadCatalog();
+    mock.close.mockClear();
+    await client.request(thread, {
+      type: "prompt",
+      message: "插一句",
+      streamingBehavior: "steer",
+    });
+    expect(mock.close).not.toHaveBeenCalled();
+    expect(thread.runtimeId).toBe(previous);
+    client.dispose();
+  });
+  it("does not send set_model to a running runtime", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const thread = await client.open("one", "D:/one", "session.jsonl");
+    await client.request(thread, { type: "get_state" });
+    client.beginPrompt(thread, "进行中");
+    vi.mocked(native.sendPiCommand).mockClear();
+    vi.mocked(native.appendPiSession).mockClear();
+    await client.setModel(thread, "openai", "gpt-new", "New");
+    expect(
+      vi
+        .mocked(native.sendPiCommand)
+        .mock.calls.some(([, command]) => command.type === "set_model"),
+    ).toBe(false);
+    expect(native.appendPiSession).toHaveBeenCalledWith({
+      path: thread.view.sessionFile,
+      kind: "model_change",
+      provider: "openai",
+      modelId: "gpt-new",
+    });
     client.dispose();
   });
 });

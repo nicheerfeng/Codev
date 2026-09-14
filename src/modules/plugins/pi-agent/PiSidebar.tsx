@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -26,7 +26,21 @@ import {
   Search01Icon,
   Cancel01Icon,
 } from "@hugeicons/core-free-icons";
-import { pathKey, projectName, type PiOrganization } from "./organization";
+import {
+  defaultPiCollapsedKeys,
+  isTemporaryCwd,
+  pathKey,
+  projectName,
+  sessionIdentity,
+  TEMPORARY_GROUP_ID,
+  visiblePiProjects,
+  type PiOrganization,
+} from "./organization";
+import {
+  mergeNewCollapsedKeys,
+  readPiCollapsed,
+  writePiCollapsed,
+} from "./sidebarCollapse";
 import { applySavedOrder, mergeOrder, moveByGap } from "./sidebarOrder";
 import type { PiSessionSummary, PiViewStatus } from "./types";
 import { usePiSidebarReorder } from "./usePiSidebarReorder";
@@ -58,6 +72,7 @@ type Props = {
   sessionOrder: string[];
   onProjectOrder: (order: string[]) => void;
   onSessionOrder: (order: string[]) => void;
+  temporaryHome?: string | null;
 };
 
 function DropLine() {
@@ -68,7 +83,50 @@ function DropLine() {
 export function PiSidebar(props: Props) {
   const { width, onWidthChange: setWidth } = props;
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const storedCollapsed = useRef(readPiCollapsed());
+  const [collapsed, setCollapsed] = useState<Set<string>>(
+    () => storedCollapsed.current.keys,
+  );
+  const knownCollapsed = useRef(new Set(storedCollapsed.current.keys));
+  const seededCollapsed = useRef(false);
+  const projects = useMemo(
+    () => visiblePiProjects(props.projects, props.temporaryHome),
+    [props.projects, props.temporaryHome],
+  );
+  const temporaryThreads = useMemo(
+    () =>
+      props.threads.filter(
+        (thread) =>
+          isTemporaryCwd(thread.cwd, props.temporaryHome) &&
+          !(thread.path && props.organization.archived.includes(thread.path)),
+      ),
+    [props.threads, props.temporaryHome, props.organization.archived],
+  );
+  useEffect(() => {
+    const keys = defaultPiCollapsedKeys(
+      projects,
+      props.organization.groups,
+      props.temporaryHome,
+    );
+    if (!seededCollapsed.current) {
+      seededCollapsed.current = true;
+      if (!storedCollapsed.current.ready) {
+        knownCollapsed.current = new Set(keys);
+        setCollapsed(new Set(keys));
+        return;
+      }
+      knownCollapsed.current = new Set([...knownCollapsed.current, ...keys]);
+      return;
+    }
+    setCollapsed((current) => {
+      const next = mergeNewCollapsedKeys(current, knownCollapsed.current, keys);
+      knownCollapsed.current = next.known;
+      return next.changed ? next.collapsed : current;
+    });
+  }, [projects, props.organization.groups, props.temporaryHome]);
+  useEffect(() => {
+    writePiCollapsed(collapsed);
+  }, [collapsed]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [filter, setFilter] = useState("");
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -82,7 +140,7 @@ export function PiSidebar(props: Props) {
     (kind, source, gap, group) => {
       if (kind === "project") {
         const visible = applySavedOrder(
-          props.projects.filter(
+          projects.filter(
             (path) => (org.projectGroups[pathKey(path)] ?? "") === group,
           ),
           props.projectOrder,
@@ -96,10 +154,12 @@ export function PiSidebar(props: Props) {
         props.threads
           .filter(
             (thread) =>
-              pathKey(thread.cwd) === pathKey(group) &&
-              !archived.has(thread.path),
+              (group === TEMPORARY_GROUP_ID
+                ? isTemporaryCwd(thread.cwd, props.temporaryHome)
+                : pathKey(thread.cwd) === pathKey(group)) &&
+              !(thread.path && archived.has(thread.path)),
           )
-          .map((thread) => thread.path),
+          .map((thread) => sessionIdentity(thread.path, thread.key)),
         props.sessionOrder,
       );
       props.onSessionOrder(
@@ -150,14 +210,28 @@ export function PiSidebar(props: Props) {
     <ContextMenu key={thread.key}>
       <ContextMenuTrigger asChild>
         <div>
-          {!isArchived && gapAt("session", group, thread.path, index, list) && (
-            <DropLine />
-          )}
+          {!isArchived &&
+            gapAt(
+              "session",
+              group,
+              sessionIdentity(thread.path, thread.key),
+              index,
+              list,
+            ) && <DropLine />}
           <div
             {...(!isArchived && !filter
-              ? itemProps("session", thread.path, group)
+              ? itemProps(
+                  "session",
+                  sessionIdentity(thread.path, thread.key),
+                  group,
+                )
               : {})}
-            className={`group/pi-thread flex min-w-0 items-center rounded-lg ${props.selectedKey === thread.key ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}
+            className={`group/pi-thread flex min-w-0 items-center rounded-lg ${
+              props.selectedKey === thread.key ||
+              (thread.path && pathKey(props.selectedKey ?? "") === pathKey(thread.path))
+                ? "bg-accent text-accent-foreground"
+                : "hover:bg-muted"
+            }`}
           >
             <button
               type="button"
@@ -233,7 +307,7 @@ export function PiSidebar(props: Props) {
     const rows = props.threads.filter(
       (thread) =>
         pathKey(thread.cwd) === key &&
-        archived.has(thread.path) === isArchived &&
+        (thread.path ? archived.has(thread.path) : false) === isArchived &&
         (!filter ||
           `${thread.name ?? ""} ${thread.preview ?? ""} ${projectName(cwd)}`
             .toLocaleLowerCase()
@@ -244,7 +318,7 @@ export function PiSidebar(props: Props) {
     const closed = !filter && collapsed.has(nodeKey);
     const groupId = org.projectGroups[key] ?? "";
     const groupProjects = applySavedOrder(
-      props.projects.filter(
+      projects.filter(
         (path) => (org.projectGroups[pathKey(path)] ?? "") === groupId,
       ),
       props.projectOrder,
@@ -253,10 +327,15 @@ export function PiSidebar(props: Props) {
       (path) => pathKey(path) === key,
     );
     const ordered = applySavedOrder(
-      rows.map((row) => row.path),
+      rows.map((row) => sessionIdentity(row.path, row.key)),
       props.sessionOrder,
     )
-      .map((path) => rows.find((row) => row.path === path)!)
+      .map(
+        (id) =>
+          rows.find(
+            (row) => sessionIdentity(row.path, row.key) === id,
+          )!,
+      )
       .filter(Boolean);
     const visible = ordered.slice(
       0,
@@ -373,7 +452,7 @@ export function PiSidebar(props: Props) {
                 isArchived,
                 cwd,
                 index,
-                visible.map((item) => item.path),
+                visible.map((item) => sessionIdentity(item.path, item.key)),
               ),
             )}
             {!rows.length && !isArchived && (
@@ -457,11 +536,13 @@ export function PiSidebar(props: Props) {
           variant="secondary"
           size="sm"
           className="min-w-0 flex-1 justify-start rounded-lg text-xs"
-          onClick={() =>
-            props.selectedProject
-              ? props.onNew(props.selectedProject)
-              : props.onAddProject()
-          }
+          onClick={() => {
+            const selected = props.selectedProject;
+            if (selected && !isTemporaryCwd(selected, props.temporaryHome))
+              props.onNew(selected);
+            else if (props.temporaryHome) props.onNew(props.temporaryHome);
+            else props.onAddProject();
+          }}
         >
           <HugeiconsIcon icon={PlusSignIcon} size={14} />
           新建线程
@@ -555,7 +636,7 @@ export function PiSidebar(props: Props) {
             </ContextMenu>
             {(!collapsed.has(`group:${group.id}`) || filter) &&
               applySavedOrder(
-                props.projects.filter(
+                projects.filter(
                   (path) =>
                     (org.projectGroups[pathKey(path)] ?? "") === group.id,
                 ),
@@ -563,6 +644,57 @@ export function PiSidebar(props: Props) {
               ).map((path) => projectRow(path))}
           </section>
         ))}
+        <section className="mb-3">
+          <div className="flex items-center py-1">
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-center gap-1 py-1 text-left text-[11px] text-muted-foreground"
+              onClick={() => toggle(`group:${TEMPORARY_GROUP_ID}`)}
+            >
+              <HugeiconsIcon
+                icon={
+                  collapsed.has(`group:${TEMPORARY_GROUP_ID}`)
+                    ? ArrowRight01Icon
+                    : ArrowDown01Icon
+                }
+                size={12}
+              />
+              <span className="truncate">临时聊天</span>
+            </button>
+            {props.temporaryHome ? (
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                title="新建临时线程"
+                aria-label="新建临时线程"
+                onClick={() => {
+                  const home = props.temporaryHome;
+                  if (home) props.onNew(home);
+                }}
+              >
+                <HugeiconsIcon icon={PlusSignIcon} size={12} />
+              </Button>
+            ) : null}
+          </div>
+          {(!collapsed.has(`group:${TEMPORARY_GROUP_ID}`) || filter) &&
+            temporaryThreads
+              .filter(
+                (thread) =>
+                  !filter ||
+                  `${thread.name ?? ""} ${thread.preview ?? ""} 临时聊天`
+                    .toLocaleLowerCase()
+                    .includes(filter.toLocaleLowerCase()),
+              )
+              .map((thread, index, list) =>
+                threadRow(
+                  thread,
+                  false,
+                  TEMPORARY_GROUP_ID,
+                  index,
+                  list.map((item) => sessionIdentity(item.path, item.key)),
+                ),
+              )}
+        </section>
         <section className="border-t border-border pt-2">
           <button
             type="button"
@@ -580,7 +712,7 @@ export function PiSidebar(props: Props) {
             </span>
           </button>
           {(archiveOpen || filter) &&
-            props.projects.map((path) => projectRow(path, true))}
+            projects.map((path) => projectRow(path, true))}
         </section>
       </div>
       <Dialog

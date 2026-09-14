@@ -1,6 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { buildTimelineBlocks } from "./timeline";
-import { collectProjects, nextDraftKey, pathKey } from "./organization";
+import {
+  collectProjects,
+  defaultPiCollapsedKeys,
+  isTemporaryCwd,
+  nextDraftKey,
+  pathKey,
+  sessionIdentity,
+  visiblePiProjects,
+} from "./organization";
 import type { PiMessageItem } from "./types";
 
 /** 构造纯文本消息作为过程分组输入。 */
@@ -186,6 +194,21 @@ describe("Pi turn grouping", () => {
     ).toHaveLength(3);
     expect(collectProjects(["D:/Work/One"], [], ["d:/work/one"])).toEqual([]);
     expect(pathKey("D:\\Work\\One\\")).toBe("d:/work/one");
+    expect(pathKey("\\\\?\\C:\\Users\\me\\.pi\\agent\\")).toBe(
+      "c:/users/me/.pi/agent",
+    );
+    expect(pathKey("//?/C:/Users/me/.pi/agent/")).toBe(
+      "c:/users/me/.pi/agent",
+    );
+    expect(
+      sessionIdentity(
+        "\\\\?\\C:\\Users\\me\\session.jsonl",
+        "draft:c:/users/me:abc",
+      ),
+    ).toBe("c:/users/me/session.jsonl");
+    expect(sessionIdentity("", "draft:c:/users/me:abc")).toBe(
+      "draft:c:/users/me:abc",
+    );
   });
   it("gives each new thread a unique draft key in the same project", () => {
     const one = nextDraftKey("D:\\Work\\One\\");
@@ -193,5 +216,20 @@ describe("Pi turn grouping", () => {
     expect(one).toMatch(/^draft:d:\/work\/one:[0-9a-f-]{36}$/i);
     expect(two).toMatch(/^draft:d:\/work\/one:[0-9a-f-]{36}$/i);
     expect(one).not.toBe(two);
+  });
+  it("keeps the Pi home directory out of ordinary projects", () => {
+    const home = "C:/Users/me/.pi/agent";
+    expect(isTemporaryCwd(home, home)).toBe(true);
+    expect(
+      visiblePiProjects(["D:/Work/One", home, "D:/Work/Two"], home),
+    ).toEqual(["D:/Work/One", "D:/Work/Two"]);
+    expect(
+      defaultPiCollapsedKeys(["D:/Work/One", home], [{ id: "g1" }], home),
+    ).toEqual([
+      "group:",
+      "group:temporary",
+      "group:g1",
+      "project:d:/work/one",
+    ]);
   });
 });

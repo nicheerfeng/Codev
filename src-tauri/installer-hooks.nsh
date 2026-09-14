@@ -23,6 +23,11 @@
   WriteRegStr HKCU "Software\Classes\Drive\shell\OpenInCodev" "NoWorkingDirectory" ""
   WriteRegStr HKCU "Software\Classes\Drive\shell\OpenInCodev\command" "" '"$INSTDIR\codev.exe" "%V"'
 
+  CreateDirectory "$LOCALAPPDATA\Codev"
+  FileOpen $0 "$LOCALAPPDATA\Codev\install-stamp" w
+  FileWrite $0 "${VERSION}"
+  FileClose $0
+
   ; Refresh file associations and Explorer's icon cache immediately.
   !insertmacro UPDATEFILEASSOC
 

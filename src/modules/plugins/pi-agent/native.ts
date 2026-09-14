@@ -38,6 +38,16 @@ export function probePiAgent(): Promise<PiProbeResult> {
   return invoke<PiProbeResult>("pi_agent_probe");
 }
 
+/** 读取 Pi 主目录，供临时聊天作为工作目录。 */
+export function piAgentHomeDir(): Promise<string | null> {
+  return invoke<string | null>("pi_agent_home_dir");
+}
+
+/** 读取安装戳，覆盖安装后可再次显示起始页。 */
+export function codevInstallStamp(): Promise<string | null> {
+  return invoke<string | null>("codev_install_stamp");
+}
+
 /** 列出属于指定工作目录的 Pi 原生线程。 */
 export function listPiSessions(cwd: string): Promise<PiSessionSummary[]> {
   return invoke<PiSessionSummary[]>("pi_agent_list_sessions", {

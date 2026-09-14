@@ -23,7 +23,7 @@ import {
   PencilEdit01Icon,
   Delete02Icon,
 } from "@hugeicons/core-free-icons";
-import type { PiImage, PiViewState } from "./types";
+import type { PiImage, PiModel, PiViewState } from "./types";
 import { PI_LOCAL_COMMANDS } from "./commands";
 import {
   mergePromptHistory,
@@ -58,6 +58,8 @@ type Props = {
   busy: boolean;
   disabled: boolean;
   project: string;
+  catalogModel?: PiModel | null;
+  catalogModels?: PiModel[];
   status?: string;
   notice?: string;
   onDismissNotice?: () => void;
@@ -75,6 +77,11 @@ async function readImage(file: File): Promise<PiImage> {
 
 /** 用 Codev 控件承载 mcode 输入卡片布局：正文上方、模型/用量与发送在卡片内。 */
 export function PiComposer(props: Props) {
+  const catalogModels = props.view.models.length
+    ? props.view.models
+    : (props.catalogModels ?? []);
+  const catalogModel =
+    props.view.model ?? props.catalogModel ?? catalogModels[0] ?? null;
   const compacting = props.view.compaction?.status === "running";
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -585,7 +592,7 @@ export function PiComposer(props: Props) {
                 title="选择模型"
               >
                 <span className="truncate">
-                  {props.view.model?.name || props.view.model?.id || "选择模型"}
+                  {catalogModel?.name || catalogModel?.id || "选择模型"}
                 </span>
                 <HugeiconsIcon icon={ArrowDown01Icon} size={11} />
               </Button>
@@ -602,7 +609,7 @@ export function PiComposer(props: Props) {
                 className="mb-2 h-8 rounded-lg text-xs!"
               />
               <div className="reader-scrollbar max-h-60 overflow-auto">
-                {!props.view.models.length && (
+                {!catalogModels.length && (
                   <p
                     role="status"
                     className="px-2 py-3 text-xs text-muted-foreground"
@@ -614,7 +621,7 @@ export function PiComposer(props: Props) {
                         : "暂无可用模型"}
                   </p>
                 )}
-                {props.view.models
+                {catalogModels
                   .filter((model) =>
                     `${model.provider}/${model.id} ${model.name ?? ""}`
                       .toLowerCase()

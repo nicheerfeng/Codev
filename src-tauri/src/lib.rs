@@ -378,6 +378,8 @@ pub fn run() {
             pi_agent::pi_agent_close_all,
             pi_agent::pi_agent_watch_sessions,
             pi_agent::pi_agent_list_assets,
+            pi_agent::pi_agent_home_dir,
+            pi_agent::codev_install_stamp,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -445,7 +445,7 @@ function reduceEvent(
         typeof data?.sessionName === "string"
           ? data.sessionName
           : state.sessionName,
-      model: modelValue(data?.model),
+      model: state.model ?? modelValue(data?.model),
       thinkingLevel: String(data?.thinkingLevel ?? state.thinkingLevel),
       queue: {
         ...state.queue,
