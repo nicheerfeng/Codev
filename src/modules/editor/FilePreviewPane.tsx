@@ -1,3 +1,4 @@
+import { bindFileScroll } from "@/modules/reader/fileScroll";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import {
@@ -433,6 +434,15 @@ const TextWindowPreview = forwardRef<
     });
     return () => cancelAnimationFrame(frame);
   }, [searchRevision, state]);
+  useEffect(
+    () =>
+      bindFileScroll(
+        textScrollRef.current,
+        `${path}#${offset}`,
+        state.kind === "ready",
+      ),
+    [offset, path, state.kind],
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">

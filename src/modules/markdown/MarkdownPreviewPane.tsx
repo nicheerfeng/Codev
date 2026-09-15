@@ -6,6 +6,7 @@ import {
   type TextSearchOptions,
   type TextSearchStatus,
 } from "@/modules/editor/lib/textSearch";
+import { bindFileScroll } from "@/modules/reader/fileScroll";
 import { invoke } from "@tauri-apps/api/core";
 import {
   forwardRef,
@@ -340,6 +341,10 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
     useEffect(() => {
       void loadContent();
     }, [loadContent, reloadKey]);
+    useEffect(
+      () => bindFileScroll(scrollRootRef.current, path, status.kind === "ready"),
+      [path, status.kind],
+    );
 
     /** 更新 Markdown 当前搜索条件并计算原文命中位置。 */
     const setSearchQuery = useCallback(

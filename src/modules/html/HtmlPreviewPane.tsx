@@ -4,6 +4,12 @@ import type {
   TextSearchStatus,
 } from "@/modules/editor";
 import { MarkdownViewToggle } from "@/modules/markdown";
+import { rewriteHtmlLocalAssets } from "./localAssetUrl";
+import {
+  recallFileScroll,
+  rememberFileScroll,
+} from "@/modules/reader/fileScroll";
+import { currentWorkspaceEnv } from "@/modules/workspace";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import {
   forwardRef,
@@ -19,11 +25,12 @@ const HTML_SEARCH_CHANNEL = "codev-html-search";
 type SearchCommand = "query" | "next" | "previous" | "clear";
 
 type HtmlFrameMessage = {
-  type: SearchCommand | "scrollbar" | "hello";
+  type: SearchCommand | "scrollbar" | "hello" | "restore-scroll";
   query?: string;
   caseSensitive?: boolean;
   background?: string;
   mutedForeground?: string;
+  top?: number;
 };
 
 type HtmlSearchMessage = {
@@ -35,7 +42,13 @@ type HtmlSearchMessage = {
   x?: number;
   y?: number;
   text?: string;
+  top?: unknown;
 };
+
+type ReadResult =
+  | { kind: "text"; content: string }
+  | { kind: "binary" }
+  | { kind: "toolarge" };
 
 type Props = {
   path: string;
@@ -43,7 +56,7 @@ type Props = {
   onFocusSearch: () => void;
 };
 
-/** 直接加载本地 HTML 文件，保留脚本、相对资源和页面交互。 */
+/** 读取 HTML 文本，改写本地资源后再用 srcdoc 渲染，保留脚本和页面交互。 */
 export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
   function HtmlPreviewPane({ path, onSetView, onFocusSearch }, ref) {
     const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -196,15 +209,31 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
         if (!data || data.channel !== HTML_SEARCH_CHANNEL) return;
         if (data.type === "contextmenu") {
           const frame = iframeRef.current;
-          if (!frame || typeof data.x !== "number" || typeof data.y !== "number" || typeof data.text !== "string") return;
+          if (
+            !frame ||
+            typeof data.x !== "number" ||
+            typeof data.y !== "number" ||
+            typeof data.text !== "string"
+          )
+            return;
           const bounds = frame.getBoundingClientRect();
-          const menuEvent = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: bounds.left + data.x, clientY: bounds.top + data.y, button: 2 });
+          const menuEvent = new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true,
+            clientX: bounds.left + data.x,
+            clientY: bounds.top + data.y,
+            button: 2,
+          });
           Object.assign(menuEvent, { readerText: data.text });
           frame.dispatchEvent(menuEvent);
           return;
         }
         if (data.type === "focus") {
           onFocusSearch();
+          return;
+        }
+        if (data.type === "scroll" && typeof data.top === "number") {
+          rememberFileScroll(path, data.top);
           return;
         }
         if (data.type === "ready") {
@@ -214,6 +243,10 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
           if (firstReady) {
             syncScrollbarTheme();
             restoreSearch();
+            const top = recallFileScroll(path);
+            if (top !== undefined) {
+              postFrameMessage({ type: "restore-scroll", top });
+            }
           }
           return;
         }
@@ -235,6 +268,8 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
     }, [
       clearBridgeReadyTimer,
       onFocusSearch,
+      path,
+      postFrameMessage,
       restoreSearch,
       setSearchStatus,
       syncScrollbarTheme,
@@ -259,11 +294,21 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
       setSource(null);
       setError(null);
       void invoke("fs_allow_asset", { path, recursiveDirectory: true })
-        .then(() => {
+        .then(() =>
+          invoke<ReadResult>("fs_read_file", {
+            path,
+            workspace: currentWorkspaceEnv(),
+          }),
+        )
+        .then((result) => {
           if (cancelled) return;
-          const assetUrl = convertFileSrc(path);
-          const separator = assetUrl.includes("?") ? "&" : "?";
-          setSource(`${assetUrl}${separator}codev-preview=${reloadKey}`);
+          if (result.kind !== "text") {
+            setError("HTML preview failed: file is not text");
+            return;
+          }
+          setSource(
+            rewriteHtmlLocalAssets(result.content, path, convertFileSrc),
+          );
         })
         .catch((reason) => {
           if (!cancelled) setError(String(reason));
@@ -318,9 +363,9 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
         )}
         {source && (
           <iframe
-            key={source}
+            key={`${path}:${reloadKey}`}
             ref={iframeRef}
-            src={source}
+            srcDoc={source}
             onLoad={handleIframeLoad}
             title={path.split(/[\\/]/).pop() ?? path}
             className="h-full w-full border-0 bg-background"
