@@ -273,7 +273,9 @@ pub fn fs_allow_asset(
             .ok_or_else(|| "HTML 文件缺少父目录".to_string())?;
         scope
             .allow_directory(parent, true)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        // 显式放行入口文件，确保 WebView2 解析 HTML 文档时命中 asset scope。
+        scope.allow_file(path).map_err(|error| error.to_string())
     } else {
         scope.allow_file(path).map_err(|error| error.to_string())
     }

@@ -6,6 +6,7 @@ import { gotoLine } from "@codemirror/search";
 import { EditorView, keymap } from "@codemirror/view";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
+import { bindFileScroll } from "@/modules/reader/fileScroll";
 import {
   forwardRef,
   memo,
@@ -15,6 +16,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
 } from "react";
 import {
   buildSharedExtensions,
@@ -121,7 +123,16 @@ export const EditorPane = memo(
     });
     const reloadRef = useRef(reload);
     reloadRef.current = reload;
-    const cmRef = useRef<ReactCodeMirrorRef>(null);
+  const cmRef = useRef<ReactCodeMirrorRef>(null);
+  const editorViewRef = useRef<EditorView | null>(null);
+  const [editorReady, setEditorReady] = useState(0);
+
+  useEffect(() => {
+    if (doc.status !== "ready") return;
+    const view = editorViewRef.current ?? cmRef.current?.view;
+    if (!view) return;
+    return bindFileScroll(view.scrollDOM, path);
+  }, [path, doc.status, editorReady]);
     const themeExt = useEditorThemeExt();
     const editorWordWrap = usePreferencesStore((s) => s.editorWordWrap);
     const editorWordWrapColumn = usePreferencesStore(
@@ -601,6 +612,10 @@ export const EditorPane = memo(
           onChange={onChange}
           theme={themeExt}
           extensions={extensions}
+          onCreateEditor={(view) => {
+            editorViewRef.current = view;
+            setEditorReady((value) => value + 1);
+          }}
           height="100%"
           className="reader-scrollbar flex-1 min-h-0 overflow-hidden"
           basicSetup={{

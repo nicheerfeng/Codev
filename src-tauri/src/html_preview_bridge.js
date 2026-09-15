@@ -1,6 +1,11 @@
 ;(() => {
   const params = new URLSearchParams(window.location.search);
-  if (window.parent === window || !params.has("codev-preview")) return;
+  if (
+    window.parent === window ||
+    (!params.has("codev-preview") && location.href !== "about:srcdoc")
+  ) {
+    return;
+  }
 
   const CHANNEL = "codev-html-search";
   const MATCH_HIGHLIGHT = "codev-html-search-match";
@@ -13,6 +18,26 @@
   let matches = [];
   let activeIndex = -1;
   let truncated = false;
+
+  /** 当前 HTML 文档的滚动根。 */
+  function scrollingRoot() {
+    return document.scrollingElement || document.documentElement;
+  }
+
+  /** 把滚动位置回传给 Codev，切标签后可还原。 */
+  function publishScroll() {
+    const node = scrollingRoot();
+    window.parent.postMessage(
+      { channel: CHANNEL, type: "scroll", top: node ? node.scrollTop : 0 },
+      "*",
+    );
+  }
+
+  /** 恢复上次阅读位置。 */
+  function restoreScroll(top) {
+    const node = scrollingRoot();
+    if (node && typeof top === "number") node.scrollTop = top;
+  }
 
   /** 判断文本节点是否属于可检索的页面正文。 */
   function isSearchableTextNode(node) {
@@ -304,6 +329,8 @@
       setScrollbarTheme(data.background, data.mutedForeground);
     } else if (data.type === "hello") {
       publishReady();
+    } else if (data.type === "restore-scroll") {
+      restoreScroll(data.top);
     }
   }
 
@@ -329,6 +356,7 @@
   window.addEventListener("contextmenu", openReaderMenu, true);
   window.addEventListener("message", handleSearchMessage);
   window.addEventListener("keydown", handleFindShortcut, true);
+  window.addEventListener("scroll", publishScroll, { passive: true });
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", initializeBridge, { once: true });
   } else {
