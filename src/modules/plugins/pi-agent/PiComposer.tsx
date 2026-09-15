@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import {
@@ -22,6 +23,7 @@ import {
   ArrowDown01Icon,
   PencilEdit01Icon,
   Delete02Icon,
+  Tick02Icon,
 } from "@hugeicons/core-free-icons";
 import type { PiImage, PiModel, PiViewState } from "./types";
 import { PI_LOCAL_COMMANDS } from "./commands";
@@ -66,6 +68,23 @@ type Props = {
   focusRevision?: number;
 };
 
+function modelTitle(model: PiModel): string {
+  return model.name?.trim() || model.id;
+}
+
+function duplicateModelTitles(models: PiModel[]): Set<string> {
+  const counts = new Map<string, number>();
+  for (const model of models) {
+    const title = modelTitle(model);
+    counts.set(title, (counts.get(title) ?? 0) + 1);
+  }
+  return new Set(
+    [...counts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([title]) => title),
+  );
+}
+
 /** 将粘贴或选择的图片转成 Pi 原生图片输入。 */
 async function readImage(file: File): Promise<PiImage> {
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -82,6 +101,10 @@ export function PiComposer(props: Props) {
     : (props.catalogModels ?? []);
   const catalogModel =
     props.view.model ?? props.catalogModel ?? catalogModels[0] ?? null;
+  const selectedModelKey = catalogModel
+    ? `${catalogModel.provider}/${catalogModel.id}`
+    : "";
+  const repeatedTitles = duplicateModelTitles(catalogModels);
   const compacting = props.view.compaction?.status === "running";
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -105,6 +128,13 @@ export function PiComposer(props: Props) {
   const history = mergePromptHistory(submitted, props.view.items);
   const [modelFilter, setModelFilter] = useState("");
   const [modelOpen, setModelOpen] = useState(false);
+  const modelList = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!modelOpen) return;
+    modelList.current
+      ?.querySelector('[aria-current="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [modelOpen, selectedModelKey, modelFilter]);
   const [commandIndex, setCommandIndex] = useState(0);
   const commandList = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -608,7 +638,10 @@ export function PiComposer(props: Props) {
                 onChange={(event) => setModelFilter(event.target.value)}
                 className="mb-2 h-8 rounded-lg text-xs!"
               />
-              <div className="reader-scrollbar max-h-60 overflow-auto">
+              <div
+                ref={modelList}
+                className="reader-scrollbar max-h-60 overflow-auto"
+              >
                 {!catalogModels.length && (
                   <p
                     role="status"
@@ -627,26 +660,44 @@ export function PiComposer(props: Props) {
                       .toLowerCase()
                       .includes(modelFilter.toLowerCase()),
                   )
-                  .map((model) => (
-                    <Button
-                      key={`${model.provider}/${model.id}`}
-                      variant="ghost"
-                      className="h-auto w-full justify-start rounded-lg py-2 text-left"
-                      onClick={() => {
-                        props.onModel(model.provider, model.id);
-                        setModelOpen(false);
-                      }}
-                    >
-                      <span className="min-w-0">
-                        <span className="block truncate text-xs">
-                          {model.name || model.id}
+                  .map((model) => {
+                    const selected =
+                      `${model.provider}/${model.id}` === selectedModelKey;
+                    const title = modelTitle(model);
+                    const showId =
+                      repeatedTitles.has(title) || title !== model.id;
+                    return (
+                      <Button
+                        key={`${model.provider}/${model.id}`}
+                        variant="ghost"
+                        aria-current={selected ? "true" : undefined}
+                        className={cn(
+                          "h-auto w-full justify-start gap-2 rounded-lg py-2 text-left",
+                          selected && "bg-accent text-accent-foreground",
+                        )}
+                        onClick={() => {
+                          props.onModel(model.provider, model.id);
+                          setModelOpen(false);
+                        }}
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-xs">
+                            {showId ? `${title} · ${model.id}` : title}
+                          </span>
+                          <span className="block truncate text-[10px] text-muted-foreground">
+                            {model.provider} / {model.id}
+                          </span>
                         </span>
-                        <span className="block truncate text-[10px] text-muted-foreground">
-                          {model.provider} / {model.id}
-                        </span>
-                      </span>
-                    </Button>
-                  ))}
+                        {selected && (
+                          <HugeiconsIcon
+                            icon={Tick02Icon}
+                            size={14}
+                            className="shrink-0"
+                          />
+                        )}
+                      </Button>
+                    );
+                  })}
               </div>
               <Button
                 variant="ghost"
@@ -674,7 +725,13 @@ export function PiComposer(props: Props) {
               >
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent className="rounded-xl">
+              <SelectContent
+                position="popper"
+                side="top"
+                align="start"
+                collisionPadding={8}
+                className="rounded-xl"
+              >
                 {props.view.thinkingLevels.map((level) => (
                   <SelectItem key={level} value={level}>
                     {level}
