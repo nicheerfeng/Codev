@@ -81,6 +81,40 @@ export function isSrcdocEscapeHref(url: string): boolean {
   return true;
 }
 
+/** 只改 script 标签以外的标记，避免改写 Pi 导出里的 JS。 */
+export function mapMarkupOutsideScripts(
+  html: string,
+  map: (markup: string) => string,
+): string {
+  const parts: string[] = [];
+  const script = /<script\b[^>]*>[\s\S]*?<\/script>/gi;
+  let last = 0;
+  for (const match of html.matchAll(script)) {
+    const index = match.index ?? 0;
+    if (index > last) parts.push(map(html.slice(last, index)));
+    parts.push(match[0]);
+    last = index + match[0].length;
+  }
+  if (last < html.length) parts.push(map(html.slice(last)));
+  return parts.join("");
+}
+
+/** 内联脚本很大时，srcdoc 会继承父页 CSP 把页面跑黑。 */
+export function htmlNeedsAssetDocument(html: string): boolean {
+  const script = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+  let bytes = 0;
+  for (const match of html.matchAll(script)) {
+    const attrs = match[1] ?? "";
+    if (/\btype\s*=\s*["']application\/(?:ld\+)?json["']/i.test(attrs)) {
+      continue;
+    }
+    if (/\bsrc\s*=/i.test(attrs)) continue;
+    bytes += match[2].length;
+    if (bytes > 24 * 1024) return true;
+  }
+  return false;
+}
+
 /** 相对/空锚点改成页内哈希，避免 srcdoc 打开 Codev。 */
 export function neutralizeSrcdocAnchors(html: string): string {
   return html.replace(
@@ -106,18 +140,11 @@ export function withSrcdocBase(html: string): string {
   return `<base href="about:srcdoc">${html}`;
 }
 
-/** 只改写会加载的本地资源；导航锚点改成页内哈希。 */
-export function rewriteHtmlLocalAssets(
+function rewriteMarkupAssets(
   html: string,
-  htmlPath: string,
-  toSrc: (absPath: string) => string,
+  rewrite: (raw: string) => string,
 ): string {
-  const rewrite = (raw: string) => {
-    const resolved = resolveHtmlAssetPath(htmlPath, raw);
-    if (!resolved) return raw;
-    return toSrc(nativeFsPath(resolved));
-  };
-  let next = neutralizeSrcdocAnchors(withSrcdocBase(html));
+  let next = neutralizeSrcdocAnchors(html);
   next = next.replace(
     /\b(src|poster)\s*=\s*(["'])([^"']*)\2/gi,
     (full, attr: string, quote: string, url: string) => {
@@ -148,10 +175,26 @@ export function rewriteHtmlLocalAssets(
     },
   );
   return next.replace(
-    /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi,
+    /url\(\s*(['"]?)([^'")]+)\1\s*\)/g,
     (full, quote: string, url: string) => {
       if (isRemoteAssetUrl(url.trim())) return full;
       return `url(${quote}${rewrite(url.trim())}${quote})`;
     },
+  );
+}
+
+/** 只改写标记里的本地资源，不改 <script> 源码。 */
+export function rewriteHtmlLocalAssets(
+  html: string,
+  htmlPath: string,
+  toSrc: (absPath: string) => string,
+): string {
+  const rewrite = (raw: string) => {
+    const resolved = resolveHtmlAssetPath(htmlPath, raw);
+    if (!resolved) return raw;
+    return toSrc(nativeFsPath(resolved));
+  };
+  return mapMarkupOutsideScripts(withSrcdocBase(html), (markup) =>
+    rewriteMarkupAssets(markup, rewrite),
   );
 }
