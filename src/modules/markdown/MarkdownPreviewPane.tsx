@@ -6,7 +6,11 @@ import {
   type TextSearchOptions,
   type TextSearchStatus,
 } from "@/modules/editor/lib/textSearch";
-import { bindFileScroll } from "@/modules/reader/fileScroll";
+import {
+  bindFileScroll,
+  recallFileScroll,
+  scheduleWhenTallEnough,
+} from "@/modules/reader/fileScroll";
 import { invoke } from "@tauri-apps/api/core";
 import {
   forwardRef,
@@ -342,7 +346,16 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
       void loadContent();
     }, [loadContent, reloadKey]);
     useEffect(
-      () => bindFileScroll(scrollRootRef.current, path, status.kind === "ready"),
+      () =>
+        bindFileScroll(scrollRootRef.current, path, {
+          ready: status.kind === "ready",
+          schedule: (apply) =>
+            scheduleWhenTallEnough(
+              () => scrollRootRef.current,
+              recallFileScroll(path),
+              apply,
+            ),
+        }),
       [path, status.kind],
     );
 

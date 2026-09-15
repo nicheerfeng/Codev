@@ -436,11 +436,9 @@ const TextWindowPreview = forwardRef<
   }, [searchRevision, state]);
   useEffect(
     () =>
-      bindFileScroll(
-        textScrollRef.current,
-        `${path}#${offset}`,
-        state.kind === "ready",
-      ),
+      bindFileScroll(textScrollRef.current, `${path}#${offset}`, {
+        ready: state.kind === "ready",
+      }),
     [offset, path, state.kind],
   );
 

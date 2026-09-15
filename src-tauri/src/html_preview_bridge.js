@@ -353,7 +353,27 @@
     event.preventDefault();
     window.parent.postMessage({ channel: CHANNEL, type: "contextmenu", x: event.clientX, y: event.clientY, text: window.getSelection()?.toString() || "" }, "*");
   }
+
+  /** srcdoc 相对链接会落到父页 Codev；页内锚点放行，其余拦住。 */
+  function handlePreviewClick(event) {
+    let node = event.target;
+    while (node && node !== document && node.tagName !== "A") {
+      node = node.parentElement;
+    }
+    if (!node || node.tagName !== "A") return;
+    const href = (node.getAttribute("href") || "").trim();
+    if (href.startsWith("#")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (/^https?:/i.test(href)) return;
+    if (!href || href === "." || href === "./" || href === "/") {
+      const scroller = scrollingRoot();
+      if (scroller) scroller.scrollTop = 0;
+    }
+  }
+
   window.addEventListener("contextmenu", openReaderMenu, true);
+  window.addEventListener("click", handlePreviewClick, true);
   window.addEventListener("message", handleSearchMessage);
   window.addEventListener("keydown", handleFindShortcut, true);
   window.addEventListener("scroll", publishScroll, { passive: true });
