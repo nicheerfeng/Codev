@@ -6,6 +6,8 @@ import type {
 import { MarkdownViewToggle } from "@/modules/markdown";
 import { rewriteHtmlLocalAssets } from "./localAssetUrl";
 import {
+  beginFileScrollRestore,
+  endFileScrollRestore,
   recallFileScroll,
   rememberFileScroll,
 } from "@/modules/reader/fileScroll";
@@ -247,6 +249,7 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
             if (top !== undefined) {
               postFrameMessage({ type: "restore-scroll", top });
             }
+            requestAnimationFrame(() => endFileScrollRestore(path));
           }
           return;
         }
@@ -293,6 +296,7 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
       setSearchStatus({ count: 0, index: 0 });
       setSource(null);
       setError(null);
+      beginFileScrollRestore(path);
       void invoke("fs_allow_asset", { path, recursiveDirectory: true })
         .then(() =>
           invoke<ReadResult>("fs_read_file", {
@@ -315,6 +319,7 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
         });
       return () => {
         cancelled = true;
+        endFileScrollRestore(path);
         clearBridgeReadyTimer();
       };
     }, [clearBridgeReadyTimer, path, reloadKey, setSearchStatus]);

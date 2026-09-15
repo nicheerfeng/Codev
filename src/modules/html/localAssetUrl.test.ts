@@ -46,5 +46,19 @@ describe("html local asset urls", () => {
     expect(html).toContain(encodeURIComponent("D:\\proj\\fig\\a.png"));
     expect(html).toContain(encodeURIComponent("D:\\proj\\style.css"));
     expect(html).not.toContain("./fig/a.png");
+    expect(html).toContain('<base href="about:srcdoc">');
+  });
+
+  it("does not rewrite navigation anchors", () => {
+    const toSrc = (abs: string) =>
+      `http://asset.localhost/${encodeURIComponent(abs)}`;
+    const html = rewriteHtmlLocalAssets(
+      `<a href="./" class="brand">title</a><a href="">empty</a>`,
+      "D:/proj/page.html",
+      toSrc,
+    );
+    expect(html).toContain('href="./"');
+    expect(html).toContain('href=""');
+    expect(html).not.toContain(encodeURIComponent("D:\\proj"));
   });
 });

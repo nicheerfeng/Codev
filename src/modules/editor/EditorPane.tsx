@@ -123,16 +123,31 @@ export const EditorPane = memo(
     });
     const reloadRef = useRef(reload);
     reloadRef.current = reload;
-  const cmRef = useRef<ReactCodeMirrorRef>(null);
-  const editorViewRef = useRef<EditorView | null>(null);
-  const [editorReady, setEditorReady] = useState(0);
+    const cmRef = useRef<ReactCodeMirrorRef>(null);
+    const editorViewRef = useRef<EditorView | null>(null);
+    const [editorReady, setEditorReady] = useState(0);
 
-  useEffect(() => {
-    if (doc.status !== "ready") return;
-    const view = editorViewRef.current ?? cmRef.current?.view;
-    if (!view) return;
-    return bindFileScroll(view.scrollDOM, path);
-  }, [path, doc.status, editorReady]);
+    useEffect(() => {
+      if (doc.status !== "ready") return;
+      const view = editorViewRef.current ?? cmRef.current?.view;
+      if (!view) return;
+      return bindFileScroll(view.scrollDOM, path, {
+        schedule: (apply) => {
+          let done = false;
+          const run = () => {
+            if (done) return;
+            done = true;
+            apply();
+          };
+          view.requestMeasure({
+            read: () => 0,
+            write: run,
+          });
+          const id = requestAnimationFrame(run);
+          return () => cancelAnimationFrame(id);
+        },
+      });
+    }, [path, doc.status, editorReady]);
     const themeExt = useEditorThemeExt();
     const editorWordWrap = usePreferencesStore((s) => s.editorWordWrap);
     const editorWordWrapColumn = usePreferencesStore(
@@ -342,13 +357,7 @@ export const EditorPane = memo(
       const query = searchQueryRef.current;
       const view = cmRef.current?.view;
       if (!query || !view) return;
-      applyEditorSearchSession(
-        view,
-        query,
-        searchOptionsRef.current,
-        0,
-        true,
-      );
+      applyEditorSearchSession(view, query, searchOptionsRef.current, 0, true);
       emitSearchStatus();
     }, [doc.status, emitSearchStatus]);
 

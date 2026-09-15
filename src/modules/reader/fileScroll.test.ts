@@ -27,14 +27,35 @@ describe("file scroll memory", () => {
     expect(recallFileScroll("D:/a.md")).toBe(420);
   });
 
-  it("writes on scroll and on unbind", () => {
+  it("ignores native zeroing until restore finishes", () => {
+    rememberFileScroll("D:/c.py", 400);
     const node = fakeScroller(0);
-    const stop = bindFileScroll(node, "D:/b.py");
-    node.scrollTop = 88;
+    let apply = () => {};
+    const stop = bindFileScroll(node, "D:/c.py", {
+      schedule: (next) => {
+        apply = next;
+        return () => {};
+      },
+    });
+    node.scrollTop = 0;
     node.emit();
-    expect(recallFileScroll("D:/b.py")).toBe(88);
-    node.scrollTop = 120;
+    expect(recallFileScroll("D:/c.py")).toBe(400);
+    apply();
+    expect(node.scrollTop).toBe(400);
+    node.scrollTop = 0;
+    node.emit();
+    expect(recallFileScroll("D:/c.py")).toBe(0);
     stop();
-    expect(recallFileScroll("D:/b.py")).toBe(120);
+  });
+
+  it("does not write zero if unbound before restore", () => {
+    rememberFileScroll("D:/d.py", 240);
+    const node = fakeScroller(0);
+    const stop = bindFileScroll(node, "D:/d.py", {
+      schedule: () => () => {},
+    });
+    node.scrollTop = 0;
+    stop();
+    expect(recallFileScroll("D:/d.py")).toBe(240);
   });
 });

@@ -73,7 +73,19 @@ export function nativeFsPath(path: string): string {
     : normalized;
 }
 
-/** 在 HTML 文本里改写本地资源，避免 iframe 相对路径丢掉目录。 */
+/** srcdoc 没有自己的目录，相对地址会落到父页 Codev；先钉死基址。 */
+export function withSrcdocBase(html: string): string {
+  if (/<base\b/i.test(html)) return html;
+  if (/<head[^>]*>/i.test(html)) {
+    return html.replace(
+      /<head[^>]*>/i,
+      (open) => `${open}<base href="about:srcdoc">`,
+    );
+  }
+  return `<base href="about:srcdoc">${html}`;
+}
+
+/** 只改写会加载的本地资源，不改 <a href> 导航。 */
 export function rewriteHtmlLocalAssets(
   html: string,
   htmlPath: string,
@@ -84,11 +96,19 @@ export function rewriteHtmlLocalAssets(
     if (!resolved) return raw;
     return toSrc(nativeFsPath(resolved));
   };
-  let next = html.replace(
-    /\b(src|href|poster)\s*=\s*(["'])([^"']*)\2/gi,
+  let next = withSrcdocBase(html);
+  next = next.replace(
+    /\b(src|poster)\s*=\s*(["'])([^"']*)\2/gi,
     (full, attr: string, quote: string, url: string) => {
       if (isRemoteAssetUrl(url)) return full;
       return `${attr}=${quote}${rewrite(url)}${quote}`;
+    },
+  );
+  next = next.replace(
+    /<link\b([^>]*?)\bhref\s*=\s*(["'])([^"']*)\2/gi,
+    (full, before: string, quote: string, url: string) => {
+      if (isRemoteAssetUrl(url)) return full;
+      return `<link${before}href=${quote}${rewrite(url)}${quote}`;
     },
   );
   next = next.replace(
