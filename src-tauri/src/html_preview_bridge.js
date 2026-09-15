@@ -1,11 +1,10 @@
 ;(() => {
   const params = new URLSearchParams(window.location.search);
-  if (
-    window.parent === window ||
-    (!params.has("codev-preview") && location.href !== "about:srcdoc")
-  ) {
-    return;
-  }
+  const inIframe = window.parent !== window;
+  const isSrcdoc =
+    location.href === "about:srcdoc" || location.protocol === "about:";
+  if (!inIframe) return;
+  if (!params.has("codev-preview") && !isSrcdoc) return;
 
   const CHANNEL = "codev-html-search";
   const MATCH_HIGHLIGHT = "codev-html-search-match";

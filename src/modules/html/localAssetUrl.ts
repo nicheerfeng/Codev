@@ -73,6 +73,27 @@ export function nativeFsPath(path: string): string {
     : normalized;
 }
 
+/** srcdoc 里会把 iframe 导航到父页 Codev 的相对地址。 */
+export function isSrcdocEscapeHref(url: string): boolean {
+  const value = url.trim();
+  if (value.startsWith("#")) return false;
+  if (REMOTE.test(value)) return false;
+  return true;
+}
+
+/** 相对/空锚点改成页内哈希，避免 srcdoc 打开 Codev。 */
+export function neutralizeSrcdocAnchors(html: string): string {
+  return html.replace(
+    /<a\b([^>]*?)\bhref\s*=\s*(["'])([^"']*)\2/gi,
+    (full, before: string, quote: string, url: string) => {
+      if (!isSrcdocEscapeHref(url)) return full;
+      const hashIndex = url.indexOf("#");
+      const hash = hashIndex >= 0 ? url.slice(hashIndex) : "#";
+      return `<a${before}href=${quote}${hash || "#"}${quote}`;
+    },
+  );
+}
+
 /** srcdoc 没有自己的目录，相对地址会落到父页 Codev；先钉死基址。 */
 export function withSrcdocBase(html: string): string {
   if (/<base\b/i.test(html)) return html;
@@ -85,7 +106,7 @@ export function withSrcdocBase(html: string): string {
   return `<base href="about:srcdoc">${html}`;
 }
 
-/** 只改写会加载的本地资源，不改 <a href> 导航。 */
+/** 只改写会加载的本地资源；导航锚点改成页内哈希。 */
 export function rewriteHtmlLocalAssets(
   html: string,
   htmlPath: string,
@@ -96,7 +117,7 @@ export function rewriteHtmlLocalAssets(
     if (!resolved) return raw;
     return toSrc(nativeFsPath(resolved));
   };
-  let next = withSrcdocBase(html);
+  let next = neutralizeSrcdocAnchors(withSrcdocBase(html));
   next = next.replace(
     /\b(src|poster)\s*=\s*(["'])([^"']*)\2/gi,
     (full, attr: string, quote: string, url: string) => {
