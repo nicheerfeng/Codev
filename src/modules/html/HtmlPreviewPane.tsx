@@ -197,11 +197,26 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
       sendSearchCommand("query");
     }, [sendSearchCommand, setSearchStatus]);
 
-    /** 在 iframe 完成加载后请求 bridge 握手。 */
+    /** 正式包 srcdoc 的 location 常是父 origin；父页直接拦相对链接。 */
+    const interceptPreviewNavigation = useCallback((event: Event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const anchor = target.closest("a");
+      if (!anchor) return;
+      const href = (anchor.getAttribute("href") || "").trim();
+      if (href.startsWith("#")) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, []);
+
+    /** 在 iframe 完成加载后请求 bridge 握手，并挂上父页点击拦截。 */
     const handleIframeLoad = useCallback(() => {
       armBridgeReadyTimeout();
       postFrameMessage({ type: "hello" });
-    }, [armBridgeReadyTimeout, postFrameMessage]);
+      const doc = iframeRef.current?.contentDocument;
+      if (!doc) return;
+      doc.addEventListener("click", interceptPreviewNavigation, true);
+    }, [armBridgeReadyTimeout, interceptPreviewNavigation, postFrameMessage]);
 
     useEffect(() => {
       /** 接收 HTML iframe 的命中统计和 Ctrl+F 聚焦请求。 */
