@@ -4,7 +4,10 @@ import type {
   TextSearchStatus,
 } from "@/modules/editor";
 import { MarkdownViewToggle } from "@/modules/markdown";
-import { rewriteHtmlLocalAssets } from "./localAssetUrl";
+import {
+  htmlNeedsAssetDocument,
+  rewriteHtmlLocalAssets,
+} from "./localAssetUrl";
 import {
   beginFileScrollRestore,
   endFileScrollRestore,
@@ -48,9 +51,9 @@ type HtmlSearchMessage = {
 };
 
 type ReadResult =
-  | { kind: "text"; content: string }
-  | { kind: "binary" }
-  | { kind: "toolarge" };
+  | { kind: "text"; content: string; size?: number }
+  | { kind: "binary"; size?: number }
+  | { kind: "toolarge"; size?: number; limit?: number };
 
 type Props = {
   path: string;
@@ -66,6 +69,7 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
     const bridgeReadyTimerRef = useRef<number | null>(null);
     const [reloadKey, setReloadKey] = useState(0);
     const [source, setSource] = useState<string | null>(null);
+    const [frameSrc, setFrameSrc] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const searchQueryRef = useRef("");
     const searchOptionsRef = useRef<TextSearchOptions>({
@@ -310,27 +314,39 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
       clearBridgeReadyTimer();
       setSearchStatus({ count: 0, index: 0 });
       setSource(null);
+      setFrameSrc(null);
       setError(null);
       beginFileScrollRestore(path);
+      const useAssetDocument = () => {
+        if (cancelled) return;
+        setSource(null);
+        setFrameSrc(convertFileSrc(path));
+      };
       void invoke("fs_allow_asset", { path, recursiveDirectory: true })
         .then(() =>
           invoke<ReadResult>("fs_read_file", {
             path,
             workspace: currentWorkspaceEnv(),
+            force: true,
           }),
         )
         .then((result) => {
           if (cancelled) return;
           if (result.kind !== "text") {
-            setError("HTML preview failed: file is not text");
+            useAssetDocument();
             return;
           }
+          if (htmlNeedsAssetDocument(result.content)) {
+            useAssetDocument();
+            return;
+          }
+          setFrameSrc(null);
           setSource(
             rewriteHtmlLocalAssets(result.content, path, convertFileSrc),
           );
         })
-        .catch((reason) => {
-          if (!cancelled) setError(String(reason));
+        .catch(() => {
+          useAssetDocument();
         });
       return () => {
         cancelled = true;
@@ -376,16 +392,17 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
     return (
       <div className="relative h-full w-full overflow-hidden rounded-md border border-border/60 bg-background">
         <MarkdownViewToggle mode="rendered" onChange={onSetView} />
-        {!source && (
+        {!source && !frameSrc && (
           <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
             {error ? `HTML preview failed: ${error}` : "Loading HTML..."}
           </div>
         )}
-        {source && (
+        {(source || frameSrc) && (
           <iframe
-            key={`${path}:${reloadKey}`}
+            key={`${path}:${reloadKey}:${frameSrc ? "asset" : "srcdoc"}`}
             ref={iframeRef}
-            srcDoc={source}
+            src={frameSrc ?? undefined}
+            srcDoc={frameSrc ? undefined : (source ?? undefined)}
             onLoad={handleIframeLoad}
             title={path.split(/[\\/]/).pop() ?? path}
             className="h-full w-full border-0 bg-background"

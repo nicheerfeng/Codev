@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  htmlNeedsAssetDocument,
   joinFsPath,
   parentDirectory,
   resolveHtmlAssetPath,
@@ -62,5 +63,30 @@ describe("html local asset urls", () => {
     expect(html).toContain('href="https://example.com"');
     expect(html).not.toContain('href="./"');
     expect(html).not.toContain(encodeURIComponent("D:\\proj"));
+  });
+
+  it("does not rewrite javascript inside script tags", () => {
+    const toSrc = (abs: string) =>
+      `http://asset.localhost/${encodeURIComponent(abs)}`;
+    const html = rewriteHtmlLocalAssets(
+      '<img src="./fig/a.png"><script>const x = URL(blob); el.src="./local.png";</script>',
+      "D:/proj/page.html",
+      toSrc,
+    );
+    expect(html).toContain("URL(blob)");
+    expect(html).toContain('el.src="./local.png"');
+    expect(html).toContain(encodeURIComponent("D:\\proj\\fig\\a.png"));
+  });
+
+  it("sends large inline-script pages to the asset document path", () => {
+    expect(htmlNeedsAssetDocument("<img src=a.png>")).toBe(false);
+    expect(
+      htmlNeedsAssetDocument(`<script>${"x".repeat(25 * 1024)}</script>`),
+    ).toBe(true);
+    expect(
+      htmlNeedsAssetDocument(
+        `<script type="application/json">${"{".repeat(30 * 1024)}</script>`,
+      ),
+    ).toBe(false);
   });
 });
