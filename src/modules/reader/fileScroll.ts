@@ -50,7 +50,7 @@ function defaultSchedule(apply: () => void): () => void {
   return () => cancelAnimationFrame(id);
 }
 
-/** 等滚动容器高度够放下保存位置后再还原。 */
+/** 等滚动容器高度够放下保存位置、并且连续两帧不再长高后再还原。 */
 export function scheduleWhenTallEnough(
   getNode: () => { scrollHeight: number } | null,
   saved: number | undefined,
@@ -58,17 +58,18 @@ export function scheduleWhenTallEnough(
 ): () => void {
   let cancelled = false;
   let frames = 0;
+  let lastHeight = -1;
+  let stable = 0;
   const tryApply = () => {
     if (cancelled) return;
     const node = getNode();
     frames += 1;
-    if (
-      saved &&
-      saved > 0 &&
-      frames < 30 &&
-      node &&
-      node.scrollHeight < saved
-    ) {
+    const height = node?.scrollHeight ?? 0;
+    if (height === lastHeight && height > 0) stable += 1;
+    else stable = 0;
+    lastHeight = height;
+    const enough = !saved || saved <= 0 || height >= saved;
+    if (frames < 45 && (!enough || stable < 2)) {
       requestAnimationFrame(tryApply);
       return;
     }
@@ -105,7 +106,14 @@ export function bindFileScroll(
   const apply = () => {
     if (cancelled) return;
     if (saved !== undefined) node.scrollTop = saved;
-    endFileScrollRestore(path);
+    const unlock = () => {
+      if (!cancelled) endFileScrollRestore(path);
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => requestAnimationFrame(unlock));
+      return;
+    }
+    unlock();
   };
   const remember = () => rememberFileScroll(path, node.scrollTop);
   node.addEventListener("scroll", remember, { passive: true });
@@ -113,9 +121,7 @@ export function bindFileScroll(
   return () => {
     cancelled = true;
     stopSchedule();
-    const wasRestoring = restoring.has(path);
     endFileScrollRestore(path);
-    if (!wasRestoring) remember();
     node.removeEventListener("scroll", remember);
   };
 }
