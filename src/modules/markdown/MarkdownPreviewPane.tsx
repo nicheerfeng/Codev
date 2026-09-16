@@ -23,6 +23,7 @@ import {
   useState,
 } from "react";
 import { Streamdown } from "streamdown";
+import { ZoomableImage } from "@/modules/reader/ZoomableImage";
 import { MarkdownLink } from "./MarkdownLink";
 import { MarkdownToc } from "./MarkdownToc";
 import { MarkdownViewToggle } from "./MarkdownViewToggle";
@@ -139,7 +140,7 @@ function revealRenderedRange(range: Range, scrollRoot: HTMLElement): void {
   });
 }
 
-const components = { a: MarkdownLink };
+const components = { a: MarkdownLink, img: ZoomableImage };
 
 export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
   function MarkdownPreviewPane({ path, visible, onSetView }, ref) {

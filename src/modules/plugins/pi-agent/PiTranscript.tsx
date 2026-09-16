@@ -24,6 +24,7 @@ import {
   GitForkIcon,
 } from "@hugeicons/core-free-icons";
 import { findLiteralMatches } from "@/modules/editor/lib/textSearch";
+import { ZoomableImage } from "@/modules/reader/ZoomableImage";
 import {
   buildTimelineBlocks,
   itemText,
@@ -41,6 +42,7 @@ const STREAMDOWN_CONTROLS = {
   code: { copy: true, download: false },
   table: { copy: true, download: false, fullscreen: false },
 } as const;
+const STREAMDOWN_COMPONENTS = { img: ZoomableImage };
 
 type MessageActions = {
   onCopy?: (text: string) => void;
@@ -174,12 +176,17 @@ const TranscriptItem = memo(function TranscriptItem({
               {item.text.replace(/\s+$/u, "")}
             </div>
           ) : (
-            <Streamdown controls={STREAMDOWN_CONTROLS}>{item.text}</Streamdown>
+            <Streamdown
+              components={STREAMDOWN_COMPONENTS}
+              controls={STREAMDOWN_CONTROLS}
+            >
+              {item.text}
+            </Streamdown>
           )}
         </div>
         {item.kind === "message" &&
           item.images?.map((image, index) => (
-            <img
+            <ZoomableImage
               key={`${item.id}-${index}`}
               className="mt-2 max-h-60 max-w-full rounded-lg"
               src={`data:${image.mimeType};base64,${image.data}`}
@@ -451,7 +458,10 @@ function ProcessStep({
             : "已思考"}
         </summary>
         <div className="pi-process-step-body pi-markdown select-text">
-          <Streamdown controls={STREAMDOWN_CONTROLS}>
+          <Streamdown
+            components={STREAMDOWN_COMPONENTS}
+            controls={STREAMDOWN_CONTROLS}
+          >
             {step.item?.kind === "thinking" ? step.item.text : ""}
           </Streamdown>
         </div>

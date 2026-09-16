@@ -25,6 +25,7 @@ import {
   Delete02Icon,
   Tick02Icon,
 } from "@hugeicons/core-free-icons";
+import { ZoomableImage } from "@/modules/reader/ZoomableImage";
 import type { PiImage, PiModel, PiViewState } from "./types";
 import { PI_LOCAL_COMMANDS } from "./commands";
 import {
@@ -455,7 +456,7 @@ export function PiComposer(props: Props) {
                 key={`${index}-${item.data.slice(-16)}`}
                 className="relative"
               >
-                <img
+                <ZoomableImage
                   className="h-16 max-w-24 rounded-lg object-cover"
                   src={`data:${item.mimeType};base64,${item.data}`}
                   alt={`待发送图片 ${index + 1}`}
@@ -465,12 +466,13 @@ export function PiComposer(props: Props) {
                   size="icon-xs"
                   className="absolute -top-1 -right-1"
                   aria-label={`移除图片 ${index + 1}`}
-                  onClick={() =>
+                  onClick={(event) => {
+                    event.stopPropagation();
                     changeDraft({
                       ...props.draft,
                       images: props.draft.images.filter((_, i) => i !== index),
-                    })
-                  }
+                    });
+                  }}
                 >
                   <HugeiconsIcon icon={Cancel01Icon} size={12} />
                 </Button>
