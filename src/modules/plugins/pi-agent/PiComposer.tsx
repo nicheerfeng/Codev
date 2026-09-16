@@ -367,17 +367,26 @@ export function PiComposer(props: Props) {
                 <span className="pi-queue-mode">
                   {kind === "steering" ? "插入" : "排队"}
                 </span>
-                <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]">
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 whitespace-pre-wrap text-left [overflow-wrap:anywhere]"
+                  disabled={props.disabled || kind !== "followUp"}
+                  title={kind === "followUp" ? "立即插入当前任务" : undefined}
+                  onClick={() => {
+                    if (kind === "followUp")
+                      props.onQueueAction(kind, index, text, "steer");
+                  }}
+                >
                   {text}
-                </span>
+                </button>
                 <div className="flex shrink-0 items-center gap-0.5">
                   {kind === "followUp" && (
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      title="立即引导当前任务"
-                      aria-label="立即引导"
-                      disabled={props.busy || props.disabled}
+                      title="立即插入当前任务"
+                      aria-label="立即插入当前任务"
+                      disabled={props.disabled}
                       onClick={() =>
                         props.onQueueAction(kind, index, text, "steer")
                       }
@@ -390,7 +399,7 @@ export function PiComposer(props: Props) {
                     size="icon-xs"
                     title="退回输入框编辑"
                     aria-label="退回编辑"
-                    disabled={props.busy || props.disabled}
+                    disabled={props.disabled}
                     onClick={() =>
                       props.onQueueAction(kind, index, text, "edit")
                     }
@@ -402,7 +411,7 @@ export function PiComposer(props: Props) {
                     size="icon-xs"
                     title="删除排队消息"
                     aria-label="删除排队消息"
-                    disabled={props.busy || props.disabled}
+                    disabled={props.disabled}
                     onClick={() =>
                       props.onQueueAction(kind, index, text, "delete")
                     }
@@ -575,15 +584,11 @@ export function PiComposer(props: Props) {
               event.nativeEvent.keyCode !== 229
             ) {
               event.preventDefault();
-              if (
-                (!props.busy || compacting) &&
-                (props.draft.text.trim() || props.draft.images.length)
-              )
-                sendDraft(
-                  running && (event.ctrlKey || event.metaKey)
-                    ? "steer"
-                    : "followUp",
-                );
+              if (!(props.draft.text.trim() || props.draft.images.length))
+                return;
+              const insert = running && (event.ctrlKey || event.metaKey);
+              if (insert || !props.busy || compacting)
+                sendDraft(insert ? "steer" : "followUp");
             }
           }}
         />
@@ -772,17 +777,33 @@ export function PiComposer(props: Props) {
                 <span className="size-2.5 rounded-xs bg-current" />
               </Button>
             )}
+            {running && !compacting && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="rounded-full"
+                title="排队到本轮之后"
+                aria-label="排队到本轮之后"
+                disabled={
+                  props.disabled ||
+                  (!props.draft.text.trim() && !props.draft.images.length)
+                }
+                onClick={() => sendDraft("followUp")}
+              >
+                <HugeiconsIcon icon={ArrowDown01Icon} size={17} />
+              </Button>
+            )}
             <Button
               size="icon-sm"
               className="rounded-full"
-              title={running ? "排队发送" : "发送"}
-              aria-label={running ? "排队发送" : "发送"}
+              title={running ? "插入当前任务" : "发送"}
+              aria-label={running ? "插入当前任务" : "发送"}
               disabled={
                 props.disabled ||
-                (props.busy && !compacting) ||
+                (!running && props.busy && !compacting) ||
                 (!props.draft.text.trim() && !props.draft.images.length)
               }
-              onClick={() => sendDraft("followUp")}
+              onClick={() => sendDraft(running ? "steer" : "followUp")}
             >
               <HugeiconsIcon icon={ArrowUp01Icon} size={17} />
             </Button>

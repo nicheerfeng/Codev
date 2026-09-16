@@ -455,11 +455,7 @@ function reduceEvent(
             : state.queue.pendingCount,
       },
     };
-  if (event.command === "clear_queue")
-    return {
-      ...state,
-      queue: { steering: [], followUp: [], pendingCount: 0 },
-    };
+  if (event.command === "clear_queue") return state;
   if (event.command === "get_session_stats") {
     const usage = objectValue(data?.contextUsage);
     const tokens = typeof usage?.tokens === "number" ? usage.tokens : null;

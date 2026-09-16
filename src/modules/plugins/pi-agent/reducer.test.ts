@@ -204,6 +204,27 @@ describe("piViewReducer", () => {
     });
   });
 
+  it("keeps the displayed queue after native clear_queue until queue_update arrives", () => {
+    const queued = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "event",
+      payload: rpc({
+        type: "queue_update",
+        steering: ["先修复这个"],
+        followUp: ["完成后总结"],
+      }),
+    });
+    const cleared = piViewReducer(queued, {
+      type: "event",
+      payload: rpc({
+        type: "response",
+        command: "clear_queue",
+        success: true,
+        data: { steering: ["先修复这个"], followUp: ["完成后总结"] },
+      }),
+    });
+    expect(cleared.queue).toEqual(queued.queue);
+  });
+
   it("marks a prompt as running before agent_start and keeps trailing blanks off user text", () => {
     const state = piViewReducer(INITIAL_PI_VIEW_STATE, {
       type: "prompt",

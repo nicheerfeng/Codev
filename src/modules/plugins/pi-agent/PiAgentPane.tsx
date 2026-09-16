@@ -472,8 +472,8 @@ export function PiAgentPane({ active }: { active: boolean }) {
       }));
       return;
     }
-    if (pending.has(draftKey) || (!draft.text.trim() && !draft.images.length))
-      return;
+    if (!draft.text.trim() && !draft.images.length) return;
+    const alreadySending = pending.has(draftKey);
     const text = draft.text.replace(/\s+$/u, "");
     const sourceKey = draftKey;
     let runtimeKey = sourceKey;
@@ -482,7 +482,9 @@ export function PiAgentPane({ active }: { active: boolean }) {
       const thread = await ensure(rows.find((row) => row.key === selected));
       runtimeKey = thread.key;
       const queued =
-        thread.view.status === "running" || thread.view.status === "stopping";
+        alreadySending ||
+        thread.view.status === "running" ||
+        thread.view.status === "stopping";
       setPending((value) => new Set([...value, runtimeKey]));
       setSelected((current) => (current === selected ? thread.key : current));
       const adapted = queued
@@ -499,12 +501,18 @@ export function PiAgentPane({ active }: { active: boolean }) {
         [sourceKey]: EMPTY_DRAFT,
         [thread.key]: EMPTY_DRAFT,
       }));
-      await client.current!.request(thread, {
-        type: "prompt",
-        message: text,
-        ...(draft.images.length ? { images: draft.images } : {}),
-        ...(queued ? { streamingBehavior: behavior } : {}),
-      });
+      await client.current!.request(thread, queued
+        ? {
+            type: behavior === "steer" ? "steer" : "follow_up",
+            message: text,
+            ...(draft.images.length ? { images: draft.images } : {}),
+          }
+        : {
+            type: "prompt",
+            message: text,
+            ...(draft.images.length ? { images: draft.images } : {}),
+          },
+      );
       await client.current!.refreshState(thread);
     } catch (error) {
       setDrafts((value) => ({

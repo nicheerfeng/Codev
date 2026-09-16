@@ -124,12 +124,17 @@ describe("Pi RPC workspace", () => {
       ).toBe(false);
       release();
       await operation;
-      const prompts = vi
+      const flushed = vi
         .mocked(native.sendPiCommand)
-        .mock.calls.filter(([, cmd]) => cmd.type === "prompt");
-      expect(prompts.map(([, cmd]) => cmd.message)).toEqual(["one", "two"]);
-      expect(prompts[0][1].images).toEqual(images);
-      expect(prompts[1][1].streamingBehavior).toBe("steer");
+        .mock.calls.filter(([, cmd]) =>
+          ["prompt", "steer", "follow_up"].includes(String(cmd.type)),
+        );
+      expect(flushed.map(([, cmd]) => [cmd.type, cmd.message])).toEqual([
+        ["prompt", "one"],
+        ["prompt", "two"],
+      ]);
+      expect(flushed[0][1].images).toEqual(images);
+      expect(flushed[1][1].streamingBehavior).toBe("steer");
       expect(thread.view.localQueue).toEqual([]);
       expect(thread.view.compaction?.status).toBe("done");
       expect(thread.view.items).toBe(items);
@@ -620,6 +625,36 @@ describe("Pi RPC workspace", () => {
       }
     },
   );
+  it("promotes a queued follow-up by index when the displayed text drifts", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("queue", "D:/one");
+      await client.request(thread, { type: "get_state" });
+      vi.mocked(native.sendPiCommand).mockClear();
+      await client.updateQueuedMessage(
+        thread,
+        "followUp",
+        0,
+        "后续任务（已改写）",
+        "steer",
+        vi.fn(),
+      );
+      const commands = vi
+        .mocked(native.sendPiCommand)
+        .mock.calls.map(([, command]) => ({
+          type: command.type,
+          message: command.message,
+        }));
+      expect(commands).toEqual([
+        { type: "clear_queue", message: undefined },
+        { type: "steer", message: "后续任务" },
+        { type: "steer", message: "排队指令" },
+      ]);
+    } finally {
+      client.dispose();
+    }
+  });
   it("restores queue before abort and leaves other threads untouched", async () => {
     const native = await import("./native");
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
