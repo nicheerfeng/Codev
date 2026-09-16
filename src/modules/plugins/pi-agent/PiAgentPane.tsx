@@ -8,7 +8,6 @@ import {
   LayoutRightIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
@@ -46,8 +45,10 @@ import {
   nextDraftKey,
   pathKey,
   projectName,
+  sessionIdentity,
   visiblePiProjects,
 } from "./organization";
+import { adoptOrderIds, prependOrderId } from "./sidebarOrder";
 import { PiSidebar, type SidebarThread } from "./PiSidebar";
 import { PiComposer, EMPTY_DRAFT, type PiDraft } from "./PiComposer";
 import { PiTranscript } from "./PiTranscript";
@@ -98,10 +99,7 @@ export function PiAgentPane({ active }: { active: boolean }) {
   const [probe, setProbe] = useState<Awaited<
     ReturnType<typeof probePiAgent>
   > | null>(null);
-  const [rename, setRename] = useState<{
-    thread: SidebarThread;
-    name: string;
-  } | null>(null);
+  const pinnedDrafts = useRef(new Set<string>());
   const [requests, setRequests] = useState<ExtensionRequest[]>([]);
   const [answer, setAnswer] = useState("");
   const [extensionStatus, setExtensionStatus] = useState<
@@ -284,6 +282,7 @@ export function PiAgentPane({ active }: { active: boolean }) {
       if (client.current === runtime) client.current = null;
     };
   }, [initialized, refreshSessions]);
+  const previousIdentities = useRef(new Map<string, string>());
   const rows = useMemo<SidebarThread[]>(() => {
     const result: SidebarThread[] = sessions
       .filter((session) => session.path)
@@ -326,6 +325,19 @@ export function PiAgentPane({ active }: { active: boolean }) {
     }
     return result;
   }, [sessions, threads, requests, selected]);
+  useEffect(() => {
+    const replacements: Array<[string, string]> = [];
+    for (const row of rows) {
+      const previous = previousIdentities.current.get(row.key);
+      const next = sessionIdentity(row.path, row.key);
+      if (previous && previous !== next) replacements.push([previous, next]);
+      previousIdentities.current.set(row.key, next);
+    }
+    if (!replacements.length) return;
+    const adopted = adoptOrderIds(sessionOrder, replacements);
+    if (adopted.join("\0") !== sessionOrder.join("\0"))
+      void setPiAgentSessionOrder(adopted);
+  }, [rows, sessionOrder]);
   /** 用统一提示处理操作异常，避免无响应按钮。 */
   const run = (operation: Promise<unknown>, key = draftKey) => {
     void operation.catch((error) => setNotice(String(error), key));
@@ -345,6 +357,10 @@ export function PiAgentPane({ active }: { active: boolean }) {
   const create = async (path: string) => {
     setProject(path);
     const key = nextDraftKey(path);
+    if (!pinnedDrafts.current.has(key)) {
+      pinnedDrafts.current.add(key);
+      void setPiAgentSessionOrder(prependOrderId(sessionOrder, key));
+    }
     setSelected(key);
     setSearchOpen(false);
     const target = await client.current!.open(key, path);
@@ -669,11 +685,9 @@ export function PiAgentPane({ active }: { active: boolean }) {
     setNotice(`已导出：${result?.path ?? outputPath}`, target.key);
   };
   /** 重命名指定会话并回读名称，不依赖当前选中的会话。 */
-  const renameThread = async () => {
-    if (!rename?.name.trim()) return;
-    const thread = await ensure(rename.thread);
-    await client.current!.rename(thread, rename.name.trim());
-    setRename(null);
+  const commitRename = async (target: SidebarThread, name: string) => {
+    const thread = await ensure(target);
+    await client.current!.rename(thread, name);
     await refreshSessions();
   };
   const request = requests.find((item) => item.key === selected);
@@ -763,8 +777,8 @@ export function PiAgentPane({ active }: { active: boolean }) {
             onRemoveProject={(path) => run(removeProject(path))}
             onNew={(path) => run(create(path))}
             onSelect={(thread) => run(select(thread), thread.key)}
-            onRename={(thread) =>
-              setRename({ thread, name: thread.name || thread.preview || "" })
+            onCommitRename={(thread, name) =>
+              run(commitRename(thread, name), thread.key)
             }
             onFork={(thread) => run(forkThread(thread), thread.key)}
             onExport={(thread) => run(exportThread(thread), thread.key)}
@@ -1007,47 +1021,6 @@ export function PiAgentPane({ active }: { active: boolean }) {
               {deleting ? "删除中…" : "彻底删除"}
             </Button>
           </div>
-        </DialogContent>
-      </Dialog>
-      <Dialog
-        open={!!rename && active}
-        onOpenChange={(value) => {
-          if (!value) setRename(null);
-        }}
-      >
-        <DialogContent className="rounded-2xl" showCloseButton={false}>
-          <DialogTitle>重命名线程</DialogTitle>
-          <DialogDescription>保存到该线程的 Pi 原生会话。</DialogDescription>
-          <form
-            className="space-y-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              run(renameThread(), rename?.thread.key);
-            }}
-          >
-            <Input
-              aria-label="线程名称"
-              autoFocus
-              value={rename?.name ?? ""}
-              onChange={(event) =>
-                setRename((value) =>
-                  value ? { ...value, name: event.target.value } : null,
-                )
-              }
-            />
-            <div className="flex justify-end gap-2">
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => setRename(null)}
-              >
-                取消
-              </Button>
-              <Button type="submit" disabled={!rename?.name.trim()}>
-                保存
-              </Button>
-            </div>
-          </form>
         </DialogContent>
       </Dialog>
       <Dialog

@@ -4,9 +4,10 @@ import {
   useRef,
   useState,
   type HTMLAttributes,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 
-type ReorderAttrs = HTMLAttributes<HTMLDivElement> & {
+type ItemAttrs = HTMLAttributes<HTMLDivElement> & {
   "data-pi-reorder": PiReorderKind;
   "data-pi-key": string;
   "data-pi-group": string;
@@ -14,7 +15,30 @@ type ReorderAttrs = HTMLAttributes<HTMLDivElement> & {
 
 export type PiReorderKind = "project" | "session";
 
-/** 为 Pi 项目和 session 提供 pointer 捕获排序，避开 WebView2 的 HTML5 拖放。 */
+export type PiReorderGhost = {
+  kind: PiReorderKind;
+  source: string;
+  group: string;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+};
+
+type DragState = {
+  kind: PiReorderKind;
+  source: string;
+  group: string;
+  label: string;
+  pointerId: number;
+  startY: number;
+  target: HTMLElement;
+  active: boolean;
+  gap: number | null;
+  width: number;
+};
+
+/** 为 Pi 项目和 session 提供整行 pointer 捕获排序，避开 WebView2 的 HTML5 拖放。 */
 export function usePiSidebarReorder(
   onMove: (
     kind: PiReorderKind,
@@ -23,16 +47,7 @@ export function usePiSidebarReorder(
     group: string,
   ) => void,
 ) {
-  const drag = useRef<{
-    kind: PiReorderKind;
-    source: string;
-    group: string;
-    pointerId: number;
-    startY: number;
-    target: HTMLElement;
-    active: boolean;
-    gap: number | null;
-  } | null>(null);
+  const drag = useRef<DragState | null>(null);
   const suppressClick = useRef(false);
   const [position, setPosition] = useState<{
     kind: PiReorderKind;
@@ -40,38 +55,130 @@ export function usePiSidebarReorder(
     group: string;
     gap: number | null;
   } | null>(null);
+  const [ghost, setGhost] = useState<PiReorderGhost | null>(null);
 
-  const cancel = useCallback(() => {
-    const current = drag.current;
-    drag.current = null;
-    if (current?.target.hasPointerCapture(current.pointerId)) {
-      current.target.releasePointerCapture(current.pointerId);
-    }
+  const clearVisuals = useCallback(() => {
     setPosition(null);
+    setGhost(null);
     document.body.style.userSelect = "";
+  }, []);
+
+  const finish = useCallback(
+    (commit: boolean) => {
+      const current = drag.current;
+      drag.current = null;
+      if (current?.target.hasPointerCapture(current.pointerId)) {
+        current.target.releasePointerCapture(current.pointerId);
+      }
+      suppressClick.current = current?.active === true;
+      clearVisuals();
+      if (commit && current?.active && current.gap !== null) {
+        onMove(current.kind, current.source, current.gap, current.group);
+      }
+    },
+    [clearVisuals, onMove],
+  );
+
+  const track = useCallback((_clientX: number, clientY: number) => {
+    const current = drag.current;
+    if (!current) return;
+    if (!current.active && Math.abs(clientY - current.startY) < 6) return;
+    if (!current.active) {
+      current.active = true;
+      document.body.style.userSelect = "none";
+    }
+    const selector = `[data-pi-reorder="${current.kind}"]`;
+    const headers = Array.from(
+      document.querySelectorAll<HTMLElement>(selector),
+    ).filter((node) => node.dataset.piGroup === current.group);
+    if (!headers.length) {
+      current.gap = null;
+      setPosition({
+        kind: current.kind,
+        source: current.source,
+        group: current.group,
+        gap: null,
+      });
+      setGhost(null);
+      return;
+    }
+    const first = headers[0].getBoundingClientRect();
+    const last = headers[headers.length - 1].getBoundingClientRect();
+    const left = first.left;
+    const width = first.width;
+    const top = first.top;
+    const bottom = last.bottom;
+    if (clientY < top - 12 || clientY > bottom + 12) {
+      current.gap = null;
+    } else {
+      const index = headers.findIndex((header) => {
+        const rect = header.getBoundingClientRect();
+        return clientY < rect.top + rect.height / 2;
+      });
+      current.gap = index < 0 ? headers.length : index;
+    }
+    setPosition({
+      kind: current.kind,
+      source: current.source,
+      group: current.group,
+      gap: current.gap,
+    });
+    const height = Math.max(28, first.height);
+    const y = Math.min(bottom - height, Math.max(top, clientY - height / 2));
+    setGhost({
+      kind: current.kind,
+      source: current.source,
+      group: current.group,
+      label: current.label,
+      x: left,
+      y,
+      width,
+    });
   }, []);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && drag.current) {
-        suppressClick.current = drag.current.active;
-        cancel();
-      }
+      if (event.key === "Escape" && drag.current) finish(false);
+    };
+    const onMove = (event: PointerEvent) => {
+      const current = drag.current;
+      if (!current || current.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      track(event.clientX, event.clientY);
+    };
+    const onUp = (event: PointerEvent) => {
+      const current = drag.current;
+      if (!current || current.pointerId !== event.pointerId) return;
+      finish(true);
+    };
+    const onCancel = (event: PointerEvent) => {
+      const current = drag.current;
+      if (!current || current.pointerId !== event.pointerId) return;
+      finish(false);
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [cancel]);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+    };
+  }, [finish, track]);
 
   const itemProps = (
     kind: PiReorderKind,
     source: string,
     group: string,
-  ): ReorderAttrs => ({
+    label: string,
+  ): ItemAttrs => ({
     "data-pi-reorder": kind,
     "data-pi-key": source,
     "data-pi-group": group,
     onDragStart: (event) => event.preventDefault(),
-    onPointerDown: (event) => {
+    onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => {
       if (event.button !== 0) return;
       if ((event.target as HTMLElement).closest("[data-no-drag]")) return;
       suppressClick.current = false;
@@ -79,52 +186,24 @@ export function usePiSidebarReorder(
         kind,
         source,
         group,
+        label,
         pointerId: event.pointerId,
         startY: event.clientY,
         target: event.currentTarget,
         active: false,
         gap: null,
+        width: event.currentTarget.getBoundingClientRect().width,
       };
+      event.currentTarget.setPointerCapture(event.pointerId);
     },
-    onPointerMove: (event) => {
+    onLostPointerCapture: (event) => {
       const current = drag.current;
       if (!current || current.pointerId !== event.pointerId) return;
-      if (!current.active && Math.abs(event.clientY - current.startY) < 4)
-        return;
-      if (!current.active) {
-        current.active = true;
+      if (current.active && current.target.isConnected) {
         current.target.setPointerCapture(current.pointerId);
-        document.body.style.userSelect = "none";
+        return;
       }
-      event.preventDefault();
-      const selector = `[data-pi-reorder="${current.kind}"]`;
-      const headers = Array.from(
-        document.querySelectorAll<HTMLElement>(selector),
-      ).filter((node) => node.dataset.piGroup === current.group);
-      const index = headers.findIndex((header) => {
-        const rect = header.getBoundingClientRect();
-        return event.clientY < rect.top + rect.height / 2;
-      });
-      current.gap = index < 0 ? headers.length : index;
-      setPosition({
-        kind: current.kind,
-        source: current.source,
-        group: current.group,
-        gap: current.gap,
-      });
-    },
-    onPointerUp: (event) => {
-      const current = drag.current;
-      if (!current || current.pointerId !== event.pointerId) return;
-      suppressClick.current = current.active;
-      cancel();
-      if (current.active && current.gap !== null) {
-        onMove(current.kind, current.source, current.gap, current.group);
-      }
-    },
-    onPointerCancel: cancel,
-    onLostPointerCapture: () => {
-      if (drag.current) cancel();
+      if (!current.active) finish(false);
     },
     onClickCapture: (event) => {
       if (!suppressClick.current) return;
@@ -134,5 +213,5 @@ export function usePiSidebarReorder(
     },
   });
 
-  return { position, itemProps };
+  return { position, ghost, itemProps };
 }
