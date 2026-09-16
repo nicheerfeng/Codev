@@ -89,7 +89,9 @@ import {
 } from "react";
 import { CloseDialogs } from "./components/CloseDialogs";
 import { WorkspaceSurface } from "./components/WorkspaceSurface";
+import { showMainWindow } from "./lib/hideToTray";
 import { useAppCloseGuard } from "./hooks/useAppCloseGuard";
+import { onAction } from "@tauri-apps/plugin-notification";
 import { useDockTabReorder } from "./hooks/useDockTabReorder";
 import { useTabCloseGuards } from "./hooks/useTabCloseGuards";
 import { useWorkspaceSwitcher } from "./hooks/useWorkspaceSwitcher";
@@ -627,6 +629,20 @@ export default function App() {
 
   const { pendingAppClose, confirmAppClose, cancelAppClose } =
     useAppCloseGuard(tabsRef);
+
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    void onAction(() => {
+      void showMainWindow();
+    })
+      .then((listener) => {
+        stop = () => {
+          void listener.unregister();
+        };
+      })
+      .catch(() => undefined);
+    return () => stop?.();
+  }, []);
 
   useEffect(() => {
     const live = new Set<number>();

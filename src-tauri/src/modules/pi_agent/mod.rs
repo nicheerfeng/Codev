@@ -153,35 +153,163 @@ pub struct PiAsset {
 /// 扫描 Pi 技能或插件目录，返回只读展示所需的轻量元数据。
 #[tauri::command]
 pub fn pi_agent_list_assets(kind: String) -> Result<Vec<PiAsset>, String> {
-    let home = dirs::home_dir().ok_or("无法定位用户目录")?;
-    let roots: Vec<(PathBuf, String)> = match kind.as_str() {
-        "skills" => vec![
-            (home.join(".pi").join("agent").join("skills"), "Pi 技能".into()),
-            (home.join(".agents").join("skills"), "共享技能".into()),
-        ],
-        "plugins" => vec![(home.join(".pi").join("agent").join("extensions"), "Pi 插件".into())],
-        _ => return Err("kind 必须是 skills 或 plugins".into()),
-    };
     let mut assets = Vec::new();
-    for (root, source) in roots {
-        let entries = match fs::read_dir(&root) {
-            Ok(entries) => entries,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() { continue; }
-            let name = entry.file_name().to_string_lossy().to_string();
-            let summary = ["README.md", "README.txt", "package.json"]
-                .iter()
-                .find_map(|file| fs::read_to_string(path.join(file)).ok())
-                .map(|text| text.lines().take(3).collect::<Vec<_>>().join(" "))
-                .map(|text| text.chars().take(240).collect());
-            assets.push(PiAsset { name, path: canonical_display(&path), source: source.clone(), summary });
+    match kind.as_str() {
+        "skills" => {
+            let home = dirs::home_dir().ok_or("无法定位用户目录")?;
+            collect_named_dirs(
+                &home.join(".pi").join("agent").join("skills"),
+                "Pi 技能",
+                &mut assets,
+            );
+            collect_named_dirs(&home.join(".agents").join("skills"), "共享技能", &mut assets);
+        }
+        "plugins" => {
+            let agent = pi_home_dir().ok_or("无法定位 Pi 目录")?;
+            collect_extension_assets(&agent.join("extensions"), "自研扩展", &mut assets);
+            collect_package_assets(&agent, &mut assets);
+        }
+        _ => return Err("kind 必须是 skills 或 plugins".into()),
+    }
+    assets.sort_by(|left, right| {
+        left.source
+            .to_lowercase()
+            .cmp(&right.source.to_lowercase())
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    Ok(assets)
+}
+
+fn is_extension_file(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|value| value.to_str()),
+        Some("ts" | "js" | "mjs" | "cjs")
+    )
+}
+
+fn asset_summary(path: &Path) -> Option<String> {
+    if path.is_file() {
+        return read_preview(path).and_then(summarize_text);
+    }
+    ["README.md", "README.txt", "package.json"]
+        .iter()
+        .find_map(|file| fs::read_to_string(path.join(file)).ok())
+        .and_then(summarize_text)
+}
+
+fn read_preview(path: &Path) -> Option<String> {
+    let mut file = File::open(path).ok()?;
+    let mut buffer = vec![0u8; 4096];
+    let count = file.read(&mut buffer).ok()?;
+    String::from_utf8(buffer[..count].to_vec()).ok()
+}
+
+fn summarize_text(text: String) -> Option<String> {
+    let trimmed = if let Ok(value) = serde_json::from_str::<Value>(&text) {
+        value
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    } else {
+        text.lines().take(3).collect::<Vec<_>>().join(" ")
+    };
+    let compact: String = trimmed.chars().take(240).collect();
+    if compact.trim().is_empty() {
+        None
+    } else {
+        Some(compact)
+    }
+}
+
+fn push_asset(name: String, path: PathBuf, source: &str, assets: &mut Vec<PiAsset>) {
+    let display = canonical_display(&path);
+    if assets.iter().any(|item| item.path == display) {
+        return;
+    }
+    assets.push(PiAsset {
+        name,
+        path: display,
+        source: source.to_string(),
+        summary: asset_summary(&path),
+    });
+}
+
+fn collect_named_dirs(root: &Path, source: &str, assets: &mut Vec<PiAsset>) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        push_asset(name, path, source, assets);
+    }
+}
+
+fn collect_extension_assets(root: &Path, source: &str, assets: &mut Vec<PiAsset>) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            push_asset(name, path, source, assets);
+        } else if is_extension_file(&path) {
+            let label = path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or(&name)
+                .to_string();
+            push_asset(label, path, source, assets);
         }
     }
-    assets.sort_by_key(|asset| asset.name.to_lowercase());
-    Ok(assets)
+}
+
+fn package_spec_name(spec: &str) -> Option<String> {
+    let name = spec.strip_prefix("npm:").unwrap_or(spec).trim();
+    if name.is_empty() || name.starts_with('.') || name.contains("..") {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+fn package_dir(npm: &Path, spec: &str) -> Option<PathBuf> {
+    let name = package_spec_name(spec)?;
+    Some(name.split('/').fold(npm.to_path_buf(), |acc, part| acc.join(part)))
+}
+
+fn collect_package_assets(agent: &Path, assets: &mut Vec<PiAsset>) {
+    let settings = fs::read_to_string(agent.join("settings.json")).ok();
+    let Some(value) = settings.and_then(|text| serde_json::from_str::<Value>(&text).ok()) else {
+        return;
+    };
+    let Some(packages) = value.get("packages").and_then(Value::as_array) else {
+        return;
+    };
+    let npm = agent.join("npm").join("node_modules");
+    for item in packages {
+        let Some(spec) = item.as_str() else {
+            continue;
+        };
+        let Some(path) = package_dir(&npm, spec) else {
+            continue;
+        };
+        if !path.exists() {
+            continue;
+        }
+        let name = package_spec_name(spec).unwrap_or_else(|| spec.to_string());
+        push_asset(name, path, "第三方包", assets);
+    }
 }
 
 /// 监听原生会话目录，兼容任何 Pi 客户端新建或更新的会话。

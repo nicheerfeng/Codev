@@ -13,7 +13,12 @@ import type {
 
 const PI_EVENT = "codev://pi-agent-event";
 
-export type PiAsset = { name: string; path: string; source: string; summary?: string | null };
+export type PiAsset = {
+  name: string;
+  path: string;
+  source: string;
+  summary?: string | null;
+};
 
 /** 读取 Pi 技能或插件目录的只读展示数据。 */
 export function listPiAssets(kind: "skills" | "plugins"): Promise<PiAsset[]> {
@@ -21,11 +26,20 @@ export function listPiAssets(kind: "skills" | "plugins"): Promise<PiAsset[]> {
 }
 
 /** 订阅原生会话目录变化，无需认识外部插件。 */
-export async function watchPiSessions(changed: () => void): Promise<UnlistenFn> {
+export async function watchPiSessions(
+  changed: () => void,
+): Promise<UnlistenFn> {
   const stop = await listen("codev://pi-sessions-changed", changed);
-  try { await invoke("pi_agent_watch_sessions", { enabled: true }); }
-  catch (error) { stop(); throw error; }
-  return () => { stop(); void invoke("pi_agent_watch_sessions", { enabled: false }); };
+  try {
+    await invoke("pi_agent_watch_sessions", { enabled: true });
+  } catch (error) {
+    stop();
+    throw error;
+  }
+  return () => {
+    stop();
+    void invoke("pi_agent_watch_sessions", { enabled: false });
+  };
 }
 
 /** 删除已经确认的 Pi 原生会话文件。 */
@@ -121,6 +135,11 @@ export function closePiAgent(sessionId: number): Promise<boolean> {
 /** 结束 Codev 当前管理的全部 Pi RPC 进程树。 */
 export function closeAllPiAgents(): Promise<number> {
   return invoke<number>("pi_agent_close_all");
+}
+
+/** 真正退出：先停 Pi，再结束进程。 */
+export function quitCodev(): Promise<void> {
+  return invoke("codev_quit");
 }
 
 /** 浏览历史时只读 JSONL，默认最近 150 条，不启动 Pi runtime。 */

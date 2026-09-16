@@ -17,6 +17,11 @@ const FORCE_MAX_READ_BYTES: u64 = 50 * 1024 * 1024;
 const BINARY_SNIFF_BYTES: usize = 8 * 1024;
 const PREVIEW_MAX_BYTES: u64 = 512 * 1024;
 const PREVIEW_MAX_LINES: u64 = 300;
+const LINE_INDEX_MAX: usize = 2_000_000;
+const LINE_WINDOW_MAX: u64 = 400;
+const LINE_PREVIEW_MAX: u64 = 80;
+const LINE_PREVIEW_CHARS: usize = 240;
+const LINE_PREVIEW_SCAN_MAX: u64 = 2 * 1024 * 1024;
 const SEARCH_MAX_MATCHES: usize = 2_000;
 const ASSET_MAX_READ_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -58,6 +63,41 @@ pub struct FileStat {
 pub struct TextWindow {
     pub content: String,
     pub offset: u64,
+    pub next_offset: u64,
+    pub total_bytes: u64,
+    pub has_more: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextLineIndex {
+    pub offsets: Vec<u64>,
+    pub total_bytes: u64,
+    pub truncated: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextLineWindow {
+    pub start_line: u64,
+    pub lines: Vec<String>,
+    pub total_bytes: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextLinePreview {
+    pub preview: String,
+    pub offset: u64,
+    pub next_offset: u64,
+    pub truncated: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextLinePreviewWindow {
+    pub start_line: u64,
+    pub lines: Vec<TextLinePreview>,
     pub next_offset: u64,
     pub total_bytes: u64,
     pub has_more: bool,
@@ -169,6 +209,308 @@ pub async fn fs_read_asset_bytes(
         ));
     }
     fs::read(&target).map_err(|e| e.to_string())
+}
+
+/// 扫描换行位置，供大文本按行虚拟滚动，不把文件内容载入内存。
+fn index_text_lines_sync(path: &Path) -> Result<TextLineIndex, String> {
+    let total_bytes = fs::metadata(path).map_err(|e| e.to_string())?.len();
+    let file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut reader = BufReader::with_capacity(64 * 1024, file);
+    let mut offsets = Vec::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut offset = 0_u64;
+    let mut line_start = 0_u64;
+    let mut saw_nul = false;
+    offsets.push(0);
+    loop {
+        let count = reader.read(&mut buffer).map_err(|e| e.to_string())?;
+        if count == 0 {
+            break;
+        }
+        for byte in &buffer[..count] {
+            if *byte == 0 {
+                saw_nul = true;
+            }
+            offset += 1;
+            if *byte == b'\n' && offsets.len() < LINE_INDEX_MAX {
+                line_start = offset;
+                offsets.push(offset);
+            }
+        }
+        if offsets.len() >= LINE_INDEX_MAX {
+            break;
+        }
+    }
+    if saw_nul {
+        return Err("该文件包含二进制内容，无法按文本窗口预览".to_string());
+    }
+    if line_start == total_bytes && total_bytes > 0 {
+        offsets.pop();
+    }
+    let truncated = offsets.len() >= LINE_INDEX_MAX && offset < total_bytes;
+    Ok(TextLineIndex {
+        offsets,
+        total_bytes,
+        truncated,
+    })
+}
+
+/// 按行号窗口读取完整行文本，供虚拟列表只挂载可视区。
+fn read_text_lines_sync(
+    path: &Path,
+    start_line: u64,
+    start_offset: u64,
+    end_offset: u64,
+    max_lines: u64,
+) -> Result<TextLineWindow, String> {
+    let total_bytes = fs::metadata(path).map_err(|e| e.to_string())?.len();
+    let start = start_offset.min(total_bytes);
+    let stop = end_offset.min(total_bytes).max(start);
+    let line_limit = max_lines.clamp(1, LINE_WINDOW_MAX) as usize;
+    if start == stop {
+        return Ok(TextLineWindow {
+            start_line,
+            lines: Vec::new(),
+            total_bytes,
+        });
+    }
+    let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
+    file.seek(SeekFrom::Start(start))
+        .map_err(|e| e.to_string())?;
+    let mut bytes = vec![0_u8; (stop - start) as usize];
+    file.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.contains(&0) {
+        return Err("该文件包含二进制内容，无法按文本窗口预览".to_string());
+    }
+    let text = String::from_utf8(bytes).map_err(|_| {
+        "该文件不是 UTF-8 文本，无法按文本窗口预览".to_string()
+    })?;
+    let mut lines: Vec<String> = text.split_inclusive('\n').map(str::to_string).collect();
+    if lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    if lines.len() > line_limit {
+        lines.truncate(line_limit);
+    }
+    Ok(TextLineWindow {
+        start_line,
+        lines,
+        total_bytes,
+    })
+}
+
+/// 从指定偏移扫下一窗行，每行只保留短预览，剩余字节丢弃直到换行。
+fn read_text_line_previews_sync(
+    path: &Path,
+    start_line: u64,
+    start_offset: u64,
+    max_lines: u64,
+    preview_chars: usize,
+) -> Result<TextLinePreviewWindow, String> {
+    let total_bytes = fs::metadata(path).map_err(|e| e.to_string())?.len();
+    let start = start_offset.min(total_bytes);
+    let line_limit = max_lines.clamp(1, LINE_PREVIEW_MAX) as usize;
+    let char_limit = preview_chars.clamp(32, 512);
+    if start >= total_bytes {
+        return Ok(TextLinePreviewWindow {
+            start_line,
+            lines: Vec::new(),
+            next_offset: total_bytes,
+            total_bytes,
+            has_more: false,
+        });
+    }
+    let file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut reader = BufReader::with_capacity(64 * 1024, file);
+    reader
+        .seek(SeekFrom::Start(start))
+        .map_err(|e| e.to_string())?;
+    let mut lines = Vec::new();
+    let mut offset = start;
+    let mut scanned = 0_u64;
+    let mut saw_nul = false;
+    while lines.len() < line_limit && scanned < LINE_PREVIEW_SCAN_MAX && offset < total_bytes {
+        let line_start = offset;
+        let mut preview = Vec::new();
+        let mut chars = 0_usize;
+        let mut truncated = false;
+        loop {
+            let buffer = reader.fill_buf().map_err(|e| e.to_string())?;
+            if buffer.is_empty() {
+                break;
+            }
+            if buffer.contains(&0) {
+                saw_nul = true;
+            }
+            if let Some(newline) = buffer.iter().position(|byte| *byte == b'\n') {
+                if !truncated {
+                    append_preview_chars(&mut preview, &buffer[..newline], &mut chars, char_limit, &mut truncated);
+                }
+                reader.consume(newline + 1);
+                offset += newline as u64 + 1;
+                scanned += newline as u64 + 1;
+                break;
+            }
+            if !truncated {
+                append_preview_chars(&mut preview, buffer, &mut chars, char_limit, &mut truncated);
+            }
+            let consumed = buffer.len();
+            reader.consume(consumed);
+            offset += consumed as u64;
+            scanned += consumed as u64;
+        }
+        if saw_nul {
+            return Err("该文件包含二进制内容，无法按文本窗口预览".to_string());
+        }
+        if preview.is_empty() && offset == line_start {
+            break;
+        }
+        let preview = String::from_utf8(preview).map_err(|_| {
+            "该文件不是 UTF-8 文本，无法按文本窗口预览".to_string()
+        })?;
+        lines.push(TextLinePreview {
+            preview,
+            offset: line_start,
+            next_offset: offset,
+            truncated,
+        });
+    }
+    Ok(TextLinePreviewWindow {
+        start_line,
+        lines,
+        next_offset: offset,
+        total_bytes,
+        has_more: offset < total_bytes,
+    })
+}
+
+fn append_preview_chars(
+    preview: &mut Vec<u8>,
+    bytes: &[u8],
+    chars: &mut usize,
+    char_limit: usize,
+    truncated: &mut bool,
+) {
+    let mut index = 0;
+    while index < bytes.len() {
+        if *chars >= char_limit {
+            *truncated = true;
+            return;
+        }
+        let width = utf8_char_width(bytes[index]);
+        if width == 0 || index + width > bytes.len() {
+            *truncated = true;
+            return;
+        }
+        preview.extend_from_slice(&bytes[index..index + width]);
+        *chars += 1;
+        index += width;
+    }
+}
+
+fn utf8_char_width(first: u8) -> usize {
+    if first < 0x80 {
+        1
+    } else if first & 0xE0 == 0xC0 {
+        2
+    } else if first & 0xF0 == 0xE0 {
+        3
+    } else if first & 0xF8 == 0xF0 {
+        4
+    } else {
+        0
+    }
+}
+
+/// 按行起点读取完整原文，只用于复制，不进入预览 DOM。
+fn read_full_text_lines_sync(path: &Path, offsets: &[u64]) -> Result<String, String> {
+    if offsets.is_empty() {
+        return Ok(String::new());
+    }
+    let total_bytes = fs::metadata(path).map_err(|e| e.to_string())?.len();
+    let file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut reader = BufReader::with_capacity(64 * 1024, file);
+    let mut output = String::new();
+    for start in offsets {
+        let start = (*start).min(total_bytes);
+        reader
+            .seek(SeekFrom::Start(start))
+            .map_err(|e| e.to_string())?;
+        let mut bytes = Vec::new();
+        reader
+            .read_until(b'\n', &mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.contains(&0) {
+            return Err("该文件包含二进制内容，无法按文本窗口预览".to_string());
+        }
+        output.push_str(
+            std::str::from_utf8(&bytes).map_err(|_| {
+                "该文件不是 UTF-8 文本，无法按文本窗口预览".to_string()
+            })?,
+        );
+    }
+    Ok(output)
+}
+
+/// 返回下一窗短预览行，供大 JSONL 先画第一屏。
+#[tauri::command]
+pub async fn fs_read_text_line_previews(
+    path: String,
+    start_line: u64,
+    start_offset: u64,
+    max_lines: u64,
+    preview_chars: Option<u64>,
+    workspace: Option<WorkspaceEnv>,
+) -> Result<TextLinePreviewWindow, String> {
+    let workspace = WorkspaceEnv::from_option(workspace);
+    read_text_line_previews_sync(
+        &resolve_path(&path, &workspace),
+        start_line,
+        start_offset,
+        max_lines,
+        preview_chars.unwrap_or(LINE_PREVIEW_CHARS as u64) as usize,
+    )
+}
+
+/// 按行起点读取完整行，供复制选中记录。
+#[tauri::command]
+pub async fn fs_read_full_text_lines(
+    path: String,
+    offsets: Vec<u64>,
+    workspace: Option<WorkspaceEnv>,
+) -> Result<String, String> {
+    let workspace = WorkspaceEnv::from_option(workspace);
+    read_full_text_lines_sync(&resolve_path(&path, &workspace), &offsets)
+}
+
+/// 返回大文本换行索引，供前端按行滚动。
+#[tauri::command]
+pub async fn fs_index_text_lines(
+    path: String,
+    workspace: Option<WorkspaceEnv>,
+) -> Result<TextLineIndex, String> {
+    let workspace = WorkspaceEnv::from_option(workspace);
+    index_text_lines_sync(&resolve_path(&path, &workspace))
+}
+
+/// 按行号窗口返回完整行，避免把整份 JSONL 载入 WebView。
+#[tauri::command]
+pub async fn fs_read_text_lines(
+    path: String,
+    start_line: u64,
+    start_offset: u64,
+    end_offset: u64,
+    max_lines: u64,
+    workspace: Option<WorkspaceEnv>,
+) -> Result<TextLineWindow, String> {
+    let workspace = WorkspaceEnv::from_option(workspace);
+    read_text_lines_sync(
+        &resolve_path(&path, &workspace),
+        start_line,
+        start_offset,
+        end_offset,
+        max_lines,
+    )
 }
 
 /// 按页返回大文本的局部内容，供日志和 JSONL 预览使用。
@@ -622,6 +964,53 @@ mod tests {
 
         let second = read_text_window_sync(&file, first.next_offset, 1024, 1).unwrap();
         assert_eq!(second.content, "second\n");
+    }
+
+    /// 换行索引去掉文件末尾空行，按行窗口读回完整记录。
+    #[test]
+    fn indexes_and_reads_text_by_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("rows.jsonl");
+        std::fs::write(&file, "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n").unwrap();
+
+        let index = index_text_lines_sync(&file).unwrap();
+        assert_eq!(index.offsets.len(), 3);
+        assert!(!index.truncated);
+
+        let first = read_text_lines_sync(&file, 0, index.offsets[0], index.offsets[1], 1).unwrap();
+        assert_eq!(first.lines, vec!["{\"a\":1}\n"]);
+        let rest = read_text_lines_sync(
+            &file,
+            1,
+            index.offsets[1],
+            index.total_bytes,
+            8,
+        )
+        .unwrap();
+        assert_eq!(rest.lines, vec!["{\"b\":2}\n", "{\"c\":3}\n"]);
+    }
+
+    /// 短预览只保留行首，复制再按偏移读回整行。
+    #[test]
+    fn previews_long_lines_and_copies_full_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("long.jsonl");
+        let long = format!("{{\"x\":\"{}\"}}\n{{\"y\":1}}\n", "z".repeat(400));
+        std::fs::write(&file, &long).unwrap();
+
+        let window = read_text_line_previews_sync(&file, 0, 0, 8, 40).unwrap();
+        assert_eq!(window.lines.len(), 2);
+        assert!(window.lines[0].truncated);
+        assert!(window.lines[0].preview.chars().count() <= 40);
+        assert!(!window.lines[1].truncated);
+        assert!(!window.has_more);
+
+        let copied = read_full_text_lines_sync(
+            &file,
+            &[window.lines[0].offset, window.lines[1].offset],
+        )
+        .unwrap();
+        assert_eq!(copied, long);
     }
 
     /// 校验字面量搜索返回稳定的字节偏移和行号。

@@ -50,6 +50,8 @@ import {
   visiblePiProjects,
   withArchivedPath,
 } from "./organization";
+import { notifyFinishedProjects } from "./piNotify";
+import type { ProjectActivity } from "./projectActivity";
 import { adoptOrderIds, prependOrderId } from "./sidebarOrder";
 import { PiSidebar, type SidebarThread } from "./PiSidebar";
 import { PiComposer, EMPTY_DRAFT, type PiDraft } from "./PiComposer";
@@ -66,15 +68,8 @@ type ExtensionRequest = { key: string; event: Record<string, unknown> };
 export function PiAgentPane({ active }: { active: boolean }) {
   const [initialized, setInitialized] = useState(false);
   const client = useRef<PiWorkspaceClient | null>(null);
-  const activeRef = useRef(active);
+  const activityRef = useRef(new Map<string, ProjectActivity>());
   const [threads, setThreads] = useState<PiThread[]>([]);
-  useEffect(() => {
-    activeRef.current = active;
-    if (active && client.current)
-      setThreads(
-        [...client.current.threads.values()].map((thread) => ({ ...thread })),
-      );
-  }, [active]);
   const [sessions, setSessions] = useState<PiSessionSummary[]>([]);
   const [sessionsReady, setSessionsReady] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
@@ -225,8 +220,7 @@ export function PiAgentPane({ active }: { active: boolean }) {
     let disposed = false;
     const runtime = new PiWorkspaceClient(
       () => {
-        if (!disposed && activeRef.current)
-          setThreads([...runtime.threads.values()]);
+        if (!disposed) setThreads([...runtime.threads.values()]);
       },
       (key, event) => {
         if (
@@ -346,6 +340,15 @@ export function PiAgentPane({ active }: { active: boolean }) {
       adoptOrderIds(current, replacements),
     );
   }, [rows]);
+  useEffect(() => {
+    void notifyFinishedProjects({
+      previous: activityRef.current,
+      threads: rows,
+      piActive: active,
+    }).then((next) => {
+      activityRef.current = next;
+    });
+  }, [rows, active]);
   /** 用统一提示处理操作异常，避免无响应按钮。 */
   const run = (operation: Promise<unknown>, key = draftKey) => {
     void operation.catch((error) => setNotice(String(error), key));

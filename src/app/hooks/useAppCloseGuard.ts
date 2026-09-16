@@ -1,24 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  type RefObject,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
-import { usePreferencesStore } from "@/modules/settings/preferences";
+import { type RefObject, useCallback, useEffect, useState } from "react";
 import type { Tab } from "@/modules/tabs";
-import { leafHasForegroundProcess, leafIds } from "@/modules/terminal";
-import { closeAllPiAgents } from "@/modules/plugins/pi-agent/native";
-
-async function anyTerminalBusy(tabs: Tab[]): Promise<boolean> {
-  const leaves = tabs.flatMap((t) =>
-    t.kind === "terminal" ? leafIds(t.paneTree) : [],
-  );
-  if (leaves.length === 0) return false;
-  const checks = await Promise.all(leaves.map(leafHasForegroundProcess));
-  return checks.some(Boolean);
-}
+import { hideMainWindowToTray } from "@/app/lib/hideToTray";
 
 export type AppCloseBlocker = {
   dirtyEditors: number;
@@ -33,38 +16,17 @@ export function canOptOutOfAppClosePrompt(blocker: AppCloseBlocker): boolean {
   return blocker.busyTerminal && blocker.dirtyEditors === 0;
 }
 
-export function useAppCloseGuard(tabsRef: RefObject<Tab[]>) {
+export function useAppCloseGuard(_tabsRef: RefObject<Tab[]>) {
   const [pendingAppClose, setPendingAppClose] =
     useState<AppCloseBlocker | null>(null);
-  const forceClose = useRef(false);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
     void getCurrentWindow()
       .onCloseRequested(async (event) => {
-        if (forceClose.current) return;
         event.preventDefault();
-        // Opting out skips the per-leaf IPC entirely; it never relaxes the
-        // unsaved-changes guard below.
-        const busyTerminal =
-          usePreferencesStore.getState().confirmCloseRunningTerminal &&
-          (await anyTerminalBusy(tabsRef.current));
-        // Count after the await so edits made during the IPC check are seen.
-        const dirtyEditors = tabsRef.current.filter(
-          (t) =>
-            (t.kind === "editor" ||
-              (t.kind === "markdown" && t.viewMode === "raw") ||
-              (t.kind === "html" && t.viewMode === "raw")) &&
-            t.dirty,
-        ).length;
-        if (dirtyEditors > 0 || busyTerminal) {
-          setPendingAppClose({ dirtyEditors, busyTerminal });
-        } else {
-          forceClose.current = true;
-          await closeAllPiAgents().catch(() => undefined);
-          void getCurrentWindow().close();
-        }
+        await hideMainWindowToTray();
       })
       .then((un) => {
         if (disposed) un();
@@ -74,14 +36,11 @@ export function useAppCloseGuard(tabsRef: RefObject<Tab[]>) {
       disposed = true;
       unlisten?.();
     };
-  }, [tabsRef]);
+  }, []);
 
   const confirmAppClose = useCallback(() => {
     setPendingAppClose(null);
-    forceClose.current = true;
-    void closeAllPiAgents()
-      .catch(() => undefined)
-      .finally(() => void getCurrentWindow().close());
+    void hideMainWindowToTray();
   }, []);
 
   const cancelAppClose = useCallback(() => setPendingAppClose(null), []);

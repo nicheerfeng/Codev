@@ -23,6 +23,7 @@ import {
   ArrowDown01Icon,
   PlusSignIcon,
   Folder01Icon,
+  Layers01Icon,
   Search01Icon,
   Cancel01Icon,
 } from "@hugeicons/core-free-icons";
@@ -51,6 +52,7 @@ import {
   pinSessionOrder,
 } from "./sidebarOrder";
 import type { PiSessionSummary, PiViewStatus } from "./types";
+import { cwdIsLive } from "./projectActivity";
 import { usePiSidebarReorder } from "./usePiSidebarReorder";
 
 export type SidebarThread = PiSessionSummary & {
@@ -457,6 +459,7 @@ export function PiSidebar(props: Props) {
     if (isArchived && !rows.length) return null;
     const nodeKey = `${isArchived ? "archive:" : "project:"}${key}`;
     const closed = !filter && collapsed.has(nodeKey);
+    const live = !isArchived && cwdIsLive(props.threads, cwd);
     const groupId = org.projectGroups[key] ?? "";
     const groupProjects = applySavedOrder(
       projects.filter(
@@ -497,11 +500,11 @@ export function PiSidebar(props: Props) {
                       projectName(cwd),
                     )
                   : {})}
-                className={`group/pi-project flex min-w-0 touch-none items-center rounded-lg hover:bg-muted/70 ${ghost?.source === cwd ? "opacity-35" : ""}`}
+                className={`group/pi-project flex min-w-0 touch-none items-center rounded-lg hover:bg-muted/70 ${ghost?.source === cwd ? "opacity-35" : ""} ${closed && live ? "pi-project-live" : ""}`}
               >
                 <button
                   type="button"
-                  className={`flex min-w-0 flex-1 items-center gap-1.5 px-1.5 py-2 text-left text-xs ${pathKey(props.selectedProject ?? "") === key ? "text-foreground" : "text-muted-foreground"}`}
+                  className={`flex min-w-0 flex-1 items-center gap-1.5 px-1.5 py-2 text-left text-xs ${closed && live ? "text-[#477faf] dark:text-[#a6cceb]" : pathKey(props.selectedProject ?? "") === key ? "text-foreground" : "text-muted-foreground"}`}
                   onClick={() => toggle(nodeKey)}
                   aria-expanded={!closed}
                   title={cwd}
@@ -514,6 +517,14 @@ export function PiSidebar(props: Props) {
                   <span className="truncate font-medium">
                     {projectName(cwd)}
                   </span>
+                  {closed && live ? (
+                    <span
+                      role="img"
+                      aria-label="项目运行中"
+                      title="项目运行中"
+                      className="pi-running-dot size-2 shrink-0 rounded-full bg-[#477faf] text-[#477faf] dark:bg-[#a6cceb] dark:text-[#a6cceb]"
+                    />
+                  ) : null}
                 </button>
                 {!isArchived && (
                   <Button
@@ -734,22 +745,22 @@ export function PiSidebar(props: Props) {
                       <Button
                         variant="ghost"
                         size="icon-xs"
-                        title="添加项目"
-                        aria-label="添加项目"
-                        onClick={props.onAddProject}
-                      >
-                        <HugeiconsIcon icon={Folder01Icon} size={13} />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
                         title="新建组"
                         aria-label="新建组"
                         onClick={() =>
                           setGroupEdit({ id: crypto.randomUUID(), name: "" })
                         }
                       >
-                        <HugeiconsIcon icon={PlusSignIcon} size={12} />
+                        <HugeiconsIcon icon={Layers01Icon} size={13} />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        title="添加项目"
+                        aria-label="添加项目"
+                        onClick={props.onAddProject}
+                      >
+                        <HugeiconsIcon icon={Folder01Icon} size={13} />
                       </Button>
                     </div>
                   )}

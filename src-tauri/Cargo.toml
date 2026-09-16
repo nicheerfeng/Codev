@@ -1,6 +1,6 @@
 [package]
 name = "codev"
-version = "0.9.6"
+version = "0.9.7"
 description = "Codev — a minimal code and document reader with an integrated terminal"
 authors = ["teague"]
 license = "Apache-2.0"
@@ -13,7 +13,7 @@ default-members = ["."]
 resolver = "2"
 
 [workspace.package]
-version = "0.9.6"
+version = "0.9.7"
 edition = "2021"
 license = "Apache-2.0"
 
@@ -36,7 +36,11 @@ tauri-build = { version = "2", features = [] }
 serde_json = "1"
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "2", features = [
+  "protocol-asset",
+  "tray-icon",
+  "image-ico",
+] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
@@ -54,6 +58,7 @@ tauri-plugin-log = "2"
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"
 tauri-plugin-clipboard-manager = "2"
+tauri-plugin-notification = "2"
 tempfile = "3"
 notify = "8.2.0"
 
