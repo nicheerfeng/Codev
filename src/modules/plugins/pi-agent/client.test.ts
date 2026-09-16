@@ -85,7 +85,7 @@ vi.mock("./native", () => ({
     );
   }),
 }));
-import { PiWorkspaceClient } from "./client";
+import { COMPACTION_CONTINUE_PROMPT, PiWorkspaceClient } from "./client";
 
 describe("Pi RPC workspace", () => {
   // 延迟压缩期间不发送图片队列，完成后顺序投递且不重载原聊天。
@@ -230,6 +230,98 @@ describe("Pi RPC workspace", () => {
       }
     },
   );
+  it("resumes a running turn after threshold compaction settles", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("resume-compact", "D:/one");
+      await client.request(thread, { type: "get_state" });
+      mock.receive({
+        sessionId: thread.runtimeId!,
+        stream: "stdout",
+        event: { type: "agent_start" },
+      });
+      mock.receive({
+        sessionId: thread.runtimeId!,
+        stream: "stdout",
+        event: { type: "compaction_start", reason: "threshold" },
+      });
+      mock.receive({
+        sessionId: thread.runtimeId!,
+        stream: "stdout",
+        event: {
+          type: "compaction_end",
+          reason: "threshold",
+          result: {},
+          aborted: false,
+          willRetry: false,
+        },
+      });
+      vi.mocked(native.sendPiCommand).mockClear();
+      mock.receive({
+        sessionId: thread.runtimeId!,
+        stream: "stdout",
+        event: { type: "agent_settled" },
+      });
+      await vi.waitFor(() =>
+        expect(
+          vi
+            .mocked(native.sendPiCommand)
+            .mock.calls.some(
+              ([, cmd]) =>
+                cmd.type === "prompt" &&
+                cmd.message === COMPACTION_CONTINUE_PROMPT,
+            ),
+        ).toBe(true),
+      );
+    } finally {
+      client.dispose();
+    }
+  });
+  it("does not send a resume prompt after overflow compaction that will retry", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("overflow-compact", "D:/one");
+      await client.request(thread, { type: "get_state" });
+      mock.receive({
+        sessionId: thread.runtimeId!,
+        stream: "stdout",
+        event: { type: "agent_start" },
+      });
+      mock.receive({
+        sessionId: thread.runtimeId!,
+        stream: "stdout",
+        event: {
+          type: "compaction_end",
+          reason: "overflow",
+          result: {},
+          aborted: false,
+          willRetry: true,
+        },
+      });
+      vi.mocked(native.sendPiCommand).mockClear();
+      mock.receive({
+        sessionId: thread.runtimeId!,
+        stream: "stdout",
+        event: { type: "agent_settled" },
+      });
+      await vi.waitFor(() =>
+        expect(
+          vi
+            .mocked(native.sendPiCommand)
+            .mock.calls.some(([, cmd]) => cmd.type === "get_session_stats"),
+        ).toBe(true),
+      );
+      expect(
+        vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.some(([, cmd]) => cmd.type === "prompt"),
+      ).toBe(false);
+    } finally {
+      client.dispose();
+    }
+  });
   // runtime 冷启动未完成时也能获取缓存线程并立即进入发送状态。
   it("returns cached history immediately while the runtime is starting", async () => {
     const native = await import("./native");
