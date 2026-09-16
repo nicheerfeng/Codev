@@ -1,7 +1,9 @@
 import { bindFileScroll } from "@/modules/reader/fileScroll";
 import { ImageViewport } from "@/modules/reader/ImageViewport";
 import { currentWorkspaceEnv } from "@/modules/workspace";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
   forwardRef,
   memo,
@@ -12,13 +14,18 @@ import {
   useState,
 } from "react";
 import type { EditorPaneHandle } from "./EditorPane";
+import {
+  collectLineOffsets,
+  formatPreviewBytes,
+  selectedLineIndexes,
+} from "./lib/textLinePreview";
 import type {
   TextSearchHandle,
   TextSearchOptions,
   TextSearchStatus,
 } from "./lib/textSearch";
 import { findLiteralMatches } from "./lib/textSearch";
-import type { ReactNode } from "react";
+import type { ClipboardEvent, ReactNode } from "react";
 
 type Props = {
   path: string;
@@ -28,9 +35,16 @@ type Props = {
 
 type PreviewKind = "asset" | "text";
 
-type TextWindow = {
-  content: string;
+type TextLinePreview = {
+  preview: string;
   offset: number;
+  nextOffset: number;
+  truncated: boolean;
+};
+
+type TextLinePreviewWindow = {
+  startLine: number;
+  lines: TextLinePreview[];
   nextOffset: number;
   totalBytes: number;
   hasMore: boolean;
@@ -57,7 +71,13 @@ type WindowSearchMatch = {
 
 type LoadState =
   | { kind: "loading" }
-  | { kind: "ready"; value: TextWindow }
+  | {
+      kind: "ready";
+      lines: TextLinePreview[];
+      nextOffset: number;
+      totalBytes: number;
+      hasMore: boolean;
+    }
   | { kind: "error"; message: string };
 
 const ASSET_EXTENSIONS = new Set([
@@ -90,6 +110,9 @@ const TEXT_PREVIEW_EXTENSIONS = new Set([
   "trace",
 ]);
 
+const LINE_ROW_HEIGHT = 20;
+const LINE_PREVIEW_PAGE = 40;
+
 // 根据扩展名选择媒体直读或纯文本窗口预览。
 export function getPreviewKind(path: string): PreviewKind | null {
   const extension = path.split(".").pop()?.toLowerCase() ?? "";
@@ -101,13 +124,6 @@ export function getPreviewKind(path: string): PreviewKind | null {
 // 从路径中提取展示名，避免预览工具栏重复显示完整路径。
 function filenameFromPath(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
-}
-
-// 将字节数转为紧凑文本，供分页状态展示。
-function formatBytes(size: number): string {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 /** 计算 UTF-8 文本前缀的字节长度，用于对齐 Rust 返回的文件偏移。 */
@@ -178,54 +194,36 @@ function imageMimeType(extension: string): string {
   );
 }
 
-// 渲染纯文本预览共用的前后翻页栏。
-function PageControls({
-  offset,
-  totalBytes,
-  hasMore,
-  canGoBack,
-  onBack,
-  onForward,
-}: {
-  offset: number;
-  totalBytes: number;
-  hasMore: boolean;
-  canGoBack: boolean;
-  onBack: () => void;
-  onForward: () => void;
-}) {
-  return (
-    <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border/60 px-2 text-[11px] text-muted-foreground">
-      <button
-        type="button"
-        className="rounded px-1.5 py-0.5 hover:bg-accent disabled:opacity-35"
-        disabled={!canGoBack}
-        onClick={onBack}
-      >
-        上一页
-      </button>
-      <button
-        type="button"
-        className="rounded px-1.5 py-0.5 hover:bg-accent disabled:opacity-35"
-        disabled={!hasMore}
-        onClick={onForward}
-      >
-        下一页
-      </button>
-      <span className="ml-auto tabular-nums">
-        {formatBytes(offset)} / {formatBytes(totalBytes)}
-      </span>
-    </div>
-  );
+function mergePreviewWindow(
+  current: Extract<LoadState, { kind: "ready" }> | null,
+  window: TextLinePreviewWindow,
+): Extract<LoadState, { kind: "ready" }> {
+  const existing = current?.lines ?? [];
+  const start = window.startLine;
+  const next = existing.slice(0, start);
+  while (next.length < start) {
+    next.push({
+      preview: "",
+      offset: window.nextOffset,
+      nextOffset: window.nextOffset,
+      truncated: false,
+    });
+  }
+  next.push(...window.lines);
+  return {
+    kind: "ready",
+    lines: next,
+    nextOffset: window.nextOffset,
+    totalBytes: window.totalBytes,
+    hasMore: window.hasMore,
+  };
 }
 
-// 以单页纯文本预览 CSV、TSV 和日志，保持原文可选中复制。
+// 以短预览按窗填充高度，全文只在复制时从磁盘读取。
 const TextWindowPreview = forwardRef<
   TextSearchHandle,
   { path: string; reloadKey: number }
 >(function TextWindowPreview({ path, reloadKey }, ref) {
-  const [offset, setOffset] = useState(0);
-  const [history, setHistory] = useState<number[]>([]);
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const queryRef = useRef("");
   const optionsRef = useRef<TextSearchOptions>({ caseSensitive: false });
@@ -239,7 +237,17 @@ const TextWindowPreview = forwardRef<
     new Set(),
   );
   const [searchRevision, setSearchRevision] = useState(0);
-  const textScrollRef = useRef<HTMLPreElement>(null);
+  const textScrollRef = useRef<HTMLDivElement>(null);
+  const fetchRef = useRef(0);
+  const loadingMoreRef = useRef(false);
+  const stateRef = useRef(state);
+  const virtualizerRef = useRef<{
+    scrollToIndex: (
+      index: number,
+      options?: { align?: "start" | "center" | "end" | "auto" },
+    ) => void;
+  } | null>(null);
+  stateRef.current = state;
 
   /** 计算大文本预览的当前搜索状态。 */
   const getSearchStatus = useCallback(
@@ -259,41 +267,102 @@ const TextWindowPreview = forwardRef<
     for (const listener of searchListenersRef.current) listener(status);
   }, [getSearchStatus]);
 
+  const loadWindow = useCallback(
+    async (startLine: number, startOffset: number, replace = false) => {
+      const generation = fetchRef.current + 1;
+      fetchRef.current = generation;
+      const window = await invoke<TextLinePreviewWindow>(
+        "fs_read_text_line_previews",
+        {
+          path,
+          startLine,
+          startOffset,
+          maxLines: LINE_PREVIEW_PAGE,
+          previewChars: 240,
+          workspace: currentWorkspaceEnv(),
+        },
+      );
+      if (generation !== fetchRef.current) return window;
+      const current = stateRef.current;
+      const next = mergePreviewWindow(
+        replace || current.kind !== "ready" ? null : current,
+        window,
+      );
+      stateRef.current = next;
+      setState(next);
+      return window;
+    },
+    [path],
+  );
+
   useEffect(() => {
     let cancelled = false;
+    fetchRef.current += 1;
     setState({ kind: "loading" });
-    invoke<TextWindow>("fs_read_text_window", {
-      path,
-      offset,
-      maxBytes: 512 * 1024,
-      maxLines: 300,
-      workspace: currentWorkspaceEnv(),
-    })
-      .then((value) => {
-        if (!cancelled) setState({ kind: "ready", value });
-      })
-      .catch((error) => {
-        if (!cancelled) setState({ kind: "error", message: String(error) });
-      });
+    void loadWindow(0, 0, true).catch((error) => {
+      if (!cancelled) setState({ kind: "error", message: String(error) });
+    });
     return () => {
       cancelled = true;
     };
-  }, [path, offset, reloadKey]);
+  }, [loadWindow, path, reloadKey]);
 
-  /** 根据当前命中位置切换到对应文本页。 */
+  const lines = state.kind === "ready" ? state.lines : [];
+  const totalBytes = state.kind === "ready" ? state.totalBytes : 0;
+  const virtualizer = useVirtualizer({
+    count: lines.length,
+    getScrollElement: () => textScrollRef.current,
+    estimateSize: () => LINE_ROW_HEIGHT,
+    overscan: 12,
+  });
+  virtualizerRef.current = virtualizer;
+  const virtualItems = virtualizer.getVirtualItems();
+  const lastVisible = virtualItems[virtualItems.length - 1]?.index ?? -1;
+
+  useEffect(() => {
+    if (state.kind !== "ready" || !state.hasMore || loadingMoreRef.current)
+      return;
+    if (lastVisible < 0 || lastVisible < state.lines.length - 8) return;
+    loadingMoreRef.current = true;
+    void loadWindow(state.lines.length, state.nextOffset)
+      .catch(() => undefined)
+      .finally(() => {
+        loadingMoreRef.current = false;
+      });
+  }, [lastVisible, loadWindow, state]);
+
+  const ensureLine = useCallback(
+    async (lineIndex: number) => {
+      let current = stateRef.current;
+      while (
+        current.kind === "ready" &&
+        current.hasMore &&
+        current.lines.length <= lineIndex
+      ) {
+        await loadWindow(current.lines.length, current.nextOffset);
+        current = stateRef.current;
+      }
+    },
+    [loadWindow],
+  );
+
+  /** 根据当前命中行滚到虚拟列表对应位置。 */
   const moveToMatch = useCallback(
     (index: number) => {
       const match = matchesRef.current[index];
       if (!match) return;
       currentMatchRef.current = index;
-      setHistory([]);
-      setOffset(match.lineStart);
-      emitSearchStatus();
+      void ensureLine(Math.max(0, match.line - 1)).then(() => {
+        virtualizerRef.current?.scrollToIndex(Math.max(0, match.line - 1), {
+          align: "center",
+        });
+        emitSearchStatus();
+      });
     },
-    [emitSearchStatus],
+    [emitSearchStatus, ensureLine],
   );
 
-  /** 发起大文本字面量搜索，并把首个命中页定位到阅读器。 */
+  /** 发起大文本字面量搜索，并把首个命中行定位到阅读器。 */
   const setSearchQuery = useCallback(
     (query: string, options: TextSearchOptions = { caseSensitive: false }) => {
       const generation = searchGenerationRef.current + 1;
@@ -306,7 +375,6 @@ const TextWindowPreview = forwardRef<
       currentMatchRef.current = -1;
       if (!query) {
         searchBusyRef.current = false;
-        setOffset(0);
         emitSearchStatus();
         return;
       }
@@ -319,15 +387,20 @@ const TextWindowPreview = forwardRef<
         maxMatches: 2000,
         workspace: currentWorkspaceEnv(),
       })
-        .then((result) => {
+        .then(async (result) => {
           if (generation !== searchGenerationRef.current) return;
           matchesRef.current = result.matches;
           totalMatchesRef.current = result.total;
           truncatedRef.current = result.truncated;
           currentMatchRef.current = result.matches.length > 0 ? 0 : -1;
           searchBusyRef.current = false;
-          setHistory([]);
-          setOffset(result.matches[0]?.lineStart ?? 0);
+          if (result.matches[0]) {
+            await ensureLine(Math.max(0, result.matches[0].line - 1));
+            virtualizerRef.current?.scrollToIndex(
+              Math.max(0, result.matches[0].line - 1),
+              { align: "center" },
+            );
+          }
           emitSearchStatus();
         })
         .catch(() => {
@@ -336,8 +409,15 @@ const TextWindowPreview = forwardRef<
           emitSearchStatus();
         });
     },
-    [emitSearchStatus, path],
+    [emitSearchStatus, ensureLine, path],
   );
+
+  const reloadPreview = useCallback(() => {
+    setState({ kind: "loading" });
+    void loadWindow(0, 0, true).catch((error) =>
+      setState({ kind: "error", message: String(error) }),
+    );
+  }, [loadWindow]);
 
   useImperativeHandle(
     ref,
@@ -361,7 +441,6 @@ const TextWindowPreview = forwardRef<
         totalMatchesRef.current = 0;
         currentMatchRef.current = -1;
         searchBusyRef.current = false;
-        setOffset(0);
         emitSearchStatus();
       },
       getSearchStatus,
@@ -384,7 +463,7 @@ const TextWindowPreview = forwardRef<
           workspace: currentWorkspaceEnv(),
         });
         if (replaced > 0) {
-          setOffset(0);
+          reloadPreview();
           setSearchQuery(query, optionsRef.current);
         }
         return replaced;
@@ -402,29 +481,21 @@ const TextWindowPreview = forwardRef<
           workspace: currentWorkspaceEnv(),
         });
         if (replaced > 0) {
-          setOffset(0);
+          reloadPreview();
           setSearchQuery(query, optionsRef.current);
         }
         return replaced;
       },
     }),
-    [emitSearchStatus, getSearchStatus, moveToMatch, path, setSearchQuery],
+    [
+      emitSearchStatus,
+      getSearchStatus,
+      moveToMatch,
+      path,
+      reloadPreview,
+      setSearchQuery,
+    ],
   );
-
-  // 返回已访问的文本窗口，只保存偏移量而不保存额外文件内容。
-  const goBack = useCallback(() => {
-    const previous = history[history.length - 1];
-    if (previous === undefined) return;
-    setHistory((entries) => entries.slice(0, -1));
-    setOffset(previous);
-  }, [history]);
-
-  // 请求下一页原始文本，避免前端构造表格或 JSON 对象。
-  const goForward = useCallback(() => {
-    if (state.kind !== "ready" || !state.value.hasMore) return;
-    setHistory((entries) => [...entries, offset]);
-    setOffset(state.value.nextOffset);
-  }, [offset, state]);
 
   useEffect(() => {
     if (state.kind !== "ready" || !queryRef.current) return;
@@ -437,17 +508,35 @@ const TextWindowPreview = forwardRef<
   }, [searchRevision, state]);
   useEffect(
     () =>
-      bindFileScroll(textScrollRef.current, `${path}#${offset}`, {
+      bindFileScroll(textScrollRef.current, path, {
         ready: state.kind === "ready",
       }),
-    [offset, path, state.kind],
+    [path, state.kind],
   );
+
+  const copySelection = (event: ClipboardEvent<HTMLDivElement>) => {
+    if (state.kind !== "ready") return;
+    const indexes = selectedLineIndexes(
+      textScrollRef.current,
+      window.getSelection(),
+    );
+    const offsets = collectLineOffsets(indexes, state.lines);
+    if (offsets.length === 0) return;
+    event.preventDefault();
+    void invoke<string>("fs_read_full_text_lines", {
+      path,
+      offsets,
+      workspace: currentWorkspaceEnv(),
+    })
+      .then((text) => writeText(text))
+      .catch(() => undefined);
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       {state.kind === "loading" && (
         <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-          正在读取当前页面…
+          正在读取预览…
         </div>
       )}
       {state.kind === "error" && (
@@ -457,29 +546,51 @@ const TextWindowPreview = forwardRef<
       )}
       {state.kind === "ready" && (
         <>
-          <PageControls
-            offset={state.value.offset}
-            totalBytes={state.value.totalBytes}
-            hasMore={state.value.hasMore}
-            canGoBack={history.length > 0}
-            onBack={goBack}
-            onForward={goForward}
-          />
-          <pre
+          <div className="flex h-8 shrink-0 items-center border-b border-border/60 px-2 text-[11px] text-muted-foreground">
+            <span className="ml-auto tabular-nums">
+              {formatPreviewBytes(totalBytes)}
+            </span>
+          </div>
+          <div
             ref={textScrollRef}
-            className="reader-scrollbar min-h-0 flex-1 select-text overflow-auto p-3 font-mono text-[12px] leading-5 whitespace-pre text-foreground"
+            className="reader-scrollbar min-h-0 flex-1 overflow-auto font-mono text-[12px] leading-5 text-foreground"
+            onCopy={copySelection}
           >
-            {renderWindowSearchText(
-              state.value.content,
-              collectWindowSearchMatches(
-                state.value.content,
-                state.value.offset,
-                queryRef.current,
-                optionsRef.current,
-              ),
-              matchesRef.current[currentMatchRef.current]?.offset,
-            )}
-          </pre>
+            <div
+              className="relative min-w-[120ch]"
+              style={{ height: `${virtualizer.getTotalSize()}px` }}
+            >
+              {virtualItems.map((item) => {
+                const row = lines[item.index];
+                const preview = row?.preview ?? "";
+                return (
+                  <div
+                    key={item.key}
+                    data-line-index={item.index}
+                    className="absolute top-0 left-0 min-w-[120ch] overflow-hidden whitespace-nowrap px-3 select-text"
+                    style={{
+                      height: `${item.size}px`,
+                      transform: `translateY(${item.start}px)`,
+                    }}
+                  >
+                    {renderWindowSearchText(
+                      preview,
+                      collectWindowSearchMatches(
+                        preview,
+                        row?.offset ?? 0,
+                        queryRef.current,
+                        optionsRef.current,
+                      ),
+                      matchesRef.current[currentMatchRef.current]?.offset,
+                    )}
+                    {row?.truncated ? (
+                      <span className="text-muted-foreground">…</span>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </>
       )}
     </div>
@@ -541,7 +652,13 @@ function AssetPreview({ path }: { path: string }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className={isImage ? "min-h-0 flex-1" : "reader-scrollbar min-h-0 flex-1 overflow-auto p-4"}>
+      <div
+        className={
+          isImage
+            ? "min-h-0 flex-1"
+            : "reader-scrollbar min-h-0 flex-1 overflow-auto p-4"
+        }
+      >
         {!source && (
           <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
             {assetError ? `媒体加载失败：${assetError}` : "正在加载媒体…"}

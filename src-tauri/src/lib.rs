@@ -3,7 +3,9 @@ pub mod modules;
 use modules::{fs, history, pi_agent, pty, workspace};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::menu::MenuBuilder;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 #[cfg(target_os = "macos")]
 use tauri::PhysicalPosition;
 #[cfg(target_os = "windows")]
@@ -285,6 +287,56 @@ fn queue_open_target(app: &tauri::AppHandle, target: LaunchTarget) {
     let _ = app.emit("codev:open-target", ());
 }
 
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.unminimize();
+        let _ = main.set_focus();
+    }
+}
+
+fn quit_app(app: &tauri::AppHandle) {
+    let _ = pi_agent::pi_agent_close_all(app.state());
+    app.exit(0);
+}
+
+/// 托盘「退出」走这条路径，先停 Pi 再结束进程。
+#[tauri::command]
+fn codev_quit(app: tauri::AppHandle) {
+    quit_app(&app);
+}
+
+fn install_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let menu = MenuBuilder::new(app)
+        .text("show", "显示主窗口")
+        .text("quit", "退出")
+        .build()?;
+    let mut builder = TrayIconBuilder::with_id("codev-tray")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip("Codev")
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "show" => show_main_window(app),
+            "quit" => quit_app(app),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder.build(app)?;
+    Ok(())
+}
+
 /// 打开并居中单页面设置窗口。
 #[tauri::command]
 async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
@@ -389,25 +441,16 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(move |_app| {
+            if let Err(error) = install_tray(_app.handle()) {
+                log::warn!("[Codev] tray icon unavailable: {error}");
+            }
             if let Some(main) = _app.get_webview_window("main") {
                 #[cfg(target_os = "windows")]
                 let _ = disable_browser_accelerator_keys(&main);
                 #[cfg(target_os = "windows")]
                 let _ = guard_webview_navigation(&main);
-                let handle = _app.handle().clone();
-                main.on_window_event(move |event| {
-                    if matches!(
-                        event,
-                        WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed
-                    ) {
-                        let _ = pi_agent::pi_agent_close_all(handle.state());
-                        #[cfg(target_os = "macos")]
-                        if let Some(settings) = handle.get_webview_window("settings") {
-                            let _ = settings.close();
-                        }
-                    }
-                });
             }
             Ok(())
         })
@@ -444,6 +487,10 @@ pub fn run() {
             fs::file::fs_read_file,
             fs::file::fs_read_asset_bytes,
             fs::file::fs_read_text_window,
+            fs::file::fs_index_text_lines,
+            fs::file::fs_read_text_lines,
+            fs::file::fs_read_text_line_previews,
+            fs::file::fs_read_full_text_lines,
             fs::file::fs_find_text,
             fs::file::fs_replace_text,
             fs::file::fs_allow_asset,
@@ -496,6 +543,7 @@ pub fn run() {
             pi_agent::pi_agent_list_assets,
             pi_agent::pi_agent_home_dir,
             pi_agent::codev_install_stamp,
+            codev_quit,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

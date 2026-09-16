@@ -15,6 +15,13 @@
   animation: pi-running-spin 1s linear infinite;
 }
 @keyframes pi-running-spin { to { transform: rotate(360deg); } }
+.pi-agent .pi-project-live {
+  animation: pi-project-breathe 2.4s ease-in-out infinite;
+}
+@keyframes pi-project-breathe {
+  0%, 100% { background-color: transparent; }
+  50% { background-color: rgb(71 127 175 / 12%); }
+}
 .pi-agent .pi-markdown pre { max-width: 100%; overflow: auto; }
 .pi-agent .pi-markdown [data-streamdown="code-block"],
 .pi-agent .pi-markdown [data-streamdown="table-wrapper"],
