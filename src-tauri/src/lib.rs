@@ -7,11 +7,61 @@ use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEve
 #[cfg(target_os = "macos")]
 use tauri::PhysicalPosition;
 #[cfg(target_os = "windows")]
-use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+use webview2_com::{
+    take_pwstr, Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3,
+    NavigationStartingEventHandler, NewWindowRequestedEventHandler,
+};
 #[cfg(target_os = "windows")]
-use windows::core::Interface;
+use windows::core::{Interface, PWSTR};
 
 const HTML_PREVIEW_BRIDGE: &str = include_str!("html_preview_bridge.js");
+
+/// 应用内 WebView 允许继续加载的地址，其余 http(s) 交给系统浏览器。
+fn is_app_webview_url(uri: &str) -> bool {
+    let lower = uri.trim().to_ascii_lowercase();
+    if lower.is_empty() {
+        return true;
+    }
+    const APP_PREFIXES: &[&str] = &[
+        "https://tauri.localhost",
+        "http://tauri.localhost",
+        "tauri://",
+        "https://asset.localhost",
+        "http://asset.localhost",
+        "asset://",
+        "https://ipc.localhost",
+        "http://ipc.localhost",
+        "ipc://",
+        "about:",
+        "data:",
+        "blob:",
+        "file:",
+    ];
+    if APP_PREFIXES.iter().any(|prefix| lower.starts_with(prefix)) {
+        return true;
+    }
+    lower.starts_with("http://localhost")
+        || lower.starts_with("https://localhost")
+        || lower.starts_with("http://127.0.0.1")
+        || lower.starts_with("https://127.0.0.1")
+        || lower.starts_with("http://[::1]")
+        || lower.starts_with("https://[::1]")
+}
+
+fn is_external_browser_url(uri: &str) -> bool {
+    let lower = uri.trim().to_ascii_lowercase();
+    (lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("mailto:")
+        || lower.starts_with("tel:"))
+        && !is_app_webview_url(uri)
+}
+
+fn open_external_browser(uri: &str) {
+    if let Err(error) = tauri_plugin_opener::open_url(uri, None::<&str>) {
+        log::warn!("[Codev] failed to open external url {uri}: {error}");
+    }
+}
 
 /// 关闭 WebView2 原生菜单与浏览器快捷键，覆盖阅读器和所有 iframe。
 #[cfg(target_os = "windows")]
@@ -49,6 +99,70 @@ fn disable_browser_accelerator_keys(
             })();
             if let Err(error) = result {
                 log::warn!("[Codev] browser accelerator keys unchanged: {error}");
+            }
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// 拦住 PDF/iframe 把顶层 WebView 导航成外部网页，改为系统浏览器打开。
+#[cfg(target_os = "windows")]
+fn guard_webview_navigation(window: &tauri::WebviewWindow<tauri::Wry>) -> Result<(), String> {
+    window
+        .with_webview(|webview| {
+            let result = (|| -> Result<(), String> {
+                let core_webview = unsafe {
+                    webview
+                        .controller()
+                        .CoreWebView2()
+                        .map_err(|error| error.to_string())?
+                };
+                let mut token = 0_i64;
+                unsafe {
+                    core_webview
+                        .add_NavigationStarting(
+                            &NavigationStartingEventHandler::create(Box::new(move |_, args| {
+                                let Some(args) = args else {
+                                    return Ok(());
+                                };
+                                let uri = {
+                                    let mut uri = PWSTR::null();
+                                    args.Uri(&mut uri)?;
+                                    take_pwstr(uri)
+                                };
+                                if is_external_browser_url(&uri) {
+                                    args.SetCancel(true)?;
+                                    open_external_browser(&uri);
+                                }
+                                Ok(())
+                            })),
+                            &mut token,
+                        )
+                        .map_err(|error| error.to_string())?;
+                    core_webview
+                        .add_NewWindowRequested(
+                            &NewWindowRequestedEventHandler::create(Box::new(move |_, args| {
+                                let Some(args) = args else {
+                                    return Ok(());
+                                };
+                                let uri = {
+                                    let mut uri = PWSTR::null();
+                                    args.Uri(&mut uri)?;
+                                    take_pwstr(uri)
+                                };
+                                if is_external_browser_url(&uri) {
+                                    args.SetHandled(true)?;
+                                    open_external_browser(&uri);
+                                }
+                                Ok(())
+                            })),
+                            &mut token,
+                        )
+                        .map_err(|error| error.to_string())?;
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                log::warn!("[Codev] webview navigation guard unchanged: {error}");
             }
         })
         .map_err(|error| error.to_string())
@@ -279,6 +393,8 @@ pub fn run() {
             if let Some(main) = _app.get_webview_window("main") {
                 #[cfg(target_os = "windows")]
                 let _ = disable_browser_accelerator_keys(&main);
+                #[cfg(target_os = "windows")]
+                let _ = guard_webview_navigation(&main);
                 let handle = _app.handle().clone();
                 main.on_window_event(move |event| {
                     if matches!(
@@ -415,8 +531,52 @@ pub fn run() {
 
 #[cfg(test)]
 mod launch_target_tests {
-    use super::{resolve_launch_target, LaunchEntry, LaunchTarget};
+    use super::{
+        is_app_webview_url, is_external_browser_url, resolve_launch_target, LaunchEntry,
+        LaunchTarget,
+    };
     use std::path::PathBuf;
+
+    #[test]
+    fn keeps_codev_and_asset_urls_inside_the_app() {
+        for uri in [
+            "https://tauri.localhost/",
+            "https://tauri.localhost/index.html",
+            "http://localhost:1420/",
+            "http://127.0.0.1:1420/src/main.tsx",
+            "https://asset.localhost/D:/a.pdf",
+            "http://asset.localhost/C:/tmp/file.pdf",
+            "asset://localhost/D:/a.pdf",
+            "about:blank",
+            "data:application/pdf,test",
+        ] {
+            assert!(is_app_webview_url(uri), "{uri}");
+            assert!(!is_external_browser_url(uri), "{uri}");
+        }
+    }
+
+    #[test]
+    fn sends_pdf_reference_links_to_the_system_browser() {
+        for uri in [
+            "https://pubmed.ncbi.nlm.nih.gov/123/",
+            "http://www.example.com/paper",
+            "mailto:a@b.com",
+        ] {
+            assert!(!is_app_webview_url(uri), "{uri}");
+            assert!(is_external_browser_url(uri), "{uri}");
+        }
+    }
+
+    #[test]
+    fn leaves_edge_pdf_viewer_internal_pages_alone() {
+        for uri in [
+            "chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html",
+            "edge://pdf/viewer",
+            "pdf.js",
+        ] {
+            assert!(!is_external_browser_url(uri), "{uri}");
+        }
+    }
 
     #[test]
     fn no_entries_resolves_to_empty() {
