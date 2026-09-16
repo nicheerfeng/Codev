@@ -14,6 +14,8 @@ import type { PiEventEnvelope, PiImage, PiModel, PiViewState } from "./types";
 
 export const CATALOG_ADAPT_NOTICE =
   "当前选择不在历史会话配置中，正在更新以适配";
+export const COMPACTION_CONTINUE_PROMPT =
+  "请继续完成刚才被上下文压缩中断的任务。";
 
 export type PiThread = {
   loadingHistory: boolean;
@@ -47,6 +49,7 @@ export class PiWorkspaceClient {
   private draining = new Set<string>();
   private manualCompactions = new Set<string>();
   private compactionResume = new Set<string>();
+  private compactionContinue = new Set<string>();
   private statsTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private stop: Promise<() => void>;
 
@@ -114,12 +117,23 @@ export class PiWorkspaceClient {
       !this.manualCompactions.has(thread.key)
     ) {
       const success = !event.aborted && !event.errorMessage && !!event.result;
+      const running =
+        thread.view.status === "running" || thread.view.status === "stopping";
       this.finishCompaction(thread, success);
       if (success && event.willRetry) this.compactionResume.add(thread.key);
       else this.compactionResume.delete(thread.key);
+      if (
+        success &&
+        !event.willRetry &&
+        thread.view.status === "running" &&
+        !thread.view.localQueue?.length
+      )
+        this.compactionContinue.add(thread.key);
+      else this.compactionContinue.delete(thread.key);
       void this.refreshState(thread)
         .then(() => {
-          if (success && !event.willRetry) return this.drainQueue(thread);
+          if (success && !event.willRetry && !running)
+            return this.drainQueue(thread);
         })
         .catch((error) => this.error(thread.key, error));
     }
@@ -146,13 +160,15 @@ export class PiWorkspaceClient {
       thread.runtimeId = null;
     }
     if (event.type === "agent_settled" && thread.runtimeId !== null) {
-      if (this.compactionResume.delete(thread.key))
-        void this.drainQueue(thread).catch((error) =>
-          this.error(thread.key, error),
-        );
-      void this.refreshState(thread).catch((error) =>
-        this.error(thread.key, error),
-      );
+      const resumeQueue = this.compactionResume.delete(thread.key);
+      const resumeTurn = this.compactionContinue.delete(thread.key);
+      void this.refreshState(thread)
+        .then(async () => {
+          if (resumeQueue || thread.view.localQueue?.length)
+            await this.drainQueue(thread);
+          else if (resumeTurn) await this.continueAfterCompaction(thread);
+        })
+        .catch((error) => this.error(thread.key, error));
     }
     this.publish(streaming || event.type === "message_update");
   }
@@ -426,6 +442,22 @@ export class PiWorkspaceClient {
     await this.drainQueue(thread);
   }
 
+  /** 阈值压缩不会原生续跑，settled 后再发一轮短 prompt。 */
+  private async continueAfterCompaction(thread: PiThread) {
+    if (
+      this.disposed ||
+      thread.runtimeId === null ||
+      thread.view.compaction?.status === "running" ||
+      thread.view.localQueue?.length
+    )
+      return;
+    this.beginPrompt(thread, COMPACTION_CONTINUE_PROMPT);
+    await this.request(thread, {
+      type: "prompt",
+      message: COMPACTION_CONTINUE_PROMPT,
+    });
+  }
+
   /** 运行期间定时读取实时上下文用量，停止后自动释放定时器。 */
   private syncStats(thread: PiThread) {
     if (this.statsTimers.has(thread.key)) return;
@@ -493,8 +525,7 @@ export class PiWorkspaceClient {
         thread.view = { ...thread.view, queueSendingId: item.id };
         this.publish();
         const live =
-          thread.view.status === "running" ||
-          thread.view.status === "stopping";
+          thread.view.status === "running" || thread.view.status === "stopping";
         await this.request(
           thread,
           live
@@ -781,6 +812,8 @@ export class PiWorkspaceClient {
       ...(Array.isArray(queued?.steering) ? queued.steering : []),
       ...(Array.isArray(queued?.followUp) ? queued.followUp : []),
     ]);
+    this.compactionContinue.delete(thread.key);
+    this.compactionResume.delete(thread.key);
     thread.view = piViewReducer(thread.view, { type: "stopping" });
     this.publish();
     await this.request(thread, { type: "abort" });
