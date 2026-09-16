@@ -3,11 +3,14 @@ import { buildTimelineBlocks } from "./timeline";
 import {
   collectProjects,
   defaultPiCollapsedKeys,
+  isArchivedPath,
   isTemporaryCwd,
   nextDraftKey,
+  normalizeOrganization,
   pathKey,
   sessionIdentity,
   visiblePiProjects,
+  withArchivedPath,
 } from "./organization";
 import type { PiMessageItem } from "./types";
 
@@ -209,6 +212,54 @@ describe("Pi turn grouping", () => {
     expect(sessionIdentity("", "draft:c:/users/me:abc")).toBe(
       "draft:c:/users/me:abc",
     );
+  });
+  it("matches archived sessions after Windows path shape changes", () => {
+    const archived = withArchivedPath(
+      ["D:\\Users\\me\\.pi\\agent\\sessions\\a.jsonl"],
+      "",
+      false,
+    );
+    expect(archived).toEqual(["d:/users/me/.pi/agent/sessions/a.jsonl"]);
+    expect(
+      isArchivedPath("D:/Users/me/.pi/agent/sessions/a.jsonl", archived),
+    ).toBe(true);
+    expect(
+      isArchivedPath(
+        "//?/D:/Users/me/.pi/agent/sessions/A.jsonl",
+        archived,
+      ),
+    ).toBe(true);
+    expect(
+      isArchivedPath(
+        "\\\\?\\D:\\Users\\me\\.pi\\agent\\sessions\\a.jsonl",
+        archived,
+      ),
+    ).toBe(true);
+    expect(
+      withArchivedPath(
+        archived,
+        "//?/D:/Users/me/.pi/agent/sessions/A.jsonl",
+        true,
+      ),
+    ).toEqual(["d:/users/me/.pi/agent/sessions/a.jsonl"]);
+    expect(
+      withArchivedPath(
+        archived,
+        "//?/D:/Users/me/.pi/agent/sessions/A.jsonl",
+        false,
+      ),
+    ).toEqual([]);
+    const org = normalizeOrganization({
+      groups: [{ id: " g1 ", name: " " }],
+      projectGroups: { "D:\\Work\\One\\": "g1" },
+      archived: [
+        "D:/Users/me/.pi/agent/sessions/a.jsonl",
+        "d:\\users\\me\\.pi\\agent\\sessions\\a.jsonl",
+      ],
+    });
+    expect(org.groups).toEqual([{ id: "g1", name: "g1" }]);
+    expect(org.projectGroups).toEqual({ "d:/work/one": "g1" });
+    expect(org.archived).toEqual(["d:/users/me/.pi/agent/sessions/a.jsonl"]);
   });
   it("gives each new thread a unique draft key in the same project", () => {
     const one = nextDraftKey("D:\\Work\\One\\");

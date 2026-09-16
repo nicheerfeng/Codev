@@ -29,11 +29,13 @@ import {
 import {
   defaultPiCollapsedKeys,
   isTemporaryCwd,
+  isArchivedPath,
   pathKey,
   projectName,
   sessionIdentity,
   TEMPORARY_GROUP_ID,
   visiblePiProjects,
+  withArchivedPath,
   type PiOrganization,
 } from "./organization";
 import {
@@ -78,6 +80,7 @@ type Props = {
   sessionOrder: string[];
   onProjectOrder: (order: string[]) => void;
   onSessionOrder: (order: string[]) => void;
+  organizationReady?: boolean;
   temporaryHome?: string | null;
 };
 
@@ -112,7 +115,7 @@ export function PiSidebar(props: Props) {
       props.threads.filter(
         (thread) =>
           isTemporaryCwd(thread.cwd, props.temporaryHome) &&
-          !(thread.path && props.organization.archived.includes(thread.path)),
+          !isArchivedPath(thread.path, props.organization.archived),
       ),
     [props.threads, props.temporaryHome, props.organization.archived],
   );
@@ -149,7 +152,7 @@ export function PiSidebar(props: Props) {
     name: string;
   } | null>(null);
   const org = props.organization;
-  const archived = new Set(org.archived);
+  const archived = org.archived;
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const { position, ghost, itemProps } = usePiSidebarReorder(
@@ -173,7 +176,7 @@ export function PiSidebar(props: Props) {
               (group === TEMPORARY_GROUP_ID
                 ? isTemporaryCwd(thread.cwd, props.temporaryHome)
                 : pathKey(thread.cwd) === pathKey(group)) &&
-              !(thread.path && archived.has(thread.path)),
+              !isArchivedPath(thread.path, archived),
           )
           .map((thread) => sessionIdentity(thread.path, thread.key)),
         props.sessionOrder,
@@ -184,13 +187,20 @@ export function PiSidebar(props: Props) {
     },
   );
   useEffect(() => {
+    if (props.organizationReady === false) return;
     const ids = props.threads
-      .filter((thread) => !(thread.path && archived.has(thread.path)))
+      .filter((thread) => !isArchivedPath(thread.path, archived))
       .map((thread) => sessionIdentity(thread.path, thread.key));
     const next = pinSessionOrder(props.sessionOrder, ids);
     if (next.join("\0") === props.sessionOrder.join("\0")) return;
     props.onSessionOrder(next);
-  }, [archived, props.onSessionOrder, props.sessionOrder, props.threads]);
+  }, [
+    archived,
+    props.organizationReady,
+    props.onSessionOrder,
+    props.sessionOrder,
+    props.threads,
+  ]);
   const gapAt = (
     kind: "project" | "session",
     group: string,
@@ -236,9 +246,7 @@ export function PiSidebar(props: Props) {
   const archive = (thread: SidebarThread, value: boolean) =>
     props.onOrganize({
       ...org,
-      archived: value
-        ? [...new Set([...org.archived, thread.path])]
-        : org.archived.filter((path) => path !== thread.path),
+      archived: withArchivedPath(org.archived, thread.path, value),
     });
   /** 渲染带状态和右键菜单的线程行。 */
   const threadRow = (
@@ -387,7 +395,7 @@ export function PiSidebar(props: Props) {
     const rows = props.threads.filter(
       (thread) =>
         pathKey(thread.cwd) === key &&
-        (thread.path ? archived.has(thread.path) : false) === isArchived &&
+        isArchivedPath(thread.path, archived) === isArchived &&
         (!filter ||
           `${thread.name ?? ""} ${thread.preview ?? ""} ${projectName(cwd)}`
             .toLocaleLowerCase()
@@ -829,7 +837,7 @@ export function PiSidebar(props: Props) {
             />
             已归档{" "}
             <span className="ml-auto">
-              {props.threads.filter((item) => archived.has(item.path)).length}
+              {props.threads.filter((item) => isArchivedPath(item.path, archived)).length}
             </span>
           </button>
           {(archiveOpen || filter) &&
