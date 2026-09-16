@@ -3,6 +3,7 @@ import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import {
   EMPTY_ORGANIZATION,
+  normalizeOrganization,
   type PiOrganization,
 } from "./pi-agent/organization";
 import { readOrderList } from "./pi-agent/sidebarOrder";
@@ -141,9 +142,9 @@ export async function loadPluginState(): Promise<PluginState> {
   );
   return {
     ...state,
-    piAgentOrganization:
-      (await store.get<PiOrganization>("piAgentOrganization")) ??
-      EMPTY_ORGANIZATION,
+    piAgentOrganization: normalizeOrganization(
+      await store.get<unknown>("piAgentOrganization"),
+    ),
     piAgentProjectOrder: readOrderList(
       await store.get<unknown>(PI_AGENT_PROJECT_ORDER_KEY),
     ),
@@ -191,9 +192,10 @@ export async function setPiAgentLastModel(
 export async function setPiAgentOrganization(
   next: PiOrganization,
 ): Promise<void> {
-  await store.set("piAgentOrganization", next);
+  const normalized = normalizeOrganization(next);
+  await store.set("piAgentOrganization", normalized);
   await store.save();
-  usePluginStore.setState({ piAgentOrganization: next });
+  usePluginStore.setState({ piAgentOrganization: normalized });
 }
 
 /** 持久化 Pi Agent 的项目目录列表，不写入常规设置。 */

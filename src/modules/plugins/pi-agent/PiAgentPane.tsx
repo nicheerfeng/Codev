@@ -48,6 +48,7 @@ import {
   projectName,
   sessionIdentity,
   visiblePiProjects,
+  withArchivedPath,
 } from "./organization";
 import { adoptOrderIds, prependOrderId } from "./sidebarOrder";
 import { PiSidebar, type SidebarThread } from "./PiSidebar";
@@ -113,6 +114,7 @@ export function PiAgentPane({ active }: { active: boolean }) {
   const pluginProjects = usePluginStore((state) => state.piAgentProjects);
   const hiddenProjects = usePluginStore((state) => state.piAgentHiddenProjects);
   const organization = usePluginStore((state) => state.piAgentOrganization);
+  const hydrated = usePluginStore((state) => state.hydrated);
   const lastModel = usePluginStore((state) => state.piAgentLastModel);
   const lastThinkingLevel = usePluginStore(
     (state) => state.piAgentLastThinkingLevel,
@@ -646,9 +648,7 @@ export function PiAgentPane({ active }: { active: boolean }) {
       }
       await setPiAgentOrganization({
         ...organization,
-        archived: organization.archived.filter(
-          (path) => pathKey(path) !== pathKey(target.path),
-        ),
+        archived: withArchivedPath(organization.archived, target.path, false),
       });
       setDeleteTarget(null);
     } finally {
@@ -782,6 +782,7 @@ export function PiAgentPane({ active }: { active: boolean }) {
             selectedKey={selected}
             selectedProject={activeCwd}
             organization={organization}
+            organizationReady={hydrated}
             onOrganize={(next) => run(setPiAgentOrganization(next))}
             onAddProject={() => run(addProject())}
             onRemoveProject={(path) => run(removeProject(path))}
