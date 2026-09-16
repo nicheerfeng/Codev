@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { applySavedOrder, mergeOrder, moveByGap } from "./sidebarOrder";
+import {
+  adoptOrderIds,
+  applySavedOrder,
+  mergeOrder,
+  moveByGap,
+  pinSessionOrder,
+  prependOrderId,
+} from "./sidebarOrder";
 
 describe("pi sidebar order", () => {
   const projects = ["D:/Work/A", "D:/Work/B", "D:/Work/C"];
@@ -33,5 +40,21 @@ describe("pi sidebar order", () => {
         ["D:/Work/B", "D:/Work/A"],
       ),
     ).toEqual(["D:/Work/B", "D:/Work/A", "D:/Hidden"]);
+  });
+
+  it("pins unseen sessions without reshuffling known ones", () => {
+    expect(pinSessionOrder(["s1", "s2"], ["s2", "s3", "s1"])).toEqual([
+      "s1",
+      "s2",
+      "s3",
+    ]);
+  });
+
+  it("adopts draft ids onto session files and prepends new threads", () => {
+    expect(adoptOrderIds(["draft:a", "s2"], [["draft:a", "s1"]])).toEqual([
+      "s1",
+      "s2",
+    ]);
+    expect(prependOrderId(["s1", "s2"], "s3")).toEqual(["s3", "s1", "s2"]);
   });
 });

@@ -48,3 +48,27 @@ export function readOrderList(value: unknown): string[] {
       ]
     : [];
 }
+
+/** 把当前可见项钉进缓存：已有顺序不动，未见项追加到末尾。 */
+export function pinSessionOrder(saved: string[], visible: string[]): string[] {
+  if (!visible.length) return saved;
+  return mergeOrder(saved, applySavedOrder(visible, saved));
+}
+
+/** 草稿落盘后把旧键换成稳定路径，避免线程跳到顶部。 */
+export function adoptOrderIds(
+  saved: string[],
+  replacements: Array<[string, string]>,
+): string[] {
+  if (!replacements.length) return saved;
+  const map = new Map(
+    replacements.map(([from, to]) => [pathKey(from), to] as const),
+  );
+  return readOrderList(saved.map((item) => map.get(pathKey(item)) ?? item));
+}
+
+/** 新建线程插到该项目可见列表的最前。 */
+export function prependOrderId(saved: string[], id: string): string[] {
+  const key = pathKey(id);
+  return readOrderList([id, ...saved.filter((item) => pathKey(item) !== key)]);
+}

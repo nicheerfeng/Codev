@@ -41,7 +41,12 @@ import {
   readPiCollapsed,
   writePiCollapsed,
 } from "./sidebarCollapse";
-import { applySavedOrder, mergeOrder, moveByGap } from "./sidebarOrder";
+import {
+  applySavedOrder,
+  mergeOrder,
+  moveByGap,
+  pinSessionOrder,
+} from "./sidebarOrder";
 import type { PiSessionSummary, PiViewStatus } from "./types";
 import { usePiSidebarReorder } from "./usePiSidebarReorder";
 
@@ -63,7 +68,7 @@ type Props = {
   onRemoveProject: (cwd: string) => void;
   onNew: (cwd: string) => void;
   onSelect: (thread: SidebarThread) => void;
-  onRename: (thread: SidebarThread) => void;
+  onCommitRename: (thread: SidebarThread, name: string) => void;
   onFork: (thread: SidebarThread) => void;
   onExport: (thread: SidebarThread) => void;
   onClose: (thread: SidebarThread) => void;
@@ -75,8 +80,15 @@ type Props = {
   temporaryHome?: string | null;
 };
 
+const SESSION_PAGE = 5;
+
 function DropLine() {
-  return <div className="mx-1 h-0.5 rounded-full bg-ring" />;
+  return (
+    <div className="pointer-events-none relative h-0">
+      <span className="absolute -top-px left-0 z-20 size-2 -translate-y-1/2 rounded-full bg-sky-400" />
+      <span className="absolute top-0 right-0 left-2 z-20 h-0.5 -translate-y-1/2 rounded-full bg-sky-400" />
+    </div>
+  );
 }
 
 /** 复用 mcode 左栏的组→项目→线程与底部归档收纳，使用 Codev 菜单和控件。 */
@@ -136,7 +148,9 @@ export function PiSidebar(props: Props) {
   } | null>(null);
   const org = props.organization;
   const archived = new Set(org.archived);
-  const { position, itemProps } = usePiSidebarReorder(
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const { position, ghost, itemProps } = usePiSidebarReorder(
     (kind, source, gap, group) => {
       if (kind === "project") {
         const visible = applySavedOrder(
@@ -167,6 +181,14 @@ export function PiSidebar(props: Props) {
       );
     },
   );
+  useEffect(() => {
+    const ids = props.threads
+      .filter((thread) => !(thread.path && archived.has(thread.path)))
+      .map((thread) => sessionIdentity(thread.path, thread.key));
+    const next = pinSessionOrder(props.sessionOrder, ids);
+    if (next.join("\0") === props.sessionOrder.join("\0")) return;
+    props.onSessionOrder(next);
+  }, [archived, props.onSessionOrder, props.sessionOrder, props.threads]);
   const gapAt = (
     kind: "project" | "session",
     group: string,
@@ -181,16 +203,33 @@ export function PiSidebar(props: Props) {
     )
       return false;
     const from = list.findIndex((item) => pathKey(item) === pathKey(source));
-    return position.gap === index && from !== index && from !== index - 1;
+    return position.gap === index && from !== index;
   };
   /** 切换单个收纳节点，互不影响其他项目。 */
   const toggle = (key: string) =>
     setCollapsed((previous) => {
       const next = new Set(previous);
       if (next.has(key)) next.delete(key);
-      else next.add(key);
+      else {
+        next.add(key);
+        setCounts((value) => {
+          if (!(key in value)) return value;
+          const { [key]: _removed, ...rest } = value;
+          return rest;
+        });
+      }
       return next;
     });
+  const beginRename = (thread: SidebarThread) => {
+    setEditingKey(thread.key);
+    setEditingName(thread.name || thread.preview || "");
+  };
+  const commitRename = (thread: SidebarThread) => {
+    const name = editingName.trim();
+    setEditingKey(null);
+    if (!name || name === (thread.name || thread.preview || "")) return;
+    props.onCommitRename(thread, name);
+  };
   /** 更新归档标记，只改变收纳位置。 */
   const archive = (thread: SidebarThread, value: boolean) =>
     props.onOrganize({
@@ -219,58 +258,93 @@ export function PiSidebar(props: Props) {
               list,
             ) && <DropLine />}
           <div
-            {...(!isArchived && !filter
+            {...(!isArchived && !filter && editingKey !== thread.key
               ? itemProps(
                   "session",
                   sessionIdentity(thread.path, thread.key),
                   group,
+                  thread.name || thread.preview || "新线程",
                 )
               : {})}
-            className={`group/pi-thread flex min-w-0 items-center rounded-lg ${
-              props.selectedKey === thread.key ||
-              (thread.path && pathKey(props.selectedKey ?? "") === pathKey(thread.path))
-                ? "bg-accent text-accent-foreground"
-                : "hover:bg-muted"
+            className={`group/pi-thread flex min-w-0 touch-none items-center rounded-lg ${
+              ghost?.source === sessionIdentity(thread.path, thread.key)
+                ? "opacity-35"
+                : props.selectedKey === thread.key ||
+                    (thread.path &&
+                      pathKey(props.selectedKey ?? "") === pathKey(thread.path))
+                  ? "bg-accent text-accent-foreground"
+                  : "hover:bg-muted"
             }`}
           >
-            <button
-              type="button"
-              className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left"
-              onClick={() => props.onSelect(thread)}
-              title={thread.name || thread.preview || "新线程"}
-            >
-              <span
-                role="img"
-                aria-label={
-                  thread.waiting
-                    ? "等待输入"
-                    : thread.status === "running"
-                      ? "运行中"
-                      : "就绪"
-                }
-                title={
-                  thread.waiting
-                    ? "等待输入"
-                    : thread.status === "running"
-                      ? "运行中"
-                      : "就绪"
-                }
-                className={`size-2 shrink-0 rounded-full ${thread.waiting ? "bg-amber-600 ring-2 ring-amber-600/25 dark:bg-amber-300" : thread.status === "running" ? "pi-running-dot bg-[#477faf] text-[#477faf] dark:bg-[#a6cceb] dark:text-[#a6cceb]" : "bg-muted-foreground/50"}`}
+            {editingKey === thread.key ? (
+              <Input
+                aria-label="线程名称"
+                autoFocus
+                data-no-drag=""
+                value={editingName}
+                className="mx-1 h-6 flex-1 rounded-md px-1 text-xs!"
+                onClick={(event) => event.stopPropagation()}
+                onChange={(event) => setEditingName(event.target.value)}
+                onBlur={() => commitRename(thread)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    commitRename(thread);
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setEditingKey(null);
+                  }
+                }}
               />
-              <span className="min-w-0 flex-1 truncate text-xs">
-                {thread.name || thread.preview || "新线程"}
-              </span>
-            </button>
+            ) : (
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left"
+                onClick={() => props.onSelect(thread)}
+                onDoubleClick={(event) => {
+                  event.preventDefault();
+                  beginRename(thread);
+                }}
+                title={thread.name || thread.preview || "新线程"}
+              >
+                <span
+                  role="img"
+                  aria-label={
+                    thread.waiting
+                      ? "等待输入"
+                      : thread.status === "running"
+                        ? "运行中"
+                        : "就绪"
+                  }
+                  title={
+                    thread.waiting
+                      ? "等待输入"
+                      : thread.status === "running"
+                        ? "运行中"
+                        : "就绪"
+                  }
+                  className={`size-2 shrink-0 rounded-full ${thread.waiting ? "bg-amber-600 ring-2 ring-amber-600/25 dark:bg-amber-300" : thread.status === "running" ? "pi-running-dot bg-[#477faf] text-[#477faf] dark:bg-[#a6cceb] dark:text-[#a6cceb]" : "bg-muted-foreground/50"}`}
+                />
+                <span className="min-w-0 flex-1 truncate text-xs">
+                  {thread.name || thread.preview || "新线程"}
+                </span>
+              </button>
+            )}
           </div>
           {!isArchived &&
             index === list.length - 1 &&
-            gapAt("session", group, thread.path, list.length, list) && (
-              <DropLine />
-            )}
+            gapAt(
+              "session",
+              group,
+              sessionIdentity(thread.path, thread.key),
+              list.length,
+              list,
+            ) && <DropLine />}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="rounded-xl">
-        <ContextMenuItem onSelect={() => props.onRename(thread)}>
+        <ContextMenuItem onSelect={() => beginRename(thread)}>
           重命名
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => props.onFork(thread)}>
@@ -331,15 +405,12 @@ export function PiSidebar(props: Props) {
       props.sessionOrder,
     )
       .map(
-        (id) =>
-          rows.find(
-            (row) => sessionIdentity(row.path, row.key) === id,
-          )!,
+        (id) => rows.find((row) => sessionIdentity(row.path, row.key) === id)!,
       )
       .filter(Boolean);
     const visible = ordered.slice(
       0,
-      filter ? ordered.length : (counts[nodeKey] ?? 5),
+      filter ? ordered.length : (counts[nodeKey] ?? SESSION_PAGE),
     );
     return (
       <div key={nodeKey} className="mb-1 min-w-0">
@@ -352,9 +423,14 @@ export function PiSidebar(props: Props) {
                 )}
               <div
                 {...(!isArchived && !filter
-                  ? itemProps("project", cwd, org.projectGroups[key] ?? "")
+                  ? itemProps(
+                      "project",
+                      cwd,
+                      org.projectGroups[key] ?? "",
+                      projectName(cwd),
+                    )
                   : {})}
-                className="group/pi-project flex min-w-0 items-center rounded-lg hover:bg-muted/70"
+                className={`group/pi-project flex min-w-0 touch-none items-center rounded-lg hover:bg-muted/70 ${ghost?.source === cwd ? "opacity-35" : ""}`}
               >
                 <button
                   type="button"
@@ -472,7 +548,7 @@ export function PiSidebar(props: Props) {
                 onClick={() =>
                   setCounts((value) => ({
                     ...value,
-                    [nodeKey]: (value[nodeKey] ?? 5) + 20,
+                    [nodeKey]: (value[nodeKey] ?? SESSION_PAGE) + SESSION_PAGE,
                   }))
                 }
               >
@@ -677,23 +753,62 @@ export function PiSidebar(props: Props) {
             ) : null}
           </div>
           {(!collapsed.has(`group:${TEMPORARY_GROUP_ID}`) || filter) &&
-            temporaryThreads
-              .filter(
+            (() => {
+              const nodeKey = `group:${TEMPORARY_GROUP_ID}`;
+              const rows = temporaryThreads.filter(
                 (thread) =>
                   !filter ||
                   `${thread.name ?? ""} ${thread.preview ?? ""} 临时聊天`
                     .toLocaleLowerCase()
                     .includes(filter.toLocaleLowerCase()),
+              );
+              const ordered = applySavedOrder(
+                rows.map((row) => sessionIdentity(row.path, row.key)),
+                props.sessionOrder,
               )
-              .map((thread, index, list) =>
-                threadRow(
-                  thread,
-                  false,
-                  TEMPORARY_GROUP_ID,
-                  index,
-                  list.map((item) => sessionIdentity(item.path, item.key)),
-                ),
-              )}
+                .map(
+                  (id) =>
+                    rows.find(
+                      (row) => sessionIdentity(row.path, row.key) === id,
+                    )!,
+                )
+                .filter(Boolean);
+              const visible = ordered.slice(
+                0,
+                filter ? ordered.length : (counts[nodeKey] ?? SESSION_PAGE),
+              );
+              return (
+                <>
+                  {visible.map((thread, index) =>
+                    threadRow(
+                      thread,
+                      false,
+                      TEMPORARY_GROUP_ID,
+                      index,
+                      visible.map((item) =>
+                        sessionIdentity(item.path, item.key),
+                      ),
+                    ),
+                  )}
+                  {visible.length < rows.length && (
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      className="text-muted-foreground"
+                      onClick={() =>
+                        setCounts((value) => ({
+                          ...value,
+                          [nodeKey]:
+                            (value[nodeKey] ?? SESSION_PAGE) + SESSION_PAGE,
+                        }))
+                      }
+                    >
+                      显示更多（{rows.length - visible.length}）
+                    </Button>
+                  )}
+                </>
+              );
+            })()}
         </section>
         <section className="border-t border-border pt-2">
           <button
@@ -715,6 +830,19 @@ export function PiSidebar(props: Props) {
             projects.map((path) => projectRow(path, true))}
         </section>
       </div>
+      {ghost && (
+        <div
+          className="pointer-events-none fixed z-50 flex items-center gap-2 rounded-lg bg-popover/75 px-2 py-1.5 text-xs text-popover-foreground shadow-md ring-1 ring-sky-400/40"
+          style={{
+            left: ghost.x,
+            top: ghost.y,
+            width: ghost.width,
+          }}
+        >
+          <span className="size-2 shrink-0 rounded-full bg-muted-foreground/70" />
+          <span className="min-w-0 flex-1 truncate">{ghost.label}</span>
+        </div>
+      )}
       <Dialog
         open={removeTarget !== null}
         onOpenChange={(open) => {
