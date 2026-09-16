@@ -49,10 +49,12 @@ export function readOrderList(value: unknown): string[] {
     : [];
 }
 
-/** 把当前可见项钉进缓存：已有顺序不动，未见项追加到末尾。 */
+/** 把当前可见项钉进缓存：已有顺序不动，未见项插到最前。 */
 export function pinSessionOrder(saved: string[], visible: string[]): string[] {
   if (!visible.length) return saved;
-  return mergeOrder(saved, applySavedOrder(visible, saved));
+  const known = new Set(saved.map(pathKey));
+  const unseen = visible.filter((item) => !known.has(pathKey(item)));
+  return [...unseen, ...saved];
 }
 
 /** 草稿落盘后把旧键换成稳定路径，避免线程跳到顶部。 */
