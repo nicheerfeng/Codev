@@ -77,6 +77,20 @@
 .pi-agent .pi-markdown :last-child { margin-bottom: 0; }
 .pi-agent .pi-user-turn { display: flex; flex-direction: column; align-items: flex-end; }
 .pi-agent .pi-user-message { position: relative; }
+.pi-agent .pi-user-file-chip {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--background) 55%, transparent);
+  padding: 1px 6px 1px 5px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  line-height: 1.3;
+}
+.pi-agent .pi-user-file-chip:hover { color: var(--foreground); }
 .pi-agent .pi-message-actions {
   display: flex;
   align-items: center;

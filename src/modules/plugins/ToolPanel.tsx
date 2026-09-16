@@ -49,9 +49,11 @@ function JsonFormatterTool() {
 export function ToolPanel({
   tool = "json",
   active = true,
+  onOpenFile,
 }: {
   tool?: ToolId;
   active?: boolean;
+  onOpenFile?: (path: string) => void;
 }) {
   const piEnabled = usePluginStore(
     (state) => state.enabled[PI_AGENT_PLUGIN_ID],
@@ -89,7 +91,10 @@ export function ToolPanel({
               </div>
             }
           >
-            <PiAgentPane active={active && tool === "pi"} />
+            <PiAgentPane
+              active={active && tool === "pi"}
+              onOpenFile={onOpenFile}
+            />
           </Suspense>
         )}
       </div>

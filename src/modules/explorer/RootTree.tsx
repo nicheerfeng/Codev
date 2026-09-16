@@ -41,7 +41,7 @@ import { useExplorerDnd } from "./lib/useExplorerDnd";
 import { useExplorerFileDrop } from "./lib/useExplorerFileDrop";
 import { useFileTree } from "./lib/useFileTree";
 import { useGlobalShortcuts } from "@/modules/shortcuts";
-import type { TerminalPathDropTarget } from "@/modules/terminal";
+import type { ExplorerPathDropTarget } from "./lib/useExplorerDnd";
 
 export type RootTreeHandle = {
   focus: () => void;
@@ -89,7 +89,7 @@ export type RootTreeProps = {
   showToolbar?: boolean;
   /** Opens a file in the secondary editor group. */
   onOpenFileToSide?: (path: string) => void;
-  pathDropTarget?: TerminalPathDropTarget;
+  pathDropTarget?: ExplorerPathDropTarget;
   /** Renders this root into the explorer's single continuous scroll flow. */
   sharedScroll?: boolean;
   /** Searches every currently imported workspace root from this tree. */

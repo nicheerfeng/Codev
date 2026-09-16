@@ -36,6 +36,11 @@ import { openSettingsWindow } from "@/modules/settings/openSettingsWindow";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { ToolPanel, usePluginStore } from "@/modules/plugins";
 import {
+  composeExplorerPathDropTargets,
+  createPiComposerPathDropTarget,
+} from "@/modules/plugins/pi-agent/piComposerDrop";
+import { usePiComposerDropStore } from "@/modules/plugins/pi-agent/piComposerDropStore";
+import {
   shouldDisablePaneSwapShortcut,
   type ShortcutHandlers,
   type ShortcutId,
@@ -185,6 +190,23 @@ export default function App() {
   const { zoomIn, zoomOut, zoomReset } = useZoom();
   useApplyEditorFontSize();
   const terminalPathDropTarget = useTerminalFileDrop();
+  const piComposerPathDropTarget = useMemo(
+    () =>
+      createPiComposerPathDropTarget({
+        active: () => usePiComposerDropStore.getState().active,
+        onDrop: (items) => usePiComposerDropStore.getState().drop?.(items),
+        onHover: (hover) => usePiComposerDropStore.getState().setHover(hover),
+      }),
+    [],
+  );
+  const explorerPathDropTarget = useMemo(
+    () =>
+      composeExplorerPathDropTargets(
+        piComposerPathDropTarget,
+        terminalPathDropTarget,
+      ),
+    [piComposerPathDropTarget, terminalPathDropTarget],
+  );
   const explorerRef = useRef<FileExplorerHandle>(null);
   const markdownDefaultView = usePreferencesStore(
     (state) => state.markdownDefaultView,
@@ -1308,7 +1330,7 @@ export default function App() {
                       onPathRenamed={handlePathRenamed}
                       onPathDeleted={handlePathDeleted}
                       onRevealInTerminal={cdInNewTab}
-                      pathDropTarget={terminalPathDropTarget}
+                      pathDropTarget={explorerPathDropTarget}
                     />
                   </div>
                 </div>
@@ -1460,6 +1482,7 @@ export default function App() {
                         <ToolPanel
                           tool={toolView}
                           active={rightDockView === "tools"}
+                          onOpenFile={(path) => handleOpenFile(path, false)}
                         />
                       </div>
                     )}
