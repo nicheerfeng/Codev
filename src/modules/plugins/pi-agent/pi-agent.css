@@ -68,21 +68,23 @@
 }
 .pi-agent .pi-markdown :first-child { margin-top: 0; }
 .pi-agent .pi-markdown :last-child { margin-bottom: 0; }
-.pi-agent .pi-user-message { position: relative; padding-bottom: 0.5rem; }
+.pi-agent .pi-user-turn { display: flex; flex-direction: column; align-items: flex-end; }
+.pi-agent .pi-user-message { position: relative; }
 .pi-agent .pi-message-actions {
-  position: absolute;
-  right: 10px;
-  bottom: 6px;
   display: flex;
   align-items: center;
   gap: 4px;
+  margin-top: 4px;
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
   transition: opacity 120ms ease;
 }
-.pi-agent .pi-user-message:hover .pi-message-actions,
-.pi-agent .pi-user-message:focus-within .pi-message-actions {
+.pi-agent .pi-user-turn .pi-message-actions { justify-content: flex-end; }
+.pi-agent .pi-user-turn:hover .pi-message-actions,
+.pi-agent .pi-user-turn:focus-within .pi-message-actions,
+.pi-agent .pi-assistant-message:hover .pi-message-actions,
+.pi-agent .pi-assistant-message:focus-within .pi-message-actions {
   opacity: 1;
   visibility: visible;
   pointer-events: auto;

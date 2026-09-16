@@ -139,44 +139,54 @@ const TranscriptItem = memo(function TranscriptItem({
         </div>
       </details>
     );
+  const isUser = item.kind === "message" && item.role === "user";
+  const isAssistant = item.kind === "message" && item.role === "assistant";
   return (
     <article
       className={
-        item.kind === "message" && item.role === "user"
-          ? "pi-user-message ml-auto w-fit max-w-[80%] rounded-2xl bg-muted px-3 py-2"
-          : "min-w-0 py-2"
+        isUser
+          ? "pi-user-turn ml-auto w-fit max-w-[80%]"
+          : isAssistant
+            ? "pi-assistant-message min-w-0 py-2"
+            : "min-w-0 py-2"
       }
     >
       <div
-        data-pi-text={item.id}
-        className={`pi-markdown select-text ${item.kind === "thinking" ? "text-muted-foreground" : ""}`}
+        className={
+          isUser ? "pi-user-message rounded-2xl bg-muted px-3 py-2" : undefined
+        }
       >
-        {item.kind === "message" && item.role === "user" && editing ? (
-          <Textarea
-            autoFocus
-            aria-label="编辑最后一条输入"
-            value={editText}
-            disabled={editSubmitting}
-            className="pi-user-edit-input min-h-20 resize-y rounded-lg border-0 bg-transparent px-0 py-0 text-[13px] shadow-none focus-visible:ring-0"
-            onChange={(event) => setEditText(event.target.value)}
-          />
-        ) : item.kind === "message" && item.role === "user" ? (
-          <div className="pi-user-text whitespace-pre-wrap">
-            {item.text.replace(/\s+$/u, "")}
-          </div>
-        ) : (
-          <Streamdown controls={STREAMDOWN_CONTROLS}>{item.text}</Streamdown>
-        )}
+        <div
+          data-pi-text={item.id}
+          className={`pi-markdown select-text ${item.kind === "thinking" ? "text-muted-foreground" : ""}`}
+        >
+          {item.kind === "message" && item.role === "user" && editing ? (
+            <Textarea
+              autoFocus
+              aria-label="编辑最后一条输入"
+              value={editText}
+              disabled={editSubmitting}
+              className="pi-user-edit-input min-h-20 resize-y rounded-lg border-0 bg-transparent px-0 py-0 text-[13px] shadow-none focus-visible:ring-0"
+              onChange={(event) => setEditText(event.target.value)}
+            />
+          ) : item.kind === "message" && item.role === "user" ? (
+            <div className="pi-user-text whitespace-pre-wrap">
+              {item.text.replace(/\s+$/u, "")}
+            </div>
+          ) : (
+            <Streamdown controls={STREAMDOWN_CONTROLS}>{item.text}</Streamdown>
+          )}
+        </div>
+        {item.kind === "message" &&
+          item.images?.map((image, index) => (
+            <img
+              key={`${item.id}-${index}`}
+              className="mt-2 max-h-60 max-w-full rounded-lg"
+              src={`data:${image.mimeType};base64,${image.data}`}
+              alt="用户附件"
+            />
+          ))}
       </div>
-      {item.kind === "message" &&
-        item.images?.map((image, index) => (
-          <img
-            key={`${item.id}-${index}`}
-            className="mt-2 max-h-60 max-w-full rounded-lg"
-            src={`data:${image.mimeType};base64,${image.data}`}
-            alt="用户附件"
-          />
-        ))}
       {item.kind === "message" && item.role === "user" && editing && (
         <div className="pi-user-edit-actions mt-2 flex justify-end gap-1">
           <Button
@@ -294,14 +304,15 @@ function ToolGroup({
         {runningCount > 0 && ` · ${runningCount} 项执行中`}
         {errorCount > 0 && ` · ${errorCount} 项失败`}
       </summary>
-      {expanded && items.map((item) => (
-        <TranscriptItem
-          key={item.id}
-          item={item}
-          actions={actions}
-          openForSearch={item.id === openForSearch}
-        />
-      ))}
+      {expanded &&
+        items.map((item) => (
+          <TranscriptItem
+            key={item.id}
+            item={item}
+            actions={actions}
+            openForSearch={item.id === openForSearch}
+          />
+        ))}
     </details>
   );
 }
@@ -368,45 +379,45 @@ function TimelineBlock({
     elapsed === null ? "" : ` · 用时 ${formatElapsed(elapsed)}`;
   return (
     <>
-    <details className="pi-process" open={expanded}>
-      <summary
-        className="pi-process-summary flex max-w-full cursor-pointer list-none items-center gap-2 py-1.5 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
-        onClick={(event) => {
-          event.preventDefault();
-          userToggled.current = true;
-          setExpanded((value) => !value);
-        }}
-      >
-        <HugeiconsIcon icon={ArrowDown01Icon} size={12} />
-        <span
-          className={`pi-process-title ${block.running ? "pi-process-live" : ""}`}
+      <details className="pi-process" open={expanded}>
+        <summary
+          className="pi-process-summary flex max-w-full cursor-pointer list-none items-center gap-2 py-1.5 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
+          onClick={(event) => {
+            event.preventDefault();
+            userToggled.current = true;
+            setExpanded((value) => !value);
+          }}
         >
-          {block.label}
-        </span>
-        <span className="pi-process-meta">
-          {block.items.length
-            ? `${block.items.length} 个步骤${tools.length ? ` · ${tools.length} 次工具调用` : ""}`
-            : "等待模型响应"}
-          {elapsedText}
-        </span>
-      </summary>
-      <div className="pi-process-body ml-1.5 pl-4">
-        {block.steps.map((step) => (
-          <ProcessStep
-            key={step.id}
-            step={step}
-            actions={actions}
-            openForSearch={
-              step.kind !== "tool-group" && step.item?.id === searchItem?.id
-            }
-            toolSearchId={
-              step.kind === "tool-group" ? searchItem?.id : undefined
-            }
-          />
-        ))}
-      </div>
-    </details>
-    <PiFileOperations items={block.items} cwd={cwd} />
+          <HugeiconsIcon icon={ArrowDown01Icon} size={12} />
+          <span
+            className={`pi-process-title ${block.running ? "pi-process-live" : ""}`}
+          >
+            {block.label}
+          </span>
+          <span className="pi-process-meta">
+            {block.items.length
+              ? `${block.items.length} 个步骤${tools.length ? ` · ${tools.length} 次工具调用` : ""}`
+              : "等待模型响应"}
+            {elapsedText}
+          </span>
+        </summary>
+        <div className="pi-process-body ml-1.5 pl-4">
+          {block.steps.map((step) => (
+            <ProcessStep
+              key={step.id}
+              step={step}
+              actions={actions}
+              openForSearch={
+                step.kind !== "tool-group" && step.item?.id === searchItem?.id
+              }
+              toolSearchId={
+                step.kind === "tool-group" ? searchItem?.id : undefined
+              }
+            />
+          ))}
+        </div>
+      </details>
+      <PiFileOperations items={block.items} cwd={cwd} />
     </>
   );
 }
@@ -583,7 +594,16 @@ export function PiTranscript({
   /** 顶部滚轮也可翻页，内容不足一屏时无需等待 scroll 事件。 */
   const loadEarlier = () => {
     const node = viewport.current;
-    if (!node || node.scrollTop >= 80 || !view.historyHasMore || loading || view.historyLoadingMore || loadingOlder.current || !onLoadOlder) return;
+    if (
+      !node ||
+      node.scrollTop >= 80 ||
+      !view.historyHasMore ||
+      loading ||
+      view.historyLoadingMore ||
+      loadingOlder.current ||
+      !onLoadOlder
+    )
+      return;
     pauseFollow();
     loadingOlder.current = true;
     pendingOlderRestore.current = virtualizer.getTotalSize();
@@ -801,7 +821,12 @@ export function PiTranscript({
         onScroll={(event) => {
           const node = event.currentTarget;
           if (!follow.current) loadEarlier();
-          if (!loadingOlder.current && !view.historyLoadingMore && node.scrollTop > 0 && node.scrollHeight - node.scrollTop - node.clientHeight < 32) {
+          if (
+            !loadingOlder.current &&
+            !view.historyLoadingMore &&
+            node.scrollTop > 0 &&
+            node.scrollHeight - node.scrollTop - node.clientHeight < 32
+          ) {
             follow.current = true;
             setFollowing(true);
           }

@@ -68,6 +68,7 @@ type Props = {
   onRemoveProject: (cwd: string) => void;
   onNew: (cwd: string) => void;
   onSelect: (thread: SidebarThread) => void;
+  onRename: (thread: SidebarThread) => void;
   onCommitRename: (thread: SidebarThread, name: string) => void;
   onFork: (thread: SidebarThread) => void;
   onExport: (thread: SidebarThread) => void;
@@ -81,6 +82,7 @@ type Props = {
 };
 
 const SESSION_PAGE = 5;
+const SESSION_MORE = 50;
 
 function DropLine() {
   return (
@@ -276,61 +278,65 @@ export function PiSidebar(props: Props) {
                   : "hover:bg-muted"
             }`}
           >
-            {editingKey === thread.key ? (
-              <Input
-                aria-label="线程名称"
-                autoFocus
-                data-no-drag=""
-                value={editingName}
-                className="mx-1 h-6 flex-1 rounded-md px-1 text-xs!"
-                onClick={(event) => event.stopPropagation()}
-                onChange={(event) => setEditingName(event.target.value)}
-                onBlur={() => commitRename(thread)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    commitRename(thread);
-                  }
-                  if (event.key === "Escape") {
-                    event.preventDefault();
-                    setEditingKey(null);
-                  }
-                }}
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left"
+              onClick={() => {
+                if (editingKey === thread.key) return;
+                props.onSelect(thread);
+              }}
+              onDoubleClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                beginRename(thread);
+              }}
+              title={thread.name || thread.preview || "新线程"}
+            >
+              <span
+                role="img"
+                aria-label={
+                  thread.waiting
+                    ? "等待输入"
+                    : thread.status === "running"
+                      ? "运行中"
+                      : "就绪"
+                }
+                title={
+                  thread.waiting
+                    ? "等待输入"
+                    : thread.status === "running"
+                      ? "运行中"
+                      : "就绪"
+                }
+                className={`size-2 shrink-0 rounded-full ${thread.waiting ? "bg-amber-600 ring-2 ring-amber-600/25 dark:bg-amber-300" : thread.status === "running" ? "pi-running-dot bg-[#477faf] text-[#477faf] dark:bg-[#a6cceb] dark:text-[#a6cceb]" : "bg-muted-foreground/50"}`}
               />
-            ) : (
-              <button
-                type="button"
-                className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left"
-                onClick={() => props.onSelect(thread)}
-                onDoubleClick={(event) => {
-                  event.preventDefault();
-                  beginRename(thread);
-                }}
-                title={thread.name || thread.preview || "新线程"}
-              >
-                <span
-                  role="img"
-                  aria-label={
-                    thread.waiting
-                      ? "等待输入"
-                      : thread.status === "running"
-                        ? "运行中"
-                        : "就绪"
-                  }
-                  title={
-                    thread.waiting
-                      ? "等待输入"
-                      : thread.status === "running"
-                        ? "运行中"
-                        : "就绪"
-                  }
-                  className={`size-2 shrink-0 rounded-full ${thread.waiting ? "bg-amber-600 ring-2 ring-amber-600/25 dark:bg-amber-300" : thread.status === "running" ? "pi-running-dot bg-[#477faf] text-[#477faf] dark:bg-[#a6cceb] dark:text-[#a6cceb]" : "bg-muted-foreground/50"}`}
+              {editingKey === thread.key ? (
+                <Input
+                  aria-label="线程名称"
+                  autoFocus
+                  data-no-drag=""
+                  value={editingName}
+                  className="h-5 min-w-0 flex-1 rounded-sm border-border/70 bg-transparent px-1 py-0 text-xs! shadow-none"
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={(event) => setEditingName(event.target.value)}
+                  onBlur={() => commitRename(thread)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      commitRename(thread);
+                    }
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      setEditingKey(null);
+                    }
+                  }}
                 />
+              ) : (
                 <span className="min-w-0 flex-1 truncate text-xs">
                   {thread.name || thread.preview || "新线程"}
                 </span>
-              </button>
-            )}
+              )}
+            </button>
           </div>
           {!isArchived &&
             index === list.length - 1 &&
@@ -344,7 +350,7 @@ export function PiSidebar(props: Props) {
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="rounded-xl">
-        <ContextMenuItem onSelect={() => beginRename(thread)}>
+        <ContextMenuItem onSelect={() => props.onRename(thread)}>
           重命名
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => props.onFork(thread)}>
@@ -548,7 +554,7 @@ export function PiSidebar(props: Props) {
                 onClick={() =>
                   setCounts((value) => ({
                     ...value,
-                    [nodeKey]: (value[nodeKey] ?? SESSION_PAGE) + SESSION_PAGE,
+                    [nodeKey]: (value[nodeKey] ?? SESSION_PAGE) + SESSION_MORE,
                   }))
                 }
               >
@@ -799,7 +805,7 @@ export function PiSidebar(props: Props) {
                         setCounts((value) => ({
                           ...value,
                           [nodeKey]:
-                            (value[nodeKey] ?? SESSION_PAGE) + SESSION_PAGE,
+                            (value[nodeKey] ?? SESSION_PAGE) + SESSION_MORE,
                         }))
                       }
                     >
