@@ -55,6 +55,15 @@ import type { ProjectActivity } from "./projectActivity";
 import { adoptOrderIds, prependOrderId } from "./sidebarOrder";
 import { PiSidebar, type SidebarThread } from "./PiSidebar";
 import { PiComposer, EMPTY_DRAFT, type PiDraft } from "./PiComposer";
+import {
+  addPathAttachments,
+  draftHasPayload,
+  isImagePath,
+  readPathImage,
+  withAttachmentPrompt,
+} from "./piAttachments";
+import { usePiComposerNativeDrop } from "./piComposerDrop";
+import { usePiComposerDropStore } from "./piComposerDropStore";
 import { PiTranscript } from "./PiTranscript";
 import { PiSettings } from "./PiSettings";
 import { plainStatusText } from "./statusText";
@@ -65,7 +74,13 @@ import "./pi-agent.css";
 type ExtensionRequest = { key: string; event: Record<string, unknown> };
 
 /** 插件入口只协调原生会话与 Codev 组件，不接管外部文件树或终端。 */
-export function PiAgentPane({ active }: { active: boolean }) {
+export function PiAgentPane({
+  active,
+  onOpenFile,
+}: {
+  active: boolean;
+  onOpenFile?: (path: string) => void;
+}) {
   const [initialized, setInitialized] = useState(false);
   const client = useRef<PiWorkspaceClient | null>(null);
   const activityRef = useRef(new Map<string, ProjectActivity>());
@@ -445,18 +460,64 @@ export function PiAgentPane({ active }: { active: boolean }) {
       setSelected(null);
     }
   };
+  const ingestDroppedPaths = useCallback(
+    (items: Array<{ path: string; kind: "file" | "dir" }>) => {
+      void (async () => {
+        const images: typeof draft.images = [];
+        const files: Array<{ path: string; kind: "file" | "dir" }> = [];
+        for (const item of items) {
+          if (item.kind === "file" && isImagePath(item.path)) {
+            try {
+              images.push(await readPathImage(item.path));
+            } catch {
+              files.push(item);
+            }
+          } else files.push(item);
+        }
+        setDrafts((value) => {
+          const current = value[draftKey] ?? EMPTY_DRAFT;
+          return {
+            ...value,
+            [draftKey]: {
+              ...current,
+              images: [...current.images, ...images],
+              files: addPathAttachments(current.files, files),
+            },
+          };
+        });
+      })().catch((error) => setNotice(String(error), draftKey));
+    },
+    [draftKey],
+  );
+  useEffect(() => {
+    const store = usePiComposerDropStore.getState();
+    store.setActive(active);
+    store.setDrop(ingestDroppedPaths);
+    return () => {
+      store.setActive(false);
+      store.setDrop(null);
+      store.setHover(false);
+    };
+  }, [active, ingestDroppedPaths]);
+  usePiComposerNativeDrop({
+    active: () => active && usePiComposerDropStore.getState().active,
+    onDrop: ingestDroppedPaths,
+    onHover: (hover) => usePiComposerDropStore.getState().setHover(hover),
+  });
   /** 待 Pi 确认接受后清除当前草稿，失败时原输入仍可编辑重发。 */
   const submit = async (behavior: "steer" | "followUp") => {
+    const text = withAttachmentPrompt(draft.text, draft.files);
     if (activeThread?.view.compaction?.status === "running") {
-      if (!draft.text.trim() && !draft.images.length) return;
-      client.current!.enqueue(activeThread, draft.text, draft.images, behavior);
+      if (!draftHasPayload(draft)) return;
+      client.current!.enqueue(activeThread, text, draft.images, behavior);
       setDrafts((value) => ({ ...value, [draftKey]: EMPTY_DRAFT }));
       return;
     }
     if (operationKeys.current.has(draftKey)) return;
     const command = localCommand(draft.text);
     if (command) {
-      if (draft.images.length) throw new Error("请先移除附件再执行会话命令");
+      if (draft.images.length || draft.files.length)
+        throw new Error("请先移除附件再执行会话命令");
       const thread = await ensure(rows.find((row) => row.key === selected));
       if (command.name === "fork") {
         const target = rows.find((row) => row.key === thread.key);
@@ -477,9 +538,8 @@ export function PiAgentPane({ active }: { active: boolean }) {
       }));
       return;
     }
-    if (!draft.text.trim() && !draft.images.length) return;
+    if (!draftHasPayload(draft)) return;
     const alreadySending = pending.has(draftKey);
-    const text = draft.text.replace(/\s+$/u, "");
     const sourceKey = draftKey;
     let runtimeKey = sourceKey;
     setPending((value) => new Set([...value, sourceKey]));
@@ -569,6 +629,7 @@ export function PiAgentPane({ active }: { active: boolean }) {
                 .filter(Boolean)
                 .join("\n\n"),
               images: [...(item?.images ?? []), ...current.images],
+              files: current.files,
             },
           };
         });
@@ -837,6 +898,7 @@ export function PiAgentPane({ active }: { active: boolean }) {
             active={active}
             searchOpen={searchOpen}
             onCloseSearch={() => setSearchOpen(false)}
+            onOpenFile={onOpenFile}
             onCopy={(text) => run(writeText(text))}
             onEdit={async (item, text) => {
               if (!activeThread) throw new Error("当前没有活动线程");
@@ -919,6 +981,7 @@ export function PiAgentPane({ active }: { active: boolean }) {
                         .filter(Boolean)
                         .join("\n\n"),
                       images: [...item.images, ...current.images],
+                      files: current.files,
                     },
                   };
                 });

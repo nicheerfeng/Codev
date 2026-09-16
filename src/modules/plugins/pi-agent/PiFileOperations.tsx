@@ -3,13 +3,15 @@ import { toast } from "sonner";
 import { collectFileOperations, type FileOperation } from "./fileOperations";
 import type { PiTranscriptItem } from "./types";
 
-/** 展示本轮已识别文件操作，展开完整路径并在资源管理器中定位。 */
+/** 展示本轮已识别文件操作；点击在主界面打开，不加入工作区根目录。 */
 export function PiFileOperations({
   items,
   cwd,
+  onOpenFile,
 }: {
   items: PiTranscriptItem[];
   cwd: string;
+  onOpenFile?: (path: string) => void;
 }) {
   const files = collectFileOperations(items, cwd);
   if (!files.length) return null;
@@ -25,6 +27,13 @@ export function PiFileOperations({
       toast.error("无法定位文件或目录", { description: String(error) });
     }
   }
+  function openFile(file: FileOperation) {
+    if (file.operation === "删除" || !onOpenFile) {
+      void reveal(file);
+      return;
+    }
+    onOpenFile(file.path);
+  }
   return (
     <details className="my-1 min-w-0 text-xs text-muted-foreground">
       <summary className="cursor-pointer py-1 leading-6 [overflow-wrap:anywhere]">
@@ -33,15 +42,25 @@ export function PiFileOperations({
       </summary>
       <div className="space-y-1 py-1 pl-4">
         {files.map((file) => (
-          <button
-            key={file.path}
-            type="button"
-            title="在资源管理器中定位"
-            className="block w-full text-left leading-5 hover:text-foreground [overflow-wrap:anywhere]"
-            onClick={() => void reveal(file)}
-          >
-            {file.operation} · {file.path} ↗
-          </button>
+          <div key={file.path} className="flex items-start gap-1">
+            <button
+              type="button"
+              title="在主界面打开"
+              className="min-w-0 flex-1 text-left leading-5 hover:text-foreground [overflow-wrap:anywhere]"
+              onClick={() => openFile(file)}
+            >
+              {file.operation} · {file.path}
+            </button>
+            <button
+              type="button"
+              title="在资源管理器中显示"
+              aria-label={`在资源管理器中显示 ${file.path.split("/").pop()}`}
+              className="shrink-0 px-1 leading-5 hover:text-foreground"
+              onClick={() => void reveal(file)}
+            >
+              ↗
+            </button>
+          </div>
         ))}
       </div>
     </details>

@@ -59,8 +59,15 @@ export function finishExplorerDrag(
   pathDropTarget: ExplorerPathDropTarget | undefined,
   onMove: (sources: string[], toDir: string, copy: boolean) => void,
 ): void {
-  const handledByPathTarget =
-    commit && (pathDropTarget?.dropPath(source, clientX, clientY) ?? false);
+  let handledByPathTarget = false;
+  if (commit && pathDropTarget) {
+    handledByPathTarget = pathDropTarget.dropPath(source, clientX, clientY);
+    if (handledByPathTarget) {
+      for (const extra of sourcePaths) {
+        if (extra !== source) pathDropTarget.dropPath(extra, clientX, clientY);
+      }
+    }
+  }
   if (commit && !handledByPathTarget && moveTarget) {
     onMove(sourcePaths, moveTarget, copy);
   }

@@ -24,10 +24,14 @@ import {
   PencilEdit01Icon,
   Delete02Icon,
   Tick02Icon,
+  File01Icon,
+  Folder01Icon,
 } from "@hugeicons/core-free-icons";
 import { ZoomableImage } from "@/modules/reader/ZoomableImage";
 import type { PiImage, PiModel, PiViewState } from "./types";
 import { PI_LOCAL_COMMANDS } from "./commands";
+import { draftHasPayload, EMPTY_DRAFT, type PiDraft } from "./piAttachments";
+import { usePiComposerDropStore } from "./piComposerDropStore";
 import {
   mergePromptHistory,
   nextHistoryIndex,
@@ -36,8 +40,8 @@ import {
   shouldRecallPrevious,
 } from "./promptHistory";
 
-export type PiDraft = { text: string; images: PiImage[] };
-export const EMPTY_DRAFT: PiDraft = { text: "", images: [] };
+export type { PiDraft } from "./piAttachments";
+export { EMPTY_DRAFT } from "./piAttachments";
 type Props = {
   draft: PiDraft;
   onChange: (value: PiDraft) => void;
@@ -208,7 +212,7 @@ export function PiComposer(props: Props) {
       changeDraft(restored);
     } else {
       recallCaret.current = direction === -1 ? "start" : "end";
-      changeDraft({ text: history[next] ?? "", images: [] });
+      changeDraft({ text: history[next] ?? "", images: [], files: [] });
     }
     applyingHistory.current = false;
     setRecallRevision((value) => value + 1);
@@ -424,7 +428,14 @@ export function PiComposer(props: Props) {
           )}
         </div>
       )}
-      <div className="relative mx-auto w-full max-w-3xl rounded-2xl border border-border bg-card shadow-sm focus-within:border-ring/60">
+      <div
+        data-pi-composer-drop=""
+        className={cn(
+          "relative mx-auto w-full max-w-3xl rounded-2xl border border-border bg-card shadow-sm focus-within:border-ring/60",
+          usePiComposerDropStore((state) => state.hover) &&
+            "border-sky-400 ring-1 ring-sky-400/40",
+        )}
+      >
         {showCommands && (
           <div
             ref={commandList}
@@ -458,7 +469,7 @@ export function PiComposer(props: Props) {
             ))}
           </div>
         )}
-        {!!props.draft.images.length && (
+        {(!!props.draft.images.length || !!props.draft.files.length) && (
           <div className="flex max-h-28 flex-wrap gap-2 overflow-auto px-3 pt-3">
             {props.draft.images.map((item, index) => (
               <div
@@ -480,6 +491,40 @@ export function PiComposer(props: Props) {
                     changeDraft({
                       ...props.draft,
                       images: props.draft.images.filter((_, i) => i !== index),
+                    });
+                  }}
+                >
+                  <HugeiconsIcon icon={Cancel01Icon} size={12} />
+                </Button>
+              </div>
+            ))}
+            {props.draft.files.map((item) => (
+              <div
+                key={item.path}
+                className="relative flex max-w-48 items-center gap-1.5 rounded-lg border border-border bg-muted/40 px-2 py-1.5"
+              >
+                <HugeiconsIcon
+                  icon={item.kind === "dir" ? Folder01Icon : File01Icon}
+                  size={14}
+                />
+                <span
+                  className="min-w-0 truncate text-[11px]"
+                  title={item.path}
+                >
+                  {item.name}
+                </span>
+                <Button
+                  variant="secondary"
+                  size="icon-xs"
+                  className="absolute -top-1 -right-1"
+                  aria-label={`移除 ${item.name}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    changeDraft({
+                      ...props.draft,
+                      files: props.draft.files.filter(
+                        (file) => file.path !== item.path,
+                      ),
                     });
                   }}
                 >
@@ -584,8 +629,7 @@ export function PiComposer(props: Props) {
               event.nativeEvent.keyCode !== 229
             ) {
               event.preventDefault();
-              if (!(props.draft.text.trim() || props.draft.images.length))
-                return;
+              if (!draftHasPayload(props.draft)) return;
               const insert = running && (event.ctrlKey || event.metaKey);
               if (insert || !props.busy || compacting)
                 sendDraft(insert ? "steer" : "followUp");
@@ -784,10 +828,7 @@ export function PiComposer(props: Props) {
                 className="rounded-full"
                 title="排队到本轮之后"
                 aria-label="排队到本轮之后"
-                disabled={
-                  props.disabled ||
-                  (!props.draft.text.trim() && !props.draft.images.length)
-                }
+                disabled={props.disabled || !draftHasPayload(props.draft)}
                 onClick={() => sendDraft("followUp")}
               >
                 <HugeiconsIcon icon={ArrowDown01Icon} size={17} />
@@ -801,7 +842,7 @@ export function PiComposer(props: Props) {
               disabled={
                 props.disabled ||
                 (!running && props.busy && !compacting) ||
-                (!props.draft.text.trim() && !props.draft.images.length)
+                !draftHasPayload(props.draft)
               }
               onClick={() => sendDraft(running ? "steer" : "followUp")}
             >

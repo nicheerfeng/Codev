@@ -22,7 +22,10 @@ import {
   Copy01Icon,
   PencilEdit01Icon,
   GitForkIcon,
+  File01Icon,
+  Folder01Icon,
 } from "@hugeicons/core-free-icons";
+import { splitUserAttachmentText } from "./piAttachments";
 import { findLiteralMatches } from "@/modules/editor/lib/textSearch";
 import { ZoomableImage } from "@/modules/reader/ZoomableImage";
 import { MarkdownTable } from "@/modules/markdown/MarkdownTable";
@@ -52,6 +55,7 @@ type MessageActions = {
     text: string,
   ) => boolean | undefined | Promise<boolean | undefined>;
   onFork?: () => void;
+  onOpenFile?: (path: string) => void;
   canEditLastUser?: boolean;
   lastUserId?: string;
 };
@@ -82,6 +86,43 @@ function formatElapsed(milliseconds: number): string {
   const seconds = totalSeconds % 60;
   if (minutes) return `${minutes}分${seconds}秒`;
   return `${seconds}秒`;
+}
+
+/** 用户正文与关联路径分开：人看文件名标签，复制/模型仍是完整路径。 */
+function UserMessageText({
+  text,
+  onOpenFile,
+}: {
+  text: string;
+  onOpenFile?: (path: string) => void;
+}) {
+  const { body, attachments } = splitUserAttachmentText(text);
+  return (
+    <div className="pi-user-text">
+      {body ? <div className="whitespace-pre-wrap">{body}</div> : null}
+      {attachments.length > 0 ? (
+        <div
+          className={`flex flex-wrap justify-end gap-1 ${body ? "mt-1.5" : ""}`}
+        >
+          {attachments.map((item) => (
+            <button
+              key={item.path}
+              type="button"
+              title={item.path}
+              className="pi-user-file-chip"
+              onClick={() => onOpenFile?.(item.path)}
+            >
+              <HugeiconsIcon
+                icon={item.kind === "dir" ? Folder01Icon : File01Icon}
+                size={10}
+              />
+              <span className="max-w-40 truncate">{item.name}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 /** 显示原始消息或工具内容，选中与搜索不改变输入焦点。 */
@@ -173,9 +214,7 @@ const TranscriptItem = memo(function TranscriptItem({
               onChange={(event) => setEditText(event.target.value)}
             />
           ) : item.kind === "message" && item.role === "user" ? (
-            <div className="pi-user-text whitespace-pre-wrap">
-              {item.text.replace(/\s+$/u, "")}
-            </div>
+            <UserMessageText text={item.text} onOpenFile={actions.onOpenFile} />
           ) : (
             <Streamdown
               components={STREAMDOWN_COMPONENTS}
@@ -425,7 +464,11 @@ function TimelineBlock({
           ))}
         </div>
       </details>
-      <PiFileOperations items={block.items} cwd={cwd} />
+      <PiFileOperations
+        items={block.items}
+        cwd={cwd}
+        onOpenFile={actions.onOpenFile}
+      />
     </>
   );
 }
@@ -522,6 +565,7 @@ export function PiTranscript({
   onCopy,
   onEdit,
   onFork,
+  onOpenFile,
   onLoadOlder,
   canEditLastUser,
 }: {
@@ -540,12 +584,13 @@ export function PiTranscript({
       onCopy,
       onEdit,
       onFork,
+      onOpenFile,
       canEditLastUser,
       lastUserId: [...view.items]
         .reverse()
         .find((item) => item.kind === "message" && item.role === "user")?.id,
     }),
-    [view.items, onCopy, onEdit, onFork, canEditLastUser],
+    [view.items, onCopy, onEdit, onFork, onOpenFile, canEditLastUser],
   );
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
