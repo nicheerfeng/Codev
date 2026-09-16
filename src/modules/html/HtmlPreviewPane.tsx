@@ -350,7 +350,7 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
         });
       return () => {
         cancelled = true;
-        endFileScrollRestore(path);
+        beginFileScrollRestore(path);
         clearBridgeReadyTimer();
       };
     }, [clearBridgeReadyTimer, path, reloadKey, setSearchStatus]);

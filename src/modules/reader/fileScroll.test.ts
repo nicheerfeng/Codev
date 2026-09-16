@@ -58,4 +58,21 @@ describe("file scroll memory", () => {
     stop();
     expect(recallFileScroll("D:/d.py")).toBe(240);
   });
+
+  it("does not write the unmount zero after restore", () => {
+    rememberFileScroll("D:/e.md", 360);
+    const node = fakeScroller(0);
+    let apply = () => {};
+    const stop = bindFileScroll(node, "D:/e.md", {
+      schedule: (next) => {
+        apply = next;
+        return () => {};
+      },
+    });
+    apply();
+    expect(node.scrollTop).toBe(360);
+    node.scrollTop = 0;
+    stop();
+    expect(recallFileScroll("D:/e.md")).toBe(360);
+  });
 });
