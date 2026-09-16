@@ -15,6 +15,7 @@ import {
 } from "@/lib/launchDir";
 import { isHtmlPath, isMarkdownPath } from "@/lib/utils";
 import { useZoom } from "@/lib/useZoom";
+import { ImageLightbox } from "@/modules/reader/ImageLightbox";
 import { quoteShellArg } from "@/lib/shellQuote";
 import { CommandPalette, createCommandItems } from "@/modules/command-palette";
 import {
@@ -1475,6 +1476,7 @@ export default function App() {
             onCreated={(path) => handleOpenFile(path)}
           />
 
+          <ImageLightbox />
           <CloseDialogs
             tabs={tabs}
             pendingTerminalCloseTab={pendingTerminalCloseTab}

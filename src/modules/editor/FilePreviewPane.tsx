@@ -1,4 +1,5 @@
 import { bindFileScroll } from "@/modules/reader/fileScroll";
+import { ZoomableImage } from "@/modules/reader/ZoomableImage";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import {
@@ -595,7 +596,7 @@ function AssetPreview({ path }: { path: string }) {
           </div>
         )}
         {source && isImage && (
-          <img
+          <ZoomableImage
             src={source}
             loading="lazy"
             decoding="async"
