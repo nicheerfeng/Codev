@@ -85,6 +85,9 @@ export function usePiSidebarReorder(
     if (!current.active && Math.abs(clientY - current.startY) < 6) return;
     if (!current.active) {
       current.active = true;
+      if (!current.target.hasPointerCapture(current.pointerId)) {
+        current.target.setPointerCapture(current.pointerId);
+      }
       document.body.style.userSelect = "none";
     }
     const selector = `[data-pi-reorder="${current.kind}"]`;
@@ -143,7 +146,7 @@ export function usePiSidebarReorder(
     const onMove = (event: PointerEvent) => {
       const current = drag.current;
       if (!current || current.pointerId !== event.pointerId) return;
-      event.preventDefault();
+      if (current.active) event.preventDefault();
       track(event.clientX, event.clientY);
     };
     const onUp = (event: PointerEvent) => {
@@ -194,7 +197,6 @@ export function usePiSidebarReorder(
         gap: null,
         width: event.currentTarget.getBoundingClientRect().width,
       };
-      event.currentTarget.setPointerCapture(event.pointerId);
     },
     onLostPointerCapture: (event) => {
       const current = drag.current;

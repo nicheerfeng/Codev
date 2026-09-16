@@ -8,6 +8,7 @@ import {
   LayoutRightIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
@@ -100,6 +101,10 @@ export function PiAgentPane({ active }: { active: boolean }) {
     ReturnType<typeof probePiAgent>
   > | null>(null);
   const pinnedDrafts = useRef(new Set<string>());
+  const [rename, setRename] = useState<{
+    thread: SidebarThread;
+    name: string;
+  } | null>(null);
   const [requests, setRequests] = useState<ExtensionRequest[]>([]);
   const [answer, setAnswer] = useState("");
   const [extensionStatus, setExtensionStatus] = useState<
@@ -690,6 +695,11 @@ export function PiAgentPane({ active }: { active: boolean }) {
     await client.current!.rename(thread, name);
     await refreshSessions();
   };
+  const renameThread = async () => {
+    if (!rename?.name.trim()) return;
+    await commitRename(rename.thread, rename.name.trim());
+    setRename(null);
+  };
   const request = requests.find((item) => item.key === selected);
   useEffect(() => {
     setAnswer(String(request?.event.prefill ?? ""));
@@ -779,6 +789,9 @@ export function PiAgentPane({ active }: { active: boolean }) {
             onSelect={(thread) => run(select(thread), thread.key)}
             onCommitRename={(thread, name) =>
               run(commitRename(thread, name), thread.key)
+            }
+            onRename={(thread) =>
+              setRename({ thread, name: thread.name || thread.preview || "" })
             }
             onFork={(thread) => run(forkThread(thread), thread.key)}
             onExport={(thread) => run(exportThread(thread), thread.key)}
@@ -1021,6 +1034,47 @@ export function PiAgentPane({ active }: { active: boolean }) {
               {deleting ? "删除中…" : "彻底删除"}
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={!!rename && active}
+        onOpenChange={(value) => {
+          if (!value) setRename(null);
+        }}
+      >
+        <DialogContent className="rounded-2xl" showCloseButton={false}>
+          <DialogTitle>重命名线程</DialogTitle>
+          <DialogDescription>保存到该线程的 Pi 原生会话。</DialogDescription>
+          <form
+            className="space-y-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              run(renameThread(), rename?.thread.key);
+            }}
+          >
+            <Input
+              aria-label="线程名称"
+              autoFocus
+              value={rename?.name ?? ""}
+              onChange={(event) =>
+                setRename((value) =>
+                  value ? { ...value, name: event.target.value } : null,
+                )
+              }
+            />
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setRename(null)}
+              >
+                取消
+              </Button>
+              <Button type="submit" disabled={!rename?.name.trim()}>
+                保存
+              </Button>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
       <Dialog
