@@ -25,6 +25,7 @@ import {
 import { Streamdown } from "streamdown";
 import { ZoomableImage } from "@/modules/reader/ZoomableImage";
 import { MarkdownLink } from "./MarkdownLink";
+import { MarkdownTable } from "./MarkdownTable";
 import { MarkdownToc } from "./MarkdownToc";
 import { MarkdownViewToggle } from "./MarkdownViewToggle";
 
@@ -140,7 +141,11 @@ function revealRenderedRange(range: Range, scrollRoot: HTMLElement): void {
   });
 }
 
-const components = { a: MarkdownLink, img: ZoomableImage };
+const components = {
+  a: MarkdownLink,
+  img: ZoomableImage,
+  table: MarkdownTable,
+};
 
 export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
   function MarkdownPreviewPane({ path, visible, onSetView }, ref) {
@@ -552,7 +557,7 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
                 parseIncompleteMarkdown={false}
                 controls={{
                   code: { copy: true, download: false },
-                  table: { copy: true, download: false, fullscreen: false },
+                  table: false,
                 }}
               >
                 {status.content}
