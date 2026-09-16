@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -45,6 +45,7 @@ import {
 } from "./sidebarCollapse";
 import {
   applySavedOrder,
+  adoptOrderIds,
   mergeOrder,
   moveByGap,
   pinSessionOrder,
@@ -63,6 +64,7 @@ type Props = {
   projects: string[];
   threads: SidebarThread[];
   selectedKey: string | null;
+  revealThreadKey?: string | null;
   selectedProject: string | null;
   organization: PiOrganization;
   onOrganize: (next: PiOrganization) => void;
@@ -79,7 +81,7 @@ type Props = {
   projectOrder: string[];
   sessionOrder: string[];
   onProjectOrder: (order: string[]) => void;
-  onSessionOrder: (order: string[]) => void;
+  onSessionOrder: (order: string[] | ((current: string[]) => string[])) => void;
   organizationReady?: boolean;
   temporaryHome?: string | null;
 };
@@ -144,6 +146,7 @@ export function PiSidebar(props: Props) {
   useEffect(() => {
     writePiCollapsed(collapsed);
   }, [collapsed]);
+  const listRef = useRef<HTMLDivElement>(null);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [filter, setFilter] = useState("");
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -153,6 +156,17 @@ export function PiSidebar(props: Props) {
   } | null>(null);
   const org = props.organization;
   const archived = org.archived;
+  const identities = props.threads
+    .filter((thread) => !isArchivedPath(thread.path, archived))
+    .map((thread): [string, string] => [
+      thread.key,
+      sessionIdentity(thread.path, thread.key),
+    ]);
+  // 草稿先原位换成文件路径，再补入新线程；首帧和存盘采用同一顺序。
+  const sessionOrder = pinSessionOrder(
+    adoptOrderIds(props.sessionOrder, identities),
+    identities.map(([, id]) => id),
+  );
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const { position, ghost, itemProps } = usePiSidebarReorder(
@@ -179,28 +193,66 @@ export function PiSidebar(props: Props) {
               !isArchivedPath(thread.path, archived),
           )
           .map((thread) => sessionIdentity(thread.path, thread.key)),
-        props.sessionOrder,
+        sessionOrder,
       );
-      props.onSessionOrder(
-        mergeOrder(props.sessionOrder, moveByGap(visible, source, gap)),
+      props.onSessionOrder((current) =>
+        mergeOrder(current, moveByGap(visible, source, gap)),
       );
     },
   );
   useEffect(() => {
     if (props.organizationReady === false) return;
-    const ids = props.threads
-      .filter((thread) => !isArchivedPath(thread.path, archived))
-      .map((thread) => sessionIdentity(thread.path, thread.key));
-    const next = pinSessionOrder(props.sessionOrder, ids);
-    if (next.join("\0") === props.sessionOrder.join("\0")) return;
-    props.onSessionOrder(next);
+    if (sessionOrder.join("\0") === props.sessionOrder.join("\0")) return;
+    props.onSessionOrder((current) =>
+      pinSessionOrder(
+        adoptOrderIds(current, identities),
+        identities.map(([, id]) => id),
+      ),
+    );
   }, [
-    archived,
     props.organizationReady,
     props.onSessionOrder,
     props.sessionOrder,
-    props.threads,
+    identities,
+    sessionOrder,
   ]);
+  const revealedKey = useRef<string | null>(null);
+  // 新建或分叉只定位一次，等待目标行挂载；流式更新不会重复抢滚动。
+  useLayoutEffect(() => {
+    const key = props.revealThreadKey;
+    const root = listRef.current;
+    if (!key || key === revealedKey.current || !root) return;
+    if (key !== props.selectedKey) {
+      revealedKey.current = key;
+      return;
+    }
+    const thread = props.threads.find((item) => item.key === key);
+    if (!thread) return;
+    const keys = isTemporaryCwd(thread.cwd, props.temporaryHome)
+      ? [`group:${TEMPORARY_GROUP_ID}`]
+      : [
+          `group:${org.projectGroups[pathKey(thread.cwd)] ?? ""}`,
+          `project:${pathKey(thread.cwd)}`,
+        ];
+    if (filter || keys.some((item) => collapsed.has(item))) {
+      setFilter("");
+      setCollapsed(
+        (current) =>
+          new Set([...current].filter((item) => !keys.includes(item))),
+      );
+      return;
+    }
+    const node = [
+      ...root.querySelectorAll<HTMLElement>("[data-pi-thread-key]"),
+    ].find((item) => item.dataset.piThreadKey === key);
+    if (!node) return;
+    const bounds = root.getBoundingClientRect();
+    const row = node.getBoundingClientRect();
+    if (row.top < bounds.top) root.scrollTop += row.top - bounds.top;
+    else if (row.bottom > bounds.bottom)
+      root.scrollTop += row.bottom - bounds.bottom;
+    revealedKey.current = key;
+  });
   const gapAt = (
     kind: "project" | "session",
     group: string,
@@ -276,6 +328,7 @@ export function PiSidebar(props: Props) {
                   thread.name || thread.preview || "新线程",
                 )
               : {})}
+            data-pi-thread-key={thread.key}
             className={`group/pi-thread flex min-w-0 touch-none items-center rounded-lg ${
               ghost?.source === sessionIdentity(thread.path, thread.key)
                 ? "opacity-35"
@@ -416,7 +469,7 @@ export function PiSidebar(props: Props) {
     );
     const ordered = applySavedOrder(
       rows.map((row) => sessionIdentity(row.path, row.key)),
-      props.sessionOrder,
+      sessionOrder,
     )
       .map(
         (id) => rows.find((row) => sessionIdentity(row.path, row.key) === id)!,
@@ -652,7 +705,10 @@ export function PiSidebar(props: Props) {
           className="h-7 rounded-lg pl-7 text-xs!"
         />
       </div>
-      <div className="reader-scrollbar min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+      <div
+        ref={listRef}
+        className="reader-scrollbar min-h-0 flex-1 overflow-y-auto px-2 pb-3"
+      >
         {[{ id: "", name: "项目" }, ...org.groups].map((group) => (
           <section key={group.id} className="mb-3">
             <ContextMenu>
@@ -778,7 +834,7 @@ export function PiSidebar(props: Props) {
               );
               const ordered = applySavedOrder(
                 rows.map((row) => sessionIdentity(row.path, row.key)),
-                props.sessionOrder,
+                sessionOrder,
               )
                 .map(
                   (id) =>
@@ -837,7 +893,11 @@ export function PiSidebar(props: Props) {
             />
             已归档{" "}
             <span className="ml-auto">
-              {props.threads.filter((item) => isArchivedPath(item.path, archived)).length}
+              {
+                props.threads.filter((item) =>
+                  isArchivedPath(item.path, archived),
+                ).length
+              }
             </span>
           </button>
           {(archiveOpen || filter) &&

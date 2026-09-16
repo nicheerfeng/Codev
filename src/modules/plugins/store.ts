@@ -163,11 +163,17 @@ export async function setPiAgentProjectOrder(order: string[]): Promise<void> {
 }
 
 /** 记住 Pi session 拖拽顺序，归档项不写入此缓存。 */
-export async function setPiAgentSessionOrder(order: string[]): Promise<void> {
-  const next = readOrderList(order);
+export async function setPiAgentSessionOrder(
+  order: string[] | ((current: string[]) => string[]),
+): Promise<void> {
+  const next = readOrderList(
+    typeof order === "function"
+      ? order(usePluginStore.getState().piAgentSessionOrder)
+      : order,
+  );
+  usePluginStore.setState({ piAgentSessionOrder: next });
   await store.set(PI_AGENT_SESSION_ORDER_KEY, next);
   await store.save();
-  usePluginStore.setState({ piAgentSessionOrder: next });
 }
 
 /** 记住最近一次思考等级，新线程直接复用。 */

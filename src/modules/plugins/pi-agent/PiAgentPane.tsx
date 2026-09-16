@@ -78,6 +78,7 @@ export function PiAgentPane({ active }: { active: boolean }) {
   const [sessions, setSessions] = useState<PiSessionSummary[]>([]);
   const [sessionsReady, setSessionsReady] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [revealThreadKey, setRevealThreadKey] = useState<string | null>(null);
   const [project, setProject] = useState<string | null>(null);
   const [piHome, setPiHome] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<PiModel[]>([]);
@@ -341,10 +342,10 @@ export function PiAgentPane({ active }: { active: boolean }) {
       previousIdentities.current.set(row.key, next);
     }
     if (!replacements.length) return;
-    const adopted = adoptOrderIds(sessionOrder, replacements);
-    if (adopted.join("\0") !== sessionOrder.join("\0"))
-      void setPiAgentSessionOrder(adopted);
-  }, [rows, sessionOrder]);
+    void setPiAgentSessionOrder((current) =>
+      adoptOrderIds(current, replacements),
+    );
+  }, [rows]);
   /** 用统一提示处理操作异常，避免无响应按钮。 */
   const run = (operation: Promise<unknown>, key = draftKey) => {
     void operation.catch((error) => setNotice(String(error), key));
@@ -366,9 +367,10 @@ export function PiAgentPane({ active }: { active: boolean }) {
     const key = nextDraftKey(path);
     if (!pinnedDrafts.current.has(key)) {
       pinnedDrafts.current.add(key);
-      void setPiAgentSessionOrder(prependOrderId(sessionOrder, key));
+      void setPiAgentSessionOrder((current) => prependOrderId(current, key));
     }
     setSelected(key);
+    setRevealThreadKey(key);
     setSearchOpen(false);
     const target = await client.current!.open(key, path);
     client.current!.applyCatalogModel(target, lastModel);
@@ -501,17 +503,19 @@ export function PiAgentPane({ active }: { active: boolean }) {
         [sourceKey]: EMPTY_DRAFT,
         [thread.key]: EMPTY_DRAFT,
       }));
-      await client.current!.request(thread, queued
-        ? {
-            type: behavior === "steer" ? "steer" : "follow_up",
-            message: text,
-            ...(draft.images.length ? { images: draft.images } : {}),
-          }
-        : {
-            type: "prompt",
-            message: text,
-            ...(draft.images.length ? { images: draft.images } : {}),
-          },
+      await client.current!.request(
+        thread,
+        queued
+          ? {
+              type: behavior === "steer" ? "steer" : "follow_up",
+              message: text,
+              ...(draft.images.length ? { images: draft.images } : {}),
+            }
+          : {
+              type: "prompt",
+              message: text,
+              ...(draft.images.length ? { images: draft.images } : {}),
+            },
       );
       await client.current!.refreshState(thread);
     } catch (error) {
@@ -676,8 +680,14 @@ export function PiAgentPane({ active }: { active: boolean }) {
     let name = `${base} · 分叉 ${index}`;
     while (used.has(name)) name = `${base} · 分叉 ${++index}`;
     const result = await client.current!.branch(source, name);
+    const identity = sessionIdentity(
+      result.thread.view.sessionFile ?? "",
+      result.thread.key,
+    );
+    void setPiAgentSessionOrder((current) => prependOrderId(current, identity));
     setProject(result.thread.cwd);
     setSelected(result.thread.key);
+    setRevealThreadKey(result.thread.key);
     await refreshSessions();
   };
   /** 导出明确目标的原生 HTML，由用户选择输出文件路径。 */
@@ -788,6 +798,7 @@ export function PiAgentPane({ active }: { active: boolean }) {
             projects={projects}
             threads={rows}
             selectedKey={selected}
+            revealThreadKey={revealThreadKey}
             selectedProject={activeCwd}
             organization={organization}
             organizationReady={hydrated}
