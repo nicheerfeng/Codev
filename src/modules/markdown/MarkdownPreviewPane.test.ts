@@ -21,10 +21,9 @@ describe("MarkdownPreviewPane Streamdown configuration", () => {
     expect(streamdownJsx).toMatch(/markdown-rendered/);
   });
 
-  it("keeps copy controls while removing markdown downloads and table fullscreen", () => {
+  it("keeps code copy while replacing table copy with one-click markdown", () => {
     expect(streamdownJsx).toMatch(/code: \{ copy: true, download: false \}/);
-    expect(streamdownJsx).toMatch(
-      /table: \{ copy: true, download: false, fullscreen: false \}/,
-    );
+    expect(streamdownJsx).toMatch(/table: false/);
+    expect(src).toMatch(/table: MarkdownTable/);
   });
 });

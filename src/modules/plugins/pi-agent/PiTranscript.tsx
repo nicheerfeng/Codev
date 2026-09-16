@@ -25,6 +25,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { findLiteralMatches } from "@/modules/editor/lib/textSearch";
 import { ZoomableImage } from "@/modules/reader/ZoomableImage";
+import { MarkdownTable } from "@/modules/markdown/MarkdownTable";
 import {
   buildTimelineBlocks,
   itemText,
@@ -40,9 +41,9 @@ import type {
 
 const STREAMDOWN_CONTROLS = {
   code: { copy: true, download: false },
-  table: { copy: true, download: false, fullscreen: false },
+  table: false,
 } as const;
-const STREAMDOWN_COMPONENTS = { img: ZoomableImage };
+const STREAMDOWN_COMPONENTS = { img: ZoomableImage, table: MarkdownTable };
 
 type MessageActions = {
   onCopy?: (text: string) => void;
