@@ -620,12 +620,20 @@ export function PiTranscript({
     pendingOlderRestore.current = virtualizer.getTotalSize();
     onLoadOlder();
   };
+  const transcriptSize = virtualizer.getTotalSize();
+  /** 钉在最后一块真实底边，避免估高把视口停在中部。 */
+  const pinBottom = () => {
+    const node = viewport.current;
+    if (!node) return;
+    const last = blocks.length - 1;
+    if (last >= 0) virtualizer.scrollToIndex(last, { align: "end" });
+    node.scrollTop = node.scrollHeight;
+  };
   /** 返回最新消息并重新启用后续流式跟随。 */
   const scrollBottom = () => {
     follow.current = true;
     setFollowing(true);
-    const node = viewport.current;
-    if (node) node.scrollTop = node.scrollHeight;
+    pinBottom();
   };
   useLayoutEffect(() => {
     const node = viewport.current;
@@ -636,11 +644,12 @@ export function PiTranscript({
     setFollowing(follow.current);
     setQuery("");
     setHit(0);
-    if (node) node.scrollTop = position?.top ?? node.scrollHeight;
+    if (follow.current) pinBottom();
+    else if (node && position) node.scrollTop = position.top;
     return () => {
       if (node)
         positions.current.set(threadKey, {
-          top: node.scrollTop,
+          top: follow.current ? 0 : node.scrollTop,
           follow: follow.current,
         });
     };
@@ -654,37 +663,38 @@ export function PiTranscript({
     setQuery("");
     appliedJump.current = jump;
     revealPending.current = false;
-    const node = viewport.current;
-    if (node) node.scrollTop = node.scrollHeight;
+    pinBottom();
   }, [threadKey, sendRevision, jump]);
   useLayoutEffect(() => {
     const node = viewport.current;
     if (!node) return;
     const previous = pendingOlderRestore.current;
     if (previous != null && !view.historyLoadingMore) {
-      node.scrollTop += virtualizer.getTotalSize() - previous;
+      node.scrollTop += transcriptSize - previous;
       pendingOlderRestore.current = null;
       loadingOlder.current = false;
       return;
     }
-    if (active && follow.current) node.scrollTop = node.scrollHeight;
-  }, [active, view.items, view.historyLoadingMore, virtualizer]);
+    if (active && follow.current) pinBottom();
+  }, [active, view.items, view.historyLoadingMore, transcriptSize]);
   useEffect(() => {
     const node = viewport.current;
+    const body = content.current;
     if (!active || !node) return;
     let frame = 0;
     const observer = new ResizeObserver(() => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        if (follow.current) node.scrollTop = node.scrollHeight;
+        if (follow.current) pinBottom();
       });
     });
     observer.observe(node);
+    if (body) observer.observe(body);
     return () => {
       observer.disconnect();
       cancelAnimationFrame(frame);
     };
-  }, [active]);
+  }, [active, threadKey]);
   useLayoutEffect(() => {
     if (jump === appliedJump.current || !matches.length) return;
     appliedJump.current = jump;
