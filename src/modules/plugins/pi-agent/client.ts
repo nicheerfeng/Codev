@@ -492,12 +492,24 @@ export class PiWorkspaceClient {
         const item = thread.view.localQueue[0];
         thread.view = { ...thread.view, queueSendingId: item.id };
         this.publish();
-        await this.request(thread, {
-          type: "prompt",
-          message: item.text,
-          images: item.images,
-          streamingBehavior: item.behavior,
-        });
+        const live =
+          thread.view.status === "running" ||
+          thread.view.status === "stopping";
+        await this.request(
+          thread,
+          live
+            ? {
+                type: item.behavior === "steer" ? "steer" : "follow_up",
+                message: item.text,
+                ...(item.images.length ? { images: item.images } : {}),
+              }
+            : {
+                type: "prompt",
+                message: item.text,
+                ...(item.images.length ? { images: item.images } : {}),
+                streamingBehavior: item.behavior,
+              },
+        );
         thread.view = {
           ...thread.view,
           localQueue: thread.view.localQueue?.filter(
@@ -735,16 +747,17 @@ export class PiWorkspaceClient {
         (message, position) => ({ mode, position, message }),
       ),
     );
-    const target = entries.find(
-      (entry) =>
-        entry.mode === kind &&
-        entry.position === index &&
-        entry.message === text,
+    const byIndex = entries.find(
+      (entry) => entry.mode === kind && entry.position === index,
     );
+    const target =
+      byIndex ??
+      entries.find((entry) => entry.mode === kind && entry.message === text);
+    if (!target)
+      throw new Error("这条消息已开始处理或队列已变化，请查看最新队列");
     const remaining = entries.filter((entry) => entry !== target);
-    if (target && action === "edit") restore([target.message]);
-    if (target && action === "steer")
-      remaining.unshift({ ...target, mode: "steering" });
+    if (action === "edit") restore([target.message]);
+    if (action === "steer") remaining.unshift({ ...target, mode: "steering" });
     for (let position = 0; position < remaining.length; position++) {
       const entry = remaining[position];
       try {
@@ -757,8 +770,6 @@ export class PiWorkspaceClient {
         throw error;
       }
     }
-    if (!target)
-      throw new Error("这条消息已开始处理或队列已变化，请查看最新队列");
   }
 
   /** 先取回未执行的队列文本，再中断运行，恢复操作始终绑定原线程。 */
