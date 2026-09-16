@@ -1,5 +1,5 @@
 import { bindFileScroll } from "@/modules/reader/fileScroll";
-import { ZoomableImage } from "@/modules/reader/ZoomableImage";
+import { ImageViewport } from "@/modules/reader/ImageViewport";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import {
@@ -486,7 +486,7 @@ const TextWindowPreview = forwardRef<
   );
 });
 
-// 直接交给 WebView 解码媒体或 PDF，并为超宽图片提供原始尺寸滚动阅读。
+// 直接交给 WebView 解码媒体或 PDF；图片用视口滚轮缩放、拖动平移。
 function AssetPreview({ path }: { path: string }) {
   const extension = path.split(".").pop()?.toLowerCase() ?? "";
   const isImage = [
@@ -503,9 +503,6 @@ function AssetPreview({ path }: { path: string }) {
   const isVideo = ["mp4", "webm", "ogg", "mov"].includes(extension);
   const isAudio = ["mp3", "wav", "flac", "aac", "m4a"].includes(extension);
   const isPdf = extension === "pdf";
-  const [fit, setFit] = useState(false);
-  const [zoom, setZoom] = useState(100);
-  const [naturalWidth, setNaturalWidth] = useState<number | null>(null);
   const [source, setSource] = useState<string | null>(null);
   const [assetError, setAssetError] = useState<string | null>(null);
 
@@ -514,7 +511,6 @@ function AssetPreview({ path }: { path: string }) {
     let objectUrl: string | null = null;
     setSource(null);
     setAssetError(null);
-    setNaturalWidth(null);
     const loadAsset = async () => {
       try {
         if (isImage) {
@@ -543,78 +539,16 @@ function AssetPreview({ path }: { path: string }) {
     };
   }, [extension, isImage, path]);
 
-  // 限制图片缩放范围，避免误操作创建过大的布局。
-  const changeZoom = useCallback((delta: number) => {
-    setFit(false);
-    setZoom((value) => Math.min(400, Math.max(25, value + delta)));
-  }, []);
-
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      {isImage && (
-        <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border/60 px-2 text-[11px] text-muted-foreground">
-          <button
-            type="button"
-            className="rounded px-1.5 py-0.5 hover:bg-accent"
-            onClick={() => setFit(true)}
-          >
-            适合窗口
-          </button>
-          <button
-            type="button"
-            className="rounded px-1.5 py-0.5 hover:bg-accent"
-            onClick={() => {
-              setFit(false);
-              setZoom(100);
-            }}
-          >
-            原始 100%
-          </button>
-          <button
-            type="button"
-            className="rounded px-1.5 py-0.5 hover:bg-accent"
-            onClick={() => changeZoom(-25)}
-            disabled={fit}
-          >
-            −
-          </button>
-          <button
-            type="button"
-            className="rounded px-1.5 py-0.5 hover:bg-accent"
-            onClick={() => changeZoom(25)}
-            disabled={fit}
-          >
-            ＋
-          </button>
-          <span className="ml-auto">{fit ? "适合窗口" : `${zoom}%`}</span>
-        </div>
-      )}
-      <div className="reader-scrollbar min-h-0 flex-1 overflow-auto p-4">
+      <div className={isImage ? "min-h-0 flex-1" : "reader-scrollbar min-h-0 flex-1 overflow-auto p-4"}>
         {!source && (
           <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
             {assetError ? `媒体加载失败：${assetError}` : "正在加载媒体…"}
           </div>
         )}
         {source && isImage && (
-          <ZoomableImage
-            src={source}
-            loading="lazy"
-            decoding="async"
-            onLoad={(event) =>
-              setNaturalWidth(event.currentTarget.naturalWidth)
-            }
-            className={
-              fit
-                ? "mx-auto max-h-full max-w-full rounded-md border border-border object-contain shadow-sm"
-                : "rounded-md border border-border object-contain shadow-sm"
-            }
-            style={
-              fit || naturalWidth === null
-                ? undefined
-                : { width: `${Math.max(1, (naturalWidth * zoom) / 100)}px` }
-            }
-            alt={filenameFromPath(path)}
-          />
+          <ImageViewport src={source} alt={filenameFromPath(path)} />
         )}
         {source && isVideo && (
           // biome-ignore lint/a11y/useMediaCaption: local file preview has no predictable caption track
