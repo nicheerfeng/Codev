@@ -25,6 +25,16 @@ export function listPiAssets(kind: "skills" | "plugins"): Promise<PiAsset[]> {
   return invoke<PiAsset[]>("pi_agent_list_assets", { kind });
 }
 
+/** 读取 settings.json 的 packages 列表，用于推荐插件的已装标记。 */
+export function listPiPackageSpecs(): Promise<string[]> {
+  return invoke<string[]>("pi_agent_list_package_specs");
+}
+
+/** 一次性安装公开 npm 插件，不启动 RPC。 */
+export function installPiPackage(packageName: string): Promise<string> {
+  return invoke<string>("pi_agent_install_package", { package: packageName });
+}
+
 /** 订阅原生会话目录变化，无需认识外部插件。 */
 export async function watchPiSessions(
   changed: () => void,

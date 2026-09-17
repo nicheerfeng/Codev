@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { getIdentifier, getVersion } from "@tauri-apps/api/app";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Refresh01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
@@ -8,35 +9,33 @@ import {
   type VersionChannelState,
 } from "@/components/VersionChannelCard";
 import {
-  compareDottedVersions,
+  CODEV_RELEASES_URL,
+  CODEV_REPO_URL,
   fetchLatestRelease,
   parseDottedVersion,
-  PI_RELEASES_URL,
-  PI_REPO_URL,
   updateReleaseStatus,
 } from "@/lib/releaseChannel";
-import { probePiAgent } from "./native";
 
-export const parsePiVersion = parseDottedVersion;
-export const comparePiVersions = compareDottedVersions;
-
-/** Pi 设置只展示本机 CLI 和上游发行，不再混入 Codev。 */
-export function PiVersionPanel() {
+/** 主设置只负责 Codev 本机版本和 GitHub 发行检测。 */
+export function VersionSection() {
   const [channel, setChannel] = useState<VersionChannelState>({
     ...EMPTY_VERSION_CHANNEL,
-    releaseUrl: PI_RELEASES_URL,
+    releaseUrl: CODEV_RELEASES_URL,
   });
   const [busy, setBusy] = useState(false);
   const load = useCallback(async () => {
     setBusy(true);
     setChannel((current) => ({ ...current, error: "", status: "" }));
     try {
-      const probe = await probePiAgent();
+      const [version, identifier] = await Promise.all([
+        getVersion(),
+        getIdentifier().catch(() => null),
+      ]);
       setChannel((current) => ({
         ...current,
-        installed: parseDottedVersion(probe.version) ?? probe.version,
-        detail: probe.path,
-        error: probe.available ? "" : (probe.error ?? "Pi 不可用"),
+        installed: parseDottedVersion(version) ?? version,
+        detail: identifier,
+        error: "",
       }));
     } catch (value) {
       setChannel((current) => ({ ...current, error: String(value) }));
@@ -55,7 +54,7 @@ export function PiVersionPanel() {
       status: "",
     }));
     try {
-      const result = await fetchLatestRelease("pi");
+      const result = await fetchLatestRelease("codev");
       setChannel((current) => ({
         ...current,
         latest: result.latest,
@@ -72,9 +71,11 @@ export function PiVersionPanel() {
     }
   };
   return (
-    <section className="flex min-h-0 flex-1 flex-col" aria-label="Pi 版本">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-3 sm:px-4">
-        <h2 className="flex-1 text-sm font-medium">Pi 版本</h2>
+    <section className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <h2 className="flex-1 text-[12px] font-semibold tracking-tight">
+          版本
+        </h2>
         <Button
           variant="ghost"
           size="icon-sm"
@@ -90,17 +91,13 @@ export function PiVersionPanel() {
           />
         </Button>
       </div>
-      <div className="reader-scrollbar min-h-0 flex-1 overflow-auto p-3 sm:p-4">
-        <div className="mx-auto flex max-w-xl flex-col gap-3">
-          <VersionChannelCard
-            title="本机 Pi CLI"
-            fallback="未探测到"
-            repoUrl={PI_REPO_URL}
-            channel={channel}
-            onCheck={() => void check()}
-          />
-        </div>
-      </div>
+      <VersionChannelCard
+        title="本机 Codev"
+        fallback="未探测到"
+        repoUrl={CODEV_REPO_URL}
+        channel={channel}
+        onCheck={() => void check()}
+      />
     </section>
   );
 }

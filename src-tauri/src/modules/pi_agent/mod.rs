@@ -11,7 +11,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
 
 const PI_EVENT: &str = "codev://pi-agent-event";
@@ -191,15 +191,21 @@ fn asset_summary(path: &Path) -> Option<String> {
     if path.is_file() {
         return read_preview(path).and_then(summarize_text);
     }
-    ["README.md", "README.txt", "package.json"]
-        .iter()
-        .find_map(|file| fs::read_to_string(path.join(file)).ok())
-        .and_then(summarize_text)
+    for file in ["SKILL.md", "skill.md", "README.md", "README.txt", "package.json"] {
+        let candidate = path.join(file);
+        if !candidate.is_file() {
+            continue;
+        }
+        if let Some(summary) = read_preview(&candidate).and_then(summarize_text) {
+            return Some(summary);
+        }
+    }
+    None
 }
 
 fn read_preview(path: &Path) -> Option<String> {
     let mut file = File::open(path).ok()?;
-    let mut buffer = vec![0u8; 4096];
+    let mut buffer = vec![0u8; 8192];
     let count = file.read(&mut buffer).ok()?;
     String::from_utf8(buffer[..count].to_vec()).ok()
 }
@@ -212,14 +218,66 @@ fn summarize_text(text: String) -> Option<String> {
             .unwrap_or("")
             .to_string()
     } else {
-        text.lines().take(3).collect::<Vec<_>>().join(" ")
+        skill_frontmatter_description(&text).unwrap_or_default()
     };
-    let compact: String = trimmed.chars().take(240).collect();
-    if compact.trim().is_empty() {
+    let compact: String = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.is_empty() {
         None
     } else {
         Some(compact)
     }
+}
+
+fn skill_frontmatter_description(text: &str) -> Option<String> {
+    let rest = text.trim_start();
+    let body = rest.strip_prefix("---")?;
+    let body = body.strip_prefix('\n').or_else(|| body.strip_prefix("\r\n"))?;
+    let end = body.find("\n---").or_else(|| body.find("\r\n---"))?;
+    yaml_description(&body[..end])
+}
+
+fn yaml_description(frontmatter: &str) -> Option<String> {
+    let lines: Vec<&str> = frontmatter.lines().collect();
+    let mut index = 0;
+    while index < lines.len() {
+        let line = lines[index];
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with("description:") {
+            index += 1;
+            continue;
+        }
+        let remainder = trimmed["description:".len()..].trim();
+        if remainder.is_empty() || remainder == ">" || remainder == ">-" || remainder == "|" || remainder == "|-" {
+            index += 1;
+            let mut chunks = Vec::new();
+            while index < lines.len() {
+                let next = lines[index];
+                if next.trim().is_empty() {
+                    break;
+                }
+                let indent = next.len() - next.trim_start().len();
+                if indent == 0 {
+                    break;
+                }
+                chunks.push(next.trim());
+                index += 1;
+            }
+            let value = chunks.join(" ");
+            return if value.is_empty() { None } else { Some(value) };
+        }
+        return Some(unquote_yaml(remainder));
+    }
+    None
+}
+
+fn unquote_yaml(value: &str) -> String {
+    let trimmed = value.trim();
+    if (trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2)
+        || (trimmed.starts_with('\'') && trimmed.ends_with('\'') && trimmed.len() >= 2)
+    {
+        return trimmed[1..trimmed.len() - 1].to_string();
+    }
+    trimmed.to_string()
 }
 
 fn push_asset(name: String, path: PathBuf, source: &str, assets: &mut Vec<PiAsset>) {
@@ -310,6 +368,128 @@ fn collect_package_assets(agent: &Path, assets: &mut Vec<PiAsset>) {
         let name = package_spec_name(spec).unwrap_or_else(|| spec.to_string());
         push_asset(name, path, "第三方包", assets);
     }
+}
+
+const RECOMMENDED_NPM_PACKAGES: &[&str] = &[
+    "pi-mcp-adapter",
+    "pi-lens",
+    "pi-subagents",
+    "@kky42/pi-flow",
+    "@ogulcancelik/pi-codex-subagents",
+    "pi-intercom",
+    "pi-feishu-lark",
+    "pi-hide-providers",
+    "pi-rename-session",
+];
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
+
+fn recommended_npm_package(name: &str) -> Option<&'static str> {
+    RECOMMENDED_NPM_PACKAGES
+        .iter()
+        .copied()
+        .find(|item| item.eq_ignore_ascii_case(name.trim()))
+}
+
+fn collect_package_specs(agent: &Path) -> Vec<String> {
+    let settings = fs::read_to_string(agent.join("settings.json")).ok();
+    let Some(value) = settings.and_then(|text| serde_json::from_str::<Value>(&text).ok()) else {
+        return Vec::new();
+    };
+    let Some(packages) = value.get("packages").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    packages
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn wait_child_with_timeout(
+    child: &mut Child,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus, String> {
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {
+                if started.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("安装超时，请稍后重试或复制命令手动安装".to_string());
+                }
+                thread::sleep(Duration::from_millis(200));
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+}
+
+fn command_output_text(output: &[u8]) -> String {
+    String::from_utf8_lossy(output).trim().to_string()
+}
+
+/// 列出 settings.json 里的 packages，即使磁盘上还没下完也能标已安装。
+#[tauri::command]
+pub fn pi_agent_list_package_specs() -> Result<Vec<String>, String> {
+    let agent = pi_home_dir().ok_or("无法定位 Pi 目录")?;
+    Ok(collect_package_specs(&agent))
+}
+
+/// 一次性安装公开 npm 插件，不启动 RPC、不打断正在跑的会话。
+#[tauri::command]
+pub fn pi_agent_install_package(package: String) -> Result<String, String> {
+    let name = recommended_npm_package(&package)
+        .ok_or_else(|| format!("未收录的推荐插件：{package}"))?;
+    let path = resolve_pi_binary(None)?;
+    let spec = format!("npm:{name}");
+    let mut child = create_pi_command(&path, &["install".to_string(), spec.clone()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let stdout_handle = thread::spawn(move || {
+        let mut text = String::new();
+        if let Some(mut reader) = stdout {
+            let _ = reader.read_to_string(&mut text);
+        }
+        text
+    });
+    let stderr_handle = thread::spawn(move || {
+        let mut text = String::new();
+        if let Some(mut reader) = stderr {
+            let _ = reader.read_to_string(&mut text);
+        }
+        text
+    });
+    let status = wait_child_with_timeout(&mut child, INSTALL_TIMEOUT)?;
+    let stdout_text = stdout_handle.join().ok().unwrap_or_default();
+    let stderr_text = stderr_handle.join().ok().unwrap_or_default();
+    let stdout_text = command_output_text(stdout_text.as_bytes());
+    let stderr_text = command_output_text(stderr_text.as_bytes());
+    let combined = [stdout_text.as_str(), stderr_text.as_str()]
+        .into_iter()
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !status.success() {
+        return Err(if combined.is_empty() {
+            format!("pi install {spec} 失败：{status}")
+        } else {
+            combined
+        });
+    }
+    Ok(if combined.is_empty() {
+        format!("已安装 {spec}")
+    } else {
+        combined
+    })
 }
 
 /// 监听原生会话目录，兼容任何 Pi 客户端新建或更新的会话。
@@ -1563,8 +1743,9 @@ pub fn pi_agent_write_models(content: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_session_entry, clone_session_file, delete_session_file, message_preview,
-        parse_rpc_line, parse_session_history, parse_session_summary, same_path,
+        append_session_entry, asset_summary, clone_session_file, collect_package_specs,
+        delete_session_file, message_preview, parse_rpc_line, parse_session_history,
+        parse_session_summary, recommended_npm_package, same_path, skill_frontmatter_description,
         PiSessionAppendRequest,
     };
     use serde_json::json;
@@ -1796,5 +1977,66 @@ mod tests {
         );
         assert_eq!(parse_rpc_line(b"\n").expect("empty line"), None);
         assert!(parse_rpc_line(b"not-json\n").is_err());
+    }
+
+    #[test]
+    fn recommends_only_public_npm_packages() {
+        assert_eq!(recommended_npm_package("pi-lens"), Some("pi-lens"));
+        assert_eq!(
+            recommended_npm_package("@kky42/pi-flow"),
+            Some("@kky42/pi-flow"),
+        );
+        assert_eq!(recommended_npm_package("../evil"), None);
+        assert_eq!(recommended_npm_package("sandbox.ts"), None);
+    }
+
+    #[test]
+    fn reads_package_specs_from_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("settings.json"),
+            r#"{"packages":["npm:pi-lens","npm:@kky42/pi-flow"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            collect_package_specs(directory.path()),
+            vec!["npm:pi-lens".to_string(), "npm:@kky42/pi-flow".to_string()],
+        );
+    }
+
+    #[test]
+    fn reads_skill_description_from_yaml_frontmatter() {
+        let folded = skill_frontmatter_description(
+            "---\nname: demo\ndescription: >-\n  第一句简介。\n  第二句补充。\n---\n# Demo\n",
+        )
+        .expect("folded description");
+        assert_eq!(folded, "第一句简介。 第二句补充。");
+        assert_eq!(
+            skill_frontmatter_description(
+                "---\nname: find-skills\ndescription: Helps users discover skills.\n---\n",
+            )
+            .as_deref(),
+            Some("Helps users discover skills."),
+        );
+        assert!(skill_frontmatter_description("# no frontmatter\n简介").is_none());
+    }
+
+    #[test]
+    fn skill_dir_summary_prefers_skill_md_over_readme() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("README.md"),
+            "# Title\nthis is not the description\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("SKILL.md"),
+            "---\nname: demo\ndescription: 中文运维指南：创建、调用与管理 subagent。\n---\n# Demo\n",
+        )
+        .unwrap();
+        assert_eq!(
+            asset_summary(directory.path()).as_deref(),
+            Some("中文运维指南：创建、调用与管理 subagent。"),
+        );
     }
 }
