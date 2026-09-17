@@ -42,7 +42,11 @@ pub fn pi_agent_list_assets(kind: String) -> Result<Vec<PiAsset>, String> {
                 "Pi 技能",
                 &mut assets,
             );
-            collect_named_dirs(&home.join(".agents").join("skills"), "共享技能", &mut assets);
+            collect_named_dirs(
+                &home.join(".agents").join("skills"),
+                "共享技能",
+                &mut assets,
+            );
         }
         "plugins" => {
             let agent = pi_home_dir().ok_or("无法定位 Pi 目录")?;
@@ -71,7 +75,13 @@ pub(crate) fn asset_summary(path: &Path) -> Option<String> {
     if path.is_file() {
         return read_preview(path).and_then(summarize_text);
     }
-    for file in ["SKILL.md", "skill.md", "README.md", "README.txt", "package.json"] {
+    for file in [
+        "SKILL.md",
+        "skill.md",
+        "README.md",
+        "README.txt",
+        "package.json",
+    ] {
         let candidate = path.join(file);
         if !candidate.is_file() {
             continue;
@@ -111,7 +121,9 @@ fn summarize_text(text: String) -> Option<String> {
 pub(crate) fn skill_frontmatter_description(text: &str) -> Option<String> {
     let rest = text.trim_start();
     let body = rest.strip_prefix("---")?;
-    let body = body.strip_prefix('\n').or_else(|| body.strip_prefix("\r\n"))?;
+    let body = body
+        .strip_prefix('\n')
+        .or_else(|| body.strip_prefix("\r\n"))?;
     let end = body.find("\n---").or_else(|| body.find("\r\n---"))?;
     yaml_description(&body[..end])
 }
@@ -228,7 +240,10 @@ fn package_spec_name(spec: &str) -> Option<String> {
 
 fn package_dir(npm: &Path, spec: &str) -> Option<PathBuf> {
     let name = package_spec_name(spec)?;
-    Some(name.split('/').fold(npm.to_path_buf(), |acc, part| acc.join(part)))
+    Some(
+        name.split('/')
+            .fold(npm.to_path_buf(), |acc, part| acc.join(part)),
+    )
 }
 
 fn collect_package_assets(agent: &Path, assets: &mut Vec<PiAsset>) {
@@ -314,8 +329,8 @@ pub fn pi_agent_list_package_specs() -> Result<Vec<String>, String> {
 /// 一次性安装公开 npm 插件，不启动 RPC、不打断正在跑的会话。
 #[tauri::command]
 pub fn pi_agent_install_package(package: String) -> Result<String, String> {
-    let name = recommended_npm_package(&package)
-        .ok_or_else(|| format!("未收录的推荐插件：{package}"))?;
+    let name =
+        recommended_npm_package(&package).ok_or_else(|| format!("未收录的推荐插件：{package}"))?;
     let path = resolve_pi_binary(None)?;
     let spec = format!("npm:{name}");
     let mut child = create_pi_command(&path, &["install".to_string(), spec.clone()])

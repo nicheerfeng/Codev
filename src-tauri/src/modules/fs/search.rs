@@ -348,8 +348,14 @@ mod tests {
             Some(false),
         )
         .expect("search");
-        assert!(result.hits.iter().any(|hit| hit.rel.ends_with("src/app.rs")));
+        assert!(result
+            .hits
+            .iter()
+            .any(|hit| hit.rel.ends_with("src/app.rs")));
         assert!(!result.hits.iter().any(|hit| hit.rel.contains("target")));
-        assert!(!result.hits.iter().any(|hit| hit.rel.contains("node_modules")));
+        assert!(!result
+            .hits
+            .iter()
+            .any(|hit| hit.rel.contains("node_modules")));
     }
 }
