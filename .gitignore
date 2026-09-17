@@ -43,3 +43,5 @@ output/
 # Local Pi Agent design dumps and session transcripts; never shipped.
 docs/ref-piagent/
 docs/codev-pi-agent工作进展.md
+docs/Pi-session*.html
+docs/recent_update_pi-agent.md
