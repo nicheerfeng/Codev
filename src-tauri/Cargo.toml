@@ -61,6 +61,7 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-notification = "2"
 tempfile = "3"
 notify = "8.2.0"
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 
 [dev-dependencies]
 proptest = "1"

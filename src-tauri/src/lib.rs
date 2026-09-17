@@ -1,6 +1,6 @@
 pub mod modules;
 
-use modules::{fs, history, pi_agent, pty, workspace};
+use modules::{fs, github, history, pi_agent, pty, workspace};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::menu::MenuBuilder;
@@ -541,8 +541,11 @@ pub fn run() {
             pi_agent::pi_agent_close_all,
             pi_agent::pi_agent_watch_sessions,
             pi_agent::pi_agent_list_assets,
+            pi_agent::pi_agent_list_package_specs,
+            pi_agent::pi_agent_install_package,
             pi_agent::pi_agent_home_dir,
             pi_agent::codev_install_stamp,
+            github::github_latest_release,
             codev_quit,
         ])
         .build(tauri::generate_context!())

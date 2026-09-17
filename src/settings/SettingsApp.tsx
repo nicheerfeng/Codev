@@ -2,17 +2,13 @@ import { WindowControls } from "@/components/WindowControls";
 import { useT } from "@/lib/i18n";
 import { IS_MAC, USE_CUSTOM_WINDOW_CONTROLS } from "@/lib/platform";
 import { usePreferencesStore } from "@/modules/settings/preferences";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useEffect } from "react";
 import { EditorSection } from "./sections/EditorSection";
 import { GeneralSection } from "./sections/GeneralSection";
 import { PluginsSection } from "./sections/PluginsSection";
 import { ThemesSection } from "./sections/ThemesSection";
+import { VersionSection } from "./sections/VersionSection";
 
 /** 渲染单页面紧凑设置窗口，避免分页和低频配置分散注意力。 */
 export function SettingsApp() {
@@ -39,7 +35,10 @@ export function SettingsApp() {
       </header>
 
       <main className="min-h-0 flex-1 overflow-hidden px-4 py-3 sm:px-5">
-        <Tabs defaultValue="general" className="mx-auto flex h-full w-full max-w-[560px] flex-col">
+        <Tabs
+          defaultValue="general"
+          className="mx-auto flex h-full w-full max-w-[560px] flex-col"
+        >
           <TabsList
             variant="line"
             className="h-8 w-full shrink-0 justify-start border-b border-border/60"
@@ -49,6 +48,9 @@ export function SettingsApp() {
             </TabsTrigger>
             <TabsTrigger value="plugins" className="flex-none px-3 text-[11px]">
               {t("Plugins")}
+            </TabsTrigger>
+            <TabsTrigger value="version" className="flex-none px-3 text-[11px]">
+              {t("Version")}
             </TabsTrigger>
           </TabsList>
           <TabsContent
@@ -66,6 +68,12 @@ export function SettingsApp() {
             className="min-h-0 flex-1 overflow-y-auto py-4 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
             <PluginsSection />
+          </TabsContent>
+          <TabsContent
+            value="version"
+            className="min-h-0 flex-1 overflow-y-auto py-4 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          >
+            <VersionSection />
           </TabsContent>
         </Tabs>
       </main>
