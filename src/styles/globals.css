@@ -267,6 +267,7 @@ html[data-chrome="borderless"] #settings-root {
 body {
   -webkit-user-select: none;
   user-select: none;
+  -webkit-user-drag: none;
 }
 input,
 textarea,

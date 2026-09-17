@@ -1,3 +1,4 @@
+import { createNativeFileDragGate } from "@/lib/nativeFileDrag";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -38,12 +39,13 @@ export function useReaderFileDrop({ onOpen }: ReaderFileDropOptions): void {
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | null = null;
+    const gate = createNativeFileDragGate();
 
     void getCurrentWebview()
       .onDragDropEvent((event) => {
         const payload = event.payload;
-        if (payload.type === "enter" || payload.type === "over") return;
-        if (payload.type === "leave" || payload.paths.length === 0) return;
+        const phase = gate.phase(payload);
+        if (phase !== "drop" || payload.type !== "drop") return;
 
         const group = readerGroupAt(payload.position.x, payload.position.y);
         if (!group) return;

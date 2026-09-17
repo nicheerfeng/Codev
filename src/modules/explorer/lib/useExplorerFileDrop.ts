@@ -1,3 +1,4 @@
+import { createNativeFileDragGate } from "@/lib/nativeFileDrag";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useEffect, useRef, useState } from "react";
 
@@ -51,23 +52,26 @@ export function useExplorerFileDrop({ rootPath, isDir, onTransfer }: Options) {
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | null = null;
+    const gate = createNativeFileDragGate();
 
     void getCurrentWebview()
       .onDragDropEvent((e) => {
         const p = e.payload;
         const { rootPath, isDir, onTransfer } = optsRef.current;
-        if (p.type === "enter" || p.type === "over") {
+        const phase = gate.phase(p);
+        if (phase === "ignore") return;
+        if (phase === "hover" && (p.type === "enter" || p.type === "over")) {
           setTargetDir(dirAt(p.position.x, p.position.y, rootPath, isDir));
           return;
         }
-        if (p.type === "leave") {
+        if (phase === "leave") {
           setTargetDir(null);
           return;
         }
-        if (p.type === "drop") {
+        if (phase === "drop" && p.type === "drop") {
           const dir = dirAt(p.position.x, p.position.y, rootPath, isDir);
           setTargetDir(null);
-          if (!dir || p.paths.length === 0) return;
+          if (!dir) return;
           onTransfer(p.paths, dir);
         }
       })

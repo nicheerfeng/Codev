@@ -1,3 +1,4 @@
+import { createNativeFileDragGate } from "@/lib/nativeFileDrag";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useEffect } from "react";
 import { useTerminalDropStore } from "./dropStore";
@@ -71,21 +72,23 @@ export function useTerminalFileDrop(): TerminalPathDropTarget {
     let disposed = false;
     let unlisten: (() => void) | null = null;
     const setTarget = useTerminalDropStore.getState().setTarget;
+    const gate = createNativeFileDragGate();
 
     void getCurrentWebview()
       .onDragDropEvent((e) => {
         const p = e.payload;
-        if (p.type === "enter" || p.type === "over") {
+        const phase = gate.phase(p);
+        if (phase === "ignore") return;
+        if (phase === "hover" && (p.type === "enter" || p.type === "over")) {
           setTarget(leafIdAt(p.position.x, p.position.y));
           return;
         }
-        if (p.type === "leave") {
+        if (phase === "leave") {
           setTarget(null);
           return;
         }
-        if (p.type === "drop") {
+        if (phase === "drop" && p.type === "drop") {
           setTarget(null);
-          if (!p.paths.length) return;
           const leafId = leafIdAt(p.position.x, p.position.y);
           if (leafId !== null) {
             pasteIntoLeaf(leafId, formatDroppedPaths(p.paths));
