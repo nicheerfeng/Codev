@@ -1,0 +1,4 @@
+# 复制为 config.toml（已 gitignore）后，日常 cargo / tauri dev 会写到仓库外。
+# Windows 建议放到 LOCALAPPDATA，避免 D: 上堆积 debug 增量缓存。
+[build]
+target-dir = "C:\\Users\\79988\\AppData\\Local\\codev-cargo-target"

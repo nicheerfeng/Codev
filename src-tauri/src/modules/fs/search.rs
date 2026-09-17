@@ -37,12 +37,29 @@ const PRUNE_DIRS: &[&str] = &[
     "target",
     "dist",
     "build",
+    "out",
     ".next",
     ".turbo",
     ".cache",
     ".venv",
     "__pycache__",
+    ".ruff_cache",
+    "vendor",
+    "artifacts",
+    ".reference-cache",
+    ".playwright-cli",
+    "output",
 ];
+
+fn keep_search_entry(dent: &ignore::DirEntry) -> bool {
+    if dent.depth() == 0 {
+        return true;
+    }
+    dent.file_name()
+        .to_str()
+        .map(|name| !PRUNE_DIRS.contains(&name))
+        .unwrap_or(true)
+}
 
 #[tauri::command]
 pub fn fs_search(
@@ -96,14 +113,14 @@ pub fn fs_search(
     for (root_display, root_path, root_label) in resolved_roots {
         let walker = WalkBuilder::new(&root_path)
             .hidden(!show_hidden)
-            // Filename search follows the visible file tree, including files
-            // under ignored or commonly generated directories.
+            // 文件名搜索仍可见源码树，但绝不走进 target / node_modules 这类生成目录。
             .git_ignore(false)
             .git_global(false)
             .git_exclude(false)
             .ignore(false)
             .parents(true)
             .follow_links(false)
+            .filter_entry(keep_search_entry)
             .build();
 
         for dent in walker.flatten() {
@@ -221,15 +238,7 @@ pub fn fs_list_files(
         .parents(true)
         .follow_links(false)
         .max_depth(Some(depth))
-        .filter_entry(|dent| {
-            if dent.depth() == 0 {
-                return true;
-            }
-            match dent.file_name().to_str() {
-                Some(name) => !PRUNE_DIRS.contains(&name),
-                None => true,
-            }
-        })
+        .filter_entry(keep_search_entry)
         .build();
 
     let mut files: Vec<String> = Vec::with_capacity(cap.min(256));
@@ -319,5 +328,28 @@ mod tests {
         let cands = vec![hit("CommandPalette.tsx"), hit("readme.md")];
         let out = rank_direct(cands, "cmdp", 10);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn filename_search_skips_generated_trees() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/app.rs"), "fn main() {}").unwrap();
+        std::fs::create_dir_all(root.join("target/debug")).unwrap();
+        std::fs::write(root.join("target/debug/app.rs"), "generated").unwrap();
+        std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+        std::fs::write(root.join("node_modules/pkg/index.js"), "generated").unwrap();
+        let result = fs_search(
+            vec![root.to_string_lossy().into_owned()],
+            "app".into(),
+            Some(20),
+            None,
+            Some(false),
+        )
+        .expect("search");
+        assert!(result.hits.iter().any(|hit| hit.rel.ends_with("src/app.rs")));
+        assert!(!result.hits.iter().any(|hit| hit.rel.contains("target")));
+        assert!(!result.hits.iter().any(|hit| hit.rel.contains("node_modules")));
     }
 }

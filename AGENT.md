@@ -12,6 +12,8 @@
 pnpm tauri dev --config src-tauri/tauri.portable.conf.json
 ```
 
+日常 `tauri dev` / `cargo test` 的增量缓存不要写进仓库里的 `src-tauri/target`。本机把 `src-tauri/.cargo/config.toml` 指到 `%LOCALAPPDATA%\codev-cargo-target`（样例见 `src-tauri/.cargo/config.toml.example`）。发版脚本如需隔离产物，再显式设置 `CARGO_TARGET_DIR`，不要再克隆 `pi-ui-r*-clean` 这类完整构建树。
+
 这条命令使用 `app.teague.codev.portable`，与安装版 `app.teague.codev` 并存。Vite 热更新走 `http://localhost:1420`，安装版不占用该端口。界面改完后由 agent 直接启动这个审核窗口，并写明要看的点和反馈方式；不要只把命令丢给用户自己跑。
 
 核验入口按改动类型选择：
@@ -25,7 +27,7 @@ pnpm tauri dev --config src-tauri/tauri.portable.conf.json
 
 - 禁止结束用户正在使用的安装版、便携版或其他 Codev 窗口。
 - 安装版路径通常是 `C:\Users\79988\AppData\Local\Codev\codev.exe`。
-- 开发版路径是 `src-tauri/target/debug/codev.exe`。
+- 开发版路径默认是 `%LOCALAPPDATA%\codev-cargo-target\debug\codev.exe`；未配置 `src-tauri/.cargo/config.toml` 时才回落到 `src-tauri/target/debug/codev.exe`。
 - 发现单实例冲突时，改用便携 identifier 启动开发窗口，不要杀安装版。
 - 关闭开发窗口时，只结束 debug 进程和对应 `tauri dev` / Vite，不动安装版。
 

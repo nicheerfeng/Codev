@@ -30,7 +30,7 @@ Codev 是一个基于 Tauri 2 + Rust + React 的极简代码和文档阅读器�
 
 ## Native boundary
 
-Rust backend modules are limited to `fs`, `history`, `proc`, `pty`, `workspace` and the scoped `pi_agent` RPC process bridge。新增 IPC 命令必须在 `lib.rs` 注册，并在对应模块中补测试。不要为了潜在未来需求预留通用 Agent 协议、插件接口或后台服务。
+Rust backend modules are limited to `fs`, `history`, `proc`, `pty`, `workspace`, `github` and the scoped `pi_agent` RPC process bridge。`pi_agent` 再按 `paths` / `assets` / 运行时会话拆分，不要把安装、探测和 JSONL 历史继续堆回单文件。新增 IPC 命令必须在 `lib.rs` 注册，并在对应模块中补测试。不要为了潜在未来需求预留通用 Agent 协议、插件接口或后台服务。文件名搜索必须跳过 `target`、`node_modules` 这类生成目录。
 
 PTY shell integration emits OSC 7 for cwd and OSC 133 A/B/C/D for prompt/command state。Shell 初始化脚本只负责跨平台 Shell 启动、用户配置加载和这些终端标记；不得恢复已删除的命令块、CLI 控制或 Agent 注入。
 
