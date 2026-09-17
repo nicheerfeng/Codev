@@ -81,8 +81,6 @@ import { useWorkspaceEnvStore } from "@/modules/workspace";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { SearchAddon } from "@xterm/addon-search";
-import { PlusSignIcon } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Fragment,
   useCallback,
@@ -150,6 +148,7 @@ export default function App() {
     selectByIndex,
     setLeafCwd,
     focusPane,
+    showTerminals,
     focusNextPaneInTab,
     swapActivePaneInDirection,
     splitActivePane,
@@ -1097,9 +1096,13 @@ export default function App() {
     [setLeafCwd],
   );
 
+  /** 多视口点击同时切换终端标签与子面板，确保输入和搜索指向同一会话。 */
   const handleFocusLeaf = useCallback(
-    (tabId: number, leafId: number) => focusPane(tabId, leafId),
-    [focusPane],
+    (tabId: number, leafId: number) => {
+      setActiveId(tabId);
+      focusPane(tabId, leafId);
+    },
+    [focusPane, setActiveId],
   );
 
   const handleLeafExit = useCallback(
@@ -1430,21 +1433,6 @@ export default function App() {
                         />
                       )}
                       <div className="flex-1" />
-                      {rightDockView === "terminal" && (
-                        <button
-                          type="button"
-                          className="flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-                          onClick={openNewTab}
-                          title="新建终端"
-                          aria-label="新建终端"
-                        >
-                          <HugeiconsIcon
-                            icon={PlusSignIcon}
-                            size={13}
-                            strokeWidth={2}
-                          />
-                        </button>
-                      )}
                     </header>
                   )}
                   <div className="relative min-h-0 flex-1">
@@ -1458,10 +1446,14 @@ export default function App() {
                       <TerminalPanel
                         tabs={terminalTabs}
                         showHeader={!pluginEnabled}
+                        visible={
+                          rightDockView === "terminal" && !terminalPanelCollapsed
+                        }
                         activeId={terminalActiveId}
                         onSelect={setActiveId}
                         onClose={handleClose}
                         onNew={openNewTab}
+                        onShowTerminals={showTerminals}
                         onRename={handleRenameTab}
                         onReorder={reorderTerminals}
                         registerHandle={registerTerminalHandle}

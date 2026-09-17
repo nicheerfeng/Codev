@@ -17,21 +17,25 @@ import { labelFor, TabIcon } from "@/modules/tabs";
 import type { SearchAddon } from "@xterm/addon-search";
 import { Cancel01Icon, PlusSignIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { TerminalStack } from "./TerminalStack";
 import type { TerminalPaneHandle } from "./TerminalPane";
 import { COMPACT_CONTENT, COMPACT_ITEM } from "../explorer/lib/menuItemClass";
 import { leafIds } from "./lib/panes";
+import { terminalGrid, MAX_TERMINAL_VIEWS } from "./lib/terminalGrid";
+import { toast } from "sonner";
 
 type Props = {
   /** Terminal tabs only (filtered upstream). */
   tabs: Tab[];
   /** Hide the terminal-owned header when hosted by the right dock. */
   showHeader?: boolean;
+  visible?: boolean;
   activeId: number;
   onSelect: (id: number) => void;
   onClose: (id: number) => void;
   onNew: () => void;
+  onShowTerminals: (ids: number[]) => void;
   onRename: (id: number, title: string) => void;
   onReorder: (fromId: number, toGapIndex: number) => void;
   registerHandle: (leafId: number, handle: TerminalPaneHandle | null) => void;
@@ -52,10 +56,12 @@ function cwdLabel(cwd: string): string {
 export function TerminalPanel({
   tabs,
   showHeader = true,
+  visible = true,
   activeId,
   onSelect,
   onClose,
   onNew,
+  onShowTerminals,
   onRename,
   onReorder,
   registerHandle,
@@ -65,9 +71,58 @@ export function TerminalPanel({
   onFocusLeaf,
 }: Props) {
   const t = useT();
+  const handles = useRef(new Map<number, TerminalPaneHandle>());
+  /** 保留句柄供右侧列表点击后直接聚焦，同时维持主窗口的搜索和输入注册。 */
+  const registerPane = useCallback(
+    (id: number, handle: TerminalPaneHandle | null) => {
+      if (handle) handles.current.set(id, handle);
+      else handles.current.delete(id);
+      registerHandle(id, handle);
+    },
+    [registerHandle],
+  );
+  /** 即使点击已选中的终端，也将键盘输入焦点送回对应视口。 */
+  const selectTerminal = (id: number) => {
+    onSelect(id);
+    const tab = tabs.find((entry) => entry.id === id);
+    if (tab?.kind === "terminal")
+      requestAnimationFrame(() => {
+        if (!renameInputRef.current)
+          handles.current.get(tab.activeLeafId)?.focus();
+      });
+  };
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [navCollapsed, setNavCollapsed] = useState(false);
+  const [viewCount, setViewCount] = useState(1);
+  const grid = terminalGrid(
+    tabs.map((tab) => tab.id),
+    activeId,
+    viewCount,
+  );
+  const visibleKey = grid.visibleIds.join(",");
+  useEffect(() => {
+    if (!visible) return;
+    onShowTerminals(visibleKey ? visibleKey.split(",").map(Number) : []);
+  }, [visibleKey, onShowTerminals, visible]);
+
+  /** 切换展示数量；超过六个会话时保留全部会话，通过分组切换。 */
+  const changeViewCount = (count: number) => {
+    if (count > 1 && tabs.length > MAX_TERMINAL_VIEWS)
+      toast.info("最多支持同时展示 6 个终端，可通过右侧列表切换其他组。", {
+        id: "terminal-view-limit",
+      });
+    setViewCount(count);
+  };
+
+  /** 新建会话仍不设总数上限，超过并行展示上限时提示换组。 */
+  const createTerminal = () => {
+    if (viewCount > 1 && tabs.length >= MAX_TERMINAL_VIEWS)
+      toast.info("最多支持同时展示 6 个终端，可通过右侧列表切换其他组。", {
+        id: "terminal-view-limit",
+      });
+    onNew();
+  };
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [dropGap, setDropGap] = useState<number | null>(null);
   const [activeLeaves, setActiveLeaves] = useState<Set<number>>(
@@ -157,15 +212,6 @@ export function TerminalPanel({
           <span className="min-w-0 flex-1 truncate pr-1 text-[11px] font-medium text-muted-foreground">
             {t("Terminal")}
           </span>
-          <button
-            type="button"
-            className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-            onClick={onNew}
-            title={t("New terminal")}
-            aria-label={t("New terminal")}
-          >
-            <HugeiconsIcon icon={PlusSignIcon} size={13} strokeWidth={2} />
-          </button>
         </div>
       )}
 
@@ -175,7 +221,10 @@ export function TerminalPanel({
             <TerminalStack
               tabs={tabs}
               activeId={activeId}
-              registerHandle={registerHandle}
+              viewCount={viewCount}
+              visible={visible}
+              onSelect={selectTerminal}
+              registerHandle={registerPane}
               onSearchReady={onSearchReady}
               onCwd={onCwd}
               onExit={onExit}
@@ -196,6 +245,74 @@ export function TerminalPanel({
             className="flex h-full min-w-0 flex-col overflow-y-auto border-l border-border/60 p-1"
             aria-label={t("Terminal navigation")}
           >
+            <div
+              className="sticky top-0 z-10 mb-1 flex shrink-0 flex-wrap items-center gap-1 border-b border-border/60 bg-card pb-1"
+              data-terminal-controls=""
+            >
+              {!navCollapsed && (
+                <span className="min-w-0 flex-1 truncate px-1 text-[11px] text-muted-foreground">
+                  {t("Terminal")}
+                </span>
+              )}
+              <button
+                type="button"
+                className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                onClick={createTerminal}
+                title={t("New terminal")}
+                aria-label={t("New terminal")}
+              >
+                <HugeiconsIcon icon={PlusSignIcon} size={13} strokeWidth={2} />
+              </button>
+              {!navCollapsed && (
+                <fieldset
+                  className="grid w-full min-w-0 grid-cols-6 gap-px border-0 p-0"
+                  aria-label="终端并行视口数量"
+                >
+                  {[1, 2, 3, 4, 5, 6].map((count) => (
+                    <button
+                      key={count}
+                      type="button"
+                      aria-label={`${count} 个视口`}
+                      aria-pressed={viewCount === count}
+                      title={`并行展示 ${count} 个终端`}
+                      onClick={() => changeViewCount(count)}
+                      className={`h-6 rounded-sm text-[11px] ${viewCount === count ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                    >
+                      {count}
+                    </button>
+                  ))}
+                </fieldset>
+              )}
+              {!navCollapsed && viewCount > 1 && grid.pages > 1 && (
+                <div className="flex w-full items-center justify-between text-[10px] text-muted-foreground">
+                  <button
+                    type="button"
+                    aria-label="上一组终端"
+                    disabled={grid.page === 0}
+                    className="px-1 disabled:opacity-30"
+                    onClick={() =>
+                      selectTerminal(tabs[(grid.page - 1) * viewCount].id)
+                    }
+                  >
+                    ‹
+                  </button>
+                  <span>
+                    {grid.page + 1} / {grid.pages} 组
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="下一组终端"
+                    disabled={grid.page + 1 >= grid.pages}
+                    className="px-1 disabled:opacity-30"
+                    onClick={() =>
+                      selectTerminal(tabs[(grid.page + 1) * viewCount].id)
+                    }
+                  >
+                    ›
+                  </button>
+                </div>
+              )}
+            </div>
             {tabs.map((tab, index) => {
               const isActive = tab.id === activeId;
               const isRenaming = tab.id === renamingId;
@@ -234,7 +351,7 @@ export function TerminalPanel({
                             suppressClickRef.current = null;
                             return;
                           }
-                          onSelect(tab.id);
+                          selectTerminal(tab.id);
                         }}
                         onDoubleClick={() => beginRename(tab)}
                         onPointerDown={(event) => {
@@ -300,7 +417,7 @@ export function TerminalPanel({
                         onKeyDown={(event) => {
                           if (event.key === "Enter" || event.key === " ") {
                             event.preventDefault();
-                            onSelect(tab.id);
+                            selectTerminal(tab.id);
                           }
                           if (event.key === "F2") {
                             event.preventDefault();

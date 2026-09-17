@@ -557,6 +557,20 @@ export function useTabs(initial?: Partial<TerminalTab>) {
 
   const allocId = useCallback(() => nextIdRef.current++, []);
 
+  /** 只唤醒当前并行组里的终端，不改变焦点或启动其他恢复标签。 */
+  const showTerminals = useCallback((ids: number[]) => {
+    setTabs((current) => {
+      if (!current.some((tab) =>
+        tab.kind === "terminal" && tab.cold && ids.includes(tab.id),
+      )) return current;
+      return current.map((tab) =>
+        tab.kind === "terminal" && tab.cold && ids.includes(tab.id)
+          ? { ...tab, cold: false }
+          : tab,
+      );
+    });
+  }, []);
+
   const markBooted = useCallback(() => setBooted(true), []);
 
   const setActiveSpaceForNewTabs = useCallback((spaceId: string) => {
@@ -1152,6 +1166,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     selectByIndex,
     setLeafCwd,
     focusPane,
+    showTerminals,
     focusNextPaneInTab,
     swapActivePaneInDirection,
     splitActivePane,
