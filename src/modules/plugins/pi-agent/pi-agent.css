@@ -121,7 +121,8 @@
 .pi-agent .pi-process-title { min-width: 0; overflow-wrap: anywhere; }
 .pi-agent .pi-process-meta { min-width: 0; overflow-wrap: anywhere; }
 .pi-agent .pi-process-live { color: #8eacc9; }
-.pi-agent .pi-process[open] > summary svg { transform: rotate(180deg); }
+.pi-agent .pi-process[open] > summary > svg,
+.pi-agent .pi-file-operations[open] > summary > svg { transform: rotate(180deg); }
 .pi-agent .pi-process-body { min-width: 0; max-width: 100%; margin-top: 4px; overflow-wrap: anywhere; }
 .pi-agent .pi-process-step { padding: 2px 0; }
 .pi-agent .pi-process-step-body { padding: 4px 0 8px; color: var(--muted-foreground); font-size: 12px; }
@@ -131,6 +132,16 @@
 .pi-agent .pi-tool-summary:hover { color: var(--foreground); }
 .pi-agent .pi-tool-body { padding: 4px 0 8px; }
 .pi-agent .pi-tool-command { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pi-agent .pi-tool-group { min-width: 0; max-width: 100%; margin: 2px 0; }
-.pi-agent .pi-tool-group .pi-tool { margin: 0; }
-.pi-agent .pi-tool[open] .pi-tool-command { white-space: pre-wrap; overflow-wrap: anywhere; text-overflow: unset; }
+.pi-agent .pi-record-summary { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 0; list-style: none; }
+.pi-agent .pi-record-summary::-webkit-details-marker { display: none; }
+.pi-agent .pi-record-summary:hover { color: var(--foreground); }
+.pi-agent .pi-record-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pi-agent .pi-activity-summary { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pi-agent .pi-summary-transition { display: inline-block; max-width: calc(100% - 1em); vertical-align: bottom; animation: pi-summary-enter 180ms ease-out; }
+@keyframes pi-summary-enter {
+  from { opacity: 0.4; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pi-agent .pi-summary-transition { animation: none; }
+}

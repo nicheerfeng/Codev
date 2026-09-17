@@ -1,21 +1,29 @@
 pub mod assets;
+mod history;
 mod paths;
+use history::{
+    append_session_entry, clone_session_file, delete_session_file, list_sessions,
+    parse_session_history,
+};
 
 use crate::modules::proc::hide_console;
 #[cfg(windows)]
 use crate::modules::proc::job::ProcessJob;
-use paths::{canonical_display, create_pi_command, pi_home_dir, pi_sessions_dir, probe_binary, resolve_pi_binary, same_path};
+use paths::{
+    canonical_display, create_pi_command, pi_home_dir, pi_sessions_dir, probe_binary,
+    resolve_pi_binary,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::fs;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
 
 const PI_EVENT: &str = "codev://pi-agent-event";
@@ -109,7 +117,6 @@ pub struct PiClonedSession {
 }
 
 const HISTORY_PAGE_SIZE: usize = 150;
-const JSONL_CHUNK: u64 = 64 * 1024;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -147,21 +154,38 @@ impl Default for PiAgentState {
 
 /// 监听原生会话目录，兼容任何 Pi 客户端新建或更新的会话。
 #[tauri::command]
-pub fn pi_agent_watch_sessions(app: AppHandle, state: State<'_, PiAgentState>, enabled: bool) -> Result<(), String> {
+pub fn pi_agent_watch_sessions(
+    app: AppHandle,
+    state: State<'_, PiAgentState>,
+    enabled: bool,
+) -> Result<(), String> {
     use notify::Watcher;
     let mut slot = state.watcher.lock().map_err(|_| "会话监听锁不可用")?;
-    if !enabled { *slot = None; return Ok(()); }
-    if slot.is_some() { return Ok(()); }
+    if !enabled {
+        *slot = None;
+        return Ok(());
+    }
+    if slot.is_some() {
+        return Ok(());
+    }
     let root = pi_sessions_dir().ok_or("Pi 会话目录不可用")?;
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
         if let Ok(event) = event {
-            if matches!(event.kind, notify::EventKind::Create(_) | notify::EventKind::Modify(_) | notify::EventKind::Remove(_)) {
+            if matches!(
+                event.kind,
+                notify::EventKind::Create(_)
+                    | notify::EventKind::Modify(_)
+                    | notify::EventKind::Remove(_)
+            ) {
                 let _ = app.emit("codev://pi-sessions-changed", ());
             }
         }
-    }).map_err(|error| error.to_string())?;
-    watcher.watch(&root, notify::RecursiveMode::Recursive).map_err(|error| error.to_string())?;
+    })
+    .map_err(|error| error.to_string())?;
+    watcher
+        .watch(&root, notify::RecursiveMode::Recursive)
+        .map_err(|error| error.to_string())?;
     *slot = Some(watcher);
     Ok(())
 }
@@ -502,574 +526,6 @@ pub fn codev_install_stamp() -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
-fn message_preview(message: &Value) -> Option<String> {
-    if message.get("role").and_then(Value::as_str) != Some("user") {
-        return None;
-    }
-    let content = message.get("content")?;
-    let text = if let Some(value) = content.as_str() {
-        value.to_string()
-    } else {
-        content
-            .as_array()?
-            .iter()
-            .find_map(|item| {
-                (item.get("type").and_then(Value::as_str) == Some("text"))
-                    .then(|| item.get("text").and_then(Value::as_str))
-                    .flatten()
-            })?
-            .to_string()
-    };
-    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if compact.is_empty() {
-        None
-    } else {
-        Some(compact.chars().take(80).collect())
-    }
-}
-
-/// 解析一个 Pi JSONL 文件的轻量线程摘要。
-fn parse_session_summary(path: &Path, expected_cwd: Option<&str>) -> Option<PiSessionSummary> {
-    let file = File::open(path).ok()?;
-    let mut id = None;
-    let mut cwd = None;
-    let mut created_at = None;
-    let mut name = None;
-    let mut preview = None;
-    let mut message_count = 0usize;
-
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        match value.get("type").and_then(Value::as_str) {
-            Some("session") => {
-                id = value.get("id").and_then(Value::as_str).map(str::to_string);
-                cwd = value.get("cwd").and_then(Value::as_str).map(str::to_string);
-                created_at = value
-                    .get("timestamp")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                if let Some(expected) = expected_cwd {
-                    if !cwd
-                        .as_deref()
-                        .is_some_and(|value| same_path(value, expected))
-                    {
-                        return None;
-                    }
-                }
-            }
-            Some("session_info") => {
-                name = value
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-            }
-            Some("message") => {
-                message_count += 1;
-                if preview.is_none() {
-                    preview = value.get("message").and_then(message_preview);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let metadata = path.metadata().ok()?;
-    let updated_at = metadata
-        .modified()
-        .ok()?
-        .duration_since(UNIX_EPOCH)
-        .ok()?
-        .as_millis() as u64;
-    Some(PiSessionSummary {
-        path: canonical_display(path),
-        id: id?,
-        cwd: cwd?,
-        name,
-        preview,
-        created_at: created_at.unwrap_or_default(),
-        updated_at,
-        message_count,
-    })
-}
-
-/// 校验路径是 Pi 会话目录内的 jsonl 文件。
-fn resolve_session_file(path: &Path) -> Result<PathBuf, String> {
-    let resolved = path.canonicalize().map_err(|error| error.to_string())?;
-    let root = pi_sessions_dir()
-        .ok_or("无法定位 Pi 会话目录")?
-        .canonicalize()
-        .map_err(|error| error.to_string())?;
-    if !resolved.starts_with(&root)
-        || !resolved.is_file()
-        || resolved.extension().and_then(|value| value.to_str()) != Some("jsonl")
-    {
-        return Err("仅允许使用 Pi 会话目录中的会话文件".into());
-    }
-    Ok(resolved)
-}
-
-fn is_leap(year: u64) -> bool {
-    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
-}
-
-/// 生成 UTC RFC3339 时间，避免引入 chrono。
-fn utc_timestamp() -> String {
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let mut days = duration.as_secs() / 86400;
-    let remain = duration.as_secs() % 86400;
-    let hour = remain / 3600;
-    let minute = (remain % 3600) / 60;
-    let second = remain % 60;
-    let millis = duration.subsec_millis();
-    let mut year = 1970u64;
-    loop {
-        let year_days = if is_leap(year) { 366 } else { 365 };
-        if days < year_days {
-            break;
-        }
-        days -= year_days;
-        year += 1;
-    }
-    let month_days = [
-        31,
-        if is_leap(year) { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    let mut month = 1u64;
-    for days_in_month in month_days {
-        if days < days_in_month {
-            break;
-        }
-        days -= days_in_month;
-        month += 1;
-    }
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z",
-        day = days + 1
-    )
-}
-
-fn new_entry_id() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    format!(
-        "{:08x}-{:04x}-4{:03x}-a{:03x}-{:012x}",
-        now.as_secs() as u32,
-        (now.subsec_nanos() >> 16) as u16,
-        now.subsec_nanos() & 0xfff,
-        std::process::id() & 0xfff,
-        now.as_nanos() % 0x1_0000_0000_0000
-    )
-}
-
-struct JsonlRecord {
-    offset: u64,
-    value: Value,
-}
-
-/// 从后往前扫描 JSONL，每条记录带上文件偏移。
-fn visit_jsonl_rev(
-    path: &Path,
-    before: u64,
-    mut visit: impl FnMut(JsonlRecord) -> bool,
-) -> Result<(), String> {
-    let mut file = File::open(path).map_err(|error| error.to_string())?;
-    let mut remain = before;
-    let mut tail: Vec<u8> = Vec::new();
-    while remain > 0 {
-        let start = remain.saturating_sub(JSONL_CHUNK);
-        let length = (remain - start) as usize;
-        file.seek(SeekFrom::Start(start))
-            .map_err(|error| error.to_string())?;
-        let mut chunk = vec![0u8; length];
-        file.read_exact(&mut chunk)
-            .map_err(|error| error.to_string())?;
-        chunk.append(&mut tail);
-        let mut cut = 0usize;
-        if start > 0 {
-            match chunk.iter().position(|&byte| byte == b'\n') {
-                Some(index) => {
-                    tail = chunk[..=index].to_vec();
-                    cut = index + 1;
-                }
-                None => {
-                    tail = chunk;
-                    remain = start;
-                    continue;
-                }
-            }
-        }
-        let region = &chunk[cut..];
-        let region_start = start + cut as u64;
-        let mut ranges = Vec::new();
-        let mut line_start = 0usize;
-        for (index, byte) in region.iter().enumerate() {
-            if *byte == b'\n' {
-                let mut line_end = index;
-                if line_end > line_start && region[line_end - 1] == b'\r' {
-                    line_end -= 1;
-                }
-                ranges.push((region_start + line_start as u64, line_start, line_end));
-                line_start = index + 1;
-            }
-        }
-        if line_start < region.len() {
-            let mut line_end = region.len();
-            if line_end > line_start && region[line_end - 1] == b'\r' {
-                line_end -= 1;
-            }
-            ranges.push((region_start + line_start as u64, line_start, line_end));
-        }
-        for (offset, from, to) in ranges.into_iter().rev() {
-            if from >= to {
-                continue;
-            }
-            if let Ok(value) = serde_json::from_slice::<Value>(&region[from..to]) {
-                if !visit(JsonlRecord { offset, value }) {
-                    return Ok(());
-                }
-            }
-        }
-        remain = start;
-    }
-    Ok(())
-}
-
-fn usage_tokens(usage: &Value) -> Option<u64> {
-    usage
-        .get("totalTokens")
-        .or_else(|| usage.get("tokens"))
-        .or_else(|| usage.get("inputTokens"))
-        .or_else(|| usage.get("input"))
-        .and_then(|value| {
-            value
-                .as_u64()
-                .or_else(|| value.as_f64().map(|number| number.round() as u64))
-        })
-}
-
-fn context_ratio(tokens: u64, window: u64) -> f64 {
-    ((tokens as f64) / (window as f64) * 100.0).min(100.0)
-}
-
-fn find_listed_model<'a>(
-    models: &'a [PiListedModel],
-    provider: &str,
-    id: &str,
-) -> Option<&'a PiListedModel> {
-    if let Some(exact) = models
-        .iter()
-        .find(|listed| listed.provider == provider && listed.id == id)
-    {
-        return Some(exact);
-    }
-    let matches: Vec<_> = models.iter().filter(|listed| listed.id == id).collect();
-    match matches.as_slice() {
-        [] => None,
-        [only] => Some(*only),
-        many => many
-            .iter()
-            .copied()
-            .max_by_key(|listed| listed.context_window.unwrap_or(0)),
-    }
-}
-
-fn apply_catalog_window(
-    model: &mut Value,
-    context_tokens: Option<u64>,
-    context_percent: &mut Option<f64>,
-) {
-    let Some(provider) = model
-        .get("provider")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-    else {
-        return;
-    };
-    let Some(id) = model.get("id").and_then(Value::as_str).map(str::to_string) else {
-        return;
-    };
-    let Ok(models) = list_models_from_file() else {
-        return;
-    };
-    let Some(listed) = find_listed_model(&models, &provider, &id) else {
-        return;
-    };
-    if model.get("name").and_then(Value::as_str).is_none() {
-        if let Some(name) = &listed.name {
-            model["name"] = json!(name);
-        }
-    }
-    let Some(window) = listed.context_window.filter(|window| *window > 0) else {
-        return;
-    };
-    if model.get("contextWindow").is_none() {
-        model["contextWindow"] = json!(window);
-    }
-    if context_percent.is_none() {
-        if let Some(tokens) = context_tokens {
-            *context_percent = Some(context_ratio(tokens, window));
-        }
-    }
-}
-
-fn assistant_model(message: &Value) -> Option<Value> {
-    if message.get("role").and_then(Value::as_str) != Some("assistant") {
-        return None;
-    }
-    let provider = message.get("provider").and_then(Value::as_str)?;
-    let id = message
-        .get("model")
-        .and_then(Value::as_str)
-        .or_else(|| message.get("modelId").and_then(Value::as_str))?;
-    Some(json!({
-        "provider": provider,
-        "id": id,
-        "name": message.get("name").and_then(Value::as_str),
-    }))
-}
-
-fn peek_session_name(path: &Path) -> Option<String> {
-    let file = File::open(path).ok()?;
-    let mut reader = BufReader::new(file);
-    let mut line = String::new();
-    let mut name = None;
-    for _ in 0..48 {
-        line.clear();
-        if reader.read_line(&mut line).ok()? == 0 {
-            break;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        if value.get("type").and_then(Value::as_str) == Some("session_info") {
-            if let Some(value) = value.get("name").and_then(Value::as_str) {
-                name = Some(value.to_string());
-            }
-        }
-    }
-    name
-}
-
-fn last_entry_id(path: &Path) -> Result<Value, String> {
-    let size = path
-        .metadata()
-        .map_err(|error| error.to_string())?
-        .len();
-    let mut found = Value::Null;
-    visit_jsonl_rev(path, size, |record| {
-        if record.value.get("type").and_then(Value::as_str) == Some("session") {
-            return true;
-        }
-        if let Some(id) = record.value.get("id").cloned() {
-            found = id;
-            return false;
-        }
-        true
-    })?;
-    Ok(found)
-}
-
-/// 从末尾分页读取消息，并带回模型、会话名称和思考等级，不启动 Pi runtime。
-fn parse_session_history(
-    path: &Path,
-    before: Option<u64>,
-    limit: usize,
-) -> Result<PiSessionHistory, String> {
-    let resolved = resolve_session_file(path)?;
-    let file_len = resolved
-        .metadata()
-        .map_err(|error| error.to_string())?
-        .len();
-    let end = before.unwrap_or(file_len).min(file_len);
-    let page = limit.max(1);
-    let mut newest_first = Vec::new();
-    let mut model = None;
-    let mut thinking_level = None;
-    let mut session_name = None;
-    let mut oldest_offset = 0;
-    let mut has_more = false;
-    let mut context_tokens = None;
-    let mut context_percent = None;
-    visit_jsonl_rev(&resolved, end, |record| {
-        match record.value.get("type").and_then(Value::as_str) {
-            Some("session_info") if session_name.is_none() => {
-                session_name = record
-                    .value
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                true
-            }
-            Some("model_change") if model.is_none() => {
-                if let (Some(provider), Some(id)) = (
-                    record.value.get("provider").and_then(Value::as_str),
-                    record.value.get("modelId").and_then(Value::as_str),
-                ) {
-                    model = Some(json!({
-                        "provider": provider,
-                        "id": id,
-                        "name": record.value.get("name").and_then(Value::as_str),
-                    }));
-                }
-                true
-            }
-            Some("thinking_level_change") if thinking_level.is_none() => {
-                thinking_level = record
-                    .value
-                    .get("thinkingLevel")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                true
-            }
-            Some("message") => {
-                let Some(message) = record.value.get("message").cloned() else {
-                    return true;
-                };
-                let usage = message.get("usage").or_else(|| record.value.get("usage"));
-                let context = usage.and_then(|value| value.get("contextUsage")).or(usage);
-                if let Some(context) = context {
-                    if context_tokens.is_none() {
-                        context_tokens = usage_tokens(context);
-                    }
-                    if context_percent.is_none() {
-                        context_percent = context.get("percent").and_then(Value::as_f64);
-                    }
-                }
-                if model.is_none() {
-                    model = assistant_model(&message);
-                }
-                if newest_first.len() < page {
-                    newest_first.push(json!({
-                        "id": record.value.get("id"),
-                        "timestamp": record.value.get("timestamp"),
-                        "message": message,
-                    }));
-                    oldest_offset = record.offset;
-                } else {
-                    has_more = true;
-                }
-                newest_first.len() < page
-                    || model.is_none()
-                    || thinking_level.is_none()
-                    || session_name.is_none()
-                    || context_tokens.is_none()
-            }
-            _ => {
-                newest_first.len() < page
-                    || model.is_none()
-                    || thinking_level.is_none()
-                    || session_name.is_none()
-                    || context_tokens.is_none()
-            }
-        }
-    })?;
-    if session_name.is_none() && before.is_none() {
-        session_name = peek_session_name(&resolved);
-    }
-    newest_first.reverse();
-    if let Some(model) = model.as_mut() {
-        apply_catalog_window(model, context_tokens, &mut context_percent);
-    }
-    Ok(PiSessionHistory {
-        messages: newest_first,
-        model,
-        thinking_level,
-        session_name,
-        session_file: canonical_display(&resolved),
-        oldest_offset,
-        has_more,
-        context_tokens,
-        context_percent,
-    })
-}
-
-fn clone_session_file(path: &Path) -> Result<PiClonedSession, String> {
-    let source = resolve_session_file(path)?;
-    let content = fs::read_to_string(&source).map_err(|error| error.to_string())?;
-    let mut lines = content.lines();
-    let header_line = lines.next().ok_or("会话文件为空")?;
-    let mut header: Value =
-        serde_json::from_str(header_line).map_err(|error| error.to_string())?;
-    if header.get("type").and_then(Value::as_str) != Some("session") {
-        return Err("会话头无效".into());
-    }
-    let new_id = new_entry_id();
-    let timestamp = utc_timestamp();
-    header["id"] = json!(new_id);
-    header["timestamp"] = json!(timestamp);
-    header["parentSession"] = json!(canonical_display(&source));
-    let directory = source.parent().ok_or("会话目录不存在")?;
-    let file_stamp = timestamp.replace(':', "-");
-    let dest = directory.join(format!("{file_stamp}_{new_id}.jsonl"));
-    let mut output = header.to_string();
-    output.push('\n');
-    for line in lines {
-        if line.trim().is_empty() {
-            continue;
-        }
-        output.push_str(line);
-        output.push('\n');
-    }
-    fs::write(&dest, output).map_err(|error| error.to_string())?;
-    Ok(PiClonedSession {
-        path: canonical_display(&dest),
-        id: new_id,
-        name: None,
-    })
-}
-
-fn append_session_entry(request: PiSessionAppendRequest) -> Result<(), String> {
-    let path = resolve_session_file(Path::new(&request.path))?;
-    let parent_id = last_entry_id(&path)?;
-    let id = new_entry_id();
-    let timestamp = utc_timestamp();
-    let entry = match request.kind.as_str() {
-        "session_info" => json!({
-            "type": "session_info",
-            "id": id,
-            "parentId": parent_id,
-            "timestamp": timestamp,
-            "name": request.name.filter(|value| !value.trim().is_empty()).ok_or("缺少会话名称")?,
-        }),
-        "model_change" => json!({
-            "type": "model_change",
-            "id": id,
-            "parentId": parent_id,
-            "timestamp": timestamp,
-            "provider": request.provider.filter(|value| !value.trim().is_empty()).ok_or("缺少 provider")?,
-            "modelId": request.model_id.filter(|value| !value.trim().is_empty()).ok_or("缺少 modelId")?,
-        }),
-        "thinking_level_change" => json!({
-            "type": "thinking_level_change",
-            "id": id,
-            "parentId": parent_id,
-            "timestamp": timestamp,
-            "thinkingLevel": request.thinking_level.filter(|value| !value.trim().is_empty()).ok_or("缺少 thinkingLevel")?,
-        }),
-        _ => return Err("不支持的会话写入类型".into()),
-    };
-    let mut file = OpenOptions::new()
-        .append(true)
-        .open(&path)
-        .map_err(|error| error.to_string())?;
-    writeln!(file, "{entry}").map_err(|error| error.to_string())
-}
-
 fn list_models_from_file() -> Result<Vec<PiListedModel>, String> {
     let file = pi_agent_read_models()?;
     let value: Value =
@@ -1098,33 +554,6 @@ fn list_models_from_file() -> Result<Vec<PiListedModel>, String> {
         }
     }
     Ok(models)
-}
-
-/// 扫描会话目录并返回属于指定工作目录的最近线程。
-fn list_sessions(cwd: Option<&str>, limit: usize) -> Vec<PiSessionSummary> {
-    let Some(root) = pi_sessions_dir() else {
-        return Vec::new();
-    };
-    let mut pending = vec![root];
-    let mut summaries = Vec::new();
-    while let Some(directory) = pending.pop() {
-        let Ok(entries) = std::fs::read_dir(directory) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                pending.push(path);
-            } else if path.extension().and_then(|value| value.to_str()) == Some("jsonl") {
-                if let Some(summary) = parse_session_summary(&path, cwd) {
-                    summaries.push(summary);
-                }
-            }
-        }
-    }
-    summaries.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-    summaries.truncate(limit);
-    summaries
 }
 
 /// 异步列出当前工作目录对应的 Pi 原生线程。
@@ -1186,19 +615,6 @@ pub fn pi_agent_list_models() -> Result<Vec<PiListedModel>, String> {
     list_models_from_file()
 }
 
-/// 校验真实路径与会话格式后仅删除该文件。
-fn delete_session_file(root: &Path, target: &Path) -> Result<(), String> {
-    let resolved = target.canonicalize().map_err(|error| error.to_string())?;
-    if !resolved.starts_with(root)
-        || !resolved.is_file()
-        || resolved.extension().and_then(|value| value.to_str()) != Some("jsonl")
-        || parse_session_summary(&resolved, None).is_none()
-    {
-        return Err("仅允许删除 Pi 会话目录中的会话文件".into());
-    }
-    std::fs::remove_file(resolved).map_err(|error| error.to_string())
-}
-
 /// 返回 Pi models.json 的原始文本，不在 Codev 内复制模型密钥。
 #[tauri::command]
 pub fn pi_agent_read_models() -> Result<PiModelsFile, String> {
@@ -1255,11 +671,15 @@ pub fn pi_agent_write_models(content: String) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::assets::{asset_summary, collect_package_specs, recommended_npm_package, skill_frontmatter_description};
+    use super::assets::{
+        asset_summary, collect_package_specs, recommended_npm_package,
+        skill_frontmatter_description,
+    };
+    use super::history::{message_preview, parse_session_summary};
     use super::paths::same_path;
     use super::{
-        append_session_entry, clone_session_file, delete_session_file, message_preview,
-        parse_rpc_line, parse_session_history, parse_session_summary, PiSessionAppendRequest,
+        append_session_entry, clone_session_file, delete_session_file, parse_rpc_line,
+        parse_session_history, PiSessionAppendRequest,
     };
     use serde_json::json;
     use std::io::Write;
@@ -1336,9 +756,24 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.jsonl");
         let mut file = std::fs::File::create(&path).expect("create session");
-        writeln!(file, "{}", json!({"type":"session","id":"s1","cwd":"C:/work"})).unwrap();
-        writeln!(file, "{}", json!({"type":"session_info","id":"n1","parentId":"s1","name":"Demo"})).unwrap();
-        writeln!(file, "{}", json!({"type":"thinking_level_change","id":"t1","parentId":"n1","thinkingLevel":"high"})).unwrap();
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"session","id":"s1","cwd":"C:/work"})
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"session_info","id":"n1","parentId":"s1","name":"Demo"})
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"thinking_level_change","id":"t1","parentId":"n1","thinkingLevel":"high"})
+        )
+        .unwrap();
         writeln!(file, "{}", json!({"type":"model_change","id":"m1","parentId":"t1","provider":"openai","modelId":"gpt-test"})).unwrap();
         for index in 0..25 {
             writeln!(file, "{}", json!({"type":"message","id":format!("u{index}"),"parentId":"m1","message":{"role":"user","content":format!("q{index}")}})).unwrap();
@@ -1375,7 +810,12 @@ mod tests {
         assert_eq!(older.messages.len(), 20);
         assert!(older.has_more);
         assert_eq!(older.messages[0]["message"]["content"], json!("q5"));
-        assert_eq!(std::fs::read_to_string(&cloned.path).unwrap().contains("\"name\":\"Fork\""), true);
+        assert_eq!(
+            std::fs::read_to_string(&cloned.path)
+                .unwrap()
+                .contains("\"name\":\"Fork\""),
+            true
+        );
     }
 
     #[test]
@@ -1391,8 +831,18 @@ mod tests {
         .unwrap();
         let path = root.join("session.jsonl");
         let mut file = std::fs::File::create(&path).expect("create session");
-        writeln!(file, "{}", json!({"type":"session","id":"s1","cwd":"C:/work"})).unwrap();
-        writeln!(file, "{}", json!({"type":"session_info","id":"n1","parentId":"s1","name":"Demo"})).unwrap();
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"session","id":"s1","cwd":"C:/work"})
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"session_info","id":"n1","parentId":"s1","name":"Demo"})
+        )
+        .unwrap();
         writeln!(file, "{}", json!({"type":"model_change","id":"m1","parentId":"n1","provider":"openai","modelId":"gpt-test"})).unwrap();
         writeln!(file, "{}", json!({"type":"message","id":"u1","parentId":"m1","message":{"role":"user","content":"q"}})).unwrap();
         writeln!(
@@ -1427,7 +877,10 @@ mod tests {
             None => std::env::remove_var("PI_CODING_AGENT_DIR"),
         }
         assert_eq!(history.context_tokens, Some(27502));
-        assert_eq!(history.model.as_ref().unwrap()["contextWindow"], json!(500000));
+        assert_eq!(
+            history.model.as_ref().unwrap()["contextWindow"],
+            json!(500000)
+        );
         let percent = history.context_percent.expect("percent");
         assert!((percent - 5.5004).abs() < 0.0001, "{percent}");
     }
@@ -1445,8 +898,18 @@ mod tests {
         .unwrap();
         let path = root.join("session.jsonl");
         let mut file = std::fs::File::create(&path).expect("create session");
-        writeln!(file, "{}", json!({"type":"session","id":"s1","cwd":"C:/work"})).unwrap();
-        writeln!(file, "{}", json!({"type":"session_info","id":"n1","parentId":"s1","name":"iris"})).unwrap();
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"session","id":"s1","cwd":"C:/work"})
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"session_info","id":"n1","parentId":"s1","name":"iris"})
+        )
+        .unwrap();
         writeln!(file, "{}", json!({"type":"model_change","id":"m1","parentId":"n1","provider":"provider","modelId":"grok-4.6-PSYDO_GROK_SUPER"})).unwrap();
         writeln!(file, "{}", json!({"type":"message","id":"u1","parentId":"m1","message":{"role":"user","content":"q"}})).unwrap();
         writeln!(
@@ -1474,7 +937,10 @@ mod tests {
             None => std::env::remove_var("PI_CODING_AGENT_DIR"),
         }
         assert_eq!(history.context_tokens, Some(30501));
-        assert_eq!(history.model.as_ref().unwrap()["contextWindow"], json!(500000));
+        assert_eq!(
+            history.model.as_ref().unwrap()["contextWindow"],
+            json!(500000)
+        );
         let percent = history.context_percent.expect("percent");
         assert!((percent - 6.1002).abs() < 0.0001, "{percent}");
     }

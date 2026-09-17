@@ -88,7 +88,19 @@ describe("pi project activity", () => {
       finishNotificationCopy({ name: "trade_agentic", count: 1, failed: true }),
     ).toEqual({
       title: "Pi · trade_agentic",
-      body: "线程已失败",
+      body: "执行失败",
+    });
+    expect(
+      finishNotificationCopy({
+        name: "trade_agentic",
+        threadName: "修复导出流程",
+        summary: "已完成导出修复，并补充了回归测试。",
+        count: 1,
+        failed: false,
+      }),
+    ).toEqual({
+      title: "Pi · 修复导出流程",
+      body: "已完成导出修复，并补充了回归测试。",
     });
   });
 });

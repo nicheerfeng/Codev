@@ -317,7 +317,7 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
       setFrameSrc(null);
       setError(null);
       beginFileScrollRestore(path);
-      const useAssetDocument = () => {
+      const loadAssetDocument = () => {
         if (cancelled) return;
         setSource(null);
         setFrameSrc(convertFileSrc(path));
@@ -333,11 +333,11 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
         .then((result) => {
           if (cancelled) return;
           if (result.kind !== "text") {
-            useAssetDocument();
+            loadAssetDocument();
             return;
           }
           if (htmlNeedsAssetDocument(result.content)) {
-            useAssetDocument();
+            loadAssetDocument();
             return;
           }
           setFrameSrc(null);
@@ -346,7 +346,7 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
           );
         })
         .catch(() => {
-          useAssetDocument();
+          loadAssetDocument();
         });
       return () => {
         cancelled = true;

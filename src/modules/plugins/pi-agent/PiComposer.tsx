@@ -380,13 +380,13 @@ export function PiComposer(props: Props) {
             props.view.queue[kind].map((text, index) => (
               <div className="pi-queue-item" key={`${kind}-${index}-${text}`}>
                 <span className="pi-queue-mode">
-                  {kind === "steering" ? "插入" : "排队"}
+                  {kind === "steering" ? "下一步" : "随后"}
                 </span>
                 <button
                   type="button"
                   className="min-w-0 flex-1 whitespace-pre-wrap text-left [overflow-wrap:anywhere]"
                   disabled={props.disabled || kind !== "followUp"}
-                  title={kind === "followUp" ? "立即插入当前任务" : undefined}
+                  title={kind === "followUp" ? "安排到当前步骤之后" : undefined}
                   onClick={() => {
                     if (kind === "followUp")
                       props.onQueueAction(kind, index, text, "steer");
@@ -399,8 +399,8 @@ export function PiComposer(props: Props) {
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      title="立即插入当前任务"
-                      aria-label="立即插入当前任务"
+                      title="安排到当前步骤之后"
+                      aria-label="安排到当前步骤之后"
                       disabled={props.disabled}
                       onClick={() =>
                         props.onQueueAction(kind, index, text, "steer")
@@ -834,8 +834,8 @@ export function PiComposer(props: Props) {
                 variant="ghost"
                 size="icon-sm"
                 className="rounded-full"
-                title="排队到本轮之后"
-                aria-label="排队到本轮之后"
+                title="当前步骤完成后继续"
+                aria-label="当前步骤完成后继续"
                 disabled={props.disabled || !draftHasPayload(props.draft)}
                 onClick={() => sendDraft("followUp")}
               >
@@ -845,8 +845,8 @@ export function PiComposer(props: Props) {
             <Button
               size="icon-sm"
               className="rounded-full"
-              title={running ? "插入当前任务" : "发送"}
-              aria-label={running ? "插入当前任务" : "发送"}
+              title={running ? "安排为下一步" : "发送"}
+              aria-label={running ? "安排为下一步" : "发送"}
               disabled={
                 props.disabled ||
                 (!running && props.busy && !compacting) ||
@@ -864,7 +864,7 @@ export function PiComposer(props: Props) {
           {props.project || "请添加项目"}
         </span>
         {running ? (
-          <span className="shrink-0">Enter 排队 · Ctrl/Cmd + Enter 插入</span>
+          <span className="shrink-0">Enter 随后 · Ctrl/Cmd + Enter 下一步</span>
         ) : (
           <span className="shrink-0">Shift + Enter 换行</span>
         )}

@@ -827,7 +827,7 @@ export class PiWorkspaceClient {
     images: PiImage[] = [],
   ): Promise<boolean> {
     if (thread.view.status !== "idle")
-      throw new Error("只有自然结束的线程可以编辑");
+      throw new Error("请等待运行结束后再编辑");
     if (!text.trim()) throw new Error("编辑内容不能为空");
     const forkData = objectValue(
       await this.request(thread, { type: "get_fork_messages" }),

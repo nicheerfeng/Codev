@@ -7,7 +7,6 @@ import {
 import { pathKey, projectName } from "./organization";
 import {
   finishNotificationCopy,
-  projectActivity,
   shouldSkipFinishNotification,
   type ActivityThread,
   type ProjectActivity,
@@ -48,19 +47,24 @@ async function piPanelIsForeground(piActive: boolean): Promise<boolean> {
 /** 项目从 live 变为全 idle 时弹一条 Windows 通知。 */
 export async function notifyFinishedProjects(input: {
   previous: Map<string, ProjectActivity>;
+  current: Map<string, ProjectActivity>;
   threads: ActivityThread[];
   piActive: boolean;
-}): Promise<Map<string, ProjectActivity>> {
-  const next = projectActivity(input.threads);
-  if (await piPanelIsForeground(input.piActive)) return next;
-  if (!(await ensurePermission())) return next;
+}): Promise<void> {
+  if (await piPanelIsForeground(input.piActive)) return;
+  if (!(await ensurePermission())) return;
   for (const [cwd, previous] of input.previous) {
     if (previous.liveCount <= 0) continue;
-    const current = next.get(cwd);
+    const current = input.current.get(cwd);
     if ((current?.liveCount ?? 0) > 0) continue;
-    const sample = input.threads.find((thread) => pathKey(thread.cwd) === cwd);
+    const sample =
+      input.threads.find(
+        (thread) => pathKey(thread.cwd) === cwd && thread.summary?.trim(),
+      ) ?? input.threads.find((thread) => pathKey(thread.cwd) === cwd);
     const copy = finishNotificationCopy({
       name: sample ? projectName(sample.cwd) : cwd.split("/").pop() || cwd,
+      threadName: sample?.name,
+      summary: sample?.summary,
       count: previous.liveCount,
       failed: current?.failed ?? previous.failed,
     });
@@ -70,5 +74,4 @@ export async function notifyFinishedProjects(input: {
       // 系统拒绝通知时不影响线程运行。
     }
   }
-  return next;
 }
