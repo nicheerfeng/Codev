@@ -1,16 +1,17 @@
 """10 并发构建 Pi UI 便携审核包，禁止启动应用。"""
 import hashlib
 import os
-from pathlib import Path
 import shutil
 import subprocess
+from pathlib import Path
+
 from tqdm import tqdm
 
 
 # 构建当前源码并输出带轮次、哈希和许可的审核目录。
 def main():
     root = Path(__file__).resolve().parents[3]
-    target = root / "src-tauri/target/pi-ui-r16-clean"
+    target = root / "src-tauri/target/pi-ui-rebuild"
     env = {**os.environ, "CARGO_BUILD_JOBS": "10", "CARGO_TARGET_DIR": str(target)}
     output = root / "artifacts/Codev-PiAgent-UI-r16"
     output.mkdir(parents=True, exist_ok=True)
@@ -18,8 +19,11 @@ def main():
     tail = []
     with tqdm(total=3, desc="Pi UI portable", unit="stage", ascii=True) as progress:
         process = subprocess.Popen(args, cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        stdout = process.stdout
+        if stdout is None:
+            raise RuntimeError("missing stdout pipe")
         with (output / "build.log").open("w", encoding="utf-8") as log:
-            for line in process.stdout:
+            for line in stdout:
                 log.write(line)
                 tail = (tail + [line])[-60:]
                 if "built in" in line and progress.n == 0:
