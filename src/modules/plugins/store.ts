@@ -125,7 +125,7 @@ function normalizePluginState(
 }
 
 /** 读取插件独立配置文件，避免把插件状态混入常规设置。 */
-export async function loadPluginState(): Promise<PluginState> {
+async function loadPluginState(): Promise<PluginState> {
   const value = await store.get<unknown>(ENABLED_PLUGINS_KEY);
   const projects = await store.get<unknown>(PI_AGENT_PROJECTS_KEY);
   const hiddenProjects = await store.get<unknown>(PI_AGENT_HIDDEN_PROJECTS_KEY);
@@ -236,7 +236,7 @@ export async function setPluginEnabled(
 }
 
 /** 监听其他窗口发来的插件开关变化。 */
-export async function onPluginStateChange(
+async function onPluginStateChange(
   callback: (id: PluginId, enabled: boolean) => void,
 ): Promise<UnlistenFn> {
   return listen<{ id: string; enabled: boolean }>(

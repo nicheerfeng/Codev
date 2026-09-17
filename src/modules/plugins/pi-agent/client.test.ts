@@ -872,6 +872,36 @@ describe("Pi RPC workspace", () => {
     ).toMatchObject({ type: "prompt", message: "修改后的输入" });
     client.dispose();
   });
+  it("resends an aborted turn with its images after restoring queued text", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const thread = await client.open("aborted-edit", "D:/one");
+    await client.request(thread, { type: "get_state" });
+    vi.mocked(native.sendPiCommand).mockClear();
+    thread.view.status = "running";
+    const restore = vi.fn();
+    await client.stopAndRestore(thread, restore);
+    if (thread.runtimeId === null) throw new Error("测试线程未启动");
+    mock.receive({
+      sessionId: thread.runtimeId,
+      stream: "stdout",
+      event: { type: "agent_settled" },
+    });
+    expect(restore).toHaveBeenCalledWith(["排队指令", "后续任务"]);
+    const images = [
+      { type: "image" as const, data: "image-data", mimeType: "image/png" },
+    ];
+    await expect(
+      client.editLastUser(thread, "终止后修改", images),
+    ).resolves.toBe(true);
+    expect(
+      vi.mocked(native.sendPiCommand).mock.calls.find(
+        ([, command]) => command.type === "prompt",
+      )?.[1],
+    ).toMatchObject({ type: "prompt", message: "终止后修改", images });
+    expect(restore).toHaveBeenCalledTimes(1);
+    client.dispose();
+  });
   it("reloads catalog without closing a live runtime", async () => {
     const native = await import("./native");
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());

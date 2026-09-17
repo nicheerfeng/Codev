@@ -5,6 +5,8 @@ export type ActivityThread = {
   cwd: string;
   status?: PiViewStatus;
   waiting?: boolean;
+  name?: string | null;
+  summary?: string | null;
 };
 
 /** 压缩、排队等待和运行中都算 live，折叠项目要能看见。 */
@@ -58,18 +60,33 @@ export function shouldSkipFinishNotification(input: {
 
 export function finishNotificationCopy(input: {
   name: string;
+  threadName?: string | null;
+  summary?: string | null;
   count: number;
   failed: boolean;
 }): { title: string; body: string } {
-  const name = input.name.trim() || "Pi";
-  if (input.failed) {
+  const project = input.name.trim() || "Pi";
+  const thread = input.threadName?.trim();
+  const summary = input.summary?.replace(/\s+/gu, " ").trim();
+  const excerpt = summary
+    ? summary.length > 140
+      ? `${summary.slice(0, 139)}…`
+      : summary
+    : "";
+  const title = `Pi · ${input.count === 1 && thread ? thread : project}`;
+  if (input.failed)
     return {
-      title: `Pi · ${name}`,
-      body: input.count > 1 ? `${input.count} 个线程已失败` : "线程已失败",
+      title,
+      body: excerpt ? `执行失败 · ${excerpt}` : "执行失败",
     };
-  }
+  if (excerpt)
+    return {
+      title,
+      body:
+        input.count > 1 ? `${input.count} 个线程已完成 · ${excerpt}` : excerpt,
+    };
   return {
-    title: `Pi · ${name}`,
+    title,
     body: input.count > 1 ? `${input.count} 个线程已完成` : "线程已完成",
   };
 }

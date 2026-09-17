@@ -1,5 +1,7 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { ArrowDown01Icon } from "@hugeicons/core-free-icons";
 import { collectFileOperations, type FileOperation } from "./fileOperations";
 import type { PiTranscriptItem } from "./types";
 
@@ -27,6 +29,7 @@ export function PiFileOperations({
       toast.error("无法定位文件或目录", { description: String(error) });
     }
   }
+  /** 打开观测文件，删除记录则定位原目录。 */
   function openFile(file: FileOperation) {
     if (file.operation === "删除" || !onOpenFile) {
       void reveal(file);
@@ -35,12 +38,15 @@ export function PiFileOperations({
     onOpenFile(file.path);
   }
   return (
-    <details className="my-1 min-w-0 text-xs text-muted-foreground">
-      <summary className="cursor-pointer py-1 leading-6 [overflow-wrap:anywhere]">
-        修改观测 · {files.length} 个文件：
-        {files.map((file) => file.path.split("/").pop()).join("、")}
+    <details className="pi-file-operations my-1 min-w-0 text-xs text-muted-foreground">
+      <summary className="flex cursor-pointer list-none items-center gap-2 py-1 leading-6 [overflow-wrap:anywhere] [&::-webkit-details-marker]:hidden">
+        <HugeiconsIcon icon={ArrowDown01Icon} size={12} className="shrink-0" />
+        <span className="min-w-0">
+          修改观测 · {files.length} 个文件：
+          {files.map((file) => file.path.split("/").pop()).join("、")}
+        </span>
       </summary>
-      <div className="space-y-1 py-1 pl-4">
+      <div className="space-y-1 py-1 pl-5">
         {files.map((file) => (
           <div key={file.path} className="flex items-start gap-1">
             <button

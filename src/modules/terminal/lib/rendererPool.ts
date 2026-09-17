@@ -27,6 +27,7 @@ import {
 } from "./terminalClipboard";
 import { createTerminalLinkHandler } from "./terminalLinks";
 import { pasteIntoTerminal } from "./terminalPaste";
+import { followTerminalOutput } from "./terminalScrollFollow";
 
 const FIT_DEBOUNCE_MS = 8;
 const PTY_RESIZE_DEBOUNCE_MS = 256;
@@ -59,6 +60,7 @@ export type Slot = {
   readonly searchAddon: SearchAddon;
   readonly serializeAddon: SerializeAddon;
   readonly host: HTMLDivElement;
+  readonly scrollFollow: ReturnType<typeof followTerminalOutput>;
   currentLeafId: number | null;
   // Leaf whose buffer this slot still holds intact after release; serialized
   // only if another leaf steals the slot.
@@ -149,6 +151,7 @@ function bgActive(
   return prefs.backgroundKind === "image" && !!prefs.backgroundImageId;
 }
 
+/** 读取终端偏好，并统一滚动条轨道宽度。 */
 function termOptions() {
   const prefs = usePreferencesStore.getState();
   const font = configuredFont ?? {
@@ -166,6 +169,7 @@ function termOptions() {
     cursorStyle: prefs.terminalCursorStyle,
     cursorInactiveStyle: "outline" as const,
     scrollback: prefs.terminalScrollback,
+    scrollbar: { width: 10 },
     allowProposedApi: true,
     windowsPty: IS_WINDOWS ? { backend: "conpty" as const } : undefined,
     minimumContrastRatio: bgActive(prefs) ? MCR_BG_ACTIVE : MCR_BG_INACTIVE,
@@ -180,6 +184,7 @@ export function applyBackgroundActive(active: boolean): void {
   }
 }
 
+/** 创建终端渲染槽，绑定输入、尺寸和输出追底。 */
 function createSlot(): Slot {
   let focusTerminal = () => {};
   const term = new Terminal({
@@ -212,6 +217,7 @@ function createSlot(): Slot {
     searchAddon,
     serializeAddon,
     host,
+    scrollFollow: followTerminalOutput(term),
     currentLeafId: null,
     retainedLeafId: null,
     parked: false,
@@ -440,6 +446,21 @@ function discardRetention(slot: Slot): void {
   slot.oscDisposers = [];
 }
 
+/** 仅测量可见网格；字体变化可强制重算，隐藏时保留最后有效尺寸。 */
+function fitVisibleSlot(slot: Slot, force = false): boolean {
+  const container = slot.host.parentElement;
+  if (!container || slot.host.clientWidth === 0 || slot.host.clientHeight === 0)
+    return false;
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+  if (width === 0 || height === 0) return false;
+  if (!force && width === slot.lastW && height === slot.lastH) return false;
+  slot.fitAddon.fit();
+  slot.lastW = width;
+  slot.lastH = height;
+  return true;
+}
+
 function bindSlot(slot: Slot, p: AcquireParams): void {
   const fast = slot.retainedLeafId === p.leafId;
   const stale =
@@ -504,12 +525,10 @@ function bindSlot(slot: Slot, p: AcquireParams): void {
   }
 
   setupResizeObserver(slot, p);
-  slot.fitAddon.fit();
+  const fitted = fitVisibleSlot(slot, true);
   slot.lastCols = slot.term.cols;
   slot.lastRows = slot.term.rows;
-  slot.lastW = p.container.clientWidth;
-  slot.lastH = p.container.clientHeight;
-  if (slot.lastCols !== p.cols || slot.lastRows !== p.rows) {
+  if (fitted && (slot.lastCols !== p.cols || slot.lastRows !== p.rows)) {
     // resizePty updates session.cols/rows + pty backend; no separate scope call.
     adapter?.resolveLeaf(p.leafId)?.resizePty(slot.lastCols, slot.lastRows);
   }
@@ -572,10 +591,8 @@ function rewireSlot(slot: Slot, p: AcquireParams): void {
     p.container.appendChild(slot.host);
   }
   setupResizeObserver(slot, p);
-  slot.fitAddon.fit();
-  slot.lastW = p.container.clientWidth;
-  slot.lastH = p.container.clientHeight;
-  if (slot.term.cols !== p.cols || slot.term.rows !== p.rows) {
+  const fitted = fitVisibleSlot(slot, true);
+  if (fitted && (slot.term.cols !== p.cols || slot.term.rows !== p.rows)) {
     adapter?.resolveLeaf(p.leafId)?.resizePty(slot.term.cols, slot.term.rows);
   }
   slot.lastCols = slot.term.cols;
@@ -598,14 +615,7 @@ function scheduleImeResize(slot: Slot): void {
       slot.imeResizeRaf = null;
       if (slot.imeComposing || slot.parked || slot.currentLeafId === null)
         return;
-      const container = slot.host.parentElement;
-      if (!container) return;
-      const width = container.clientWidth;
-      const height = container.clientHeight;
-      if (width === slot.lastW && height === slot.lastH) return;
-      slot.lastW = width;
-      slot.lastH = height;
-      slot.fitAddon.fit();
+      if (!fitVisibleSlot(slot)) return;
       if (slot.term.cols === slot.lastCols && slot.term.rows === slot.lastRows)
         return;
       slot.lastCols = slot.term.cols;
@@ -617,6 +627,7 @@ function scheduleImeResize(slot: Slot): void {
   });
 }
 
+/** 仅按可见容器的有效尺寸调整终端，避免插件切换触发隐藏尺寸重排。 */
 function setupResizeObserver(slot: Slot, p: AcquireParams): void {
   slot.observer?.disconnect();
   if (slot.fitTimer) clearTimeout(slot.fitTimer);
@@ -624,7 +635,6 @@ function setupResizeObserver(slot: Slot, p: AcquireParams): void {
   slot.fitTimer = null;
   slot.ptyTimer = null;
 
-  const container = p.container;
   const flushPty = () => {
     slot.ptyTimer = null;
     if (slot.currentLeafId !== p.leafId || slot.imeComposing) return;
@@ -642,17 +652,12 @@ function setupResizeObserver(slot: Slot, p: AcquireParams): void {
       slot.fitTimer = null;
       if (slot.currentLeafId !== p.leafId || slot.parked || slot.imeComposing)
         return;
-      const w = container.clientWidth;
-      const h = container.clientHeight;
-      if (w === slot.lastW && h === slot.lastH) return;
-      slot.lastW = w;
-      slot.lastH = h;
-      slot.fitAddon.fit();
+      if (!fitVisibleSlot(slot)) return;
       if (slot.ptyTimer) clearTimeout(slot.ptyTimer);
       slot.ptyTimer = setTimeout(flushPty, PTY_RESIZE_DEBOUNCE_MS);
     }, FIT_DEBOUNCE_MS);
   });
-  slot.observer.observe(container);
+  slot.observer.observe(p.container);
 }
 
 type SerializeOutput = {
@@ -762,7 +767,9 @@ function reapIdleSlot(slot: Slot): void {
   disposeSlot(slot);
 }
 
+/** 释放终端渲染槽及其监听和待执行任务。 */
 function disposeSlot(slot: Slot): void {
+  slot.scrollFollow.dispose();
   cancelSlotReap(slot);
   cancelPendingUnhide(slot);
   cancelImeResize(slot);
@@ -802,7 +809,11 @@ function refitSlot(slot: Slot): void {
     slot.lastH = -1;
     return;
   }
-  slot.fitAddon.fit();
+  if (!fitVisibleSlot(slot, true)) {
+    slot.lastW = -1;
+    slot.lastH = -1;
+    return;
+  }
   slot.lastCols = slot.term.cols;
   slot.lastRows = slot.term.rows;
   adapter
@@ -916,15 +927,7 @@ export function refreshLeafSlot(leafId: number): void {
     return;
   }
   // The observer skips parked slots; catch up on container resizes here.
-  const container = slot.host.parentElement;
-  if (
-    container &&
-    (container.clientWidth !== slot.lastW ||
-      container.clientHeight !== slot.lastH)
-  ) {
-    slot.lastW = container.clientWidth;
-    slot.lastH = container.clientHeight;
-    slot.fitAddon.fit();
+  if (fitVisibleSlot(slot)) {
     if (slot.term.cols !== slot.lastCols || slot.term.rows !== slot.lastRows) {
       slot.lastCols = slot.term.cols;
       slot.lastRows = slot.term.rows;

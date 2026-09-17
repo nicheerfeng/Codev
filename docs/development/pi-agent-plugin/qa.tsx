@@ -1,7 +1,8 @@
 // 仅供本地 Vite + 后台 Chrome 核验，不是生产入口，不访问真实 Pi 或用户配置。
 import React, { useState } from "react";
+import type { PiTranscriptItem } from "../../../src/modules/plugins/pi-agent/types";
 import { createRoot } from "react-dom/client";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import "/src/styles/globals.css";
 
@@ -23,8 +24,10 @@ function entriesFor(runtime: { messages: object[] }) {
 }
 /** 发送隔离的原生形状事件，所有生产组件仍走实际 native.ts。 */
 function event(runtimeId: number, value: object) { return emit("codev://pi-agent-event", { sessionId: runtimeId, stream: "stdout", event: value }); }
+mockWindows("main");
 mockIPC(async (cmd, args: any) => {
   if (cmd === "plugin:clipboard-manager|write_text") { clipboard.push(args.text); return; }
+  if (cmd === "pi_agent_list_models") return models;
   if (cmd === "pi_agent_probe") return { available: true, version: "QA fixture", path: "pi", error: null };
   if (cmd === "pi_agent_list_all_sessions") return sessions;
   if (cmd === "pi_agent_delete_session") {
@@ -121,6 +124,8 @@ mockIPC(async (cmd, args: any) => {
   return null;
 }, { shouldMockEvents: true });
 
+const { PiTranscript } = await import("/src/modules/plugins/pi-agent/PiTranscript");
+const { INITIAL_PI_VIEW_STATE } = await import("/src/modules/plugins/pi-agent/reducer");
 const { PiAgentPane } = await import("/src/modules/plugins/pi-agent/PiAgentPane");
 const { usePluginStore } = await import("/src/modules/plugins/store");
 const { ThemeProvider, useTheme } = await import("/src/modules/theme");
@@ -134,7 +139,15 @@ function QA() {
   (window as any).piQA.setMode = setMode;
   return <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
     <div style={{ height: 32, flexShrink: 0, display: "flex", gap: 16, paddingLeft: 12 }}><button onClick={() => setActive(!active)}>切换插件</button><button onClick={() => setMode("light")}>浅色</button><button onClick={() => setMode("dark")}>深色</button></div>
-    <div style={{ position: "relative", flex: 1, minHeight: 0 }}><div style={{ position: "absolute", inset: 0, display: active ? undefined : "none" }}><PiAgentPane cwd="D:/qa/Codev" active={active} /></div>{!active && <div>终端占位（核验隐藏页不停止 Pi）</div>}</div>
+    <div style={{ position: "relative", flex: 1, minHeight: 0 }}><div style={{ position: "absolute", inset: 0, display: active ? undefined : "none" }}><PiAgentPane active={active} /></div>{!active && <div>终端占位（核验隐藏页不停止 Pi）</div>}</div>
   </div>;
 }
-createRoot(document.getElementById("root")!).render(<ThemeProvider defaultMode="dark"><QA /></ThemeProvider>);
+/** 直接驱动真实时间线组件，固定数据覆盖折叠、搜索和动画回归。 */
+function TranscriptQA() {
+  const [state, setState] = useState<{ items: PiTranscriptItem[]; running: boolean; searchOpen: boolean }>({ items: [], running: true, searchOpen: false });
+  (window as any).piQA.setTranscript = setState;
+  return <div className="pi-agent" style={{ height: "100vh", display: "flex", flexDirection: "column", padding: 24 }}>
+    <PiTranscript view={{ ...INITIAL_PI_VIEW_STATE, items: state.items, status: state.running ? "running" : "idle", processStartedAt: 1000, processFinishedAt: state.running ? undefined : 11000 }} threadKey="qa" cwd="D:/qa" active searchOpen={state.searchOpen} onCloseSearch={() => setState(value => ({ ...value, searchOpen: false }))} />
+  </div>;
+}
+createRoot(document.getElementById("root")!).render(<ThemeProvider defaultMode="dark">{new URLSearchParams(location.search).has("transcript") ? <TranscriptQA /> : <QA />}</ThemeProvider>);

@@ -32,12 +32,16 @@ import { MarkdownTable } from "@/modules/markdown/MarkdownTable";
 import {
   buildTimelineBlocks,
   itemText,
+  activitySummary,
+  currentActivity,
+  activityPreview,
+  toolSummary,
   type PiTimelineBlock,
   type PiTimelineStep,
 } from "./timeline";
 import type {
   PiMessageItem,
-  PiToolItem,
+  PiThinkingItem,
   PiTranscriptItem,
   PiViewState,
 } from "./types";
@@ -59,25 +63,6 @@ type MessageActions = {
   canEditLastUser?: boolean;
   lastUserId?: string;
 };
-
-/** 从工具参数提取可直接感知的命令、脚本或目标路径。 */
-function toolSummary(item: PiToolItem): string {
-  if (item.args && typeof item.args === "object") {
-    const args = item.args as Record<string, unknown>;
-    for (const key of [
-      "command",
-      "script",
-      "cmd",
-      "path",
-      "file_path",
-      "pattern",
-      "query",
-    ]) {
-      if (typeof args[key] === "string" && args[key]) return args[key];
-    }
-  }
-  return item.name;
-}
 
 /** 将毫秒耗时格式化为紧凑的中文时间。 */
 function formatElapsed(milliseconds: number): string {
@@ -158,7 +143,8 @@ const TranscriptItem = memo(function TranscriptItem({
         open={expanded}
         onToggle={(event) => setExpanded(event.currentTarget.open)}
       >
-        <summary className="pi-tool-summary cursor-pointer list-none text-xs text-muted-foreground [&::-webkit-details-marker]:hidden">
+        <summary className="pi-tool-summary pi-record-summary cursor-pointer text-xs text-muted-foreground">
+          <HugeiconsIcon icon={File01Icon} size={13} className="shrink-0" />
           <span
             className={`pi-tool-status ${item.status === "running" ? "pi-process-live" : ""}`}
           >
@@ -169,18 +155,30 @@ const TranscriptItem = memo(function TranscriptItem({
                 : "已完成"}
           </span>
           <span aria-hidden="true">·</span>
-          <span className="pi-tool-command">{toolSummary(item)}</span>
+          <span className="pi-tool-command">
+            {toolSummary(item).replace(/\s+/gu, " ")}
+          </span>
         </summary>
-        <div className="pi-tool-body reader-scrollbar max-h-80 overflow-auto">
-          {item.args != null && (
-            <pre className="mb-2 whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground">
-              {JSON.stringify(item.args, null, 2)}
+        {expanded && (
+          <div className="pi-tool-body reader-scrollbar max-h-80 overflow-auto">
+            {item.args != null && (
+              <>
+                <div className="mb-1 text-[10px] text-muted-foreground">
+                  调用参数
+                </div>
+                <pre className="mb-2 whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground">
+                  {JSON.stringify(item.args, null, 2)}
+                </pre>
+              </>
+            )}
+            <div className="mb-1 text-[10px] text-muted-foreground">
+              执行结果
+            </div>
+            <pre className="whitespace-pre-wrap break-all font-mono text-xs">
+              {item.output || "等待工具结果…"}
             </pre>
-          )}
-          <pre className="whitespace-pre-wrap break-all font-mono text-xs">
-            {item.output || "等待工具结果…"}
-          </pre>
-        </div>
+          </div>
+        )}
       </details>
     );
   const isUser = item.kind === "message" && item.role === "user";
@@ -322,44 +320,96 @@ const TranscriptItem = memo(function TranscriptItem({
   );
 });
 
-/** 连续工具默认压缩为一行，展开组后再按单条查看详情。 */
-function ToolGroup({
-  items,
-  actions,
+/** 保留单条思考的独立折叠，搜索命中时才主动展开。 */
+function ThinkingDetail({
+  item,
   openForSearch,
 }: {
-  items: PiToolItem[];
-  actions: MessageActions;
-  openForSearch?: string;
+  item: PiThinkingItem;
+  openForSearch: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   useEffect(() => {
     if (openForSearch) setExpanded(true);
   }, [openForSearch]);
-  const runningCount = items.filter((item) => item.status === "running").length;
-  const errorCount = items.filter((item) => item.status === "error").length;
   return (
-    <details className="pi-tool-group min-w-0 max-w-full" open={expanded}>
-      <summary
-        className="cursor-pointer py-1 text-xs text-muted-foreground hover:text-foreground"
-        onClick={(event) => {
-          event.preventDefault();
-          setExpanded((value) => !value);
-        }}
-      >
-        {runningCount ? "正在调用工具" : "已调用工具"} · {items.length} 次
-        {runningCount > 0 && ` · ${runningCount} 项执行中`}
-        {errorCount > 0 && ` · ${errorCount} 项失败`}
+    <details
+      className="pi-process-step"
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary className="pi-record-summary cursor-pointer text-xs text-muted-foreground">
+        <HugeiconsIcon icon={PencilEdit01Icon} size={13} className="shrink-0" />
+        <span className="pi-record-preview">{activityPreview(item)}</span>
       </summary>
-      {expanded &&
-        items.map((item) => (
-          <TranscriptItem
-            key={item.id}
-            item={item}
-            actions={actions}
-            openForSearch={item.id === openForSearch}
-          />
-        ))}
+      {expanded && (
+        <div
+          data-pi-text={item.id}
+          className="pi-process-step-body pi-markdown select-text"
+        >
+          <Streamdown
+            components={STREAMDOWN_COMPONENTS}
+            controls={STREAMDOWN_CONTROLS}
+          >
+            {item.text}
+          </Streamdown>
+        </div>
+      )}
+    </details>
+  );
+}
+
+/** 封装内按时间直接呈现单行记录，点击记录才展开完整内容。 */
+function ActivityGroup({
+  items,
+  actions,
+  openForSearch,
+}: {
+  items: PiTranscriptItem[];
+  actions: MessageActions;
+  openForSearch?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const current = currentActivity(items);
+  const transitionKey = current
+    ? `${current.id}:${current.kind === "tool" ? current.status : current.streaming}`
+    : "waiting";
+  const matched = items.some((item) => item.id === openForSearch);
+  useEffect(() => {
+    if (matched) setExpanded(true);
+  }, [matched]);
+  return (
+    <details
+      className="pi-activity min-w-0 max-w-full"
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary className="pi-activity-summary cursor-pointer py-1 text-xs text-muted-foreground hover:text-foreground">
+        <span
+          key={transitionKey}
+          className="pi-record-preview pi-summary-transition"
+        >
+          {activitySummary(current)}
+        </span>
+      </summary>
+      <div className="pl-4">
+        {items.map((item) =>
+          item.kind === "thinking" ? (
+            <ThinkingDetail
+              key={item.id}
+              item={item}
+              openForSearch={item.id === openForSearch}
+            />
+          ) : (
+            <TranscriptItem
+              key={item.id}
+              item={item}
+              actions={actions}
+              openForSearch={item.id === openForSearch}
+            />
+          ),
+        )}
+      </div>
     </details>
   );
 }
@@ -448,17 +498,14 @@ function TimelineBlock({
             {elapsedText}
           </span>
         </summary>
-        <div className="pi-process-body ml-1.5 pl-4">
+        <div className="pi-process-body pl-5">
           {block.steps.map((step) => (
             <ProcessStep
               key={step.id}
               step={step}
               actions={actions}
-              openForSearch={
-                step.kind !== "tool-group" && step.item?.id === searchItem?.id
-              }
-              toolSearchId={
-                step.kind === "tool-group" ? searchItem?.id : undefined
+              activitySearchId={
+                step.kind === "activity" ? searchItem?.id : undefined
               }
             />
           ))}
@@ -473,43 +520,23 @@ function TimelineBlock({
   );
 }
 
-/** 将思考、叙述和工具分别收纳，避免过程详情堆成连续卡片。 */
+/** 过程正文直接展示，思考和工具统一交由活动折叠项呈现。 */
 function ProcessStep({
   step,
   actions,
-  openForSearch = false,
-  toolSearchId,
+  activitySearchId,
 }: {
   step: PiTimelineStep;
   actions: MessageActions;
-  openForSearch?: boolean;
-  toolSearchId?: string;
+  activitySearchId?: string;
 }) {
-  if (step.kind === "tool-group")
+  if (step.kind === "activity")
     return (
-      <ToolGroup
+      <ActivityGroup
         items={step.items ?? []}
         actions={actions}
-        openForSearch={toolSearchId}
+        openForSearch={activitySearchId}
       />
-    );
-  if (step.kind === "thinking")
-    return (
-      <details className="pi-process-step" open={openForSearch || undefined}>
-        <summary className="cursor-pointer py-1 text-[11px] text-muted-foreground">
-          {step.item?.kind === "thinking" && step.item.streaming
-            ? "思考中"
-            : "已思考"}
-        </summary>
-        <div className="pi-process-step-body pi-markdown select-text">
-          <Streamdown
-            components={STREAMDOWN_COMPONENTS}
-            controls={STREAMDOWN_CONTROLS}
-          >
-            {step.item?.kind === "thinking" ? step.item.text : ""}
-          </Streamdown>
-        </div>
-      </details>
     );
   return step.item ? (
     <TranscriptItem item={step.item} actions={actions} showActions={false} />

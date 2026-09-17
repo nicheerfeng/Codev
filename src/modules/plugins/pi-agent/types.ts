@@ -110,8 +110,17 @@ export type PiViewStatus =
   | "failed";
 
 export type PiViewState = {
-  compaction?: { status: "running" | "done" | "failed"; startedAt: number; finishedAt?: number };
-  localQueue?: { id: string; text: string; images: PiImage[]; behavior: "steer" | "followUp" }[];
+  compaction?: {
+    status: "running" | "done" | "failed";
+    startedAt: number;
+    finishedAt?: number;
+  };
+  localQueue?: {
+    id: string;
+    text: string;
+    images: PiImage[];
+    behavior: "steer" | "followUp";
+  }[];
   queueSendingId?: string;
   modelsLoading: boolean;
   commands: { name: string; description?: string }[];

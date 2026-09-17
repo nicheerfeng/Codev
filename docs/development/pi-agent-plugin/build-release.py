@@ -14,7 +14,7 @@ def main():
     version = json.loads((root / "package.json").read_text(encoding="utf-8"))["version"]
     output = root / "artifacts" / f"Codev-{version}-Windows-x64"
     output.mkdir(parents=True, exist_ok=True)
-    target = root / "src-tauri/target/pi-ui-rebuild"
+    target = Path(os.environ["LOCALAPPDATA"]) / "codev-cargo-target"
     env = {**os.environ, "CARGO_BUILD_JOBS": "10", "CARGO_TARGET_DIR": str(target)}
     base = ["node", str(root / "node_modules/@tauri-apps/cli/tauri.js"), "build", "--features", "opaque-window"]
     checksums = []
@@ -36,7 +36,7 @@ def main():
             shutil.copy2(source, destination)
             digest = hashlib.sha256(destination.read_bytes()).hexdigest().upper()
             checksums.append(f"{digest}  {destination.name}")
-            tqdm.write(f"{destination.name}: {destination.stat().st_size} bytes; {digest}")
+            tqdm.write(f"Built {destination.name}")
             progress.update(1)
     shutil.copy2(root / "src/modules/plugins/pi-agent/UPSTREAM-NOTICES.md", output / "UPSTREAM-NOTICES.md")
     (output / "SHA256SUMS.txt").write_text("\n".join(checksums) + "\n", encoding="utf-8")

@@ -51,7 +51,7 @@ import {
   withArchivedPath,
 } from "./organization";
 import { notifyFinishedProjects } from "./piNotify";
-import type { ProjectActivity } from "./projectActivity";
+import { projectActivity, type ProjectActivity } from "./projectActivity";
 import { adoptOrderIds, prependOrderId } from "./sidebarOrder";
 import { PiSidebar, type SidebarThread } from "./PiSidebar";
 import { PiComposer, EMPTY_DRAFT, type PiDraft } from "./PiComposer";
@@ -69,9 +69,24 @@ import { PiSettings } from "./PiSettings";
 import { plainStatusText } from "./statusText";
 import type { PiMessageItem, PiModel, PiSessionSummary } from "./types";
 import { localCommand } from "./commands";
+import { editableLastUser } from "./editLastUser";
 import "./pi-agent.css";
 
 type ExtensionRequest = { key: string; event: Record<string, unknown> };
+
+function latestAssistantSummary(thread?: PiThread): string | null {
+  const items = thread?.view.items ?? [];
+  for (let index = items.length - 1; index >= 0; index--) {
+    const item = items[index];
+    if (
+      item.kind === "message" &&
+      item.role === "assistant" &&
+      item.text.trim()
+    )
+      return item.text;
+  }
+  return null;
+}
 
 /** 插件入口只协调原生会话与 Codev 组件，不接管外部文件树或终端。 */
 export function PiAgentPane({
@@ -138,26 +153,8 @@ export function PiAgentPane({
   const draftKey = selected ?? "";
   const draft = drafts[draftKey] ?? EMPTY_DRAFT;
   const notice = notices[draftKey] ?? "";
-  const lastUserPosition = view.items.reduce(
-    (position, item, index) =>
-      item.kind === "message" && item.role === "user" ? index : position,
-    -1,
-  );
-  const lastAssistantPosition = view.items.reduce(
-    (position, item, index) =>
-      item.kind === "message" && item.role === "assistant" ? index : position,
-    -1,
-  );
-  const lastAssistant =
-    lastAssistantPosition >= 0 ? view.items[lastAssistantPosition] : undefined;
   const canEditLastUser =
-    !!activeThread &&
-    view.status === "idle" &&
-    !view.error &&
-    lastUserPosition >= 0 &&
-    lastAssistantPosition > lastUserPosition &&
-    lastAssistant?.kind === "message" &&
-    lastAssistant.stopReason === "stop";
+    !!activeThread && !operations[draftKey] && !!editableLastUser(view);
   /** 将提示绑定到操作发起时的线程，异步返回不污染后来选中的线程。 */
   const setNotice = (message: string, key = draftKey) =>
     setNotices((current) => ({ ...current, [key]: message }));
@@ -356,14 +353,23 @@ export function PiAgentPane({
     );
   }, [rows]);
   useEffect(() => {
+    const notificationThreads = rows.map((row) => ({
+      ...row,
+      summary: latestAssistantSummary(
+        threads.find((thread) => thread.key === row.key),
+      ),
+    }));
+    const previous = activityRef.current;
+    const current = projectActivity(notificationThreads);
+    // 先消费状态变化，窗口和权限查询期间的 render 不会重复发送。
+    activityRef.current = current;
     void notifyFinishedProjects({
-      previous: activityRef.current,
-      threads: rows,
+      previous,
+      current,
+      threads: notificationThreads,
       piActive: active,
-    }).then((next) => {
-      activityRef.current = next;
     });
-  }, [rows, active]);
+  }, [rows, active, threads]);
   /** 用统一提示处理操作异常，避免无响应按钮。 */
   const run = (operation: Promise<unknown>, key = draftKey) => {
     void operation.catch((error) => setNotice(String(error), key));
@@ -614,8 +620,8 @@ export function PiAgentPane({
       setOperations((value) => ({ ...value, [key]: "" }));
     }
   };
-  /** 停止时取回排队内容；编辑最后输入时将原文与附件放回输入框。 */
-  const stopEditing = async (thread: PiThread, item?: PiMessageItem) => {
+  /** 停止运行并将未执行的队列文字恢复到原线程草稿。 */
+  const stopThread = async (thread: PiThread) => {
     await operate(thread, "正在停止…", async () => {
       const key = thread.key;
       /** 保留停止期间输入的新草稿，并恢复取回的文字和附件。 */
@@ -625,10 +631,8 @@ export function PiAgentPane({
           return {
             ...value,
             [key]: {
-              text: [item?.text, ...texts, current.text]
-                .filter(Boolean)
-                .join("\n\n"),
-              images: [...(item?.images ?? []), ...current.images],
+              text: [...texts, current.text].filter(Boolean).join("\n\n"),
+              images: current.images,
               files: current.files,
             },
           };
@@ -640,10 +644,10 @@ export function PiAgentPane({
       };
       if (thread.view.status === "running" || thread.view.status === "stopping")
         await client.current!.stopAndRestore(thread, restore);
-      else throw new Error("只有未完成的运行中回复可以停止并编辑");
+      else throw new Error("只有运行中的回复可以停止");
     });
   };
-  /** 原位编辑自然结束的最后一轮，并在同一 Pi session 中重新执行。 */
+  /** 原位编辑已结束或主动终止的最后一轮，并通过 Pi 分叉重新执行。 */
   const editLastUser = async (
     thread: PiThread,
     item: PiMessageItem,
@@ -651,19 +655,8 @@ export function PiAgentPane({
   ): Promise<boolean> => {
     const key = thread.key;
     if (operationKeys.current.has(key)) return false;
-    const lastUser = [...thread.view.items]
-      .reverse()
-      .find((entry) => entry.kind === "message" && entry.role === "user");
-    const lastAssistant = [...thread.view.items]
-      .reverse()
-      .find((entry) => entry.kind === "message" && entry.role === "assistant");
-    if (
-      thread.view.status !== "idle" ||
-      lastUser?.id !== item.id ||
-      lastAssistant?.kind !== "message" ||
-      lastAssistant.stopReason !== "stop"
-    )
-      throw new Error("只有自然结束的最后一轮可以编辑");
+    if (editableLastUser(thread.view)?.id !== item.id)
+      throw new Error("请等待运行结束后编辑最后一条输入");
     operationKeys.current.add(key);
     setOperations((value) => ({ ...value, [key]: "正在重新执行…" }));
     try {
@@ -998,8 +991,14 @@ export function PiAgentPane({
             onQueueAction={(kind, index, text, action) => {
               if (!activeThread) return;
               const thread = activeThread;
+              const label =
+                action === "steer"
+                  ? "正在安排为下一步…"
+                  : action === "edit"
+                    ? "正在退回输入框…"
+                    : "正在删除排队消息…";
               run(
-                operate(thread, "正在更新队列…", () =>
+                operate(thread, label, () =>
                   client.current!.updateQueuedMessage(
                     thread,
                     kind,
@@ -1030,7 +1029,7 @@ export function PiAgentPane({
               );
             }}
             onStop={() => {
-              if (activeThread) run(stopEditing(activeThread));
+              if (activeThread) run(stopThread(activeThread));
             }}
             onModel={(provider, modelId) =>
               run(

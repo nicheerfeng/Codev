@@ -208,22 +208,13 @@ html[data-chrome="borderless"] #settings-root {
   min-width: 0 !important;
 }
 
-/*
- * xterm.js overrides — kept outside @layer so they win against the addon's
- * own stylesheet (which is not in any layer and would otherwise override).
- *
- * Newer xterm renders scrollbars as real <div class="scrollbar vertical|horizontal">
- * children rather than relying on native overflow scrollbars. Both code paths exist
- * across versions, so we hide both.
- */
-.xterm .scrollbar,
-.xterm .scrollbar.vertical,
-.xterm .scrollbar.horizontal {
-  display: none !important;
-  visibility: hidden !important;
-  width: 0 !important;
-  height: 0 !important;
-  pointer-events: none !important;
+/* 保留 xterm 的滚动控制，滑块外观与应用 ScrollArea 一致。 */
+.xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider {
+  background: var(--border) !important;
+  border: 1px solid transparent;
+  border-left-width: 2px;
+  background-clip: padding-box !important;
+  border-radius: 9999px;
 }
 .xterm .xterm-viewport,
 .xterm-viewport {
