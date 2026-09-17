@@ -33,6 +33,12 @@ function blockNativeContextMenu(event: MouseEvent) {
 
 document.addEventListener("contextmenu", blockNativeContextMenu);
 
+/** 选区拖不要变成系统 DnD；文件拖走 Tauri 原生落点，排序走 pointer 捕获。 */
+function blockHtml5DragStart(event: DragEvent) {
+  event.preventDefault();
+}
+document.addEventListener("dragstart", blockHtml5DragStart);
+
 // Reap PTY sessions orphaned by a prior webview load before any tab spawns.
 await invoke("pty_close_all").catch(() => {});
 

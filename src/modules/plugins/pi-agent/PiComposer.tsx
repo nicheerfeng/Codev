@@ -77,6 +77,17 @@ function modelTitle(model: PiModel): string {
   return model.name?.trim() || model.id;
 }
 
+function ComposerDropHover() {
+  const hover = usePiComposerDropStore((state) => state.hover);
+  if (!hover) return null;
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 rounded-2xl border border-sky-400 ring-1 ring-sky-400/40"
+    />
+  );
+}
+
 function duplicateModelTitles(models: PiModel[]): Set<string> {
   const counts = new Map<string, number>();
   for (const model of models) {
@@ -430,12 +441,9 @@ export function PiComposer(props: Props) {
       )}
       <div
         data-pi-composer-drop=""
-        className={cn(
-          "relative mx-auto w-full max-w-3xl rounded-2xl border border-border bg-card shadow-sm focus-within:border-ring/60",
-          usePiComposerDropStore((state) => state.hover) &&
-            "border-sky-400 ring-1 ring-sky-400/40",
-        )}
+        className="relative mx-auto w-full max-w-3xl rounded-2xl border border-border bg-card shadow-sm focus-within:border-ring/60"
       >
+        <ComposerDropHover />
         {showCommands && (
           <div
             ref={commandList}

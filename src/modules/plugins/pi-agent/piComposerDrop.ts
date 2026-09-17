@@ -1,4 +1,5 @@
 import type { ExplorerPathDropTarget } from "@/modules/explorer/lib/useExplorerDnd";
+import { createNativeFileDragGate } from "@/lib/nativeFileDrag";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -97,22 +98,28 @@ export function usePiComposerNativeDrop(deps: PiComposerDropDeps): void {
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | null = null;
+    const gate = createNativeFileDragGate();
     void getCurrentWebview()
       .onDragDropEvent((event) => {
         const payload = event.payload;
         const current = depsRef.current;
-        if (payload.type === "enter" || payload.type === "over") {
+        const phase = gate.phase(payload);
+        if (phase === "ignore") return;
+        if (
+          phase === "hover" &&
+          (payload.type === "enter" || payload.type === "over")
+        ) {
           current.onHover?.(
             current.active() &&
               composerAtPoint(payload.position.x, payload.position.y),
           );
           return;
         }
-        if (payload.type === "leave") {
+        if (phase === "leave") {
           current.onHover?.(false);
           return;
         }
-        if (payload.type !== "drop" || !payload.paths.length) return;
+        if (phase !== "drop" || payload.type !== "drop") return;
         current.onHover?.(false);
         if (
           !current.active() ||

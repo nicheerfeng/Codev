@@ -1,3 +1,4 @@
+import { createNativeFileDragGate } from "@/lib/nativeFileDrag";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useEffect, useRef } from "react";
@@ -31,11 +32,13 @@ export function useWorkspaceFolderDrop({ onAddRoot }: Options): void {
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | null = null;
+    const gate = createNativeFileDragGate();
 
     void getCurrentWebview()
       .onDragDropEvent((event) => {
         const payload = event.payload;
-        if (payload.type !== "drop" || payload.paths.length === 0) return;
+        const phase = gate.phase(payload);
+        if (phase !== "drop" || payload.type !== "drop") return;
         if (!isWorkspaceFolderTarget(payload.position.x, payload.position.y))
           return;
 
