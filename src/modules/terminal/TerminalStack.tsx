@@ -5,10 +5,15 @@ import { selectLiveTerminals } from "./lib/liveTerminals";
 import { leafIds } from "./lib/panes";
 import { PaneTreeView } from "./PaneTreeView";
 import type { TerminalPaneHandle } from "./TerminalPane";
+import { labelFor } from "@/modules/tabs";
+import { terminalGrid } from "./lib/terminalGrid";
 
 type Props = {
   tabs: Tab[];
   activeId: number;
+  viewCount?: number;
+  visible?: boolean;
+  onSelect: (id: number) => void;
   /** Register/unregister handle by leaf id (not tab id). */
   registerHandle: (leafId: number, handle: TerminalPaneHandle | null) => void;
   onSearchReady: (leafId: number, addon: SearchAddon) => void;
@@ -26,9 +31,13 @@ type Bundle = {
   onActivity: (leafId: number, active: boolean) => void;
 };
 
+/** 保持会话挂载，按所选布局展示当前组终端并区分输入焦点。 */
 export function TerminalStack({
   tabs,
   activeId,
+  viewCount = 1,
+  visible = true,
+  onSelect,
   registerHandle,
   onSearchReady,
   onCwd,
@@ -37,6 +46,11 @@ export function TerminalStack({
   onFocusLeaf,
 }: Props) {
   const terminals = useMemo(() => selectLiveTerminals(tabs), [tabs]);
+  const grid = terminalGrid(
+    tabs.map((tab) => tab.id),
+    activeId,
+    viewCount,
+  );
 
   const registerRef = useRef(registerHandle);
   const searchReadyRef = useRef(onSearchReady);
@@ -87,25 +101,48 @@ export function TerminalStack({
   return (
     <div className="relative h-full w-full min-w-0 overflow-hidden">
       {terminals.map((t) => {
-        const tabVisible = t.id === activeId;
+        const position = grid.visibleIds.indexOf(t.id);
+        const tabVisible = visible && position >= 0;
+        const row = Math.floor(Math.max(0, position) / grid.columns);
+        const rowColumns = Math.max(
+          1,
+          Math.min(grid.columns, grid.visibleIds.length - row * grid.columns),
+        );
         return (
           <div
             key={t.id}
             data-terminal-tab={t.id}
-            className="absolute inset-0 min-w-0 overflow-hidden"
+            className="absolute flex min-h-0 min-w-0 flex-col overflow-hidden"
             style={{
+              left: `${((Math.max(0, position) % grid.columns) * 100) / rowColumns}%`,
+              top: `${(row * 100) / grid.rows}%`,
+              width: `${100 / rowColumns}%`,
+              height: `${100 / grid.rows}%`,
+              border: viewCount > 1 ? "1px solid var(--border)" : undefined,
               visibility: tabVisible ? "visible" : "hidden",
               pointerEvents: tabVisible ? "auto" : "none",
             }}
             aria-hidden={!tabVisible}
           >
-            <PaneTreeView
-              node={t.paneTree}
-              tabVisible={tabVisible}
-              activeLeafId={t.activeLeafId}
-              onFocusLeaf={(leafId) => onFocusLeaf(t.id, leafId)}
-              getBundle={getBundle}
-            />
+            {viewCount > 1 && (
+              <button
+                type="button"
+                onClick={() => onSelect(t.id)}
+                className={`h-6 shrink-0 truncate border-b border-border/60 px-2 text-left text-[11px] ${t.id === activeId ? "bg-accent text-foreground" : "text-muted-foreground"}`}
+                title={labelFor(t)}
+              >
+                {labelFor(t)}
+              </button>
+            )}
+            <div className="min-h-0 flex-1">
+              <PaneTreeView
+                node={t.paneTree}
+                tabVisible={tabVisible}
+                activeLeafId={t.id === activeId ? t.activeLeafId : -1}
+                onFocusLeaf={(leafId) => onFocusLeaf(t.id, leafId)}
+                getBundle={getBundle}
+              />
+            </div>
           </div>
         );
       })}
