@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
+import { uiState } from "@/lib/uiState";
 
 const TERMINAL_DEFAULT_WIDTH = 480;
 export const TERMINAL_MIN_WIDTH = 220;
@@ -17,7 +18,7 @@ export function shouldPersistTerminalWidth(
 /** 读取终端最近一次非折叠宽度。 */
 function readTerminalWidth(): number {
   try {
-    const stored = window.localStorage.getItem(TERMINAL_WIDTH_STORAGE_KEY);
+    const stored = uiState.getItem(TERMINAL_WIDTH_STORAGE_KEY);
     const parsed = stored ? Number.parseInt(stored, 10) : NaN;
     return Number.isFinite(parsed)
       ? Math.max(TERMINAL_MIN_WIDTH, parsed)
@@ -30,7 +31,7 @@ function readTerminalWidth(): number {
 /** 读取终端面板上次折叠状态。 */
 function readTerminalCollapsed(): boolean {
   try {
-    return window.localStorage.getItem(TERMINAL_COLLAPSED_STORAGE_KEY) === "1";
+    return uiState.getItem(TERMINAL_COLLAPSED_STORAGE_KEY) === "1";
   } catch {
     return false;
   }
@@ -50,10 +51,7 @@ export function useTerminalPanelLayout() {
   const persistTerminalCollapsed = useCallback((collapsed: boolean) => {
     setTerminalPanelCollapsed(collapsed);
     try {
-      window.localStorage.setItem(
-        TERMINAL_COLLAPSED_STORAGE_KEY,
-        collapsed ? "1" : "0",
-      );
+      uiState.setItem(TERMINAL_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
     } catch {
       // storage may fail in private mode
     }
@@ -70,10 +68,7 @@ export function useTerminalPanelLayout() {
       widthWriteTimerRef.current = window.setTimeout(() => {
         widthWriteTimerRef.current = 0;
         try {
-          window.localStorage.setItem(
-            TERMINAL_WIDTH_STORAGE_KEY,
-            String(width),
-          );
+          uiState.setItem(TERMINAL_WIDTH_STORAGE_KEY, String(width));
         } catch {
           // storage may fail in private mode
         }

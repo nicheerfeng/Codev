@@ -66,6 +66,11 @@ type Props = {
   projects: string[];
   threads: SidebarThread[];
   selectedKey: string | null;
+  viewportDrop?: {
+    hover: (x: number, y: number) => boolean;
+    drop: (thread: SidebarThread, x: number, y: number) => boolean;
+    clear: () => void;
+  };
   revealThreadKey?: string | null;
   selectedProject: string | null;
   organization: PiOrganization;
@@ -124,6 +129,7 @@ export function PiSidebar(props: Props) {
     [props.threads, props.temporaryHome, props.organization.archived],
   );
   useEffect(() => {
+    if (props.organizationReady === false) return;
     const keys = defaultPiCollapsedKeys(
       projects,
       props.organization.groups,
@@ -144,10 +150,16 @@ export function PiSidebar(props: Props) {
       knownCollapsed.current = next.known;
       return next.changed ? next.collapsed : current;
     });
-  }, [projects, props.organization.groups, props.temporaryHome]);
+  }, [
+    projects,
+    props.organization.groups,
+    props.temporaryHome,
+    props.organizationReady,
+  ]);
   useEffect(() => {
+    if (props.organizationReady === false || !seededCollapsed.current) return;
     writePiCollapsed(collapsed);
-  }, [collapsed]);
+  }, [collapsed, props.organizationReady]);
   const listRef = useRef<HTMLDivElement>(null);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [filter, setFilter] = useState("");
@@ -201,6 +213,23 @@ export function PiSidebar(props: Props) {
         mergeOrder(current, moveByGap(visible, source, gap)),
       );
     },
+    props.viewportDrop
+      ? {
+          hover: (kind, _source, x, y) =>
+            kind === "session" && props.viewportDrop!.hover(x, y),
+          drop: (kind, source, x, y) => {
+            const thread = props.threads.find(
+              (item) => sessionIdentity(item.path, item.key) === source,
+            );
+            return (
+              kind === "session" &&
+              !!thread &&
+              !!props.viewportDrop?.drop(thread, x, y)
+            );
+          },
+          clear: props.viewportDrop.clear,
+        }
+      : undefined,
   );
   useEffect(() => {
     if (props.organizationReady === false) return;
@@ -506,6 +535,7 @@ export function PiSidebar(props: Props) {
                   type="button"
                   className={`flex min-w-0 flex-1 items-center gap-1.5 px-1.5 py-2 text-left text-xs ${closed && live ? "text-[#477faf] dark:text-[#a6cceb]" : pathKey(props.selectedProject ?? "") === key ? "text-foreground" : "text-muted-foreground"}`}
                   onClick={() => toggle(nodeKey)}
+                  disabled={props.organizationReady === false}
                   aria-expanded={!closed}
                   title={cwd}
                 >
@@ -729,6 +759,8 @@ export function PiSidebar(props: Props) {
                     type="button"
                     className="flex min-w-0 flex-1 items-center gap-1 py-1 text-left text-[11px] text-muted-foreground"
                     onClick={() => toggle(`group:${group.id}`)}
+                    disabled={props.organizationReady === false}
+                    aria-expanded={!collapsed.has(`group:${group.id}`)}
                   >
                     <HugeiconsIcon
                       icon={

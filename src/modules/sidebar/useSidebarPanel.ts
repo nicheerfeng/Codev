@@ -6,6 +6,7 @@ import {
   useState,
 } from "react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
+import { uiState } from "@/lib/uiState";
 
 const SIDEBAR_DEFAULT_WIDTH = 260;
 export const SIDEBAR_MIN_WIDTH = 220;
@@ -25,7 +26,7 @@ function clampSidebarWidth(width: number): number {
 
 function readSidebarWidth(): number {
   try {
-    const stored = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+    const stored = uiState.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
     const parsed = stored ? Number.parseInt(stored, 10) : NaN;
     return Number.isFinite(parsed)
       ? clampSidebarWidth(parsed)
@@ -37,7 +38,7 @@ function readSidebarWidth(): number {
 
 function readSidebarCollapsed(): boolean {
   try {
-    return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
+    return uiState.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
   } catch {
     return false;
   }
@@ -62,10 +63,7 @@ export function useSidebarPanel(
     if (collapsedRef.current === collapsed) return;
     collapsedRef.current = collapsed;
     try {
-      window.localStorage.setItem(
-        SIDEBAR_COLLAPSED_STORAGE_KEY,
-        collapsed ? "1" : "0",
-      );
+      uiState.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
     } catch {
       // storage may fail in private mode
     }
@@ -88,7 +86,7 @@ export function useSidebarPanel(
       sidebarWidthWriteTimerRef.current = window.setTimeout(() => {
         sidebarWidthWriteTimerRef.current = 0;
         try {
-          window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(next));
+          uiState.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(next));
         } catch {
           // ignore
         }

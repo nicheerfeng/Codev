@@ -46,12 +46,12 @@ describe("shouldShowWelcome", () => {
     expect(shouldShowWelcome(null, store)).toBe(false);
   });
 
-  it("shows the welcome page again when the install stamp changes", () => {
+  it("preserves initialized layout when the install stamp changes", () => {
     const store = memory();
     store.setItem(WELCOME_KEY, "1");
     store.setItem(LAYOUT_INITIALIZED_KEY, "1");
     store.setItem(WELCOME_STAMP_KEY, "0.9.3");
-    expect(shouldShowWelcome("0.9.4", store)).toBe(true);
+    expect(shouldShowWelcome("0.9.4", store)).toBe(false);
     expect(shouldShowWelcome("0.9.3", store)).toBe(false);
   });
 

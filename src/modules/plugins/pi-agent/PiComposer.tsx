@@ -71,33 +71,28 @@ type Props = {
   notice?: string;
   onDismissNotice?: () => void;
   focusRevision?: number;
+  focused?: boolean;
+  threadKey?: string;
 };
 
+/** 模型首行优先显示名称，缺少名称时显示标识。 */
 function modelTitle(model: PiModel): string {
   return model.name?.trim() || model.id;
 }
 
-function ComposerDropHover() {
-  const hover = usePiComposerDropStore((state) => state.hover);
+/** 仅高亮本次附件拖拽命中的会话输入区。 */
+function ComposerDropHover({ threadKey }: { threadKey?: string }) {
+  const hover = usePiComposerDropStore(
+    (state) =>
+      state.hover &&
+      (state.hoverKey === undefined || state.hoverKey === threadKey),
+  );
   if (!hover) return null;
   return (
     <div
       aria-hidden="true"
       className="pointer-events-none absolute inset-0 rounded-2xl border border-sky-400 ring-1 ring-sky-400/40"
     />
-  );
-}
-
-function duplicateModelTitles(models: PiModel[]): Set<string> {
-  const counts = new Map<string, number>();
-  for (const model of models) {
-    const title = modelTitle(model);
-    counts.set(title, (counts.get(title) ?? 0) + 1);
-  }
-  return new Set(
-    [...counts.entries()]
-      .filter(([, count]) => count > 1)
-      .map(([title]) => title),
   );
 }
 
@@ -120,7 +115,6 @@ export function PiComposer(props: Props) {
   const selectedModelKey = catalogModel
     ? `${catalogModel.provider}/${catalogModel.id}`
     : "";
-  const repeatedTitles = duplicateModelTitles(catalogModels);
   const compacting = props.view.compaction?.status === "running";
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -242,8 +236,8 @@ export function PiComposer(props: Props) {
     input.current?.focus();
   };
   useLayoutEffect(() => {
-    if (props.focusRevision) input.current?.focus();
-  }, [props.focusRevision]);
+    if (props.focusRevision && props.focused !== false) input.current?.focus();
+  }, [props.focusRevision, props.focused]);
   const running =
     compacting ||
     props.view.status === "running" ||
@@ -443,7 +437,7 @@ export function PiComposer(props: Props) {
         data-pi-composer-drop=""
         className="relative mx-auto w-full max-w-3xl rounded-2xl border border-border bg-card shadow-sm focus-within:border-ring/60"
       >
-        <ComposerDropHover />
+        <ComposerDropHover threadKey={props.threadKey} />
         {showCommands && (
           <div
             ref={commandList}
@@ -723,8 +717,6 @@ export function PiComposer(props: Props) {
                     const selected =
                       `${model.provider}/${model.id}` === selectedModelKey;
                     const title = modelTitle(model);
-                    const showId =
-                      repeatedTitles.has(title) || title !== model.id;
                     return (
                       <Button
                         key={`${model.provider}/${model.id}`}
@@ -741,7 +733,7 @@ export function PiComposer(props: Props) {
                       >
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-xs">
-                            {showId ? `${title} · ${model.id}` : title}
+                            {title}
                           </span>
                           <span className="block truncate text-[10px] text-muted-foreground">
                             {model.provider} / {model.id}

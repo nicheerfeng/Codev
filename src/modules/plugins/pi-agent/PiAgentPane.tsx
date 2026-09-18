@@ -6,6 +6,7 @@ import {
   Search01Icon,
   Settings01Icon,
   LayoutRightIcon,
+  GridViewIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -70,6 +71,8 @@ import { plainStatusText } from "./statusText";
 import type { PiMessageItem, PiModel, PiSessionSummary } from "./types";
 import { localCommand } from "./commands";
 import { editableLastUser } from "./editLastUser";
+import { toast } from "sonner";
+import { MAX_PI_VIEWPORTS, placePiSession } from "./viewportLayout";
 import "./pi-agent.css";
 
 type ExtensionRequest = { key: string; event: Record<string, unknown> };
@@ -103,6 +106,51 @@ export function PiAgentPane({
   const [sessions, setSessions] = useState<PiSessionSummary[]>([]);
   const [sessionsReady, setSessionsReady] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [viewportKeys, setViewportKeys] = useState<(string | null)[]>([]);
+  const [activeViewport, setActiveViewport] = useState(0);
+  const [dropViewport, setDropViewport] = useState<number | null>(null);
+  /** 将选中的会话放入目标视口；已有会话可直接切焦点或交换位置。 */
+  const activateThread = (key: string | null, target?: number) => {
+    if (viewportKeys.length) {
+      const existing = key === null ? -1 : viewportKeys.indexOf(key);
+      const index = target ?? (existing >= 0 ? existing : activeViewport);
+      setActiveViewport(index);
+      setViewportKeys((slots) => placePiSession(slots, index, key));
+    }
+    setSelected(key);
+  };
+  /** 退出并行模式保留当前会话，隐藏视口不停止后台任务。 */
+  const toggleViewports = () => {
+    setViewportKeys(viewportKeys.length ? [] : [selected, null]);
+    setActiveViewport(0);
+    setDropViewport(null);
+  };
+  /** 追加空视口，最多六个，等待用户放入会话。 */
+  const addViewport = () => {
+    if (viewportKeys.length >= MAX_PI_VIEWPORTS) {
+      toast.info("最多支持 6 个 Pi 会话视口，可替换现有视口中的会话。");
+      return;
+    }
+    setViewportKeys((slots) => [...slots, null]);
+  };
+  /** 仅关闭展示卡片；移除当前卡片后聚焦仍保留的会话。 */
+  const closeViewport = (index: number) => {
+    const next = viewportKeys.filter((_, position) => position !== index);
+    const focus =
+      index < activeViewport
+        ? activeViewport - 1
+        : Math.min(activeViewport, next.length - 1);
+    setSelected(next[focus] ?? null);
+    setActiveViewport(Math.max(0, focus));
+    setViewportKeys(next.length > 1 ? next : []);
+  };
+  /** 根据指针命中读取视口序号，供侧栏 pointer 拖拽使用。 */
+  const viewportAtPoint = (x: number, y: number): number | null => {
+    const element = document
+      .elementFromPoint(x, y)
+      ?.closest<HTMLElement>("[data-pi-viewport-index]");
+    return element ? Number(element.dataset.piViewportIndex) : null;
+  };
   const [revealThreadKey, setRevealThreadKey] = useState<string | null>(null);
   const [project, setProject] = useState<string | null>(null);
   const [piHome, setPiHome] = useState<string | null>(null);
@@ -132,6 +180,10 @@ export function PiAgentPane({
     thread: SidebarThread;
     name: string;
   } | null>(null);
+  const [viewportRename, setViewportRename] = useState<{
+    thread: SidebarThread;
+    name: string;
+  } | null>(null);
   const [requests, setRequests] = useState<ExtensionRequest[]>([]);
   const [answer, setAnswer] = useState("");
   const [extensionStatus, setExtensionStatus] = useState<
@@ -152,9 +204,6 @@ export function PiAgentPane({
   const activeCwd = activeThread?.cwd ?? project;
   const draftKey = selected ?? "";
   const draft = drafts[draftKey] ?? EMPTY_DRAFT;
-  const notice = notices[draftKey] ?? "";
-  const canEditLastUser =
-    !!activeThread && !operations[draftKey] && !!editableLastUser(view);
   /** 将提示绑定到操作发起时的线程，异步返回不污染后来选中的线程。 */
   const setNotice = (message: string, key = draftKey) =>
     setNotices((current) => ({ ...current, [key]: message }));
@@ -375,12 +424,19 @@ export function PiAgentPane({
     void operation.catch((error) => setNotice(String(error), key));
   };
   /** 获取指定会话的进程，操作始终指向右键目标。 */
-  const ensure = async (thread?: SidebarThread): Promise<PiThread> => {
+  const ensure = async (
+    thread?: SidebarThread,
+    key = selected,
+  ): Promise<PiThread> => {
     const runtime = client.current;
-    const targetCwd = thread?.cwd ?? activeCwd ?? piHome;
+    const targetCwd =
+      thread?.cwd ??
+      runtime?.threads.get(key ?? "")?.cwd ??
+      activeCwd ??
+      piHome;
     if (!runtime || !targetCwd) throw new Error("请先等待 Pi 初始化");
     return runtime.open(
-      thread?.key ?? selected ?? draftKey,
+      thread?.key ?? key ?? "",
       targetCwd,
       thread?.path || undefined,
     );
@@ -393,7 +449,7 @@ export function PiAgentPane({
       pinnedDrafts.current.add(key);
       void setPiAgentSessionOrder((current) => prependOrderId(current, key));
     }
-    setSelected(key);
+    activateThread(key);
     setRevealThreadKey(key);
     setSearchOpen(false);
     const target = await client.current!.open(key, path);
@@ -428,13 +484,19 @@ export function PiAgentPane({
     }
     void create(piHome);
   }, [active, piHome, selected, sessions, sessionsReady]);
-  /** 选择已有线程只读历史，必须发送后才启动 runtime。 */
-  const select = async (thread: SidebarThread) => {
+  /** 首次选择读取历史，后续复用内存中的会话和已加载分页。 */
+  const select = async (thread: SidebarThread, targetIndex?: number) => {
     setProject(thread.cwd);
-    setSelected(thread.key);
+    activateThread(thread.key, targetIndex);
     setSearchOpen(false);
     const target = await ensure(thread);
-    if (target.runtimeId !== null) return;
+    if (
+      target.runtimeId !== null ||
+      target.loadingHistory ||
+      target.view.historyOffset !== null ||
+      target.view.items.length > 0
+    )
+      return;
     await client.current!.hydrateFromDisk(target, lastModel);
   };
   /** 添加原生目录并选择项目，空文件夹也可直接开始任务。 */
@@ -450,7 +512,7 @@ export function PiAgentPane({
       hiddenProjects.filter((item) => pathKey(item) !== pathKey(result)),
     );
     setProject(result);
-    setSelected(nextDraftKey(result));
+    activateThread(nextDraftKey(result));
     setSidebarOpen(true);
   };
   /** 从插件列表移除项目，磁盘文件与会话保持原样。 */
@@ -463,11 +525,14 @@ export function PiAgentPane({
       setProject(
         projects.find((item) => pathKey(item) !== pathKey(path)) ?? null,
       );
-      setSelected(null);
+      activateThread(null);
     }
   };
   const ingestDroppedPaths = useCallback(
-    (items: Array<{ path: string; kind: "file" | "dir" }>) => {
+    (
+      items: Array<{ path: string; kind: "file" | "dir" }>,
+      targetKey = draftKey,
+    ) => {
       void (async () => {
         const images: typeof draft.images = [];
         const files: Array<{ path: string; kind: "file" | "dir" }> = [];
@@ -481,17 +546,17 @@ export function PiAgentPane({
           } else files.push(item);
         }
         setDrafts((value) => {
-          const current = value[draftKey] ?? EMPTY_DRAFT;
+          const current = value[targetKey] ?? EMPTY_DRAFT;
           return {
             ...value,
-            [draftKey]: {
+            [targetKey]: {
               ...current,
               images: [...current.images, ...images],
               files: addPathAttachments(current.files, files),
             },
           };
         });
-      })().catch((error) => setNotice(String(error), draftKey));
+      })().catch((error) => setNotice(String(error), targetKey));
     },
     [draftKey],
   );
@@ -508,10 +573,18 @@ export function PiAgentPane({
   usePiComposerNativeDrop({
     active: () => active && usePiComposerDropStore.getState().active,
     onDrop: ingestDroppedPaths,
-    onHover: (hover) => usePiComposerDropStore.getState().setHover(hover),
+    onHover: (hover, key) =>
+      usePiComposerDropStore.getState().setHover(hover, key),
   });
   /** 待 Pi 确认接受后清除当前草稿，失败时原输入仍可编辑重发。 */
-  const submit = async (behavior: "steer" | "followUp") => {
+  const submit = async (
+    behavior: "steer" | "followUp",
+    targetKey = selected,
+  ) => {
+    const selected = targetKey;
+    const draftKey = targetKey ?? "";
+    const draft = drafts[draftKey] ?? EMPTY_DRAFT;
+    const activeThread = threads.find((thread) => thread.key === targetKey);
     const text = withAttachmentPrompt(draft.text, draft.files);
     if (activeThread?.view.compaction?.status === "running") {
       if (!draftHasPayload(draft)) return;
@@ -524,7 +597,10 @@ export function PiAgentPane({
     if (command) {
       if (draft.images.length || draft.files.length)
         throw new Error("请先移除附件再执行会话命令");
-      const thread = await ensure(rows.find((row) => row.key === selected));
+      const thread = await ensure(
+        rows.find((row) => row.key === selected),
+        selected,
+      );
       if (command.name === "fork") {
         const target = rows.find((row) => row.key === thread.key);
         if (!target) throw new Error("当前线程尚未建立，无法分叉");
@@ -550,7 +626,10 @@ export function PiAgentPane({
     let runtimeKey = sourceKey;
     setPending((value) => new Set([...value, sourceKey]));
     try {
-      const thread = await ensure(rows.find((row) => row.key === selected));
+      const thread = await ensure(
+        rows.find((row) => row.key === selected),
+        selected,
+      );
       runtimeKey = thread.key;
       const queued =
         alreadySending ||
@@ -710,9 +789,12 @@ export function PiAgentPane({
         ),
       );
       setRequests((value) => value.filter((request) => !keys.has(request.key)));
+      setViewportKeys((slots) =>
+        slots.map((key) => (key && keys.has(key) ? null : key)),
+      );
       if (selected && keys.has(selected)) {
         const fallback = rows.find((row) => !keys.has(row.key));
-        setSelected(fallback?.key ?? null);
+        activateThread(fallback?.key ?? null);
         if (fallback) setProject(fallback.cwd);
       }
       await setPiAgentOrganization({
@@ -743,7 +825,7 @@ export function PiAgentPane({
     );
     void setPiAgentSessionOrder((current) => prependOrderId(current, identity));
     setProject(result.thread.cwd);
-    setSelected(result.thread.key);
+    activateThread(result.thread.key);
     setRevealThreadKey(result.thread.key);
     await refreshSessions();
   };
@@ -770,6 +852,13 @@ export function PiAgentPane({
     await client.current!.rename(thread, name);
     await refreshSessions();
   };
+  /** 提交视口标题编辑，复用原生会话改名并同步侧栏。 */
+  const commitViewportRename = () => {
+    if (!viewportRename) return;
+    const { thread, name } = viewportRename;
+    setViewportRename(null);
+    if (name.trim()) run(commitRename(thread, name.trim()), thread.key);
+  };
   const renameThread = async () => {
     if (!rename?.name.trim()) return;
     await commitRename(rename.thread, rename.name.trim());
@@ -791,6 +880,7 @@ export function PiAgentPane({
     });
     setRequests((value) => value.filter((item) => item !== request));
   };
+  const selectedKey = selected;
   return (
     <section
       data-testid="pi-agent"
@@ -807,7 +897,29 @@ export function PiAgentPane({
       }}
     >
       <header className="flex h-10 shrink-0 items-center border-b border-border px-2">
-        <div className="order-3 shrink-0">
+        <div className="order-3 flex shrink-0 items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={viewportKeys.length ? "退出多视口" : "多视口"}
+            title={viewportKeys.length ? "退出多视口" : "多视口"}
+            aria-pressed={!!viewportKeys.length}
+            onClick={toggleViewports}
+          >
+            <HugeiconsIcon icon={GridViewIcon} size={14} />
+          </Button>
+          {viewportKeys.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="增加 Pi 视口"
+              title="增加 Pi 视口"
+              className="h-6 px-2.5 text-xs font-normal text-foreground"
+              onClick={addViewport}
+            >
+              + {viewportKeys.length}/6
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon-sm"
@@ -823,8 +935,10 @@ export function PiAgentPane({
           className="order-1 min-w-0 flex-1 truncate px-3 text-xs font-medium"
         >
           {view.sessionName ||
+            rows.find((row) => row.key === selected)?.name ||
             rows.find((row) => row.key === selected)?.preview ||
             (activeCwd ? projectName(activeCwd) : "Pi Agent")}
+          {activeCwd ? ` (${projectName(activeCwd)})` : ""}
         </div>
         <Button
           variant="ghost"
@@ -855,10 +969,28 @@ export function PiAgentPane({
             projects={projects}
             threads={rows}
             selectedKey={selected}
+            viewportDrop={
+              viewportKeys.length
+                ? {
+                    hover: (x, y) => {
+                      const index = viewportAtPoint(x, y);
+                      setDropViewport(index);
+                      return index !== null;
+                    },
+                    clear: () => setDropViewport(null),
+                    drop: (thread, x, y) => {
+                      const index = viewportAtPoint(x, y);
+                      if (index === null) return false;
+                      run(select(thread, index), thread.key);
+                      return true;
+                    },
+                  }
+                : undefined
+            }
             revealThreadKey={revealThreadKey}
             selectedProject={activeCwd}
             organization={organization}
-            organizationReady={hydrated}
+            organizationReady={hydrated && sessionsReady}
             onOrganize={(next) => run(setPiAgentOrganization(next))}
             onAddProject={() => run(addProject())}
             onRemoveProject={(path) => run(removeProject(path))}
@@ -881,205 +1013,377 @@ export function PiAgentPane({
             temporaryHome={piHome}
           />
         )}
-        <main className="relative order-first flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <PiTranscript
-            cwd={activeCwd ?? ""}
-            view={view}
-            sendRevision={sendRevisions[draftKey] ?? 0}
-            loading={activeThread?.loadingHistory ?? false}
-            threadKey={draftKey}
-            active={active}
-            searchOpen={searchOpen}
-            onCloseSearch={() => setSearchOpen(false)}
-            onOpenFile={onOpenFile}
-            onCopy={(text) => run(writeText(text))}
-            onEdit={async (item, text) => {
-              if (!activeThread) throw new Error("当前没有活动线程");
-              try {
-                return await editLastUser(activeThread, item, text);
-              } catch (error) {
-                setNotice(String(error), activeThread.key);
-                throw error;
-              }
-            }}
-            onFork={() => {
-              const target = rows.find((row) => row.key === selected);
-              if (target) run(forkThread(target), target.key);
-            }}
-            canEditLastUser={canEditLastUser}
-            onLoadOlder={() => {
-              if (activeThread)
-                run(
-                  client.current!.loadOlderHistory(activeThread),
-                  activeThread.key,
+        <div
+          className="order-first grid min-h-0 min-w-0 flex-1 gap-1 overflow-hidden"
+          style={{
+            gridTemplateColumns: `repeat(${viewportKeys.length > 4 ? 3 : viewportKeys.length > 1 ? 2 : 1}, minmax(0, 1fr))`,
+            gridTemplateRows: `repeat(${viewportKeys.length > 4 ? 2 : viewportKeys.length > 2 ? 2 : 1}, minmax(0, 1fr))`,
+          }}
+        >
+          {(viewportKeys.length ? viewportKeys : [selected]).map(
+            (paneKey, paneIndex) => {
+              const selected = paneKey;
+              const draftKey = paneKey ?? "";
+              const activeThread = threads.find(
+                (thread) => thread.key === paneKey,
+              );
+              const view = activeThread?.view ?? INITIAL_PI_VIEW_STATE;
+              const activeCwd =
+                activeThread?.cwd ??
+                rows.find((row) => row.key === paneKey)?.cwd ??
+                project;
+              const draft = drafts[draftKey] ?? EMPTY_DRAFT;
+              const notice = notices[draftKey] ?? "";
+              const canEditLastUser =
+                !!activeThread &&
+                !operations[draftKey] &&
+                !!editableLastUser(view);
+              /** 将当前视口的异步错误写回对应会话。 */
+              const run = (operation: Promise<unknown>, key = draftKey) => {
+                void operation.catch((error) => setNotice(String(error), key));
+              };
+              if (viewportKeys.length && !paneKey)
+                return (
+                  <div
+                    key={`empty-${paneIndex}`}
+                    data-pi-viewport-index={paneIndex}
+                    className={`flex min-h-0 flex-col rounded-md border border-dashed ${dropViewport === paneIndex ? "border-primary bg-accent/40" : "border-border"}`}
+                  >
+                    <div className="flex h-7 items-center justify-between px-2 text-[11px] text-muted-foreground">
+                      视口 {paneIndex + 1}
+                      <button
+                        type="button"
+                        aria-label={`关闭视口 ${paneIndex + 1}`}
+                        onClick={() => closeViewport(paneIndex)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      className="min-h-0 flex-1 px-3 text-xs text-muted-foreground"
+                      onClick={() => {
+                        setActiveViewport(paneIndex);
+                        setSelected(null);
+                      }}
+                    >
+                      从右侧拖入会话
+                      <br />
+                      或点击此处后在侧栏选择
+                    </button>
+                  </div>
                 );
-            }}
-          />
-          <PiComposer
-            key={draftKey}
-            draft={draft}
-            onChange={(value) =>
-              setDrafts((current) => ({ ...current, [draftKey]: value }))
-            }
-            view={view}
-            notice={plainStatusText(
-              notice ||
-                view.error ||
-                (probe?.available === false
-                  ? (probe.error ?? "Pi 不可用")
-                  : ""),
-            )}
-            onDismissNotice={() => {
-              setNotice("");
-              if (activeThread) client.current?.error(activeThread.key, "");
-            }}
-            status={
-              operations[draftKey] ||
-              Object.values(
-                extensionStatus[activeThread?.key ?? draftKey] ?? {},
-              )
-                .map(plainStatusText)
-                .filter(Boolean)
-                .join(" · ")
-            }
-            onLoadModels={() =>
-              run(
-                (async () => {
-                  const models = await client.current!.loadCatalog(true);
-                  setCatalog(models);
-                  const thread = await ensure(
-                    rows.find((row) => row.key === selected),
-                  );
-                  await client.current!.loadModels(thread, true);
-                })(),
-              )
-            }
-            onLoadCommands={async () => {
-              const thread = await ensure(
-                rows.find((row) => row.key === selected),
-              );
-              await client.current!.loadCommands(thread);
-            }}
-            onSend={(behavior) => run(submit(behavior))}
-            onLocalQueueAction={(id, action) => {
-              if (!activeThread) return;
-              const item = client.current!.removeQueued(activeThread, id);
-              if (item && action === "edit") {
-                setDrafts((value) => {
-                  const current = value[draftKey] ?? EMPTY_DRAFT;
-                  return {
-                    ...value,
-                    [draftKey]: {
-                      text: [item.text, current.text]
+              return (
+                <main
+                  key={
+                    viewportKeys.length
+                      ? (paneKey ?? `empty-${paneIndex}`)
+                      : "single"
+                  }
+                  data-pi-viewport-key={paneKey ?? ""}
+                  data-pi-viewport-index={
+                    viewportKeys.length ? paneIndex : undefined
+                  }
+                  className={`@container relative flex min-h-0 min-w-0 flex-col overflow-hidden ${viewportKeys.length ? "rounded-md border" : ""} ${dropViewport === paneIndex ? "border-primary ring-2 ring-primary/40" : paneKey === selectedKey ? "border-primary/50" : "border-border"}`}
+                  onPointerDownCapture={() => {
+                    if (paneKey !== selectedKey) {
+                      setActiveViewport(paneIndex);
+                      setSelected(paneKey);
+                    }
+                  }}
+                  onFocusCapture={() => {
+                    if (paneKey !== selectedKey) {
+                      setActiveViewport(paneIndex);
+                      setSelected(paneKey);
+                    }
+                  }}
+                >
+                  {viewportKeys.length > 0 && (
+                    <div className="flex h-7 shrink-0 items-center gap-1 border-b border-border/60 bg-muted/30 px-2 text-[11px]">
+                      {viewportRename?.thread.key === paneKey ? (
+                        <input
+                          autoFocus
+                          aria-label="重命名 Pi 视口"
+                          className="h-5 min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-[11px] outline-none focus:border-primary/60"
+                          value={viewportRename.name}
+                          onFocus={(event) => event.currentTarget.select()}
+                          onChange={(event) =>
+                            setViewportRename({
+                              thread: viewportRename.thread,
+                              name: event.target.value,
+                            })
+                          }
+                          onBlur={commitViewportRename}
+                          onKeyDown={(event) => {
+                            event.stopPropagation();
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              event.currentTarget.blur();
+                            } else if (event.key === "Escape") {
+                              event.preventDefault();
+                              setViewportRename(null);
+                            }
+                          }}
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 truncate text-left"
+                          title="双击重命名会话"
+                          onDoubleClick={() => {
+                            const thread = rows.find(
+                              (row) => row.key === paneKey,
+                            );
+                            if (thread)
+                              setViewportRename({
+                                thread,
+                                name: thread.name || thread.preview || "",
+                              });
+                          }}
+                        >
+                          {view.sessionName ||
+                            rows.find((row) => row.key === paneKey)?.name ||
+                            rows.find((row) => row.key === paneKey)?.preview ||
+                            `视口 ${paneIndex + 1}`}
+                          {activeCwd ? ` (${projectName(activeCwd)})` : ""}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        aria-label={`关闭视口 ${paneIndex + 1}`}
+                        title="关闭视口，任务继续运行"
+                        onClick={() => closeViewport(paneIndex)}
+                        className="size-5 shrink-0 rounded hover:bg-accent"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  )}
+                  <PiTranscript
+                    cwd={activeCwd ?? ""}
+                    view={view}
+                    sendRevision={sendRevisions[draftKey] ?? 0}
+                    loading={activeThread?.loadingHistory ?? false}
+                    threadKey={draftKey}
+                    active={active}
+                    searchOpen={searchOpen && paneKey === selectedKey}
+                    onCloseSearch={() => setSearchOpen(false)}
+                    onOpenFile={onOpenFile}
+                    onCopy={(text) => run(writeText(text))}
+                    onEdit={async (item, text) => {
+                      if (!activeThread) throw new Error("当前没有活动线程");
+                      try {
+                        return await editLastUser(activeThread, item, text);
+                      } catch (error) {
+                        setNotice(String(error), activeThread.key);
+                        throw error;
+                      }
+                    }}
+                    onFork={() => {
+                      const target = rows.find((row) => row.key === selected);
+                      if (target) run(forkThread(target), target.key);
+                    }}
+                    canEditLastUser={canEditLastUser}
+                    onLoadOlder={() => {
+                      if (activeThread)
+                        run(
+                          client.current!.loadOlderHistory(activeThread),
+                          activeThread.key,
+                        );
+                    }}
+                  />
+                  <PiComposer
+                    key={draftKey}
+                    threadKey={draftKey}
+                    focused={paneKey === selectedKey}
+                    draft={draft}
+                    onChange={(value) =>
+                      setDrafts((current) => ({
+                        ...current,
+                        [draftKey]: value,
+                      }))
+                    }
+                    view={view}
+                    notice={plainStatusText(
+                      notice ||
+                        view.error ||
+                        (probe?.available === false
+                          ? (probe.error ?? "Pi 不可用")
+                          : ""),
+                    )}
+                    onDismissNotice={() => {
+                      setNotice("", draftKey);
+                      if (activeThread)
+                        client.current?.error(activeThread.key, "");
+                    }}
+                    status={
+                      operations[draftKey] ||
+                      Object.values(
+                        extensionStatus[activeThread?.key ?? draftKey] ?? {},
+                      )
+                        .map(plainStatusText)
                         .filter(Boolean)
-                        .join("\n\n"),
-                      images: [...item.images, ...current.images],
-                      files: current.files,
-                    },
-                  };
-                });
-                setFocusRevisions((value) => ({
-                  ...value,
-                  [draftKey]: (value[draftKey] ?? 0) + 1,
-                }));
-              }
-            }}
-            onRetryQueue={() => {
-              if (activeThread)
-                run(client.current!.drainQueue(activeThread), activeThread.key);
-            }}
-            onQueueAction={(kind, index, text, action) => {
-              if (!activeThread) return;
-              const thread = activeThread;
-              const label =
-                action === "steer"
-                  ? "正在安排为下一步…"
-                  : action === "edit"
-                    ? "正在退回输入框…"
-                    : "正在删除排队消息…";
-              run(
-                operate(thread, label, () =>
-                  client.current!.updateQueuedMessage(
-                    thread,
-                    kind,
-                    index,
-                    text,
-                    action,
-                    (texts) => {
-                      setDrafts((value) => {
-                        const current = value[thread.key] ?? EMPTY_DRAFT;
-                        return {
+                        .join(" · ")
+                    }
+                    onLoadModels={() =>
+                      run(
+                        (async () => {
+                          const models =
+                            await client.current!.loadCatalog(true);
+                          setCatalog(models);
+                          const thread = await ensure(
+                            rows.find((row) => row.key === selected),
+                            selected,
+                          );
+                          await client.current!.loadModels(thread, true);
+                        })(),
+                      )
+                    }
+                    onLoadCommands={async () => {
+                      const thread = await ensure(
+                        rows.find((row) => row.key === selected),
+                        selected,
+                      );
+                      await client.current!.loadCommands(thread);
+                    }}
+                    onSend={(behavior) =>
+                      run(submit(behavior, paneKey), draftKey)
+                    }
+                    onLocalQueueAction={(id, action) => {
+                      if (!activeThread) return;
+                      const item = client.current!.removeQueued(
+                        activeThread,
+                        id,
+                      );
+                      if (item && action === "edit") {
+                        setDrafts((value) => {
+                          const current = value[draftKey] ?? EMPTY_DRAFT;
+                          return {
+                            ...value,
+                            [draftKey]: {
+                              text: [item.text, current.text]
+                                .filter(Boolean)
+                                .join("\n\n"),
+                              images: [...item.images, ...current.images],
+                              files: current.files,
+                            },
+                          };
+                        });
+                        setFocusRevisions((value) => ({
                           ...value,
-                          [thread.key]: {
-                            ...current,
-                            text: [...texts, current.text]
-                              .filter(Boolean)
-                              .join("\n\n"),
-                          },
-                        };
-                      });
-                      setFocusRevisions((value) => ({
-                        ...value,
-                        [thread.key]: (value[thread.key] ?? 0) + 1,
-                      }));
-                    },
-                  ),
-                ),
-                thread.key,
+                          [draftKey]: (value[draftKey] ?? 0) + 1,
+                        }));
+                      }
+                    }}
+                    onRetryQueue={() => {
+                      if (activeThread)
+                        run(
+                          client.current!.drainQueue(activeThread),
+                          activeThread.key,
+                        );
+                    }}
+                    onQueueAction={(kind, index, text, action) => {
+                      if (!activeThread) return;
+                      const thread = activeThread;
+                      const label =
+                        action === "steer"
+                          ? "正在安排为下一步…"
+                          : action === "edit"
+                            ? "正在退回输入框…"
+                            : "正在删除排队消息…";
+                      run(
+                        operate(thread, label, () =>
+                          client.current!.updateQueuedMessage(
+                            thread,
+                            kind,
+                            index,
+                            text,
+                            action,
+                            (texts) => {
+                              setDrafts((value) => {
+                                const current =
+                                  value[thread.key] ?? EMPTY_DRAFT;
+                                return {
+                                  ...value,
+                                  [thread.key]: {
+                                    ...current,
+                                    text: [...texts, current.text]
+                                      .filter(Boolean)
+                                      .join("\n\n"),
+                                  },
+                                };
+                              });
+                              setFocusRevisions((value) => ({
+                                ...value,
+                                [thread.key]: (value[thread.key] ?? 0) + 1,
+                              }));
+                            },
+                          ),
+                        ),
+                        thread.key,
+                      );
+                    }}
+                    onStop={() => {
+                      if (activeThread) run(stopThread(activeThread), draftKey);
+                    }}
+                    onModel={(provider, modelId) =>
+                      run(
+                        ensure(
+                          rows.find((row) => row.key === selected),
+                          selected,
+                        ).then(async (thread) => {
+                          const name = (
+                            view.models.length ? view.models : catalog
+                          ).find(
+                            (model) =>
+                              model.provider === provider &&
+                              model.id === modelId,
+                          )?.name;
+                          await client.current!.setModel(
+                            thread,
+                            provider,
+                            modelId,
+                            name,
+                          );
+                          await setPiAgentLastModel({
+                            provider,
+                            id: modelId,
+                            name,
+                          });
+                        }),
+                      )
+                    }
+                    onThinking={(level) =>
+                      run(
+                        ensure(
+                          rows.find((row) => row.key === selected),
+                          selected,
+                        ).then(async (thread) => {
+                          await client.current!.setThinkingLevel(thread, level);
+                          await setPiAgentLastThinkingLevel(level);
+                        }),
+                      )
+                    }
+                    onSettings={() => setSettingsOpen(true)}
+                    onError={(error) => setNotice(String(error), draftKey)}
+                    busy={
+                      pending.has(draftKey) ||
+                      !!operations[draftKey] ||
+                      view.status === "starting"
+                    }
+                    focusRevision={focusRevisions[draftKey] ?? 0}
+                    disabled={
+                      (!activeCwd && !piHome) || probe?.available === false
+                    }
+                    project={activeCwd ?? piHome ?? ""}
+                    catalogModel={lastModel}
+                    catalogModels={catalog}
+                  />
+                </main>
               );
-            }}
-            onStop={() => {
-              if (activeThread) run(stopThread(activeThread));
-            }}
-            onModel={(provider, modelId) =>
-              run(
-                ensure(rows.find((row) => row.key === selected)).then(
-                  async (thread) => {
-                    const name = (
-                      view.models.length ? view.models : catalog
-                    ).find(
-                      (model) =>
-                        model.provider === provider && model.id === modelId,
-                    )?.name;
-                    await client.current!.setModel(
-                      thread,
-                      provider,
-                      modelId,
-                      name,
-                    );
-                    await setPiAgentLastModel({
-                      provider,
-                      id: modelId,
-                      name,
-                    });
-                  },
-                ),
-              )
-            }
-            onThinking={(level) =>
-              run(
-                ensure(rows.find((row) => row.key === selected)).then(
-                  async (thread) => {
-                    await client.current!.setThinkingLevel(thread, level);
-                    await setPiAgentLastThinkingLevel(level);
-                  },
-                ),
-              )
-            }
-            onSettings={() => setSettingsOpen(true)}
-            onError={(error) => setNotice(String(error))}
-            busy={
-              pending.has(draftKey) ||
-              !!operations[draftKey] ||
-              view.status === "starting"
-            }
-            focusRevision={focusRevisions[draftKey] ?? 0}
-            disabled={(!activeCwd && !piHome) || probe?.available === false}
-            project={activeCwd ?? piHome ?? ""}
-            catalogModel={lastModel}
-            catalogModels={catalog}
-          />
-        </main>
+            },
+          )}
+        </div>
       </div>
       <PiSettings
         open={settingsOpen && active}

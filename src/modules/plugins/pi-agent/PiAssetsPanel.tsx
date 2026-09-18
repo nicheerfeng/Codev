@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Refresh01Icon } from "@hugeicons/core-free-icons";
+import { Refresh01Icon, Copy01Icon } from "@hugeicons/core-free-icons";
+import { invoke } from "@tauri-apps/api/core";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { toast } from "sonner";
+import {
+  HoverCard,
+  HoverCardTrigger,
+  HoverCardContent,
+} from "@/components/ui/hover-card";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -18,25 +26,85 @@ import {
   type RecommendedPiPlugin,
 } from "./recommendedPlugins";
 
-function AssetCard({ item }: { item: PiAsset }) {
+/** 在窗口边界内展示可选择、换行和滚动的完整简介。 */
+function AssetSummary({ summary }: { summary?: string | null }) {
+  const [open, setOpen] = useState(false);
   return (
-    <article className="min-h-32 rounded-lg border border-border bg-card p-3 shadow-sm">
-      <h3 className="truncate text-sm font-medium" title={item.name}>
-        {item.name}
-      </h3>
-      <p className="mt-1 text-[10px] text-muted-foreground">{item.source}</p>
-      <p
-        className="mt-2 line-clamp-2 break-words text-xs leading-5 text-muted-foreground"
-        title={item.summary || undefined}
+    <HoverCard open={open} onOpenChange={setOpen} openDelay={250}>
+      <HoverCardTrigger asChild>
+        <p
+          tabIndex={0}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setOpen(false)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setOpen(false);
+          }}
+          className="mt-2 line-clamp-2 break-words text-xs leading-5 text-muted-foreground"
+        >
+          {summary || "暂无简介"}
+        </p>
+      </HoverCardTrigger>
+      <HoverCardContent
+        collisionPadding={12}
+        className="reader-scrollbar select-text w-[min(24rem,calc(100vw-2rem))] max-h-[min(45vh,var(--radix-hover-card-content-available-height))] overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded-lg border border-border p-3 text-xs leading-5"
       >
-        {item.summary || "暂无简介"}
-      </p>
-      <p
-        className="mt-2 break-all text-[10px] text-muted-foreground/80"
-        title={item.path}
+        {summary || "暂无简介"}
+      </HoverCardContent>
+    </HoverCard>
+  );
+}
+
+/** 展示可复制的资源信息，目录直接打开，文件则定位到所在目录。 */
+function AssetCard({ item }: { item: PiAsset }) {
+  /** 复制原始标题并反馈结果。 */
+  const copyName = async () => {
+    try {
+      await writeText(item.name);
+      toast.success("已复制标题");
+    } catch (error) {
+      toast.error("复制失败", { description: String(error) });
+    }
+  };
+  /** 查询本机资源类型，打开目录或在目录中定位文件。 */
+  const openFolder = async () => {
+    try {
+      const stat = await invoke<{ kind: string }>("fs_stat", {
+        path: item.path,
+      });
+      if (stat.kind === "dir") await openPath(item.path);
+      else await revealItemInDir(item.path);
+    } catch (error) {
+      toast.error("无法打开资源目录", { description: String(error) });
+    }
+  };
+  return (
+    <article className="select-text min-w-0 min-h-32 rounded-lg border border-border bg-card p-3 shadow-sm">
+      <div className="flex items-start gap-1">
+        <h3 className="min-w-0 flex-1 break-words [overflow-wrap:anywhere] text-sm font-medium">
+          {item.name}
+        </h3>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`复制标题 ${item.name}`}
+          title="复制标题"
+          onClick={() => void copyName()}
+        >
+          <HugeiconsIcon icon={Copy01Icon} size={12} />
+        </Button>
+      </div>
+      <p className="mt-1 text-[10px] text-muted-foreground">{item.source}</p>
+      <AssetSummary summary={item.summary} />
+      <button
+        type="button"
+        className="mt-2 block w-full break-all text-left text-[10px] text-muted-foreground hover:text-foreground hover:underline"
+        aria-label={`打开目录 ${item.path}`}
+        onClick={() => {
+          if (!window.getSelection()?.toString()) void openFolder();
+        }}
       >
         {item.path}
-      </p>
+      </button>
     </article>
   );
 }
@@ -61,9 +129,7 @@ function RecommendedCard({
       <p className="mt-1 font-mono text-[10px] text-muted-foreground">
         {item.package}
       </p>
-      <p className="mt-2 line-clamp-3 flex-1 break-words text-xs text-muted-foreground">
-        {item.summary}
-      </p>
+      <AssetSummary summary={item.summary} />
       <div className="mt-3 flex flex-wrap gap-1.5">
         <Button
           size="xs"

@@ -32,6 +32,9 @@ type DragState = {
   label: string;
   pointerId: number;
   startY: number;
+  startX: number;
+  x: number;
+  y: number;
   target: HTMLElement;
   active: boolean;
   gap: number | null;
@@ -46,6 +49,21 @@ export function usePiSidebarReorder(
     gap: number,
     group: string,
   ) => void,
+  external?: {
+    hover: (
+      kind: PiReorderKind,
+      source: string,
+      x: number,
+      y: number,
+    ) => boolean;
+    drop: (
+      kind: PiReorderKind,
+      source: string,
+      x: number,
+      y: number,
+    ) => boolean;
+    clear: () => void;
+  },
 ) {
   const drag = useRef<DragState | null>(null);
   const suppressClick = useRef(false);
@@ -72,72 +90,99 @@ export function usePiSidebarReorder(
       }
       suppressClick.current = current?.active === true;
       clearVisuals();
+      external?.clear();
+      if (
+        commit &&
+        current?.active &&
+        external?.drop(current.kind, current.source, current.x, current.y)
+      )
+        return;
       if (commit && current?.active && current.gap !== null) {
         onMove(current.kind, current.source, current.gap, current.group);
       }
     },
-    [clearVisuals, onMove],
+    [clearVisuals, onMove, external],
   );
 
-  const track = useCallback((_clientX: number, clientY: number) => {
-    const current = drag.current;
-    if (!current) return;
-    if (!current.active && Math.abs(clientY - current.startY) < 6) return;
-    if (!current.active) {
-      current.active = true;
-      if (!current.target.hasPointerCapture(current.pointerId)) {
-        current.target.setPointerCapture(current.pointerId);
+  const track = useCallback(
+    (clientX: number, clientY: number) => {
+      const current = drag.current;
+      if (!current) return;
+      current.x = clientX;
+      current.y = clientY;
+      if (
+        !current.active &&
+        Math.hypot(clientX - current.startX, clientY - current.startY) < 6
+      )
+        return;
+      if (!current.active) {
+        current.active = true;
+        if (!current.target.hasPointerCapture(current.pointerId)) {
+          current.target.setPointerCapture(current.pointerId);
+        }
+        document.body.style.userSelect = "none";
       }
-      document.body.style.userSelect = "none";
-    }
-    const selector = `[data-pi-reorder="${current.kind}"]`;
-    const headers = Array.from(
-      document.querySelectorAll<HTMLElement>(selector),
-    ).filter((node) => node.dataset.piGroup === current.group);
-    if (!headers.length) {
-      current.gap = null;
+      if (external?.hover(current.kind, current.source, clientX, clientY)) {
+        current.gap = null;
+        setPosition(null);
+        setGhost({ ...current, x: clientX + 12, y: clientY + 12 });
+        return;
+      }
+      const selector = `[data-pi-reorder="${current.kind}"]`;
+      const headers = Array.from(
+        document.querySelectorAll<HTMLElement>(selector),
+      ).filter((node) => node.dataset.piGroup === current.group);
+      if (!headers.length) {
+        current.gap = null;
+        setPosition({
+          kind: current.kind,
+          source: current.source,
+          group: current.group,
+          gap: null,
+        });
+        setGhost(null);
+        return;
+      }
+      const first = headers[0].getBoundingClientRect();
+      const last = headers[headers.length - 1].getBoundingClientRect();
+      const left = first.left;
+      const width = first.width;
+      const top = first.top;
+      const bottom = last.bottom;
+      if (
+        clientX < left ||
+        clientX > left + width ||
+        clientY < top - 12 ||
+        clientY > bottom + 12
+      ) {
+        current.gap = null;
+      } else {
+        const index = headers.findIndex((header) => {
+          const rect = header.getBoundingClientRect();
+          return clientY < rect.top + rect.height / 2;
+        });
+        current.gap = index < 0 ? headers.length : index;
+      }
       setPosition({
         kind: current.kind,
         source: current.source,
         group: current.group,
-        gap: null,
+        gap: current.gap,
       });
-      setGhost(null);
-      return;
-    }
-    const first = headers[0].getBoundingClientRect();
-    const last = headers[headers.length - 1].getBoundingClientRect();
-    const left = first.left;
-    const width = first.width;
-    const top = first.top;
-    const bottom = last.bottom;
-    if (clientY < top - 12 || clientY > bottom + 12) {
-      current.gap = null;
-    } else {
-      const index = headers.findIndex((header) => {
-        const rect = header.getBoundingClientRect();
-        return clientY < rect.top + rect.height / 2;
+      const height = Math.max(28, first.height);
+      const y = Math.min(bottom - height, Math.max(top, clientY - height / 2));
+      setGhost({
+        kind: current.kind,
+        source: current.source,
+        group: current.group,
+        label: current.label,
+        x: left,
+        y,
+        width,
       });
-      current.gap = index < 0 ? headers.length : index;
-    }
-    setPosition({
-      kind: current.kind,
-      source: current.source,
-      group: current.group,
-      gap: current.gap,
-    });
-    const height = Math.max(28, first.height);
-    const y = Math.min(bottom - height, Math.max(top, clientY - height / 2));
-    setGhost({
-      kind: current.kind,
-      source: current.source,
-      group: current.group,
-      label: current.label,
-      x: left,
-      y,
-      width,
-    });
-  }, []);
+    },
+    [external],
+  );
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -192,6 +237,9 @@ export function usePiSidebarReorder(
         label,
         pointerId: event.pointerId,
         startY: event.clientY,
+        startX: event.clientX,
+        x: event.clientX,
+        y: event.clientY,
         target: event.currentTarget,
         active: false,
         gap: null,

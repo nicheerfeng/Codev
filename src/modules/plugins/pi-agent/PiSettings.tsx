@@ -5,6 +5,9 @@ import {
   Cancel01Icon,
   CpuIcon,
   HelpCircleIcon,
+  BookOpen01Icon,
+  PuzzleIcon,
+  InformationCircleIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -391,6 +394,7 @@ export function PiSettings({
               className="mt-1 w-full justify-start rounded-lg px-2 text-xs"
               onClick={() => setPanel("skills")}
             >
+              <HugeiconsIcon icon={BookOpen01Icon} size={14} />
               技能
             </Button>
             <Button
@@ -400,6 +404,7 @@ export function PiSettings({
               className="mt-1 w-full justify-start rounded-lg px-2 text-xs"
               onClick={() => setPanel("plugins")}
             >
+              <HugeiconsIcon icon={PuzzleIcon} size={14} />
               插件
             </Button>
             <Button
@@ -409,6 +414,7 @@ export function PiSettings({
               className="mt-1 w-full justify-start rounded-lg px-2 text-xs"
               onClick={() => setPanel("version")}
             >
+              <HugeiconsIcon icon={InformationCircleIcon} size={14} />
               版本
             </Button>
           </nav>

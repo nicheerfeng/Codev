@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { reorderDockTabsAtGap, type DockTab } from "./dockTabs";
+import {
+  normalizeDockOrder,
+  reorderDockTabsAtGap,
+  type DockTab,
+} from "./dockTabs";
 
 const all: DockTab[] = ["terminal", "json", "diff", "pi"];
+
+it("restores order including hidden tabs and appends missing entries", () => {
+  expect(normalizeDockOrder(["pi", "pi", "removed", "terminal"])).toEqual([
+    "pi",
+    "terminal",
+    "json",
+    "diff",
+  ]);
+  expect(normalizeDockOrder(null)).toEqual(all);
+});
 
 describe("reorderDockTabsAtGap", () => {
   it("moves the first visible tab after the last visible tab", () => {

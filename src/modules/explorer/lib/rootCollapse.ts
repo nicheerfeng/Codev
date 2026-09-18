@@ -1,3 +1,5 @@
+import { uiState } from "@/lib/uiState";
+
 export const FILE_TREE_ROOTS_KEY = "codev.file-tree.roots";
 
 /** 工作区根路径做成稳定键，Windows 盘符忽略大小写。 */
@@ -12,7 +14,7 @@ export function readFileTreeRootCollapsed(store?: Storage | null): {
   keys: Set<string>;
 } {
   try {
-    const raw = (store ?? localStorage).getItem(FILE_TREE_ROOTS_KEY);
+    const raw = (store ?? uiState).getItem(FILE_TREE_ROOTS_KEY);
     if (raw == null) return { ready: false, keys: new Set() };
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return { ready: false, keys: new Set() };
@@ -34,7 +36,7 @@ export function writeFileTreeRootCollapsed(
   store?: Storage | null,
 ): void {
   try {
-    (store ?? localStorage).setItem(
+    (store ?? uiState).setItem(
       FILE_TREE_ROOTS_KEY,
       JSON.stringify([...keys].map(rootCollapseKey)),
     );
