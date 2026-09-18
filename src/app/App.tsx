@@ -98,7 +98,8 @@ import { onAction } from "@tauri-apps/plugin-notification";
 import { useDockTabReorder } from "./hooks/useDockTabReorder";
 import { useTabCloseGuards } from "./hooks/useTabCloseGuards";
 import { useWorkspaceSwitcher } from "./hooks/useWorkspaceSwitcher";
-import type { DockTab } from "./lib/dockTabs";
+import { normalizeDockOrder, type DockTab } from "./lib/dockTabs";
+import { uiState } from "@/lib/uiState";
 import {
   completeWelcome,
   firstLayoutSizes,
@@ -193,8 +194,10 @@ export default function App() {
     () =>
       createPiComposerPathDropTarget({
         active: () => usePiComposerDropStore.getState().active,
-        onDrop: (items) => usePiComposerDropStore.getState().drop?.(items),
-        onHover: (hover) => usePiComposerDropStore.getState().setHover(hover),
+        onDrop: (items, key) =>
+          usePiComposerDropStore.getState().drop?.(items, key),
+        onHover: (hover, key) =>
+          usePiComposerDropStore.getState().setHover(hover, key),
       }),
     [],
   );
@@ -226,12 +229,18 @@ export default function App() {
     "terminal",
   );
   const [toolView, setToolView] = useState<"json" | "diff" | "pi">("pi");
-  const [dockOrder, setDockOrder] = useState<DockTab[]>([
-    "terminal",
-    "json",
-    "diff",
-    "pi",
-  ]);
+  const [dockOrder, setDockOrder] = useState<DockTab[]>(() => {
+    try {
+      return normalizeDockOrder(
+        JSON.parse(uiState.getItem("codev.dock.order") ?? "null"),
+      );
+    } catch {
+      return normalizeDockOrder(null);
+    }
+  });
+  useEffect(() => {
+    uiState.setItem("codev.dock.order", JSON.stringify(dockOrder));
+  }, [dockOrder]);
 
   const availableDockTabs = useMemo<DockTab[]>(
     () => [
@@ -1447,12 +1456,14 @@ export default function App() {
                         tabs={terminalTabs}
                         showHeader={!pluginEnabled}
                         visible={
-                          rightDockView === "terminal" && !terminalPanelCollapsed
+                          rightDockView === "terminal" &&
+                          !terminalPanelCollapsed
                         }
                         activeId={terminalActiveId}
                         onSelect={setActiveId}
                         onClose={handleClose}
                         onNew={openNewTab}
+                        onDuplicate={newTab}
                         onShowTerminals={showTerminals}
                         onRename={handleRenameTab}
                         onReorder={reorderTerminals}

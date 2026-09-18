@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { uiState } from "@/lib/uiState";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { usePreferencesStore } from "@/modules/settings/preferences";
@@ -44,9 +45,7 @@ const EXPANSION_STORAGE_KEY = "codev.file-tree.expanded";
 /** 读取跨重载保存的目录展开状态。 */
 function readStoredExpansion(root: string): string[] {
   try {
-    const value = JSON.parse(
-      localStorage.getItem(EXPANSION_STORAGE_KEY) ?? "{}",
-    );
+    const value = JSON.parse(uiState.getItem(EXPANSION_STORAGE_KEY) ?? "{}");
     return Array.isArray(value[root])
       ? value[root].filter(
           (item: unknown): item is string => typeof item === "string",
@@ -60,11 +59,9 @@ function readStoredExpansion(root: string): string[] {
 /** 保存当前根目录的目录展开状态。 */
 function writeStoredExpansion(root: string, expanded: Set<string>): void {
   try {
-    const value = JSON.parse(
-      localStorage.getItem(EXPANSION_STORAGE_KEY) ?? "{}",
-    );
+    const value = JSON.parse(uiState.getItem(EXPANSION_STORAGE_KEY) ?? "{}");
     value[root] = [...expanded];
-    localStorage.setItem(EXPANSION_STORAGE_KEY, JSON.stringify(value));
+    uiState.setItem(EXPANSION_STORAGE_KEY, JSON.stringify(value));
   } catch {
     /* storage unavailable */
   }

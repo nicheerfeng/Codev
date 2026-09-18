@@ -15,13 +15,17 @@ import { useT } from "@/lib/i18n";
 import type { Tab } from "@/modules/tabs";
 import { labelFor, TabIcon } from "@/modules/tabs";
 import type { SearchAddon } from "@xterm/addon-search";
-import { Cancel01Icon, PlusSignIcon } from "@hugeicons/core-free-icons";
+import {
+  Cancel01Icon,
+  PlusSignIcon,
+  GridViewIcon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { TerminalStack } from "./TerminalStack";
 import type { TerminalPaneHandle } from "./TerminalPane";
 import { COMPACT_CONTENT, COMPACT_ITEM } from "../explorer/lib/menuItemClass";
-import { leafIds } from "./lib/panes";
+import { leafIds, findLeafCwd } from "./lib/panes";
 import { terminalGrid, MAX_TERMINAL_VIEWS } from "./lib/terminalGrid";
 import { toast } from "sonner";
 
@@ -35,6 +39,7 @@ type Props = {
   onSelect: (id: number) => void;
   onClose: (id: number) => void;
   onNew: () => void;
+  onDuplicate: (cwd?: string) => void;
   onShowTerminals: (ids: number[]) => void;
   onRename: (id: number, title: string) => void;
   onReorder: (fromId: number, toGapIndex: number) => void;
@@ -61,6 +66,7 @@ export function TerminalPanel({
   onSelect,
   onClose,
   onNew,
+  onDuplicate,
   onShowTerminals,
   onRename,
   onReorder,
@@ -87,7 +93,10 @@ export function TerminalPanel({
     const tab = tabs.find((entry) => entry.id === id);
     if (tab?.kind === "terminal")
       requestAnimationFrame(() => {
-        if (!renameInputRef.current)
+        if (
+          !renameInputRef.current &&
+          !document.activeElement?.matches("[data-terminal-title-input]")
+        )
           handles.current.get(tab.activeLeafId)?.focus();
       });
   };
@@ -106,22 +115,22 @@ export function TerminalPanel({
     onShowTerminals(visibleKey ? visibleKey.split(",").map(Number) : []);
   }, [visibleKey, onShowTerminals, visible]);
 
-  /** 切换展示数量；超过六个会话时保留全部会话，通过分组切换。 */
+  /** 切换单组视口容量。 */
   const changeViewCount = (count: number) => {
-    if (count > 1 && tabs.length > MAX_TERMINAL_VIEWS)
-      toast.info("最多支持同时展示 6 个终端，可通过右侧列表切换其他组。", {
-        id: "terminal-view-limit",
-      });
     setViewCount(count);
   };
 
-  /** 新建会话仍不设总数上限，超过并行展示上限时提示换组。 */
-  const createTerminal = () => {
-    if (viewCount > 1 && tabs.length >= MAX_TERMINAL_VIEWS)
-      toast.info("最多支持同时展示 6 个终端，可通过右侧列表切换其他组。", {
+  /** 新建和复制共用六终端上限，多视口下同步增加展示容量。 */
+  const createTerminal = (cwd?: string, duplicate = false) => {
+    if (tabs.length >= MAX_TERMINAL_VIEWS) {
+      toast.info("最多支持 6 个终端，请先关闭不需要的终端。", {
         id: "terminal-view-limit",
       });
-    onNew();
+      return;
+    }
+    if (viewCount > 1) setViewCount(Math.max(2, tabs.length + 1));
+    if (duplicate) onDuplicate(cwd);
+    else onNew();
   };
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [dropGap, setDropGap] = useState<number | null>(null);
@@ -224,6 +233,9 @@ export function TerminalPanel({
               viewCount={viewCount}
               visible={visible}
               onSelect={selectTerminal}
+              onRename={onRename}
+              onDuplicate={(cwd) => createTerminal(cwd, true)}
+              onClose={onClose}
               registerHandle={registerPane}
               onSearchReady={onSearchReady}
               onCwd={onCwd}
@@ -249,68 +261,50 @@ export function TerminalPanel({
               className="sticky top-0 z-10 mb-1 flex shrink-0 flex-wrap items-center gap-1 border-b border-border/60 bg-card pb-1"
               data-terminal-controls=""
             >
-              {!navCollapsed && (
-                <span className="min-w-0 flex-1 truncate px-1 text-[11px] text-muted-foreground">
-                  {t("Terminal")}
-                </span>
-              )}
               <button
                 type="button"
                 className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-                onClick={createTerminal}
+                onClick={() => createTerminal()}
                 title={t("New terminal")}
                 aria-label={t("New terminal")}
               >
                 <HugeiconsIcon icon={PlusSignIcon} size={13} strokeWidth={2} />
               </button>
               {!navCollapsed && (
-                <fieldset
-                  className="grid w-full min-w-0 grid-cols-6 gap-px border-0 p-0"
-                  aria-label="终端并行视口数量"
-                >
-                  {[1, 2, 3, 4, 5, 6].map((count) => (
+                <>
+                  <button
+                    type="button"
+                    aria-label={viewCount > 1 ? "退出终端多视口" : "终端多视口"}
+                    title={viewCount > 1 ? "退出终端多视口" : "终端多视口"}
+                    aria-pressed={viewCount > 1}
+                    onClick={() => changeViewCount(viewCount > 1 ? 1 : 2)}
+                    className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                  >
+                    <HugeiconsIcon icon={GridViewIcon} size={14} />
+                  </button>
+                  {viewCount > 1 && (
                     <button
-                      key={count}
                       type="button"
-                      aria-label={`${count} 个视口`}
-                      aria-pressed={viewCount === count}
-                      title={`并行展示 ${count} 个终端`}
-                      onClick={() => changeViewCount(count)}
-                      className={`h-6 rounded-sm text-[11px] ${viewCount === count ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                      aria-label="增加终端视口"
+                      title="增加终端视口"
+                      className="h-[22px] shrink-0 rounded-sm px-2 text-[10px] font-normal text-muted-foreground hover:bg-muted hover:text-foreground"
+                      onClick={() => {
+                        if (grid.visibleIds.length >= MAX_TERMINAL_VIEWS) {
+                          toast.info(
+                            "最多支持 6 个终端，请先关闭不需要的终端。",
+                            { id: "terminal-view-limit" },
+                          );
+                          return;
+                        }
+                        if (grid.visibleIds.length < tabs.length)
+                          changeViewCount(grid.visibleIds.length + 1);
+                        else createTerminal();
+                      }}
                     >
-                      {count}
+                      + {grid.visibleIds.length}/6
                     </button>
-                  ))}
-                </fieldset>
-              )}
-              {!navCollapsed && viewCount > 1 && grid.pages > 1 && (
-                <div className="flex w-full items-center justify-between text-[10px] text-muted-foreground">
-                  <button
-                    type="button"
-                    aria-label="上一组终端"
-                    disabled={grid.page === 0}
-                    className="px-1 disabled:opacity-30"
-                    onClick={() =>
-                      selectTerminal(tabs[(grid.page - 1) * viewCount].id)
-                    }
-                  >
-                    ‹
-                  </button>
-                  <span>
-                    {grid.page + 1} / {grid.pages} 组
-                  </span>
-                  <button
-                    type="button"
-                    aria-label="下一组终端"
-                    disabled={grid.page + 1 >= grid.pages}
-                    className="px-1 disabled:opacity-30"
-                    onClick={() =>
-                      selectTerminal(tabs[(grid.page + 1) * viewCount].id)
-                    }
-                  >
-                    ›
-                  </button>
-                </div>
+                  )}
+                </>
               )}
             </div>
             {tabs.map((tab, index) => {
@@ -506,6 +500,19 @@ export function TerminalPanel({
                         onSelect={() => beginRename(tab)}
                       >
                         {t("Rename terminal")}
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        className={COMPACT_ITEM}
+                        onSelect={() => {
+                          if (tab.kind === "terminal")
+                            createTerminal(
+                              findLeafCwd(tab.paneTree, tab.activeLeafId) ??
+                                tab.cwd,
+                              true,
+                            );
+                        }}
+                      >
+                        复制终端
                       </ContextMenuItem>
                       <ContextMenuSeparator className="my-0.5" />
                       <ContextMenuItem

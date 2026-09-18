@@ -4,14 +4,21 @@ import type { PiComposerDropKind } from "./piComposerDrop";
 type PiComposerDropState = {
   active: boolean;
   hover: boolean;
+  hoverKey: string | undefined;
   setActive: (active: boolean) => void;
-  setHover: (hover: boolean) => void;
+  setHover: (hover: boolean, threadKey?: string) => void;
   drop:
-    | ((items: Array<{ path: string; kind: PiComposerDropKind }>) => void)
+    | ((
+        items: Array<{ path: string; kind: PiComposerDropKind }>,
+        threadKey?: string,
+      ) => void)
     | null;
   setDrop: (
     drop:
-      | ((items: Array<{ path: string; kind: PiComposerDropKind }>) => void)
+      | ((
+          items: Array<{ path: string; kind: PiComposerDropKind }>,
+          threadKey?: string,
+        ) => void)
       | null,
   ) => void;
 };
@@ -20,9 +27,14 @@ type PiComposerDropState = {
 export const usePiComposerDropStore = create<PiComposerDropState>((set) => ({
   active: false,
   hover: false,
+  hoverKey: undefined,
   setActive: (active) => set({ active }),
-  setHover: (hover) =>
-    set((state) => (state.hover === hover ? state : { hover })),
+  setHover: (hover, hoverKey) =>
+    set((state) =>
+      state.hover === hover && state.hoverKey === hoverKey
+        ? state
+        : { hover, hoverKey },
+    ),
   drop: null,
   setDrop: (drop) => set({ drop }),
 }));

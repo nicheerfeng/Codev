@@ -1,4 +1,5 @@
 import { FILE_TREE_ROOTS_KEY } from "@/modules/explorer/lib/rootCollapse";
+import { uiState } from "@/lib/uiState";
 import { SIDEBAR_MIN_WIDTH } from "@/modules/sidebar/useSidebarPanel";
 import { TERMINAL_MIN_WIDTH } from "@/modules/terminal/lib/useTerminalPanelLayout";
 
@@ -17,14 +18,6 @@ type MemoryStore = {
   setItem(key: string, value: string): void;
 };
 
-function memoryStore(): MemoryStore | null {
-  try {
-    return typeof localStorage === "undefined" ? null : localStorage;
-  } catch {
-    return null;
-  }
-}
-
 /** 首次进入工作区时按视口算出约三等分的左右栏宽度。 */
 export function firstLayoutSizes(width: number): {
   sidebar: number;
@@ -38,9 +31,7 @@ export function firstLayoutSizes(width: number): {
 }
 
 /** 还没按视口写过左右栏宽度时，需要走一次首次三栏。 */
-export function needsFirstLayout(
-  store: MemoryStore | null = memoryStore(),
-): boolean {
+export function needsFirstLayout(store: MemoryStore | null = uiState): boolean {
   try {
     return !store || store.getItem(LAYOUT_INITIALIZED_KEY) !== "1";
   } catch {
@@ -48,14 +39,13 @@ export function needsFirstLayout(
   }
 }
 
-/** 未完成欢迎、安装戳变化、或还没做过首次三栏时显示起始页。 */
+/** 仅未完成初始化时显示欢迎页，安装升级不重置已有布局。 */
 export function shouldShowWelcome(
-  stamp: string | null,
-  store: MemoryStore | null = memoryStore(),
+  _stamp: string | null,
+  store: MemoryStore | null = uiState,
 ): boolean {
   try {
     if (!store || store.getItem(WELCOME_KEY) !== "1") return true;
-    if (stamp && store.getItem(WELCOME_STAMP_KEY) !== stamp) return true;
     return needsFirstLayout(store);
   } catch {
     return true;
@@ -66,7 +56,7 @@ export function shouldShowWelcome(
 export function completeWelcome(
   stamp: string | null,
   width = 1200,
-  store: MemoryStore | null = memoryStore(),
+  store: MemoryStore | null = uiState,
 ): { sidebar: number; terminal: number } {
   const sizes = firstLayoutSizes(width);
   try {

@@ -2,13 +2,14 @@
 import React, { useState } from "react";
 import type { PiTranscriptItem } from "../../../src/modules/plugins/pi-agent/types";
 import { createRoot } from "react-dom/client";
+import { Toaster } from "sonner";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import "/src/styles/globals.css";
 
 const sessions = Array.from({ length: 8 }, (_, index) => ({ path: `D:/qa/sessions/${index}.jsonl`, id: String(index), cwd: index < 5 ? "D:/qa/Codev" : "D:/qa/Research", name: `研究线程 ${index + 1}`, preview: "分析文件，整理报告", messageCount: 80, createdAt: "2026-09-10", updatedAt: Date.now() - index * 1000 }));
 const runtimes = new Map<number, { cwd: string; path: string; name: string; model: object; level: string; messages: object[] }>();
-const storage = new Map<string, unknown>();
+const storage = new Map<string, unknown>([["piAgentProjects", ["D:/qa/Codev", "D:/qa/Research"]]]);
 const models = [{ provider: "qa", id: "reasoning-model", name: "Reasoning model" }, { provider: "qa", id: "fast-model", name: "Fast model" }];
 let next = 0;
 let modelsText = JSON.stringify({ customRoot: true, providers: { qa: { baseUrl: "https://example.invalid", api: "openai-completions", headers: { "X-QA": "$TOKEN" }, models: [{ id: "reasoning-model", name: "Reasoning model", reasoning: true, contextWindow: 128000 }, { id: "fast-model", name: "Fast model", customField: "preserve" }] }, overrides: { modelOverrides: { builtin: { maxTokens: 2048 } } } } }, null, 2);
@@ -30,6 +31,7 @@ mockIPC(async (cmd, args: any) => {
   if (cmd === "pi_agent_list_models") return models;
   if (cmd === "pi_agent_probe") return { available: true, version: "QA fixture", path: "pi", error: null };
   if (cmd === "pi_agent_list_all_sessions") return sessions;
+  if (cmd === "pi_agent_read_session") return { messages: [{ role: "user", content: `历史任务 ${args.path}` }, { role: "assistant", content: "历史回复", stopReason: "stop" }], model: models[0], sessionName: sessions.find(item => item.path === args.path)?.name, sessionFile: args.path, oldestOffset: 0, hasMore: false };
   if (cmd === "pi_agent_delete_session") {
     const index = sessions.findIndex((session) => session.path === args.path);
     if (index >= 0) sessions.splice(index, 1);
@@ -139,7 +141,7 @@ function QA() {
   (window as any).piQA.setMode = setMode;
   return <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
     <div style={{ height: 32, flexShrink: 0, display: "flex", gap: 16, paddingLeft: 12 }}><button onClick={() => setActive(!active)}>切换插件</button><button onClick={() => setMode("light")}>浅色</button><button onClick={() => setMode("dark")}>深色</button></div>
-    <div style={{ position: "relative", flex: 1, minHeight: 0 }}><div style={{ position: "absolute", inset: 0, display: active ? undefined : "none" }}><PiAgentPane active={active} /></div>{!active && <div>终端占位（核验隐藏页不停止 Pi）</div>}</div>
+    <div style={{ position: "relative", flex: 1, minHeight: 0 }}><div style={{ position: "absolute", inset: 0, display: active ? undefined : "none" }}><PiAgentPane active={active} /><Toaster /></div>{!active && <div>终端占位（核验隐藏页不停止 Pi）</div>}</div>
   </div>;
 }
 /** 直接驱动真实时间线组件，固定数据覆盖折叠、搜索和动画回归。 */

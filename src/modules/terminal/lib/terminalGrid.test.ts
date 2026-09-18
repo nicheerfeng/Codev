@@ -7,15 +7,13 @@ describe("terminal grid", () => {
     expect(grid.visibleIds).toHaveLength(count);
     expect(grid.columns * grid.rows).toBeGreaterThanOrEqual(count);
   });
-  it("keeps positions while focusing another member of the same group", () => {
+  it("replaces the last viewport for an existing hidden terminal without paging", () => {
     const ids = [1, 2, 3, 4, 5, 6, 7];
     expect(terminalGrid(ids, 2, 6).visibleIds).toEqual(
       terminalGrid(ids, 5, 6).visibleIds,
     );
     expect(terminalGrid(ids, 7, 6)).toMatchObject({
-      visibleIds: [7],
-      page: 1,
-      pages: 2,
+      visibleIds: [1, 2, 3, 4, 5, 7],
     });
   });
   it("never displays more than six or creates missing sessions", () => {

@@ -1,8 +1,10 @@
 import type { Tab } from "@/modules/tabs";
 import type { SearchAddon } from "@xterm/addon-search";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Copy01Icon, Cancel01Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { selectLiveTerminals } from "./lib/liveTerminals";
-import { leafIds } from "./lib/panes";
+import { leafIds, findLeafCwd } from "./lib/panes";
 import { PaneTreeView } from "./PaneTreeView";
 import type { TerminalPaneHandle } from "./TerminalPane";
 import { labelFor } from "@/modules/tabs";
@@ -14,6 +16,9 @@ type Props = {
   viewCount?: number;
   visible?: boolean;
   onSelect: (id: number) => void;
+  onRename: (id: number, title: string) => void;
+  onDuplicate: (cwd?: string) => void;
+  onClose: (id: number) => void;
   /** Register/unregister handle by leaf id (not tab id). */
   registerHandle: (leafId: number, handle: TerminalPaneHandle | null) => void;
   onSearchReady: (leafId: number, addon: SearchAddon) => void;
@@ -38,6 +43,9 @@ export function TerminalStack({
   viewCount = 1,
   visible = true,
   onSelect,
+  onRename,
+  onDuplicate,
+  onClose,
   registerHandle,
   onSearchReady,
   onCwd,
@@ -45,6 +53,15 @@ export function TerminalStack({
   onActivity,
   onFocusLeaf,
 }: Props) {
+  const [rename, setRename] = useState<{ id: number; text: string } | null>(
+    null,
+  );
+  /** 保存视口标题到终端共享状态，侧栏同步更新。 */
+  const commitRename = () => {
+    if (!rename) return;
+    onRename(rename.id, rename.text.trim());
+    setRename(null);
+  };
   const terminals = useMemo(() => selectLiveTerminals(tabs), [tabs]);
   const grid = terminalGrid(
     tabs.map((tab) => tab.id),
@@ -125,14 +142,72 @@ export function TerminalStack({
             aria-hidden={!tabVisible}
           >
             {viewCount > 1 && (
-              <button
-                type="button"
-                onClick={() => onSelect(t.id)}
-                className={`h-6 shrink-0 truncate border-b border-border/60 px-2 text-left text-[11px] ${t.id === activeId ? "bg-accent text-foreground" : "text-muted-foreground"}`}
-                title={labelFor(t)}
+              <div
+                className={`flex h-6 shrink-0 items-center gap-1 border-b border-border/60 px-2 text-[11px] ${t.id === activeId ? "bg-accent text-foreground" : "text-muted-foreground"}`}
               >
-                {labelFor(t)}
-              </button>
+                {rename?.id === t.id ? (
+                  <input
+                    autoFocus
+                    data-terminal-title-input=""
+                    aria-label="重命名终端视口"
+                    className="h-5 min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-[11px] outline-none focus:border-primary/60"
+                    value={rename.text}
+                    onFocus={(event) => event.currentTarget.select()}
+                    onChange={(event) =>
+                      setRename({ id: t.id, text: event.target.value })
+                    }
+                    onBlur={commitRename}
+                    onKeyDown={(event) => {
+                      event.stopPropagation();
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        commitRename();
+                      }
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        setRename(null);
+                      }
+                    }}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 truncate text-left"
+                    onClick={() => onSelect(t.id)}
+                    onDoubleClick={() =>
+                      setRename({
+                        id: t.id,
+                        text: t.customTitle ?? labelFor(t),
+                      })
+                    }
+                    title={labelFor(t)}
+                  >
+                    {labelFor(t)}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  aria-label="复制终端"
+                  title="在相同目录新建终端"
+                  className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                  onClick={() =>
+                    onDuplicate(
+                      findLeafCwd(t.paneTree, t.activeLeafId) ?? t.cwd,
+                    )
+                  }
+                >
+                  <HugeiconsIcon icon={Copy01Icon} size={12} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="关闭终端视口"
+                  title="关闭终端"
+                  className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                  onClick={() => onClose(t.id)}
+                >
+                  <HugeiconsIcon icon={Cancel01Icon} size={12} />
+                </button>
+              </div>
             )}
             <div className="min-h-0 flex-1">
               <PaneTreeView

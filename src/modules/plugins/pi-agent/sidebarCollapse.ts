@@ -1,9 +1,11 @@
+import { uiState } from "@/lib/uiState";
+
 export const PI_SIDEBAR_COLLAPSED_KEY = "codev.pi.sidebar.collapsed";
 
 /** 读取 Pi 侧栏折叠集合；没有记录时视为首次，需要默认全折叠。 */
 export function readPiCollapsed(): { ready: boolean; keys: Set<string> } {
   try {
-    const raw = localStorage.getItem(PI_SIDEBAR_COLLAPSED_KEY);
+    const raw = uiState.getItem(PI_SIDEBAR_COLLAPSED_KEY);
     if (raw == null) return { ready: false, keys: new Set() };
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return { ready: false, keys: new Set() };
@@ -18,9 +20,10 @@ export function readPiCollapsed(): { ready: boolean; keys: Set<string> } {
   }
 }
 
+/** 将侧栏展开状态写入统一布局文件。 */
 export function writePiCollapsed(keys: Iterable<string>): void {
   try {
-    localStorage.setItem(PI_SIDEBAR_COLLAPSED_KEY, JSON.stringify([...keys]));
+    uiState.setItem(PI_SIDEBAR_COLLAPSED_KEY, JSON.stringify([...keys]));
   } catch {
     /* storage unavailable */
   }

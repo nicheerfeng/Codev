@@ -1,5 +1,14 @@
 export type DockTab = "terminal" | "json" | "diff" | "pi";
 
+/** 恢复标签顺序，去掉无效重复项并补齐新加入的插件。 */
+export function normalizeDockOrder(value: unknown): DockTab[] {
+  const defaults: DockTab[] = ["terminal", "json", "diff", "pi"];
+  const saved = Array.isArray(value)
+    ? value.filter((tab): tab is DockTab => defaults.includes(tab))
+    : [];
+  return [...new Set([...saved, ...defaults])];
+}
+
 /** 将 Dock 标签按当前可见标签的间隙重排，隐藏插件仍保留在顺序列表中。 */
 export function reorderDockTabsAtGap(
   tabs: DockTab[],

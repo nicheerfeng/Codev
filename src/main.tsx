@@ -7,6 +7,7 @@ import { LogicalSize } from "@tauri-apps/api/dpi";
 import ReactDOM from "react-dom/client";
 import App from "./app/App";
 import { initLaunchDir } from "./lib/launchDir";
+import { initUiState } from "./lib/uiState";
 import { IS_WINDOWS, USE_CUSTOM_WINDOW_CONTROLS } from "./lib/platform";
 
 const OPAQUE_WINDOW =
@@ -44,6 +45,7 @@ await invoke("pty_close_all").catch(() => {});
 
 // Seed before first paint so default tab mounts at target cwd (no flicker).
 await initLaunchDir();
+await initUiState().catch((error) => console.error("读取界面状态失败", error));
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <App />,

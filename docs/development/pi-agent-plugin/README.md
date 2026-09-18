@@ -30,7 +30,10 @@ Pi Agent 已进入 `main`。0.9.2 收敛运行时简约感知态、队列消息�
 
 ```powershell
 node docs/development/pi-agent-plugin/ui-regression.mjs C:/Users/79988/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright
+node docs/development/pi-agent-plugin/multi-view-regression.mjs C:/Users/79988/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright
 ```
 
 脚本参数为现有 Playwright 模块路径。覆盖停止后原位编辑及重发、草稿保留、真实内容预览、折叠正文按需渲染、展开状态保持、搜索定位、状态动画及减少动态效果偏好。
 `qa.html?transcript` 是同一入口的时间线固定数据模式，测试通过 `window.piQA.setTranscript` 驱动真实组件。
+
+多视口回归覆盖侧栏 pointer 拖入、会话交换、独立发送与停止、草稿和附件归属、六视口上限、窄窗口输入及关闭视口后任务继续运行。多视口共用一个工作区客户端，打开历史会话只读文件，发送时才启动对应运行进程。
