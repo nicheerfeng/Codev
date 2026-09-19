@@ -1,0 +1,77 @@
+import { createRequire } from "node:module";
+import assert from "node:assert/strict";
+const require = createRequire(import.meta.url);
+const { chromium } = require("C:/Users/79988/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright");
+
+/** 验证本轮新增交互的真实组件与 IPC 链路，模型请求全部隔离。 */
+async function main() {
+  const browser = await chromium.launch({ channel: "chrome", headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    const errors=[]; page.on("pageerror", error=>errors.push(error.message));
+    await page.goto("http://localhost:1420/docs/development/codex-agent/qa.html");
+    await page.getByRole("button", { name:"工作会话 1 Codev",exact:true }).click();
+    const temporary = page.getByRole("button", { name:"临时对话",exact:true });
+    assert.equal(await temporary.getAttribute("aria-expanded"),"false");
+    await temporary.click(); assert.equal(await temporary.getAttribute("aria-expanded"),"true");
+    await temporary.click(); assert.equal(await temporary.getAttribute("aria-expanded"),"false");
+    assert.equal(await page.getByText("加载更多会话",{exact:true}).count(),0);
+    assert.equal(await page.getByText("加载更多归档",{exact:true}).count(),0);
+    const input=page.getByRole("textbox", { name:"发送给 Codex" });
+    await page.getByRole("button",{name:"搜索当前线程",exact:true}).click();
+    await page.getByRole("textbox",{name:"搜索对话内容"}).fill("项目");
+    await page.getByRole("button",{name:"下一处",exact:true}).click();
+    assert.ok(await page.evaluate(()=>CSS.highlights.size>0));
+    assert.ok(await page.locator(".codex-activity[open]").count()>0);
+    await page.getByRole("button",{name:"关闭搜索"}).click();
+    await page.getByRole("button",{name:"工作会话 1 Codev",exact:true}).dblclick();
+    const name=page.locator(".codex-sidebar").getByRole("textbox",{name:"线程名称"});
+    await name.fill("行内改名"); await name.press("Enter");
+    await page.getByRole("button",{name:"行内改名 Codev",exact:true}).waitFor();
+    const box=await page.locator("[data-codex-composer-drop]").boundingBox();
+    const point={x:box.x+30,y:box.y+20};
+    assert.equal(await page.evaluate(({x,y})=>window.codexQA.dropTarget.updateTarget(x,y),point),true);
+    await page.getByText("添加到此线程",{exact:true}).waitFor();
+    await page.evaluate(({x,y})=>window.codexQA.dropTarget.dropPath("D:/qa/folder",x,y),point);
+    await page.getByRole("button",{name:"移除 folder",exact:true}).waitFor();
+    await input.fill("first"); await input.press("Enter");
+    await page.getByRole("button",{name:"停止",exact:true}).waitFor();
+    await input.fill("queued"); await input.press("Enter");
+    await page.getByRole("button",{name:"退回编辑",exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>window.codexQA.sent.filter(m=>m.method==="turn/steer").length),0);
+    await input.fill("new draft");
+    await page.getByRole("button",{name:"停止",exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('[aria-label="发送给 Codex"]').value.includes("queued\n\nnew draft"));
+    await page.getByRole("button",{name:"工作会话 2 Codev",exact:true}).click();
+    const message=page.locator(".codex-user-turn").first(); await message.hover();
+    await page.getByRole("button",{name:"编辑最后一条输入",exact:true}).click();
+    await page.getByRole("textbox",{name:"编辑最后一条输入"}).fill("edited");
+    await page.locator('.codex-user-turn').getByRole("button",{name:"发送",exact:true}).click();
+    await page.waitForFunction(()=>window.codexQA.sent.some(m=>m.method==="thread/fork"&&m.params.beforeTurnId==="history-1"));
+    await page.getByRole("button",{name:"工作会话 2 Codev",exact:true}).click({button:"right"});
+    await page.getByRole("menuitem",{name:"导出 Markdown"}).click();
+    await page.waitForFunction(()=>window.codexQA.exports.length>0);
+    assert.match(await page.evaluate(()=>window.codexQA.exports[0].content),/## 用户[\s\S]*## 助手/);
+    await page.getByRole("button",{name:"工作会话 3 Codev",exact:true}).click();
+    await page.getByRole("button",{name:"多视口",exact:true}).click();
+    await page.locator('[data-codex-slot="1"]').getByRole("button",{name:/从右侧拖入会话/}).click();
+    await page.getByRole("button",{name:"工作会话 4 Codev",exact:true}).click();
+    const secondBox=await page.locator('[data-codex-slot="1"] [data-codex-composer-drop]').boundingBox();
+    assert.ok(secondBox);
+    await page.evaluate(({x,y})=>window.codexQA.dropTarget.dropPath("D:/qa/second.md",x+20,y+20),secondBox);
+    await page.locator('[data-codex-slot="1"]').getByRole("button",{name:"移除 second.md",exact:true}).waitFor();
+    assert.equal(await page.locator('[data-codex-slot="0"]').getByRole("button",{name:"移除 second.md",exact:true}).count(),0);
+    await page.getByRole("button",{name:"退出多视口",exact:true}).click();
+    await page.evaluate(()=>{window.codexQA.threads.find(t=>t.id==="qa-7").turns=Array.from({length:120},(_,i)=>({id:`long-${i}`,status:"completed",items:[{id:`u-${i}`,type:"userMessage",content:[{type:"text",text:`历史输入 ${i}`}]},{id:`a-${i}`,type:"agentMessage",text:`历史回复 ${i}\n\n`+"正文 ".repeat(120)}]}));});
+    await page.getByRole("button",{name:"工作会话 8 Research",exact:true}).click();
+    await page.getByRole("button",{name:"加载更早记录",exact:true}).waitFor({state:"attached"});
+    assert.ok(await page.locator('[data-codex-turn]').count()<30);
+    await page.getByRole("button",{name:"加载更早记录",exact:true}).click();
+    await page.waitForFunction(()=>window.codexQA.sent.some(m=>m.method==="thread/turns/list"&&m.params.threadId==="qa-7"&&m.params.cursor==="30"));
+    assert.ok(await page.locator('[data-codex-turn]').count()<30);
+    await page.screenshot({path:"output/codex-parity.png"});
+    assert.deepEqual(errors,[]);
+    console.log("PASS: search/detail expansion, inline rename, explorer/folder drop, queue/stop restore, edit fork, Markdown export, viewport drop isolation, 120-turn pagination/virtualization");
+  } finally { await browser.close(); }
+}
+await main();

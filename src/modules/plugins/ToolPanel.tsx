@@ -1,7 +1,16 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { JsonFormatterPane } from "./JsonFormatterPane";
 import { TextDiffPane } from "./TextDiffPane";
-import { PI_AGENT_PLUGIN_ID, usePluginStore } from "./store";
+import {
+  CODEX_AGENT_PLUGIN_ID,
+  PI_AGENT_PLUGIN_ID,
+  usePluginStore,
+} from "./store";
+const CodexPane = lazy(() =>
+  import("./codex-agent/CodexPane").then((module) => ({
+    default: module.CodexPane,
+  })),
+);
 const PiAgentPane = lazy(() =>
   import("./pi-agent/PiAgentPane").then((module) => ({
     default: module.PiAgentPane,
@@ -10,7 +19,7 @@ const PiAgentPane = lazy(() =>
 
 const MAX_FORMATTER_PANES = 2;
 
-export type ToolId = "json" | "diff" | "pi";
+export type ToolId = "json" | "diff" | "pi" | "codex";
 
 /** 渲染最多两个横向 JSON 格式化页面。 */
 function JsonFormatterTool() {
@@ -59,11 +68,38 @@ export function ToolPanel({
     (state) => state.enabled[PI_AGENT_PLUGIN_ID],
   );
   const [piVisited, setPiVisited] = useState(active && tool === "pi");
+  const codexEnabled = usePluginStore(
+    (state) => state.enabled[CODEX_AGENT_PLUGIN_ID],
+  );
+  const [codexVisited, setCodexVisited] = useState(active && tool === "codex");
+  useEffect(() => {
+    if (active && tool === "codex") setCodexVisited(true);
+  }, [tool, active]);
   useEffect(() => {
     if (active && tool === "pi") setPiVisited(true);
   }, [tool, active]);
   return (
     <div className="relative h-full min-h-0 min-w-0 overflow-hidden bg-card">
+      <div
+        className={
+          tool === "codex" ? "absolute inset-0" : "hidden absolute inset-0"
+        }
+      >
+        {codexVisited && codexEnabled && (
+          <Suspense
+            fallback={
+              <div className="p-4 text-xs text-muted-foreground">
+                正在加载 Codex...
+              </div>
+            }
+          >
+            <CodexPane
+              active={active && tool === "codex"}
+              onOpenFile={onOpenFile}
+            />
+          </Suspense>
+        )}
+      </div>
       <div
         className={
           tool === "json" ? "absolute inset-0" : "hidden absolute inset-0"

@@ -1,13 +1,13 @@
 pub mod modules;
 
-use modules::{fs, github, history, pi_agent, pty, workspace};
+use modules::{codex_agent, fs, github, history, pi_agent, pty, workspace};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::menu::MenuBuilder;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 #[cfg(target_os = "macos")]
 use tauri::PhysicalPosition;
+use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 #[cfg(target_os = "windows")]
 use webview2_com::{
     take_pwstr, Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3,
@@ -79,11 +79,8 @@ fn disable_browser_accelerator_keys(
                         .CoreWebView2()
                         .map_err(|error| error.to_string())?
                 };
-                let settings = unsafe {
-                    core_webview
-                        .Settings()
-                        .map_err(|error| error.to_string())?
-                };
+                let settings =
+                    unsafe { core_webview.Settings().map_err(|error| error.to_string())? };
                 unsafe {
                     settings
                         .SetAreDefaultContextMenusEnabled(false)
@@ -297,6 +294,7 @@ fn show_main_window(app: &tauri::AppHandle) {
 
 fn quit_app(app: &tauri::AppHandle) {
     let _ = pi_agent::pi_agent_close_all(app.state());
+    let _ = codex_agent::codex_agent_close(app.state(), None);
     app.exit(0);
 }
 
@@ -459,6 +457,7 @@ pub fn run() {
         .manage(fs::transfer::TransferState::default())
         .manage(history::HistoryState::default())
         .manage(pi_agent::PiAgentState::default())
+        .manage(codex_agent::CodexAgentState::default())
         .manage(fs::grep::ContentSearchState::default())
         .manage(PendingOpenTargets::default())
         .manage({
@@ -526,6 +525,16 @@ pub fn run() {
             history::history_record,
             history::history_list,
             pi_agent::pi_agent_probe,
+            codex_agent::codex_agent_start,
+            codex_agent::codex_agent_send,
+            codex_agent::codex_agent_close,
+            codex_agent::codex_agent_ready,
+            codex_agent::codex_agent_prepare_switch,
+            codex_agent::resources::codex_resources_list,
+            codex_agent::resources::codex_resources_save,
+            codex_agent::resources::codex_resources_delete,
+            codex_agent::resources::codex_resources_model,
+            codex_agent::resources::codex_resources_probe,
             pi_agent::pi_agent_list_sessions,
             pi_agent::pi_agent_list_all_sessions,
             pi_agent::pi_agent_delete_session,
@@ -540,6 +549,8 @@ pub fn run() {
             pi_agent::pi_agent_close,
             pi_agent::pi_agent_close_all,
             pi_agent::pi_agent_watch_sessions,
+            codex_agent::codex_agent_watch_sessions,
+            codex_agent::codex_agent_export,
             pi_agent::assets::pi_agent_list_assets,
             pi_agent::assets::pi_agent_list_package_specs,
             pi_agent::assets::pi_agent_install_package,
@@ -643,8 +654,9 @@ mod launch_target_tests {
 
     #[test]
     fn file_arg_opens_file_and_uses_parent_as_workspace() {
-        let out =
-            resolve_launch_target(vec![LaunchEntry::File(PathBuf::from("/home/u/proj/main.rs"))]);
+        let out = resolve_launch_target(vec![LaunchEntry::File(PathBuf::from(
+            "/home/u/proj/main.rs",
+        ))]);
         assert_eq!(out.dir.as_deref(), Some("/home/u/proj"));
         assert_eq!(out.files, vec!["/home/u/proj/main.rs".to_string()]);
     }

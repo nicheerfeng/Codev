@@ -12,10 +12,12 @@ import type { PiModel } from "./pi-agent/types";
 export const JSON_FORMATTER_PLUGIN_ID = "json-formatter" as const;
 export const TEXT_DIFF_PLUGIN_ID = "text-diff" as const;
 export const PI_AGENT_PLUGIN_ID = "pi-agent" as const;
+export const CODEX_AGENT_PLUGIN_ID = "codex-agent" as const;
 export type PluginId =
   | typeof JSON_FORMATTER_PLUGIN_ID
   | typeof TEXT_DIFF_PLUGIN_ID
-  | typeof PI_AGENT_PLUGIN_ID;
+  | typeof PI_AGENT_PLUGIN_ID
+  | typeof CODEX_AGENT_PLUGIN_ID;
 
 export type PluginState = {
   enabled: Record<PluginId, boolean>;
@@ -47,6 +49,7 @@ const DEFAULT_PLUGIN_STATE: PluginState = {
     [JSON_FORMATTER_PLUGIN_ID]: false,
     [TEXT_DIFF_PLUGIN_ID]: false,
     [PI_AGENT_PLUGIN_ID]: false,
+    [CODEX_AGENT_PLUGIN_ID]: false,
   },
   piAgentProjects: [],
   piAgentHiddenProjects: [],
@@ -82,6 +85,7 @@ function normalizePluginState(
       [JSON_FORMATTER_PLUGIN_ID]: enabled[JSON_FORMATTER_PLUGIN_ID] === true,
       [TEXT_DIFF_PLUGIN_ID]: enabled[TEXT_DIFF_PLUGIN_ID] === true,
       [PI_AGENT_PLUGIN_ID]: enabled[PI_AGENT_PLUGIN_ID] === true,
+      [CODEX_AGENT_PLUGIN_ID]: enabled[CODEX_AGENT_PLUGIN_ID] === true,
     },
     piAgentProjects: Array.isArray(projects)
       ? [
@@ -245,7 +249,8 @@ async function onPluginStateChange(
       if (
         event.payload.id !== JSON_FORMATTER_PLUGIN_ID &&
         event.payload.id !== TEXT_DIFF_PLUGIN_ID &&
-        event.payload.id !== PI_AGENT_PLUGIN_ID
+        event.payload.id !== PI_AGENT_PLUGIN_ID &&
+        event.payload.id !== CODEX_AGENT_PLUGIN_ID
       )
         return;
       callback(event.payload.id, event.payload.enabled === true);

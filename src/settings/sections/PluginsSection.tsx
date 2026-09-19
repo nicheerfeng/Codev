@@ -3,6 +3,7 @@ import { useT } from "@/lib/i18n";
 import {
   JSON_FORMATTER_PLUGIN_ID,
   PI_AGENT_PLUGIN_ID,
+  CODEX_AGENT_PLUGIN_ID,
   TEXT_DIFF_PLUGIN_ID,
   setPluginEnabled,
   usePluginStore,
@@ -23,6 +24,9 @@ export function PluginsSection() {
     (state) => state.enabled[PI_AGENT_PLUGIN_ID],
   );
   const init = usePluginStore((state) => state.init);
+  const codexEnabled = usePluginStore(
+    (state) => state.enabled[CODEX_AGENT_PLUGIN_ID],
+  );
 
   useEffect(() => {
     void init();
@@ -54,6 +58,17 @@ export function PluginsSection() {
           checked={piAgentEnabled}
           onCheckedChange={(value) =>
             void setPluginEnabled(PI_AGENT_PLUGIN_ID, value)
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        title="Codex"
+        description="运行 Codex CLI 原生会话，沿用本机 Codex 配置与认证。"
+      >
+        <Switch
+          checked={codexEnabled}
+          onCheckedChange={(value) =>
+            void setPluginEnabled(CODEX_AGENT_PLUGIN_ID, value)
           }
         />
       </SettingRow>

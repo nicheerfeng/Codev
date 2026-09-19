@@ -40,6 +40,8 @@ import {
   createPiComposerPathDropTarget,
 } from "@/modules/plugins/pi-agent/piComposerDrop";
 import { usePiComposerDropStore } from "@/modules/plugins/pi-agent/piComposerDropStore";
+import { createCodexComposerPathDropTarget } from "@/modules/plugins/codex-agent/codexComposerDrop";
+import { useCodexComposerDropStore } from "@/modules/plugins/codex-agent/codexComposerDropStore";
 import {
   shouldDisablePaneSwapShortcut,
   type ShortcutHandlers,
@@ -205,6 +207,13 @@ export default function App() {
     () =>
       composeExplorerPathDropTargets(
         piComposerPathDropTarget,
+        createCodexComposerPathDropTarget({
+          active: () => useCodexComposerDropStore.getState().active,
+          onDrop: (items, key) =>
+            useCodexComposerDropStore.getState().drop?.(items, key),
+          onHover: (hover, key) =>
+            useCodexComposerDropStore.getState().setHover(hover, key),
+        }),
         terminalPathDropTarget,
       ),
     [piComposerPathDropTarget, terminalPathDropTarget],
@@ -217,18 +226,22 @@ export default function App() {
     (state) =>
       state.enabled["json-formatter"] ||
       state.enabled["text-diff"] ||
-      state.enabled["pi-agent"],
+      state.enabled["pi-agent"] ||
+      state.enabled["codex-agent"],
   );
   const jsonFormatterEnabled = usePluginStore(
     (state) => state.enabled["json-formatter"],
   );
   const textDiffEnabled = usePluginStore((state) => state.enabled["text-diff"]);
   const piAgentEnabled = usePluginStore((state) => state.enabled["pi-agent"]);
+  const codexEnabled = usePluginStore((state) => state.enabled["codex-agent"]);
   const initPlugins = usePluginStore((state) => state.init);
   const [rightDockView, setRightDockView] = useState<"terminal" | "tools">(
     "terminal",
   );
-  const [toolView, setToolView] = useState<"json" | "diff" | "pi">("pi");
+  const [toolView, setToolView] = useState<"json" | "diff" | "pi" | "codex">(
+    "pi",
+  );
   const [dockOrder, setDockOrder] = useState<DockTab[]>(() => {
     try {
       return normalizeDockOrder(
@@ -248,8 +261,9 @@ export default function App() {
       ...(jsonFormatterEnabled ? ["json" as const] : []),
       ...(textDiffEnabled ? ["diff" as const] : []),
       ...(piAgentEnabled ? ["pi" as const] : []),
+      ...(codexEnabled ? ["codex" as const] : []),
     ],
-    [jsonFormatterEnabled, piAgentEnabled, textDiffEnabled],
+    [jsonFormatterEnabled, piAgentEnabled, textDiffEnabled, codexEnabled],
   );
   const dockTabs = useMemo(
     () => dockOrder.filter((tab) => availableDockTabs.includes(tab)),
@@ -281,10 +295,19 @@ export default function App() {
     if (toolView === "diff" && !textDiffEnabled && jsonFormatterEnabled) {
       setToolView("json");
     }
+    if (toolView === "codex" && !codexEnabled) {
+      setRightDockView("terminal");
+    }
     if (toolView === "pi" && !piAgentEnabled) {
       setToolView(jsonFormatterEnabled ? "json" : "diff");
     }
-  }, [jsonFormatterEnabled, piAgentEnabled, textDiffEnabled, toolView]);
+  }, [
+    jsonFormatterEnabled,
+    piAgentEnabled,
+    textDiffEnabled,
+    toolView,
+    codexEnabled,
+  ]);
 
   // Drives session disposal off the pane tree, not React lifecycles —
   // split/unsplit re-mount components but the leaf is still live.
@@ -1411,7 +1434,9 @@ export default function App() {
                               ? "JSON格式化"
                               : tab === "diff"
                                 ? "文本对照"
-                                : "Pi";
+                                : tab === "codex"
+                                  ? "Codex"
+                                  : "Pi";
                         return (
                           <Fragment key={tab}>
                             {dockReorder.dropIndex === index && (
