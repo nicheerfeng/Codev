@@ -8,7 +8,7 @@ Codev 是一个基于 Tauri 2 + Rust + React 的极简代码和文档阅读器�
 
 保留多项目 spaces、多个 workspace roots、文件树和文件搜索、CodeMirror 语法高亮、Markdown 原文/渲染视图、xterm PTY、多标签/分屏、Shell 历史、主题和基础设置。
 
-内置插件仅承载边界明确、默认关闭的轻量工具，当前包括 JSON 格式化、文本对照与 Pi Agent。Pi Agent 只复用 Pi 原生配置、会话和 RPC，不发展通用 Agent 平台。仍不实现第三方插件市场、LSP、代码诊断、常驻索引、图形化 Git、自动启动或独立 CLI 控制平面。语法高亮用于阅读，不承担检查职责。
+内置插件仅承载边界明确、默认关闭的轻量工具，当前包括 JSON 格式化、文本对照、Pi Agent 与 Codex。Pi Agent 复用 Pi 原生配置、会话和 RPC；Codex 独立对接官方 app-server stdio，复用 Codex 原生配置与认证。两者各自维护协议状态，不发展通用 Agent 平台。仍不实现第三方插件市场、LSP、代码诊断、常驻索引、图形化 Git、自动启动或独立 CLI 控制平面。语法高亮用于阅读，不承担检查职责。
 
 ## Runtime model
 
@@ -30,7 +30,7 @@ Codev 是一个基于 Tauri 2 + Rust + React 的极简代码和文档阅读器�
 
 ## Native boundary
 
-Rust backend modules are limited to `fs`, `history`, `proc`, `pty`, `workspace`, `github` and the scoped `pi_agent` RPC process bridge。`pi_agent` 再按 `paths` / `assets` / 运行时会话拆分，不要把安装、探测和 JSONL 历史继续堆回单文件。新增 IPC 命令必须在 `lib.rs` 注册，并在对应模块中补测试。不要为了潜在未来需求预留通用 Agent 协议、插件接口或后台服务。文件名搜索必须跳过 `target`、`node_modules` 这类生成目录。
+Rust backend modules are limited to `fs`, `history`, `proc`, `pty`, `workspace`, `github` and the scoped `pi_agent` / `codex_agent` process bridges。`pi_agent` 再按 `paths` / `assets` / 运行时会话拆分，不要把安装、探测和 JSONL 历史继续堆回单文件。`codex_agent` 仅负责独立 app-server stdio 连接与进程回收。新增 IPC 命令必须在 `lib.rs` 注册，并在对应模块中补测试。不要为了潜在未来需求预留通用 Agent 协议、插件接口或后台服务。文件名搜索必须跳过 `target`、`node_modules` 这类生成目录。
 
 PTY shell integration emits OSC 7 for cwd and OSC 133 A/B/C/D for prompt/command state。Shell 初始化脚本只负责跨平台 Shell 启动、用户配置加载和这些终端标记；不得恢复已删除的命令块、CLI 控制或 Agent 注入。
 

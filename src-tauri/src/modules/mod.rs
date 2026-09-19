@@ -1,3 +1,4 @@
+pub mod codex_agent;
 pub mod fs;
 pub mod github;
 pub mod history;
