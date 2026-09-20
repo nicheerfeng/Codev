@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   htmlNeedsAssetDocument,
+  htmlDocumentUrl,
   joinFsPath,
   parentDirectory,
   resolveHtmlAssetPath,
@@ -78,8 +79,12 @@ describe("html local asset urls", () => {
     expect(html).toContain(encodeURIComponent("D:\\proj\\fig\\a.png"));
   });
 
-  it("sends large inline-script pages to the asset document path", () => {
+  it("sends executable scripts of any size to the asset document path", () => {
     expect(htmlNeedsAssetDocument("<img src=a.png>")).toBe(false);
+    expect(htmlNeedsAssetDocument("<script>initialize()</script>")).toBe(true);
+    expect(
+      htmlNeedsAssetDocument('<script src="data/manifest.js"></script>'),
+    ).toBe(true);
     expect(
       htmlNeedsAssetDocument(`<script>${"x".repeat(25 * 1024)}</script>`),
     ).toBe(true);
@@ -88,5 +93,15 @@ describe("html local asset urls", () => {
         `<script type="application/json">${"{".repeat(30 * 1024)}</script>`,
       ),
     ).toBe(false);
+  });
+  it("preserves relative resource resolution for dynamic report scripts", () => {
+    const url = htmlDocumentUrl(
+      "C:/report/审 核.html",
+      (path) => `http://asset.localhost/${encodeURIComponent(path)}`,
+    );
+    expect(decodeURIComponent(new URL("data/manifest.js", url).pathname)).toBe(
+      "/C:/report/data/manifest.js",
+    );
+    expect(new URL(url).searchParams.get("codev-preview")).toBe("1");
   });
 });

@@ -60,3 +60,28 @@ it("retains server turn timing through streaming item updates", () => {
   expect(session.thread.turns[0].durationMs).toBe(10000);
   expect(session.thread.turns[0].items).toHaveLength(1);
 });
+
+it("preserves streamed process items when completion contains only the final answer", () => {
+  let session = sessionFromThread({ id: "s", name: null, cwd: "D:/qa", preview: "", updatedAt: 0, turns: [{ id: "t", status: "inProgress", items: [
+    { id: "tool", type: "commandExecution", command: "pwd", status: "completed" },
+    { id: "answer", type: "agentMessage", text: "partial" },
+  ] }] });
+  session = reduceNotification(session, "turn/completed", { turn: { id: "t", status: "completed", items: [{ id: "answer", type: "agentMessage", text: "final" }] } });
+  expect(session.thread.turns[0].items.map(item => item.id)).toEqual(["tool", "answer"]);
+  expect(session.thread.turns[0].items[1].text).toBe("final");
+});
+
+it("accepts token usage fields from snake-case notifications", () => {
+  const session = sessionFromThread({ id: "s", name: null, cwd: "D:/qa", preview: "", updatedAt: 0, turns: [] });
+  const next = reduceNotification(session, "thread/tokenUsage/updated", { token_usage: { last: { total_tokens: 4000 }, total: { total_tokens: 8000 }, model_context_window: 100000 } });
+  expect(next.tokenUsage).toEqual({ last: { totalTokens: 4000 }, total: { totalTokens: 8000 }, modelContextWindow: 100000 });
+});
+
+it("retains text deltas arriving before item start and accumulates subsequent chunks", () => {
+  let session = sessionFromThread({ id: "s", name: null, cwd: "D:/qa", preview: "", updatedAt: 0, turns: [] });
+  session = reduceNotification(session, "item/agentMessage/delta", { turnId: "t", itemId: "m", delta: "first" });
+  expect(session.thread.turns[0].items[0].text).toBe("first");
+  session = reduceNotification(session, "item/started", { turnId: "t", item: { id: "m", type: "agentMessage", text: "" } });
+  session = reduceNotification(session, "item/agentMessage/delta", { turnId: "t", itemId: "m", delta: " second" });
+  expect(session.thread.turns[0].items[0].text).toBe("first second");
+});

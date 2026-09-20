@@ -12,6 +12,7 @@ use std::sync::{mpsc, Arc};
 use tauri::{AppHandle, Emitter, State};
 mod activity;
 pub mod resources;
+pub mod usage;
 use activity::Activity;
 
 const EVENT: &str = "codev://codex-agent-event";
@@ -390,13 +391,14 @@ fn redact(mut value: Value, secret: Option<&str>) -> Value {
 pub fn codex_agent_ready(
     state: State<'_, CodexAgentState>,
     connection_id: u64,
+    commit: Option<bool>,
 ) -> Result<Value, String> {
     let mut slot = state.process.lock().map_err(|_| "进程锁不可用")?;
     let process = slot
         .as_mut()
         .filter(|p| p.id == connection_id)
         .ok_or("Codex 连接已关闭")?;
-    resources::commit(&process.resource_id)?;
+    if commit.unwrap_or(false) { resources::commit(&process.resource_id)?; }
     process.activity.lock().map_err(|_| "状态锁不可用")?.ready = true;
     Ok(
         json!({"resourceId":process.resource_id,"provider":process.provider,"lastModel":resources::last_model(&process.resource_id, &process.provider)?}),
@@ -410,6 +412,8 @@ pub async fn codex_agent_prepare_switch(
     connection_id: u64,
     resource_id: String,
 ) -> Result<(), String> {
+    let models = resources::codex_resources_models(resource_id.clone()).await?;
+    let model = models.first().and_then(|item| item.get("id")).and_then(Value::as_str).ok_or("资源未返回可用模型，切换未执行")?.to_string();
     tauri::async_runtime::spawn_blocking(move || {
         use tauri::Manager;
         let state = app.state::<CodexAgentState>();
@@ -423,7 +427,14 @@ pub async fn codex_agent_prepare_switch(
             return Err("原生 provider 已改变，请重新连接后再切换资源".into());
         }
         process.verify_idle()?;
-        process.shutdown_idle()?;
+        if let Err(error) = resources::apply_resource(&resource_id, &model) {
+            resources::codex_resources_rollback()?;
+            return Err(error);
+        }
+        if let Err(error) = process.shutdown_idle() {
+            resources::codex_resources_rollback()?;
+            return Err(error);
+        }
         *slot = None;
         Ok(())
     })
@@ -491,6 +502,15 @@ mod tests {
         )
         .unwrap();
         resources::fake_resource(root.path());
+        let config_path = root.path().join("config.toml");
+        let original = std::fs::read_to_string(&config_path).unwrap() + "experimental_bearer_token = \"fake-legacy\"\nenv_key = \"FAKE_OLD_KEY\"\n";
+        std::fs::write(&config_path, &original).unwrap();
+        resources::apply_resource_at(root.path(), "fake", "gpt-5.4").unwrap();
+        let stored: toml::Value = toml::from_str(&std::fs::read_to_string(root.path().join("config.toml")).unwrap()).unwrap();
+        assert_eq!(stored["model"].as_str(), Some("gpt-5.4"));
+        assert_eq!(stored["model_providers"]["codev_qa"]["requires_openai_auth"].as_bool(), Some(true));
+        assert!(stored["model_providers"]["codev_qa"].get("experimental_bearer_token").is_none());
+        assert!(stored["model_providers"]["codev_qa"].get("env_key").is_none());
         let mut command = codex_command().unwrap();
         let (resource_id, provider, _) =
             resources::configure_at(&mut command, Some("fake"), root.path()).unwrap();
@@ -546,6 +566,8 @@ mod tests {
         process.stdin.as_mut().unwrap().flush().unwrap();
         process.activity.lock().unwrap().ready = true;
         let config = process.query("config/read", json!({})).unwrap();
+        let account = process.query("account/read", json!({"refreshToken":false})).unwrap();
+        assert_eq!(account["account"]["type"], "apiKey");
         assert_eq!(config["config"]["model_provider"], "codev_qa");
         assert_eq!(
             config["config"]["model_providers"]["codev_qa"]["base_url"],
@@ -553,7 +575,7 @@ mod tests {
         );
         assert_eq!(
             config["config"]["model_providers"]["codev_qa"]["requires_openai_auth"],
-            false
+            true
         );
         let thread = process
             .query(
@@ -575,7 +597,11 @@ mod tests {
         assert!(process.child.try_wait().unwrap().is_some());
         assert!(std::fs::read_to_string(root.path().join("auth.json"))
             .unwrap()
-            .contains("fake-original"));
+            .contains("fake-codev-resource"));
+        resources::codex_resources_rollback().unwrap();
+        assert_eq!(std::fs::read_to_string(config_path).unwrap(), original);
+        assert!(std::fs::read_to_string(root.path().join("auth.json")).unwrap().contains("fake-original"));
+        assert!(!root.path().join("backups").exists());
     }
 
     /// 仅验证本机 CLI 握手和列表协议，不生成模型请求或修改会话。

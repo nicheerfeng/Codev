@@ -8,21 +8,23 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
+  ArrowDown01Icon,
+  ArrowRight01Icon,
   Cancel01Icon,
   Folder01Icon,
   Search01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import {
+  Fragment,
   forwardRef,
   useEffect,
   useImperativeHandle,
   useRef,
   useState,
 } from "react";
-import { usePreferencesStore } from "@/modules/settings/preferences";
 import { fileIconUrl } from "./lib/iconResolver";
 import { copyToClipboard, revealInFinder } from "./lib/contextActions";
 import { COMPACT_CONTENT, COMPACT_ITEM } from "./lib/menuItemClass";
@@ -39,14 +41,17 @@ type SearchHit = {
 type SearchResult = {
   hits: SearchHit[];
   truncated: boolean;
+  scanned: number;
+  unreadable: number;
+  scan_incomplete: boolean;
+  matched: number;
 };
 
-const MIN_QUERY_LEN = 2;
+const MIN_QUERY_LEN = 1;
 const DEBOUNCE_MS = 300;
 
 type Props = {
   rootPath: string;
-  searchRoots?: string[];
   onOpenFile: (path: string) => void;
   onRevealDirectory?: (path: string) => void;
   onAddAsRoot?: (path: string) => void;
@@ -68,6 +73,47 @@ function parentOf(path: string, fallback: string): string {
   return i > 0 ? path.slice(0, i) : fallback;
 }
 
+/** 高亮名称和路径中的字面量分词，不构造 HTML。 */
+function SearchHighlight({ text, query }: { text: string; query: string }) {
+  const words = query
+    .toLowerCase()
+    .replace(/\\/g, "/")
+    .split(/\s+/)
+    .filter(Boolean);
+  const lower = text.toLowerCase();
+  const marked = Array.from(text, () => false);
+  for (const word of words) {
+    let start = lower.indexOf(word);
+    while (start >= 0) {
+      for (let i = start; i < start + word.length; i++) marked[i] = true;
+      start = lower.indexOf(word, start + word.length);
+    }
+  }
+  const parts: Array<{ text: string; match: boolean }> = [];
+  for (let i = 0; i < text.length; i++) {
+    const match = !!marked[i];
+    const last = parts[parts.length - 1];
+    if (last?.match === match) last.text += text[i];
+    else parts.push({ text: text[i], match });
+  }
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.match ? (
+          <mark
+            key={`${i}-${part.text}`}
+            className="bg-transparent font-medium text-primary"
+          >
+            {part.text}
+          </mark>
+        ) : (
+          <span key={`${i}-${part.text}`}>{part.text}</span>
+        ),
+      )}
+    </>
+  );
+}
+
 export type ExplorerSearchHandle = {
   focus: () => void;
   isFocused: () => boolean;
@@ -77,9 +123,7 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
   function ExplorerSearch(
     {
       rootPath,
-      searchRoots,
       onOpenFile,
-      onRevealDirectory,
       onAddAsRoot,
       onCopyPaths,
       onCutPaths,
@@ -95,13 +139,23 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
     ref,
   ) {
     const t = useT();
-    const showHidden = usePreferencesStore((s) => s.showHidden);
     const [query, setQuery] = useState("");
     const [results, setResults] = useState<SearchHit[]>([]);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [searching, setSearching] = useState(false);
-    const [truncated, setTruncated] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [expanded, setExpanded] = useState<Set<string>>(new Set());
+    const [children, setChildren] = useState<Record<string, SearchHit[]>>({});
+    const [folderErrors, setFolderErrors] = useState<Record<string, string>>(
+      {},
+    );
+    const [loadingFolders, setLoadingFolders] = useState<Set<string>>(
+      new Set(),
+    );
+    const generation = useRef(0);
+    const [visibleCount, setVisibleCount] = useState(200);
+    const sentinel = useRef<HTMLDivElement>(null);
+    const [stats, setStats] = useState<SearchResult | null>(null);
     const [retryToken, setRetryToken] = useState(0);
     const inputRef = useRef<HTMLInputElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -121,7 +175,6 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
         setResults([]);
         setSelectedIndex(0);
         setSearching(false);
-        setTruncated(false);
         setError(null);
       }
     }, [open]);
@@ -132,31 +185,38 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
         setResults([]);
         setSelectedIndex(0);
         setSearching(false);
-        setTruncated(false);
         setError(null);
         return;
       }
+      setResults([]);
+      setStats(null);
       setSearching(true);
       setError(null);
+      const requestId = crypto.randomUUID();
+      let started = false;
       let alive = true;
       const handle = setTimeout(async () => {
         try {
-          const res = await invoke<SearchResult>("fs_search", {
-            roots: searchRoots?.length ? searchRoots : [rootPath],
+          started = true;
+          const onBatch = new Channel<SearchHit[]>();
+          onBatch.onmessage = (hits) => {
+            if (alive) setResults((current) => [...current, ...hits]);
+          };
+          const res = await invoke<SearchResult>("fs_search_query", {
+            requestId,
+            root: rootPath,
             query: q,
-            limit: 200,
-            showHidden,
+            onBatch,
             workspace: currentWorkspaceEnv(),
           });
           if (alive) {
             setResults(res.hits);
-            setTruncated(res.truncated);
+            setStats(res);
             setSelectedIndex(0);
           }
         } catch (e) {
           if (alive) {
             setResults([]);
-            setTruncated(false);
             setSelectedIndex(0);
             setError(String(e));
           }
@@ -168,9 +228,97 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
       return () => {
         alive = false;
         clearTimeout(handle);
+        if (started)
+          void invoke("fs_search_cancel", { requestId }).catch(() => {});
       };
-    }, [query, retryToken, rootPath, searchRoots, showHidden]);
+    }, [query, retryToken, rootPath]);
 
+    useEffect(() => {
+      generation.current++;
+      setExpanded(new Set());
+      setChildren({});
+      setFolderErrors({});
+      setLoadingFolders(new Set());
+      setVisibleCount(200);
+      setStats(null);
+    }, [query, rootPath]);
+    /** 在结果树中按需加载目录，查询切换后丢弃旧目录响应。 */
+    const toggleDirectory = async (hit: SearchHit) => {
+      if (expanded.has(hit.path)) {
+        setExpanded((current) => {
+          const next = new Set(current);
+          next.delete(hit.path);
+          return next;
+        });
+        return;
+      }
+      setExpanded((current) => new Set(current).add(hit.path));
+      if (children[hit.path] || loadingFolders.has(hit.path)) return;
+      const revision = generation.current;
+      setLoadingFolders((current) => new Set(current).add(hit.path));
+      setFolderErrors((current) => ({ ...current, [hit.path]: "" }));
+      try {
+        const entries = await invoke<Array<{ name: string; kind: string }>>(
+          "fs_read_dir",
+          {
+            path: hit.path,
+            showHidden: true,
+            workspace: currentWorkspaceEnv(),
+          },
+        );
+        if (revision !== generation.current) return;
+        setChildren((current) => ({
+          ...current,
+          [hit.path]: entries.map((entry) => ({
+            name: entry.name,
+            path: `${hit.path}/${entry.name}`,
+            rel: `${hit.rel}/${entry.name}`,
+            is_dir: entry.kind === "dir",
+          })),
+        }));
+      } catch (error) {
+        if (revision === generation.current)
+          setFolderErrors((current) => ({
+            ...current,
+            [hit.path]: String(error),
+          }));
+      } finally {
+        if (revision === generation.current)
+          setLoadingFolders((current) => {
+            const next = new Set(current);
+            next.delete(hit.path);
+            return next;
+          });
+      }
+    };
+    const visible: Array<SearchHit & { depth: number; key: string }> = [];
+    /** 展平已展开的结果目录，键盘顺序与屏幕顺序一致。 */
+    const appendVisible = (
+      hits: SearchHit[],
+      depth: number,
+      parent: string,
+    ) => {
+      for (const hit of hits) {
+        const key = `${parent}/${hit.path}`;
+        visible.push({ ...hit, depth, key });
+        if (expanded.has(hit.path))
+          appendVisible(children[hit.path] ?? [], depth + 1, key);
+      }
+    };
+    appendVisible(results.slice(0, visibleCount), 0, "");
+    useEffect(() => {
+      const node = sentinel.current;
+      if (!node) return;
+      const observer = new IntersectionObserver(
+        ([entry]) => {
+          if (entry.isIntersecting)
+            setVisibleCount((count) => Math.min(results.length, count + 200));
+        },
+        { rootMargin: "200px" },
+      );
+      observer.observe(node);
+      return () => observer.disconnect();
+    }, [results.length, visibleCount]);
     useImperativeHandle(
       ref,
       () => ({
@@ -200,7 +348,7 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
         return;
       }
       onSelectPath?.(hit.path, false);
-      if (hit.is_dir) onRevealDirectory?.(hit.path);
+      if (hit.is_dir) void toggleDirectory(hit);
       else onOpenFile(hit.path);
     };
 
@@ -225,24 +373,26 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
                   onRequestClose();
                   return;
                 }
-                if (results.length > 0) {
+                if (visible.length > 0) {
                   if (e.key === "ArrowDown") {
                     e.preventDefault();
                     lastKeyboardNavAt.current = Date.now();
-                    setSelectedIndex((prev) => (prev + 1) % results.length);
+                    setSelectedIndex((prev) => (prev + 1) % visible.length);
                   } else if (e.key === "ArrowUp") {
                     e.preventDefault();
                     lastKeyboardNavAt.current = Date.now();
                     setSelectedIndex(
-                      (prev) => (prev - 1 + results.length) % results.length,
+                      (prev) => (prev - 1 + visible.length) % visible.length,
                     );
                   } else if (e.key === "Enter") {
                     e.preventDefault();
-                    handleSelect(results[selectedIndex]);
+                    handleSelect(
+                      visible[Math.min(selectedIndex, visible.length - 1)],
+                    );
                   }
                 }
               }}
-              placeholder={`${t("Search files")}…`}
+              placeholder="搜索文件名 / 路径…"
               className="h-7 pr-7 pl-6.5 text-xs"
             />
             {query ? (
@@ -280,7 +430,7 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
                 </div>
               ) : query.trim().length < MIN_QUERY_LEN ? (
                 <div className="px-3 py-2 text-[11px] text-muted-foreground">
-                  {t("Type at least 2 characters")}
+                  输入文件名或路径
                 </div>
               ) : searching && results.length === 0 ? (
                 <div className="px-3 py-2 text-[11px] text-muted-foreground">
@@ -291,136 +441,202 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
                   {t("No matches")}
                 </div>
               ) : (
-                results.map((hit, index) => {
+                visible.map((hit, index) => {
                   const url = hit.is_dir ? null : fileIconUrl(hit.name);
                   const isSelected = selectedPaths.includes(hit.path);
                   const isActive = index === selectedIndex;
                   const menuPaths = isSelected ? selectedPaths : [hit.path];
                   return (
-                    <ContextMenu key={hit.path}>
-                      <ContextMenuTrigger asChild>
-                        <button
-                          type="button"
-                          data-index={index}
-                          onClick={(event) =>
-                            handleSelect(hit, event.ctrlKey || event.metaKey)
-                          }
-                          onContextMenu={() => {
-                            if (!isSelected) onSelectPath?.(hit.path, false);
-                          }}
-                          onMouseEnter={() => {
-                            if (Date.now() - lastKeyboardNavAt.current > 250) {
-                              setSelectedIndex(index);
+                    <Fragment key={hit.key}>
+                      <ContextMenu>
+                        <ContextMenuTrigger asChild>
+                          <button
+                            type="button"
+                            data-index={index}
+                            style={{ paddingLeft: 8 + hit.depth * 14 }}
+                            aria-expanded={
+                              hit.is_dir ? expanded.has(hit.path) : undefined
                             }
-                          }}
-                          className={cn(
-                            "flex w-full items-center gap-1.5 px-2 py-1 text-left text-xs transition-colors",
-                            isSelected || isActive
-                              ? "bg-accent text-foreground"
-                              : "hover:bg-accent/50 text-foreground/80",
+                            onClick={(event) =>
+                              handleSelect(hit, event.ctrlKey || event.metaKey)
+                            }
+                            onContextMenu={() => {
+                              if (!isSelected) onSelectPath?.(hit.path, false);
+                            }}
+                            onMouseEnter={() => {
+                              if (
+                                Date.now() - lastKeyboardNavAt.current >
+                                250
+                              ) {
+                                setSelectedIndex(index);
+                              }
+                            }}
+                            className={cn(
+                              "flex w-full items-center gap-1.5 px-2 py-1 text-left text-xs transition-colors",
+                              isSelected || isActive
+                                ? "bg-accent text-foreground"
+                                : "hover:bg-accent/50 text-foreground/80",
+                            )}
+                            title={hit.path}
+                          >
+                            {hit.is_dir ? (
+                              <HugeiconsIcon
+                                icon={
+                                  expanded.has(hit.path)
+                                    ? ArrowDown01Icon
+                                    : ArrowRight01Icon
+                                }
+                                size={12}
+                                className="shrink-0"
+                              />
+                            ) : (
+                              <span className="w-3 shrink-0" />
+                            )}
+                            {url ? (
+                              <img
+                                src={url}
+                                alt=""
+                                className="size-3.5 shrink-0"
+                              />
+                            ) : (
+                              <HugeiconsIcon
+                                icon={Folder01Icon}
+                                size={13}
+                                strokeWidth={1.75}
+                                className="shrink-0 text-muted-foreground"
+                              />
+                            )}
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate">
+                                <SearchHighlight
+                                  text={hit.name}
+                                  query={query}
+                                />
+                              </span>
+                              <span className="block truncate text-[10px] text-muted-foreground">
+                                <SearchHighlight
+                                  text={parentOf(hit.rel, ".")}
+                                  query={query}
+                                />
+                              </span>
+                            </span>
+                          </button>
+                        </ContextMenuTrigger>
+                        <ContextMenuContent className={COMPACT_CONTENT}>
+                          {!hit.is_dir && (
+                            <ContextMenuItem
+                              className={COMPACT_ITEM}
+                              onSelect={() => onOpenFile(hit.path)}
+                            >
+                              {t("Open")}
+                            </ContextMenuItem>
                           )}
-                          title={hit.path}
-                        >
-                          {url ? (
-                            <img
-                              src={url}
-                              alt=""
-                              className="size-3.5 shrink-0"
-                            />
-                          ) : (
-                            <HugeiconsIcon
-                              icon={Folder01Icon}
-                              size={13}
-                              strokeWidth={1.75}
-                              className="shrink-0 text-muted-foreground"
-                            />
+                          {hit.is_dir && onRevealInTerminal && (
+                            <ContextMenuItem
+                              className={COMPACT_ITEM}
+                              onSelect={() => onRevealInTerminal(hit.path)}
+                            >
+                              {t("Open in Terminal")}
+                            </ContextMenuItem>
                           )}
-                          <span className="truncate">{hit.name}</span>
-                          <span className="ml-auto truncate text-[10px] text-muted-foreground">
-                            {hit.rel}
-                          </span>
-                        </button>
-                      </ContextMenuTrigger>
-                      <ContextMenuContent className={COMPACT_CONTENT}>
-                        {!hit.is_dir && (
+                          {onAddAsRoot && (
+                            <ContextMenuItem
+                              className={COMPACT_ITEM}
+                              onSelect={() =>
+                                onAddAsRoot(
+                                  hit.is_dir
+                                    ? hit.path
+                                    : parentOf(hit.path, rootPath),
+                                )
+                              }
+                            >
+                              {t("Add folder to workspace")}
+                            </ContextMenuItem>
+                          )}
                           <ContextMenuItem
                             className={COMPACT_ITEM}
-                            onSelect={() => onOpenFile(hit.path)}
+                            onSelect={() => void revealInFinder(hit.path)}
                           >
-                            {t("Open")}
+                            {t("Reveal in Finder")}
                           </ContextMenuItem>
-                        )}
-                        {hit.is_dir && onRevealInTerminal && (
-                          <ContextMenuItem
-                            className={COMPACT_ITEM}
-                            onSelect={() => onRevealInTerminal(hit.path)}
-                          >
-                            {t("Open in Terminal")}
-                          </ContextMenuItem>
-                        )}
-                        {onAddAsRoot && (
+                          {onCopyPaths && (
+                            <ContextMenuItem
+                              className={COMPACT_ITEM}
+                              onSelect={() => onCopyPaths(menuPaths)}
+                            >
+                              {t("Copy")}
+                            </ContextMenuItem>
+                          )}
+                          {onCutPaths && (
+                            <ContextMenuItem
+                              className={COMPACT_ITEM}
+                              onSelect={() => onCutPaths(menuPaths)}
+                            >
+                              {t("Cut")}
+                            </ContextMenuItem>
+                          )}
+                          {clipboardAvailable && onPasteTo && hit.is_dir ? (
+                            <ContextMenuItem
+                              className={COMPACT_ITEM}
+                              onSelect={() => onPasteTo(hit.path)}
+                            >
+                              {t("Paste")}
+                            </ContextMenuItem>
+                          ) : null}
+                          <ContextMenuSeparator className="my-0.5" />
                           <ContextMenuItem
                             className={COMPACT_ITEM}
                             onSelect={() =>
-                              onAddAsRoot(
-                                hit.is_dir
-                                  ? hit.path
-                                  : parentOf(hit.path, rootPath),
-                              )
+                              void copyToClipboard(menuPaths.join("\n"))
                             }
                           >
-                            {t("Add folder to workspace")}
+                            {t(
+                              menuPaths.length > 1 ? "Copy Paths" : "Copy Path",
+                            )}
                           </ContextMenuItem>
+                        </ContextMenuContent>
+                      </ContextMenu>
+                      {expanded.has(hit.path) &&
+                        loadingFolders.has(hit.path) && (
+                          <p className="px-6 py-1 text-xs text-muted-foreground">
+                            读取目录中…
+                          </p>
                         )}
-                        <ContextMenuItem
-                          className={COMPACT_ITEM}
-                          onSelect={() => void revealInFinder(hit.path)}
-                        >
-                          {t("Reveal in Finder")}
-                        </ContextMenuItem>
-                        {onCopyPaths && (
-                          <ContextMenuItem
-                            className={COMPACT_ITEM}
-                            onSelect={() => onCopyPaths(menuPaths)}
+                      {expanded.has(hit.path) && folderErrors[hit.path] && (
+                        <p className="px-6 py-1 text-xs text-destructive">
+                          {folderErrors[hit.path]}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setExpanded((current) => {
+                                const next = new Set(current);
+                                next.delete(hit.path);
+                                return next;
+                              });
+                            }}
                           >
-                            {t("Copy")}
-                          </ContextMenuItem>
+                            收起后重试
+                          </button>
+                        </p>
+                      )}
+                      {expanded.has(hit.path) &&
+                        children[hit.path]?.length === 0 && (
+                          <p className="px-6 py-1 text-xs text-muted-foreground">
+                            空文件夹
+                          </p>
                         )}
-                        {onCutPaths && (
-                          <ContextMenuItem
-                            className={COMPACT_ITEM}
-                            onSelect={() => onCutPaths(menuPaths)}
-                          >
-                            {t("Cut")}
-                          </ContextMenuItem>
-                        )}
-                        {clipboardAvailable && onPasteTo && hit.is_dir ? (
-                          <ContextMenuItem
-                            className={COMPACT_ITEM}
-                            onSelect={() => onPasteTo(hit.path)}
-                          >
-                            {t("Paste")}
-                          </ContextMenuItem>
-                        ) : null}
-                        <ContextMenuSeparator className="my-0.5" />
-                        <ContextMenuItem
-                          className={COMPACT_ITEM}
-                          onSelect={() =>
-                            void copyToClipboard(menuPaths.join("\n"))
-                          }
-                        >
-                          {t(menuPaths.length > 1 ? "Copy Paths" : "Copy Path")}
-                        </ContextMenuItem>
-                      </ContextMenuContent>
-                    </ContextMenu>
+                    </Fragment>
                   );
                 })
               )}
-              {truncated && results.length > 0 ? (
+              {visibleCount < results.length && (
+                <div ref={sentinel} className="h-1" />
+              )}
+              {stats?.scan_incomplete && (
                 <div className="px-3 py-1.5 text-[10px] text-muted-foreground">
-                  {t("Showing partial results — refine your query.")}
+                  当前搜索范围过大&gt;20W文件，目前搜索结果无法搜全，如需请使用everything之类的软件来定位搜索
                 </div>
-              ) : null}
+              )}
             </div>
           </ScrollArea>
         ) : null}

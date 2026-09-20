@@ -9,15 +9,12 @@ export function isTool(item: Item): boolean {
 
 /** 将真实思考或工具预览归一为从开头截断的一行文本。 */
 export function activityLabel(item: Item): string {
-  const prefix =
-    item.type === "reasoning"
-      ? item.status === "inProgress"
-        ? "思考中 · "
-        : "已思考 · "
-      : "";
-  return (
-    prefix + itemText(item).replace(/\*\*/g, "").replace(/\s+/g, " ").trim()
-  );
+  const text = itemText(item).replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
+  if (item.type === "reasoning")
+    return `${item.status === "inProgress" ? "思考中" : "已思考"} · ${text}`;
+  const status = item.status === "inProgress" ? "正在运行" : item.status === "failed" ? "执行失败" : "已完成";
+  const name = item.tool ?? item.type;
+  return `${status} · ${name}${text && text !== name ? ` · ${text}` : ""}`;
 }
 
 /** 只使用原生或实际收到的轮次时间，不用线程更新时间伪造消息时间。 */

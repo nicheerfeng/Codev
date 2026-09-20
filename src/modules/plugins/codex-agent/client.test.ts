@@ -43,7 +43,8 @@ vi.mock("@tauri-apps/api/core", () => ({
       return ++transport.connection;
     }
     if (command === "codex_agent_ready")
-      return { resourceId: transport.resource, provider: "test" };
+      return { resourceId: transport.resource, provider: "test", lastModel: { model: "selected-model", effort: "" } };
+    if (command === "codex_resources_models") return [{ id: "selected-model" }];
     if (command === "codex_agent_prepare_switch") {
       if (transport.switchError) throw new Error(transport.switchError);
       return;
@@ -99,13 +100,14 @@ beforeEach(async () => {
   transport.catalogPages = false;
   client = new CodexClient();
   await client.connect();
+  await client.refreshProject("D:/project");
 });
 afterEach(async () => {
   await client.dispose();
 });
 
 describe("Codex native client", () => {
-  it("automatically reads every metadata page without a global load-more action", async () => {
+  it("reads history pages only for the explicitly selected project", async () => {
     transport.catalogPages = true;
     await client.refresh();
     expect(client.getSnapshot().sessions.older).toBeDefined();
@@ -445,4 +447,54 @@ describe("Codex native client", () => {
       transport.sent.find((m) => m.method === "turn/steer")?.params,
     ).not.toHaveProperty("sandboxPolicy");
   });
+});
+
+it("loads catalog pages with one session-cache publication", async () => {
+  transport.catalogPages = true;
+  let cache = client.getSnapshot().sessions;
+  let publications = 0;
+  const unsubscribe = client.subscribe(() => {
+    const next = client.getSnapshot().sessions;
+    if (next !== cache) { publications++; cache = next; }
+  });
+  await client.refresh();
+  unsubscribe();
+  expect(publications).toBe(1);
+  expect(client.getSnapshot().sessions.older).toBeDefined();
+});
+
+it("refreshes a changed session once without enumerating the catalog", async () => {
+  const id = "01a0bcab-e5b8-7ee2-add6-0bebb3d3fc9b";
+  const path = `C:/Users/test/.codex/sessions/rollout-${id}.jsonl`;
+  transport.sent = [];
+  await client.load(id);
+  transport.sent = [];
+  await client.refreshChanged([path, path]);
+  expect(transport.sent.filter(m => m.method === "thread/list")).toHaveLength(0);
+  expect(transport.sent.filter(m => m.method === "thread/read")).toHaveLength(1);
+  expect(client.getSnapshot().sessions[id]).toBeDefined();
+  const cache = client.getSnapshot().sessions;
+  await client.refreshChanged([path]);
+  expect(client.getSnapshot().sessions).toBe(cache);
+});
+
+
+it("connects without listing or loading any history", async () => {
+  await client.dispose();
+  client = new CodexClient();
+  transport.sent = [];
+  await client.connect();
+  expect(transport.sent.some(m => ["thread/list", "thread/read", "thread/turns/list"].includes(m.method ?? ""))).toBe(false);
+  expect(client.getSnapshot().order).toEqual([]);
+  await client.refreshProject("D:/chosen");
+  const calls = transport.sent.filter(m => m.method === "thread/list");
+  expect(calls).toHaveLength(1);
+  expect(calls[0].params).toMatchObject({ cwd: "D:/chosen", useStateDbOnly: true });
+});
+
+it("uses medium for history without effort metadata instead of another thread's effort", async () => {
+  await client.selectModel("one", "selected-model", "high");
+  await client.load("two");
+  expect(client.getSnapshot().sessions.two.model).toBe("selected-model");
+  expect(client.getSnapshot().sessions.two.effort).toBe("medium");
 });

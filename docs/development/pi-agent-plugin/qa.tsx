@@ -30,7 +30,7 @@ mockIPC(async (cmd, args: any) => {
   if (cmd === "plugin:clipboard-manager|write_text") { clipboard.push(args.text); return; }
   if (cmd === "pi_agent_list_models") return models;
   if (cmd === "pi_agent_probe") return { available: true, version: "QA fixture", path: "pi", error: null };
-  if (cmd === "pi_agent_list_all_sessions") return sessions;
+  if (cmd === "pi_agent_list_sessions") { sent.push({ command: cmd, cwd: args.cwd }); return sessions.filter(session => session.cwd === args.cwd); }
   if (cmd === "pi_agent_read_session") return { messages: [{ role: "user", content: `历史任务 ${args.path}` }, { role: "assistant", content: "历史回复", stopReason: "stop" }], model: models[0], sessionName: sessions.find(item => item.path === args.path)?.name, sessionFile: args.path, oldestOffset: 0, hasMore: false };
   if (cmd === "pi_agent_delete_session") {
     const index = sessions.findIndex((session) => session.path === args.path);

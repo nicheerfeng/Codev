@@ -76,6 +76,7 @@ type Props = {
   organization: PiOrganization;
   onOrganize: (next: PiOrganization) => void;
   onAddProject: () => void;
+  onSelectProject: (cwd: string) => void;
   onRemoveProject: (cwd: string) => void;
   onNew: (cwd: string) => void;
   onSelect: (thread: SidebarThread) => void;
@@ -110,6 +111,7 @@ export function PiSidebar(props: Props) {
   const { width, onWidthChange: setWidth } = props;
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
   const storedCollapsed = useRef(readPiCollapsed());
+  const [openedProjects, setOpenedProjects] = useState<Set<string>>(new Set());
   const [collapsed, setCollapsed] = useState<Set<string>>(
     () => storedCollapsed.current.keys,
   );
@@ -487,7 +489,7 @@ export function PiSidebar(props: Props) {
     );
     if (isArchived && !rows.length) return null;
     const nodeKey = `${isArchived ? "archive:" : "project:"}${key}`;
-    const closed = !filter && collapsed.has(nodeKey);
+    const closed = (!openedProjects.has(key) && !rows.length) || (!filter && collapsed.has(nodeKey));
     const live = !isArchived && cwdIsLive(props.threads, cwd);
     const groupId = org.projectGroups[key] ?? "";
     const groupProjects = applySavedOrder(
@@ -534,7 +536,13 @@ export function PiSidebar(props: Props) {
                 <button
                   type="button"
                   className={`flex min-w-0 flex-1 items-center gap-1.5 px-1.5 py-2 text-left text-xs ${closed && live ? "text-[#477faf] dark:text-[#a6cceb]" : pathKey(props.selectedProject ?? "") === key ? "text-foreground" : "text-muted-foreground"}`}
-                  onClick={() => toggle(nodeKey)}
+                  onClick={() => {
+                    if (closed) props.onSelectProject(cwd);
+                    if (!openedProjects.has(key)) {
+                      setOpenedProjects(current => new Set(current).add(key));
+                      setCollapsed(current => { const next = new Set(current); next.delete(nodeKey); return next; });
+                    } else toggle(nodeKey);
+                  }}
                   disabled={props.organizationReady === false}
                   aria-expanded={!closed}
                   title={cwd}
@@ -838,7 +846,7 @@ export function PiSidebar(props: Props) {
             <button
               type="button"
               className="flex min-w-0 flex-1 items-center gap-1 py-1 text-left text-[11px] text-muted-foreground"
-              onClick={() => toggle(`group:${TEMPORARY_GROUP_ID}`)}
+              onClick={() => { if (props.temporaryHome) props.onSelectProject(props.temporaryHome); toggle(`group:${TEMPORARY_GROUP_ID}`); }}
             >
               <HugeiconsIcon
                 icon={

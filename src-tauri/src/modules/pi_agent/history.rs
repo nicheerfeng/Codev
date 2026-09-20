@@ -590,9 +590,18 @@ pub(super) fn append_session_entry(request: PiSessionAppendRequest) -> Result<()
     writeln!(file, "{entry}").map_err(|error| error.to_string())
 }
 
+/// 按 Pi 原生规则定位指定项目的会话目录，不遍历其他项目。
+pub(super) fn project_sessions_dir(cwd: &str) -> Option<PathBuf> {
+    let normalized = cwd.replace('\\', "/");
+    let normalized = normalized.strip_prefix("//?/").unwrap_or(&normalized);
+    let normalized = normalized.strip_prefix('/').unwrap_or(normalized);
+    let safe: String = normalized.chars().map(|c| if c == '/' || c == ':' { '-' } else { c }).collect();
+    Some(pi_sessions_dir()?.join(format!("--{safe}--")))
+}
+
 /// 扫描会话目录并返回属于指定工作目录的最近线程。
-pub(super) fn list_sessions(cwd: Option<&str>, limit: usize) -> Vec<PiSessionSummary> {
-    let Some(root) = pi_sessions_dir() else {
+pub(super) fn list_sessions(cwd: &str, limit: usize) -> Vec<PiSessionSummary> {
+    let Some(root) = project_sessions_dir(cwd) else {
         return Vec::new();
     };
     let mut pending = vec![root];
@@ -606,7 +615,7 @@ pub(super) fn list_sessions(cwd: Option<&str>, limit: usize) -> Vec<PiSessionSum
             if path.is_dir() {
                 pending.push(path);
             } else if path.extension().and_then(|value| value.to_str()) == Some("jsonl") {
-                if let Some(summary) = parse_session_summary(&path, cwd) {
+                if let Some(summary) = parse_session_summary(&path, Some(cwd)) {
                     summaries.push(summary);
                 }
             }

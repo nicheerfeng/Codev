@@ -6,6 +6,7 @@ import type {
 import { MarkdownViewToggle } from "@/modules/markdown";
 import {
   htmlNeedsAssetDocument,
+  htmlDocumentUrl,
   rewriteHtmlLocalAssets,
 } from "./localAssetUrl";
 import {
@@ -320,7 +321,7 @@ export const HtmlPreviewPane = forwardRef<EditorPaneHandle, Props>(
       const loadAssetDocument = () => {
         if (cancelled) return;
         setSource(null);
-        setFrameSrc(convertFileSrc(path));
+        setFrameSrc(htmlDocumentUrl(path, convertFileSrc));
       };
       void invoke("fs_allow_asset", { path, recursiveDirectory: true })
         .then(() =>

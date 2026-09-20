@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowDown01Icon,
@@ -107,6 +107,7 @@ export function CodexSidebar({
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [home, setHome] = useState("");
+  const [openedProjects, setOpenedProjects] = useState<Set<string>>(new Set());
   const [confirm, setConfirm] = useState<{
     kind: "project" | "thread";
     id: string;
@@ -148,16 +149,35 @@ export function CodexSidebar({
       renameInput.current?.select();
     }
   }, [editing?.id]);
-  const projectMap = new Map<string, string>();
-  for (const cwd of [
-    ...layout.projects,
-    ...state.order.map((id) => state.sessions[id].thread.cwd),
-  ])
-    if (!layout.hidden.includes(pathKey(cwd)))
-      projectMap.set(pathKey(cwd), cwd);
-  const projects = ordered([...projectMap.keys()], layout.projectOrder);
-  const sessionIds = ordered(state.order, layout.sessionOrder);
+  const { projectMap, projects, sessionIds, sessionsByProject } = useMemo(() => {
+    const projectMap = new Map<string, string>();
+    const sessionsByProject = new Map<string, typeof state.sessions[string][]>();
+    const sessionIds = ordered(state.order, layout.sessionOrder);
+    for (const cwd of [...layout.projects, ...(state.historyProjects ?? [])])
+      if (!layout.hidden.includes(pathKey(cwd))) projectMap.set(pathKey(cwd), cwd);
+    for (const id of sessionIds) {
+      const session = state.sessions[id];
+      const key = pathKey(session.thread.cwd);
+      if (!layout.hidden.includes(key)) projectMap.set(key, session.thread.cwd);
+      const rows = sessionsByProject.get(key) ?? [];
+      rows.push(session);
+      sessionsByProject.set(key, rows);
+    }
+    return { projectMap, projects: ordered([...projectMap.keys()], layout.projectOrder), sessionIds, sessionsByProject };
+  }, [state.sessions, state.order, layout.projects, layout.hidden, layout.projectOrder, layout.sessionOrder, state.historyProjects]);
+  useEffect(() => {
+    const discovered = [...new Set([...(state.historyProjects ?? []), ...Object.values(state.sessions).map(session => session.thread.cwd)])];
+    setLayout(current => {
+      const added = discovered.filter(cwd => !current.hidden.includes(pathKey(cwd)) && !current.projects.some(path => pathKey(path) === pathKey(cwd)));
+      return added.length ? { ...current, projects: [...current.projects, ...added] } : current;
+    });
+  }, [state.sessions, state.historyProjects]);
   const query = filter.trim().toLowerCase();
+  /** 只有用户展开项目时读取该目录历史，显示已保存入口不触发读取。 */
+  const loadProject = (cwd: string, archived = false) => {
+    setOpenedProjects(current => new Set(current).add(pathKey(cwd)));
+    void client.refreshProject(cwd, archived).catch(error => toast.error(String(error)));
+  };
   /** 收纳状态写入统一布局文件。 */
   const toggle = (key: string) =>
     setLayout((current) => ({
@@ -169,12 +189,14 @@ export function CodexSidebar({
   /** 选择目录仅添加项目入口，不会自动向模型发送任务。 */
   const addProject = async () => {
     const cwd = await open({ directory: true });
-    if (cwd)
+    if (cwd) {
+      loadProject(cwd);
       setLayout((current) => ({
         ...current,
         projects: [...new Set([...current.projects, cwd])],
         hidden: current.hidden.filter((key) => key !== pathKey(cwd)),
       }));
+    }
   };
   /** 提交会话或分组名称，保持原生会话与右栏同步。 */
   const rename = async () => {
@@ -302,7 +324,6 @@ export function CodexSidebar({
                 type="button"
                 className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left"
                 aria-label={`${title} ${projectName(thread.cwd)}`}
-                title={title}
                 onClick={() => {
                   onSelect(thread.id);
                 }}
@@ -390,8 +411,7 @@ export function CodexSidebar({
       )?.thread.cwd ??
       key;
     const nodeKey = archived ? `archive:${key}` : key;
-    const rows = sessionIds
-      .map((id) => state.sessions[id])
+    const rows = (sessionsByProject.get(key) ?? [])
       .filter(
         (session) =>
           pathKey(session.thread.cwd) === key &&
@@ -404,7 +424,7 @@ export function CodexSidebar({
     if (archived && !rows.length) return null;
     if (query && !rows.length && !cwd.toLowerCase().includes(query))
       return null;
-    const closed = !query && layout.collapsed.includes(nodeKey);
+    const closed = (!openedProjects.has(key) && !rows.length) || (!query && layout.collapsed.includes(nodeKey));
     const live = rows.some((session) => session.busy);
     return (
       <div key={key} className="mb-1 min-w-0">
@@ -429,10 +449,15 @@ export function CodexSidebar({
               <button
                 type="button"
                 className="flex min-w-0 flex-1 items-center gap-1.5 px-1.5 py-2 text-left text-xs text-muted-foreground"
-                title={cwd}
                 aria-expanded={!closed}
                 onClick={() => {
-                  toggle(nodeKey);
+                  if (!openedProjects.has(key)) {
+                    loadProject(cwd, archived);
+                    setLayout(current => ({ ...current, collapsed: current.collapsed.filter(value => value !== nodeKey) }));
+                  } else {
+                    if (closed) loadProject(cwd, archived);
+                    toggle(nodeKey);
+                  }
                 }}
               >
                 <HugeiconsIcon
@@ -706,12 +731,10 @@ export function CodexSidebar({
                 type="button"
                 aria-expanded={layout.temporaryOpen || !!query}
                 className="flex min-w-0 flex-1 items-center gap-1 py-1 text-left text-[11px] text-muted-foreground"
-                onClick={() =>
-                  setLayout((current) => ({
-                    ...current,
-                    temporaryOpen: !current.temporaryOpen,
-                  }))
-                }
+                onClick={() => {
+                  if (!layout.temporaryOpen || !openedProjects.has(pathKey(home))) loadProject(home);
+                  setLayout(current => ({ ...current, temporaryOpen: !openedProjects.has(pathKey(home)) || !current.temporaryOpen }));
+                }}
               >
                 <HugeiconsIcon
                   icon={
@@ -780,7 +803,7 @@ export function CodexSidebar({
             onClick={() => {
               if (!archiveOpen)
                 void client
-                  .refresh(false, true)
+                  .refresh(true)
                   .catch((error) => toast.error(String(error)));
               setArchiveOpen(!archiveOpen);
             }}

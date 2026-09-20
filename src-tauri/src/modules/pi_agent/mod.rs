@@ -136,7 +136,7 @@ struct PiProcess {
 }
 
 pub struct PiAgentState {
-    watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    watcher: Mutex<Option<(String, notify::RecommendedWatcher)>>,
     next_id: AtomicU64,
     sessions: Arc<Mutex<HashMap<u64, PiProcess>>>,
 }
@@ -158,17 +158,18 @@ pub fn pi_agent_watch_sessions(
     app: AppHandle,
     state: State<'_, PiAgentState>,
     enabled: bool,
+    cwd: String,
 ) -> Result<(), String> {
     use notify::Watcher;
     let mut slot = state.watcher.lock().map_err(|_| "会话监听锁不可用")?;
     if !enabled {
-        *slot = None;
+        if slot.as_ref().is_some_and(|(owner, _)| owner == &cwd) { *slot = None; }
         return Ok(());
     }
-    if slot.is_some() {
+    if slot.as_ref().is_some_and(|(owner, _)| owner == &cwd) {
         return Ok(());
     }
-    let root = pi_sessions_dir().ok_or("Pi 会话目录不可用")?;
+    let root = history::project_sessions_dir(&cwd).ok_or("Pi 会话目录不可用")?;
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
         if let Ok(event) = event {
@@ -184,9 +185,9 @@ pub fn pi_agent_watch_sessions(
     })
     .map_err(|error| error.to_string())?;
     watcher
-        .watch(&root, notify::RecursiveMode::Recursive)
+        .watch(&root, notify::RecursiveMode::NonRecursive)
         .map_err(|error| error.to_string())?;
-    *slot = Some(watcher);
+    *slot = Some((cwd, watcher));
     Ok(())
 }
 
@@ -562,17 +563,7 @@ pub async fn pi_agent_list_sessions(
     cwd: String,
     limit: Option<usize>,
 ) -> Result<Vec<PiSessionSummary>, String> {
-    tauri::async_runtime::spawn_blocking(move || list_sessions(Some(&cwd), limit.unwrap_or(100)))
-        .await
-        .map_err(|error| error.to_string())
-}
-
-/// 异步列出所有 Pi 原生线程，供前端按 cwd 分组。
-#[tauri::command]
-pub async fn pi_agent_list_all_sessions(
-    limit: Option<usize>,
-) -> Result<Vec<PiSessionSummary>, String> {
-    tauri::async_runtime::spawn_blocking(move || list_sessions(None, limit.unwrap_or(usize::MAX)))
+    tauri::async_runtime::spawn_blocking(move || list_sessions(&cwd, limit.unwrap_or(100)))
         .await
         .map_err(|error| error.to_string())
 }
