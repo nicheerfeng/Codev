@@ -38,17 +38,18 @@ export function installPiPackage(packageName: string): Promise<string> {
 /** 订阅原生会话目录变化，无需认识外部插件。 */
 export async function watchPiSessions(
   changed: () => void,
+  cwd: string,
 ): Promise<UnlistenFn> {
   const stop = await listen("codev://pi-sessions-changed", changed);
   try {
-    await invoke("pi_agent_watch_sessions", { enabled: true });
+    await invoke("pi_agent_watch_sessions", { enabled: true, cwd });
   } catch (error) {
     stop();
     throw error;
   }
   return () => {
     stop();
-    void invoke("pi_agent_watch_sessions", { enabled: false });
+    void invoke("pi_agent_watch_sessions", { enabled: false, cwd });
   };
 }
 
@@ -78,11 +79,6 @@ export function listPiSessions(cwd: string): Promise<PiSessionSummary[]> {
     cwd,
     limit: 100,
   });
-}
-
-/** 读取所有 Pi 原生线程，供插件按 cwd 自动分组。 */
-export function listAllPiSessions(): Promise<PiSessionSummary[]> {
-  return invoke<PiSessionSummary[]>("pi_agent_list_all_sessions");
 }
 
 /** 读取 Pi 的单一 models.json 文件。 */

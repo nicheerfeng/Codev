@@ -13,7 +13,6 @@ import {
   Cancel01Icon,
   File01Icon,
   Tick02Icon,
-  StopIcon,
   Folder01Icon,
 } from "@hugeicons/core-free-icons";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -47,6 +46,7 @@ import type { CodexClient } from "./client";
 import { Tool } from "./controls";
 import { CODEX_COMMANDS, parseCommand } from "./commands";
 import { SANDBOX_LABELS, sandboxMode, type SandboxMode } from "./sandbox";
+import { listResources } from "./resources";
 
 /** 将剪贴板图片读成官方 image 输入支持的数据 URL。 */
 function imageUrl(file: File): Promise<string> {
@@ -86,10 +86,21 @@ export function CodexComposer({
   const [skills, setSkills] = useState<Skill[]>([]);
   const [skillsError, setSkillsError] = useState("");
   const [skillsLoading, setSkillsLoading] = useState(false);
-  const { skillsRevision } = useSyncExternalStore(
+  const { skillsRevision, resourceId } = useSyncExternalStore(
     client.subscribe,
     client.getSnapshot,
   );
+  const [resourceName, setResourceName] = useState<{ id: string; alias: string } | null>(null);
+  // 打开模型菜单时读取生效资源的别名，避免显示设置中尚未应用的选择。
+  useEffect(() => {
+    if (!modelOpen) return;
+    let cancelled = false;
+    void listResources().then(catalog => {
+      const resource = catalog.resources.find(item => item.id === resourceId);
+      if (!cancelled && resource) setResourceName({ id: resourceId, alias: resource.alias });
+    }).catch(error => toast.error(String(error)));
+    return () => { cancelled = true; };
+  }, [modelOpen, resourceId]);
   const slashOpen = !commandDismissed && /^\/[^\s]*$/.test(session.draft);
   // biome-ignore lint/correctness/useExhaustiveDependencies: 原生 skills/changed 事件要求重新读取目录。
   useEffect(() => {
@@ -148,7 +159,7 @@ export function CodexComposer({
   }, [session.focusRevision]);
   const selectedModel = session.model || session.thread.model || "";
   const model = models.find((item) => item.model === selectedModel);
-  const activeModel = model ?? models.find((item) => item.isDefault);
+  const activeModel = model ?? (!selectedModel ? models.find((item) => item.isDefault) : undefined);
   const effectiveMode = sandboxMode(session.effectiveSandbox);
   const effectiveLabel = effectiveMode
     ? SANDBOX_LABELS[effectiveMode]
@@ -602,7 +613,7 @@ export function CodexComposer({
               <Button
                 variant="ghost"
                 size="xs"
-                disabled={disabled || session.busy}
+                disabled={disabled}
                 title="选择模型"
                 aria-label="选择模型"
                 className="min-w-0 max-w-[min(240px,50%)] gap-1 text-xs"
@@ -629,17 +640,11 @@ export function CodexComposer({
                 onChange={(event) => setFilter(event.target.value)}
                 className="mb-2 h-8 rounded-lg text-xs!"
               />
+              {client.getSnapshot().modelCatalogError && <p className="px-2 py-1 text-xs text-muted-foreground">{client.getSnapshot().modelCatalogError}</p>}
               <div className="reader-scrollbar max-h-60 overflow-auto">
-                <Button
-                  variant="ghost"
-                  className="h-auto w-full justify-start rounded-lg py-2 text-xs"
-                  onClick={() => {
-                    client.patch(id, { model: "", effort: "" });
-                    setModelOpen(false);
-                  }}
-                >
-                  沿用当前模型
-                </Button>
+                <div className="px-3 py-2 text-xs text-muted-foreground break-words">
+                  资源方：{resourceId === "native" ? "初始配置" : resourceName?.id === resourceId ? resourceName.alias : "读取中…"}
+                </div>
                 {models
                   .filter((item) =>
                     `${item.displayName} ${item.model}`
@@ -656,7 +661,7 @@ export function CodexComposer({
                       className={`h-auto w-full justify-start gap-2 rounded-lg py-2 text-left ${session.model === item.model ? "bg-accent" : ""}`}
                       onClick={() => {
                         void client
-                          .selectModel(id, item.model, "")
+                          .selectModel(id, item.model, item.defaultReasoningEffort)
                           .catch((error) => toast.error(String(error)));
                         setModelOpen(false);
                       }}
@@ -665,10 +670,7 @@ export function CodexComposer({
                         <span className="block truncate text-xs">
                           {item.displayName?.trim() || item.model}
                         </span>
-                        <span className="block truncate text-[10px] text-muted-foreground">
-                          {session.thread.modelProvider ?? "Codex"} /{" "}
-                          {item.model}
-                        </span>
+                        {item.displayName?.trim() && item.displayName.trim() !== item.model && <span className="block truncate text-[10px] text-muted-foreground">{item.model}</span>}
                       </span>
                       {session.model === item.model && (
                         <HugeiconsIcon icon={Tick02Icon} size={14} />
@@ -678,19 +680,19 @@ export function CodexComposer({
               </div>
             </PopoverContent>
           </Popover>
-          {!!activeModel?.supportedReasoningEfforts.length && (
+          {(
             <Select
-              value={session.effort || "inherit"}
+              value={session.effort || "medium"}
               onValueChange={(value) =>
                 void client
                   .selectModel(
                     id,
                     selectedModel,
-                    value === "inherit" ? "" : value,
+                    value,
                   )
                   .catch((error) => toast.error(String(error)))
               }
-              disabled={disabled || session.busy}
+              disabled={disabled}
             >
               <SelectTrigger
                 size="sm"
@@ -704,13 +706,12 @@ export function CodexComposer({
                 position="popper"
                 className="rounded-xl"
               >
-                <SelectItem value="inherit">默认</SelectItem>
-                {activeModel.supportedReasoningEfforts.map((option) => (
+                {[...new Set([...(activeModel?.supportedReasoningEfforts.map(option => option.reasoningEffort) ?? []), session.effort || "medium"])].map((effort) => (
                   <SelectItem
-                    key={option.reasoningEffort}
-                    value={option.reasoningEffort}
+                    key={effort}
+                    value={effort}
                   >
-                    {option.reasoningEffort}
+                    {effort}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -723,7 +724,7 @@ export function CodexComposer({
                 sandbox: value as SandboxMode,
               })
             }
-            disabled={disabled || session.busy}
+            disabled={disabled}
           >
             <SelectTrigger
               size="sm"
@@ -749,30 +750,19 @@ export function CodexComposer({
             ) : (
               session.tokenUsage && (
                 <span
-                  className="text-[10px] text-muted-foreground"
+                  className="px-1 text-[10px] text-muted-foreground"
                   title={`${session.tokenUsage.last.totalTokens.toLocaleString()} tokens · 累计 ${session.tokenUsage.total.totalTokens.toLocaleString()}`}
                 >
                   {session.tokenUsage.modelContextWindow
-                    ? `上下文 ${((session.tokenUsage.last.totalTokens / session.tokenUsage.modelContextWindow) * 100).toFixed(1)}%`
+                    ? `${Math.round((session.tokenUsage.last.totalTokens / session.tokenUsage.modelContextWindow) * 100)}%`
                     : `${session.tokenUsage.last.totalTokens.toLocaleString()} tokens`}
                 </span>
               )
             )}
             {session.busy && (
               <Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label="当前步骤完成后继续"
-                title="当前步骤完成后继续"
-                disabled={disabled || !payload}
-                onClick={() => void send("followUp")}
-              >
-                <HugeiconsIcon icon={ArrowDown01Icon} size={16} />
-              </Button>
-            )}
-            {session.busy && (
-              <Button
-                variant="ghost"
+                variant="secondary"
+                className="rounded-full"
                 size="icon-sm"
                 title="停止"
                 aria-label="停止"
@@ -785,7 +775,20 @@ export function CodexComposer({
                     .catch((error) => toast.error(String(error)))
                 }
               >
-                <HugeiconsIcon icon={StopIcon} size={16} />
+                <span className="size-2.5 rounded-xs bg-current" />
+              </Button>
+            )}
+            {session.busy && (
+              <Button
+                size="icon-sm"
+                className="rounded-full"
+                variant="ghost"
+                aria-label="当前步骤完成后继续"
+                title="当前步骤完成后继续"
+                disabled={disabled || !payload}
+                onClick={() => void send("followUp")}
+              >
+                <HugeiconsIcon icon={ArrowDown01Icon} size={16} />
               </Button>
             )}
             <Button

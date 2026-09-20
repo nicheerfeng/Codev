@@ -230,8 +230,10 @@ export function PiComposer(props: Props) {
     if (text.trim()) setSubmitted((value) => prependPrompt(value, text));
     props.onSend(behavior);
   };
+  /** 补全命令时不追加空格并关闭菜单，保留焦点供再次回车执行。 */
   const chooseCommand = (name: string) => {
-    changeDraft({ ...props.draft, text: `/${name} ` });
+    changeDraft({ ...props.draft, text: `/${name}` });
+    setCommandDismissed(true);
     setCommandIndex(0);
     input.current?.focus();
   };

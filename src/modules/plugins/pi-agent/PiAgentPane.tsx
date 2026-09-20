@@ -34,7 +34,7 @@ import {
 } from "./client";
 import { INITIAL_PI_VIEW_STATE, objectValue } from "./reducer";
 import {
-  listAllPiSessions,
+  listPiSessions,
   watchPiSessions,
   probePiAgent,
   sendPiCommand,
@@ -43,7 +43,6 @@ import {
 } from "./native";
 import {
   collectProjects,
-  isTemporaryCwd,
   nextDraftKey,
   pathKey,
   projectName,
@@ -104,7 +103,7 @@ export function PiAgentPane({
   const activityRef = useRef(new Map<string, ProjectActivity>());
   const [threads, setThreads] = useState<PiThread[]>([]);
   const [sessions, setSessions] = useState<PiSessionSummary[]>([]);
-  const [sessionsReady, setSessionsReady] = useState(false);
+  const [sessionsReady, setSessionsReady] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
   const [viewportKeys, setViewportKeys] = useState<(string | null)[]>([]);
   const [activeViewport, setActiveViewport] = useState(0);
@@ -219,18 +218,23 @@ export function PiAgentPane({
       ),
     [pluginProjects, threads, sessions, hiddenProjects, piHome],
   );
-  /** 刷新原生会话目录，只在首次激活和显式文件操作后执行。 */
-  const refreshSessions = useCallback(async () => {
-    setSessions(await listAllPiSessions());
+  const selectedProjectRef = useRef(project);
+  selectedProjectRef.current = project;
+  /** 仅读取用户选择的项目目录，合并到已访问项目缓存。 */
+  const refreshSessions = useCallback(async (cwd?: string) => {
+    const target = cwd ?? selectedProjectRef.current;
+    if (!target) return;
+    const result = await listPiSessions(target);
+    setSessions(current => [...current.filter(item => pathKey(item.cwd) !== pathKey(target)), ...result]);
     setSessionsReady(true);
   }, []);
+  /** 选择项目后才监听该项目的会话文件，连续写入合并为一次刷新。 */
   useEffect(() => {
-    if (!initialized) return;
+    if (!initialized || !project) return;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let reading = false;
     let dirty = false;
-    /** 合并事件并串行刷新，持续写入时最多每 400ms 刷新一次。 */
     const schedule = () => {
       dirty = true;
       if (disposed || timer || reading) return;
@@ -238,40 +242,19 @@ export function PiAgentPane({
         timer = undefined;
         reading = true;
         dirty = false;
-        try {
-          const result = await listAllPiSessions();
-          if (!disposed) {
-            setSessions(result);
-            setSessionsReady(true);
-          }
-        } catch (error) {
-          if (!disposed) {
-            setNotice(String(error));
-            setSessionsReady(true);
-          }
-        } finally {
-          reading = false;
-          if (dirty && !disposed) schedule();
-        }
-      }, 400);
+        try { await refreshSessions(project); }
+        catch (error) { if (!disposed) setNotice(String(error)); }
+        finally { reading = false; if (dirty && !disposed) schedule(); }
+      }, 1500);
     };
-    const stop = watchPiSessions(schedule);
-    void stop
-      .then(() => {
-        if (!disposed) schedule();
-      })
-      .catch((error) => {
-        if (!disposed) {
-          setNotice(String(error));
-          setSessionsReady(true);
-        }
-      });
+    const stop = watchPiSessions(schedule, project);
+    void stop.catch(error => { if (!disposed) setNotice(String(error)); });
     return () => {
       disposed = true;
       clearTimeout(timer);
-      void stop.then((cleanup) => cleanup()).catch(() => {});
+      void stop.then(cleanup => cleanup()).catch(() => {});
     };
-  }, [initialized]);
+  }, [initialized, project, refreshSessions]);
   useEffect(() => {
     if (!active) return;
     setInitialized(true);
@@ -318,12 +301,6 @@ export function PiAgentPane({
       .catch((error) => {
         if (!disposed) setNotice(String(error));
       });
-    void refreshSessions().catch((error) => {
-      if (!disposed) {
-        setNotice(String(error));
-        setSessionsReady(true);
-      }
-    });
     void piAgentHomeDir()
       .then((path) => {
         if (!disposed && path) setPiHome(path);
@@ -457,33 +434,11 @@ export function PiAgentPane({
     target.view = { ...target.view, thinkingLevel: lastThinkingLevel };
     setThreads([...client.current!.threads.values()]);
   };
-  const bootstrapped = useRef(false);
-  useEffect(() => {
-    if (
-      !active ||
-      !piHome ||
-      !client.current ||
-      bootstrapped.current ||
-      !sessionsReady
-    )
-      return;
-    if (selected) {
-      bootstrapped.current = true;
-      return;
-    }
-    const latest = [...sessions]
-      .filter((session) => isTemporaryCwd(session.cwd, piHome))
-      .sort((left, right) => right.updatedAt - left.updatedAt)[0];
-    bootstrapped.current = true;
-    if (latest) {
-      void select({
-        ...latest,
-        key: latest.path,
-      });
-      return;
-    }
-    void create(piHome);
-  }, [active, piHome, selected, sessions, sessionsReady]);
+  /** 用户选择项目才读取历史；空项目等待用户点击新建。 */
+  const selectProject = async (cwd: string) => {
+    setProject(cwd);
+    await refreshSessions(cwd);
+  };
   /** 首次选择读取历史，后续复用内存中的会话和已加载分页。 */
   const select = async (thread: SidebarThread, targetIndex?: number) => {
     setProject(thread.cwd);
@@ -511,8 +466,7 @@ export function PiAgentPane({
     await setPiAgentHiddenProjects(
       hiddenProjects.filter((item) => pathKey(item) !== pathKey(result)),
     );
-    setProject(result);
-    activateThread(nextDraftKey(result));
+    await selectProject(result);
     setSidebarOpen(true);
   };
   /** 从插件列表移除项目，磁盘文件与会话保持原样。 */
@@ -992,6 +946,7 @@ export function PiAgentPane({
             organization={organization}
             organizationReady={hydrated && sessionsReady}
             onOrganize={(next) => run(setPiAgentOrganization(next))}
+            onSelectProject={(cwd) => run(selectProject(cwd))}
             onAddProject={() => run(addProject())}
             onRemoveProject={(path) => run(removeProject(path))}
             onNew={(path) => run(create(path))}

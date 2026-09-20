@@ -106,3 +106,9 @@ details[open] > .codex-process-summary svg,details[open] > .codex-activity-summa
   opacity: 1;
   pointer-events: auto;
 }
+
+.codex-markdown ul, .codex-markdown ol { padding-inline-start: 1.5rem; list-style-position: outside; }
+.codex-markdown a.codex-file-link { color:#58778a; text-decoration:none; text-underline-offset:3px; transition:color 120ms ease; }
+.codex-markdown a.codex-file-link:hover,.codex-markdown a.codex-file-link:focus-visible { color:#42657c; text-decoration:underline; }
+.dark .codex-markdown a.codex-file-link { color:#91adbf; }
+.dark .codex-markdown a.codex-file-link:hover,.dark .codex-markdown a.codex-file-link:focus-visible { color:#b0c7d5; }

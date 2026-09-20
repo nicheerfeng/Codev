@@ -18,16 +18,14 @@ export function watchHistory(
     const state = client.getSnapshot();
     if (stopped || !state.connected) return;
     if (state.switching || reading) {
-      timer = setTimeout(() => void flush(), 400);
+      timer = setTimeout(() => void flush(), 1500);
       return;
     }
     reading = true;
     const paths = [...pending];
     pending.clear();
     try {
-      await client.refresh();
-      if (paths.some((path) => path.includes("archived_sessions")))
-        await client.refresh(false, true);
+      await client.refreshChanged(paths);
       for (const session of Object.values(client.getSnapshot().sessions)) {
         if (stopped) break;
         if (
@@ -46,7 +44,7 @@ export function watchHistory(
     } finally {
       reading = false;
       if (!stopped && pending.size && !timer)
-        timer = setTimeout(() => void flush(), 400);
+        timer = setTimeout(() => void flush(), 1500);
     }
   };
   void listen<string[]>("codev://codex-sessions-changed", ({ payload }) => {
@@ -55,12 +53,12 @@ export function watchHistory(
     );
     payload
       .filter(
-        (path) => !own.some((session) => path.includes(session.thread.id)),
+        (path) => Object.keys(client.getSnapshot().sessions).some(id => path.includes(id)) && !own.some((session) => path.includes(session.thread.id)),
       )
       .forEach((path) => {
         pending.add(path);
       });
-    if (pending.size && !timer) timer = setTimeout(() => void flush(), 400);
+    if (pending.size && !timer) timer = setTimeout(() => void flush(), 1500);
   })
     .then(async (unlisten) => {
       if (stopped) {

@@ -19,6 +19,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   forwardRef,
   memo,
@@ -322,6 +323,18 @@ function RootSection({
           <ContextMenuSeparator className="my-0.5" />
           <ContextMenuItem className={COMPACT_ITEM} onSelect={onCopy}>
             {t("Copy Path")}
+          </ContextMenuItem>
+          <ContextMenuItem
+            className={COMPACT_ITEM}
+            onSelect={() =>
+              void revealItemInDir(root).catch((error) =>
+                toast.error("无法在文件管理器中显示", {
+                  description: String(error),
+                }),
+              )
+            }
+          >
+            {t("Reveal in Finder")}
           </ContextMenuItem>
           <ContextMenuSeparator className="my-0.5" />
           <ContextMenuItem className={COMPACT_ITEM} onSelect={onRemove}>
@@ -1061,7 +1074,6 @@ export const FileExplorer = memo(
                         {...treeProps}
                         onPathRenamed={handleTreePathRenamed}
                         onRevealDirectory={revealSearchDirectory}
-                        searchRoots={roots}
                         onTransfer={startTransfer}
                         onExternalCopy={startExternalCopy}
                         onCopyPaths={copyPaths}

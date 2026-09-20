@@ -189,14 +189,14 @@ fn search_includes_nested_generated_directories() {
 }
 
 #[test]
-fn search_matches_filename_not_parent_path() {
+fn search_matches_filename_and_parent_path() {
     let fx = FsFixture::new();
     fx.write("zeta/inner.txt", "");
     fx.write("beta/zeta.txt", "");
 
     let res = fs_search(vec![fx.root_str()], "zeta".into(), None, None, None).expect("search");
     assert!(res.hits.iter().any(|h| h.rel == "beta/zeta.txt"));
-    assert!(!res.hits.iter().any(|h| h.rel == "zeta/inner.txt"));
+    assert!(res.hits.iter().any(|h| h.rel == "zeta/inner.txt"));
 }
 
 #[test]

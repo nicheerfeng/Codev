@@ -6,6 +6,7 @@ use std::process::Command;
 use std::sync::Mutex;
 
 static FILE_LOCK: Mutex<()> = Mutex::new(());
+static PENDING_SWITCH: Mutex<Option<Vec<(PathBuf, Option<Vec<u8>>)>>> = Mutex::new(None);
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -211,11 +212,14 @@ fn catalog(file: ResourceFile) -> Result<Catalog, String> {
         .to_string();
     let mut resources = vec![ResourceView {
         id: "native".into(),
-        alias: "原生资源".into(),
+        alias: "初始配置".into(),
         base_url,
-        key_mask: "沿用原生认证".into(),
+        key_mask: "key：*".into(),
     }];
-    resources.extend(file.resources.into_iter().map(|r| ResourceView {
+    if let Some(current) = file.resources.iter().find(|r| r.id == "native") {
+        resources[0].base_url = current.base_url.clone();
+    }
+    resources.extend(file.resources.into_iter().filter(|r| r.id != "native").map(|r| ResourceView {
         id: r.id,
         alias: r.alias,
         base_url: r.base_url,
@@ -236,11 +240,29 @@ pub fn codex_resources_list() -> Result<Catalog, String> {
     catalog(read_at(&home()?.join("codev.json"))?)
 }
 
+/// 编辑资源时返回已有 API key；账号登录没有 API key 时返回空值。
+#[tauri::command]
+pub fn codex_resources_key(id: String) -> Result<String, String> {
+    let _guard = FILE_LOCK.lock().map_err(|_| "资源存储锁不可用")?;
+    let root = home()?;
+    let file = read_at(&root.join("codev.json"))?;
+    if let Some(resource) = file.resources.iter().find(|resource| resource.id == id) {
+        return String::from_utf8(crypt(&resource.encrypted_key, true)?).map_err(|_| "密钥解码失败".into());
+    }
+    if id != "native" { return Err("资源档案不存在".into()); }
+    let auth = match std::fs::read(root.join("auth.json")) {
+        Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|_| "auth.json 格式无效")?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(_) => return Err("无法读取 auth.json".into()),
+    };
+    Ok(auth.get("OPENAI_API_KEY").and_then(serde_json::Value::as_str).unwrap_or("").to_string())
+}
+
 /// 新增或编辑档案；空 key 仅用于保留已有密钥，编辑不切换运行中资源。
 #[tauri::command]
 pub fn codex_resources_save(input: ResourceInput) -> Result<Catalog, String> {
     let _guard = FILE_LOCK.lock().map_err(|_| "资源存储锁不可用")?;
-    if input.id.is_empty() || input.id == "native" || input.alias.trim().is_empty() {
+    if input.id.is_empty() || input.alias.trim().is_empty() {
         return Err("请填写资源别名".into());
     }
     let base_url = validate_url(&input.base_url)?;
@@ -248,7 +270,16 @@ pub fn codex_resources_save(input: ResourceInput) -> Result<Catalog, String> {
     let mut file = read_at(&path)?;
     let old = file.resources.iter().find(|r| r.id == input.id);
     let encrypted_key = if input.key.trim().is_empty() {
-        old.ok_or("新资源必须填写 API key")?.encrypted_key.clone()
+        if let Some(old) = old {
+            old.encrypted_key.clone()
+        } else if input.id == "native" {
+            let root = home()?;
+            let key = (|| {
+                let value: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join("auth.json")).ok()?).ok()?;
+                value.get("OPENAI_API_KEY")?.as_str().map(str::to_owned)
+            })().filter(|key| !key.trim().is_empty()).ok_or("当前配置没有可保存的 API key，请填写密钥")?;
+            crypt(key.as_bytes(), false)?
+        } else { return Err("新资源必须填写 API key".into()); }
     } else {
         crypt(input.key.trim().as_bytes(), false)?
     };
@@ -279,6 +310,34 @@ pub fn codex_resources_delete(id: String) -> Result<Catalog, String> {
     file.resources.retain(|r| r.id != id);
     write_at(&path, &file)?;
     catalog(file)
+}
+
+/// 查询所选渠道的模型 ID 与名称，不发起生成调用，也不向前端传递密钥。
+#[tauri::command]
+pub async fn codex_resources_models(id: String) -> Result<Vec<serde_json::Value>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let catalog = codex_resources_list()?;
+        let resource = catalog.resources.iter().find(|r| r.id == id).ok_or("资源档案不存在")?;
+        if resource.base_url.is_empty() { return Ok(Vec::new()); }
+        let key = codex_resources_key(id)?;
+        let agent = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(10)).redirects(0).build();
+        let mut request = agent.get(&format!("{}/models", resource.base_url.trim_end_matches('/')));
+        if !key.is_empty() { request = request.set("Authorization", &format!("Bearer {key}")); }
+        let response = request.call().map_err(|error| match error {
+            ureq::Error::Status(status, _) => format!("渠道模型目录返回 HTTP {status}"),
+            _ => "渠道模型目录连接失败或超时".to_string(),
+        })?;
+        let value: serde_json::Value = response.into_json().map_err(|_| "渠道模型目录不是 JSON 格式")?;
+        let data = value.get("data").and_then(serde_json::Value::as_array).ok_or("渠道未返回标准模型目录")?;
+        let ids: std::collections::HashSet<&str> = data.iter().filter_map(|item| item.get("id")?.as_str()).map(str::trim).collect();
+        Ok(data.iter().filter_map(|item| {
+            let id = item.get("id")?.as_str()?.trim();
+            if id.is_empty() { return None; }
+            // 仅隐藏有对应基础 ID 的已知渠道别名，保留唯一可用的带后缀模型。
+            if id.strip_suffix("-codex5").is_some_and(|base| ids.contains(base)) { return None; }
+            Some(serde_json::json!({ "id": id, "name": item.get("name").and_then(serde_json::Value::as_str).unwrap_or(id) }))
+        }).collect())
+    }).await.map_err(|error| error.to_string())?
 }
 
 /// 用户主动探测模型目录，不发送生成请求，目录可达不代表模型调用一定可用。
@@ -325,6 +384,92 @@ pub async fn codex_resources_probe(id: String) -> Result<String, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// 单文件原子写入；临时文件替换后消失，不生成历史备份。
+fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut temp = tempfile::NamedTempFile::new_in(path.parent().ok_or("配置路径无效")?).map_err(|_| "无法创建配置临时文件")?;
+    temp.write_all(bytes).map_err(|_| "无法写入配置")?;
+    temp.as_file().sync_all().map_err(|_| "无法保存配置")?;
+    temp.persist(path).map_err(|_| "无法替换配置文件")?;
+    Ok(())
+}
+
+/// 失败时恢复本次切换前的内存快照，不创建备份目录或文件。
+#[tauri::command]
+pub fn codex_resources_rollback() -> Result<(), String> {
+    let _guard = FILE_LOCK.lock().map_err(|_| "资源存储锁不可用")?;
+    let mut pending = PENDING_SWITCH.lock().map_err(|_| "切换锁不可用")?;
+    if let Some(files) = pending.as_ref() {
+        for (path, bytes) in files {
+            if let Some(bytes) = bytes { write_bytes(path, bytes)?; }
+            else if path.exists() { std::fs::remove_file(path).map_err(|_| "无法恢复配置状态")?; }
+        }
+    }
+    *pending = None;
+    Ok(())
+}
+
+/// 应用资源时同步官方配置和认证文件，所有历史快照只留在内存。
+pub fn apply_resource(id: &str, model: &str) -> Result<(), String> {
+    let _guard = FILE_LOCK.lock().map_err(|_| "资源存储锁不可用")?;
+    let root = home()?;
+    apply_resource_at(&root, id, model)
+}
+
+/// 使用指定根目录执行同步，便于用假密钥隔离验证。
+pub(super) fn apply_resource_at(root: &Path, id: &str, model: &str) -> Result<(), String> {
+    let (provider, config) = native_config(root)?;
+    let resource_path = root.join("codev.json");
+    let mut file = read_at(&resource_path)?;
+    if !file.resources.iter().any(|r| r.id == "native") {
+        let auth: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join("auth.json")).map_err(|_| "无法读取当前 auth.json")?).map_err(|_| "auth.json 格式无效")?;
+        let key = auth.get("OPENAI_API_KEY").and_then(serde_json::Value::as_str).filter(|key| !key.is_empty()).ok_or("当前资源没有 API key，请先保存资源")?;
+        let base_url = config.get("model_providers").and_then(|p| p.get(&provider)).and_then(|p| p.get("base_url")).and_then(toml::Value::as_str).unwrap_or("");
+        file.resources.push(Resource { id: "native".into(), alias: "初始配置".into(), base_url: base_url.into(), encrypted_key: crypt(key.as_bytes(), false)? });
+    }
+    let resource = file.resources.iter().find(|r| r.id == id).ok_or("资源档案不存在")?;
+    let key = String::from_utf8(crypt(&resource.encrypted_key, true)?).map_err(|_| "密钥解码失败")?;
+    let path = root.join("config.toml");
+    let source = match std::fs::read_to_string(&path) {
+        Ok(source) => source,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(_) => return Err("无法读取 config.toml".into()),
+    };
+    let mut doc = source.parse::<toml_edit::DocumentMut>().map_err(|_| "config.toml 格式无效")?;
+    doc["model"] = toml_edit::value(model);
+    doc.remove("model_reasoning_effort");
+    doc.remove("experimental_bearer_token");
+    doc["cli_auth_credentials_store"] = toml_edit::value("file");
+    doc["forced_login_method"] = toml_edit::value("api");
+    let definition = &mut doc["model_providers"][&provider];
+    definition["base_url"] = toml_edit::value(&resource.base_url);
+    definition["wire_api"] = toml_edit::value("responses");
+    definition["requires_openai_auth"] = toml_edit::value(true);
+    if let Some(table) = definition.as_table_mut() {
+        for field in ["env_key", "auth", "experimental_bearer_token"] { table.remove(field); }
+        for field in ["http_headers", "env_http_headers"] {
+            if let Some(headers) = table.get_mut(field).and_then(|item| item.as_table_like_mut()) {
+                let keys: Vec<String> = headers.iter().filter(|(name, _)| ["authorization", "x-api-key", "api-key"].contains(&name.to_ascii_lowercase().as_str())).map(|(name, _)| name.to_string()).collect();
+                for name in keys { headers.remove(&name); }
+            }
+        }
+    }
+    if let Some(profile) = doc.get("profile").and_then(|item| item.as_str()).map(str::to_owned) {
+        doc["profiles"][&profile]["model"] = toml_edit::value(model);
+        if let Some(table) = doc["profiles"][&profile].as_table_mut() { table.remove("model_reasoning_effort"); }
+    }
+    file.last_models.insert(format!("{provider}/{id}"), ModelChoice { model: model.into(), effort: String::new() });
+    let paths = [path.clone(), root.join("auth.json"), resource_path.clone()];
+    let snapshots = paths.iter().map(|path| match std::fs::read(path) {
+        Ok(bytes) => Ok((path.clone(), Some(bytes))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((path.clone(), None)),
+        Err(_) => Err("无法读取切换前配置".to_string()),
+    }).collect::<Result<Vec<_>, _>>()?;
+    *PENDING_SWITCH.lock().map_err(|_| "切换锁不可用")? = Some(snapshots);
+    write_bytes(&path, doc.to_string().as_bytes())?;
+    write_bytes(&root.join("auth.json"), serde_json::json!({"OPENAI_API_KEY":key}).to_string().as_bytes())?;
+    write_at(&resource_path, &file)
+}
+
 /// 握手成功后记住已生效的资源，失败时不改写选择。
 pub fn commit(id: &str) -> Result<(), String> {
     let _guard = FILE_LOCK.lock().map_err(|_| "资源存储锁不可用")?;
@@ -334,10 +479,13 @@ pub fn commit(id: &str) -> Result<(), String> {
         return Err("资源档案已不存在".into());
     }
     if file.active_resource_id == id {
+        *PENDING_SWITCH.lock().map_err(|_| "切换锁不可用")? = None;
         return Ok(());
     }
     file.active_resource_id = id.into();
-    write_at(&path, &file)
+    write_at(&path, &file)?;
+    *PENDING_SWITCH.lock().map_err(|_| "切换锁不可用")? = None;
+    Ok(())
 }
 
 /// 读取当前资源与 provider 对应的最近模型，不覆盖已有线程模型。
@@ -363,7 +511,7 @@ pub fn codex_resources_model(
     write_at(&path, &file)
 }
 
-/// 仅为目标子进程覆盖固定 provider 的地址与认证，不写原生配置。
+/// 启动时读取已同步的配置文件，不向进程注入另一套认证。
 pub fn configure(
     command: &mut Command,
     id: Option<&str>,
@@ -380,74 +528,10 @@ pub(super) fn configure_at(
 ) -> Result<(String, String, Option<String>), String> {
     let file = read_at(&root.join("codev.json"))?;
     let id = id.unwrap_or(&file.active_resource_id).to_string();
-    let (provider, config) = native_config(root)?;
-    let mut overrides = vec![(
-        "model_provider".to_string(),
-        toml::Value::String(provider.clone()),
-    )];
-    let mut secret = None;
-    if id != "native" {
-        if !provider
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        {
-            return Err("原生 provider 名称不适合启动参数覆盖，请使用原生资源".into());
-        }
-        let resource = file
-            .resources
-            .iter()
-            .find(|r| r.id == id)
-            .ok_or("资源档案不存在")?;
-        let definition = config
-            .get("model_providers")
-            .and_then(|p| p.get(&provider))
-            .and_then(toml::Value::as_table)
-            .cloned()
-            .unwrap_or_default();
-        if definition.contains_key("auth") || definition.contains_key("experimental_bearer_token") {
-            return Err(
-                "当前原生 provider 使用额外认证配置，暂不支持仅通过 baseURL/key 切换".into(),
-            );
-        }
-        if definition
-            .get("wire_api")
-            .and_then(toml::Value::as_str)
-            .is_some_and(|api| api != "responses")
-        {
-            return Err("资源切换当前要求原生 provider 使用 Responses 协议".into());
-        }
-        for field in ["http_headers", "env_http_headers"] {
-            if definition
-                .get(field)
-                .and_then(toml::Value::as_table)
-                .is_some_and(|headers| {
-                    headers.keys().any(|key| {
-                        ["authorization", "x-api-key", "api-key"]
-                            .contains(&key.to_ascii_lowercase().as_str())
-                    })
-                })
-            {
-                return Err("原生 provider 含自定义认证头，暂不支持仅通过 baseURL/key 切换".into());
-            }
-        }
-        let key =
-            String::from_utf8(crypt(&resource.encrypted_key, true)?).map_err(|_| "密钥解码失败")?;
-        command.env("CODEV_CODEX_RESOURCE_KEY", &key);
-        secret = Some(key);
-        for (field, value) in [
-            ("base_url", toml::Value::String(resource.base_url.clone())),
-            (
-                "env_key",
-                toml::Value::String("CODEV_CODEX_RESOURCE_KEY".into()),
-            ),
-            ("requires_openai_auth", toml::Value::Boolean(false)),
-        ] {
-            overrides.push((format!("model_providers.{provider}.{field}"), value));
-        }
-    }
-    for (key, value) in overrides {
-        command.arg("-c").arg(format!("{key}={value}"));
-    }
+    let (provider, _) = native_config(root)?;
+    let auth: serde_json::Value = std::fs::read(root.join("auth.json")).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+    let secret = auth.get("OPENAI_API_KEY").and_then(serde_json::Value::as_str).map(str::to_owned);
+    command.env("CODEX_HOME", root);
     Ok((id, provider, secret))
 }
 

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { sandboxPolicy, type SandboxPolicy } from "./sandbox";
 import { resourceSwitchReason } from "./resources";
+import { canonicalModel, mergeModels } from "./models";
 import { prependPrompt } from "./promptHistory";
 import { editableLastUser, originalInputs } from "./editLastUser";
 import {
@@ -24,6 +25,7 @@ export type Snapshot = {
   error: string | null;
   sessions: Record<string, Session>;
   order: string[];
+  historyProjects?: string[];
   models: Model[];
   cursor: string | null;
   archivedCursor: string | null;
@@ -36,6 +38,7 @@ export type Snapshot = {
   pendingRequests: number;
   lastModel: { model: string; effort: string } | null;
   skillsRevision: number;
+  modelCatalogError?: string;
 };
 type Pending = {
   resolve: (value: unknown) => void;
@@ -64,9 +67,13 @@ export class CodexClient {
     lastModel: null,
     skillsRevision: 0,
   };
+  private streamTimer: ReturnType<typeof setTimeout> | undefined;
+  private streaming = false;
   private listeners = new Set<() => void>();
   private pending = new Map<string, Pending>();
   private loads = new Map<string, Promise<void>>();
+  private refreshes = new Map<string, Promise<void>>();
+  private historyProjects = new Set<string>();
   private connectionId = 0;
   private nextId = 0;
   private unlisten?: UnlistenFn;
@@ -92,6 +99,7 @@ export class CodexClient {
   }
   /** 当前线程选择立即生效，最近模型按资源记忆供新线程复用。 */
   async selectModel(id: string, model: string, effort: string) {
+    effort = effort || "medium";
     this.patch(id, { model, effort });
     const choice = { model, effort };
     this.update({ lastModel: choice });
@@ -126,6 +134,7 @@ export class CodexClient {
     const reason = this.switchReason();
     if (reason) throw new Error(reason);
     this.update({ switching: true, error: null });
+    const previousResource = this.snapshot.resourceId;
     try {
       await invoke("codex_agent_prepare_switch", {
         connectionId: this.connectionId,
@@ -147,6 +156,15 @@ export class CodexClient {
       await this.connect();
       if (!this.snapshot.connected)
         throw new Error(this.snapshot.error ?? "资源连接失败");
+      const choice = this.snapshot.lastModel;
+      if (choice) this.update({ sessions: Object.fromEntries(Object.entries(this.snapshot.sessions).map(([key, session]) => [key, { ...session, model: choice.model, effort: choice.effort, error: null }])) });
+    } catch (error) {
+      await invoke("codex_resources_rollback");
+      if (!this.snapshot.connected || !this.connectionId) {
+        this.requestedResource = previousResource;
+        await this.connect();
+      }
+      throw error;
     } finally {
       this.update({ switching: false });
     }
@@ -154,10 +172,18 @@ export class CodexClient {
   /** 发布界面状态变化。 */
   private update(patch: Partial<Snapshot>) {
     this.snapshot = { ...this.snapshot, ...patch };
-    this.listeners.forEach((listener) => {
-      listener();
-    });
+    if (this.streaming) {
+      if (!this.streamTimer) this.streamTimer = setTimeout(() => {
+        this.streamTimer = undefined;
+        this.listeners.forEach(listener => listener());
+      }, 16);
+    } else {
+      clearTimeout(this.streamTimer);
+      this.streamTimer = undefined;
+      this.listeners.forEach(listener => listener());
+    }
   }
+
   /** 修改一个线程而不影响其他视口。 */
   patch(id: string, patch: Partial<Session>) {
     const current = this.snapshot.sessions[id];
@@ -237,7 +263,7 @@ export class CodexClient {
     if (method === "skills/changed")
       this.update({ skillsRevision: this.snapshot.skillsRevision + 1 });
     if (method === "thread/started") this.remember(params.thread as Thread);
-    const id = params.threadId as string | undefined;
+    const id = (params.threadId ?? params.thread_id) as string | undefined;
     if (
       id &&
       [
@@ -284,10 +310,9 @@ export class CodexClient {
       return;
     }
     if (id && this.snapshot.sessions[id]) {
-      this.patch(
-        id,
-        reduceNotification(this.snapshot.sessions[id], method, params),
-      );
+      this.streaming = method.endsWith("/delta") || method.endsWith("Delta");
+      this.patch(id, reduceNotification(this.snapshot.sessions[id], method, params));
+      this.streaming = false;
       if (method === "turn/completed") {
         const turn = params.turn as Turn;
         if (
@@ -366,7 +391,7 @@ export class CodexClient {
         });
         if (this.disposed) return;
         await this.request("initialize", {
-          clientInfo: { name: "codev", title: "Codev", version: "1.0.2" },
+          clientInfo: { name: "codev", title: "Codev", version: "1.0.3" },
           capabilities: { experimentalApi: true },
         });
         await this.write({ method: "initialized" });
@@ -382,10 +407,33 @@ export class CodexClient {
           provider: ready.provider,
           lastModel: ready.lastModel ?? null,
         });
-        await this.refresh();
-        await this.refresh(false, true);
-        const models = await this.request<{ data: Model[] }>("model/list");
-        this.update({ models: models.data, connected: true });
+        this.update({ models: [], modelCatalogError: undefined });
+        try {
+          const upstream = await invoke<Array<{ id: string; name?: string }>>("codex_resources_models", { id: ready.resourceId });
+          const available = mergeModels([], upstream ?? []);
+          if (!available.length) throw new Error("当前资源没有返回可用模型");
+          if (this.snapshot.switching && !available.some(model => model.model === ready.lastModel?.model))
+            throw new Error("资源模型清单在切换期间发生变化，请重新应用");
+          let choice = this.snapshot.lastModel;
+          if (choice && canonicalModel(choice.model, available) !== choice.model) {
+            choice = { ...choice, model: canonicalModel(choice.model, available) };
+            await invoke("codex_resources_model", { id: ready.resourceId, provider: ready.provider, choice });
+          }
+          if (available.length && !available.some(model => model.model === choice?.model)) {
+            choice = { model: available[0].model, effort: "" };
+            await invoke("codex_resources_model", { id: ready.resourceId, provider: ready.provider, choice });
+          }
+          await invoke("codex_agent_ready", { connectionId: this.connectionId, commit: true });
+          this.update({ models: available, lastModel: choice, connected: true,
+            sessions: Object.fromEntries(Object.entries(this.snapshot.sessions).map(([id, session]) => [id, {
+              ...session,
+              model: canonicalModel(session.model || session.thread.model || "", available),
+            }])),
+          });
+        } catch (error) {
+          if (this.snapshot.switching) throw error;
+          this.update({ models: [], connected: true, modelCatalogError: String(error) });
+        }
       } catch (error) {
         this.disconnected(String(error));
         if (this.connectionId)
@@ -399,43 +447,85 @@ export class CodexClient {
     })();
     return this.startup;
   }
-  /** 自动读完历史元数据分页，界面只按项目展示，不暴露全局分页按钮。 */
-  async refresh(more = false, archived = false) {
-    let cursor = more
-      ? archived
-        ? this.snapshot.archivedCursor
-        : this.snapshot.cursor
-      : null;
+  /** 手动刷新仅覆盖本次已由用户选择的项目，启动时没有隐式历史范围。 */
+  async refresh(archived = false): Promise<void> {
+    for (const cwd of this.historyProjects) await this.refreshProject(cwd, archived);
+  }
+  /** 用户选择项目后按 cwd 查询，重复点击复用正在执行的请求。 */
+  refreshProject(cwd: string, archived = false): Promise<void> {
+    if (!this.historyProjects.has(cwd)) {
+      this.historyProjects.add(cwd);
+      this.update({ historyProjects: [...this.historyProjects] });
+    }
+    const key = `${cwd}:${archived}`;
+    const pending = this.refreshes.get(key);
+    if (pending) return pending;
+    const task = this.refreshCatalog(cwd, archived).finally(() => this.refreshes.delete(key));
+    this.refreshes.set(key, task);
+    return task;
+  }
+  /** 初次或手动加载完整目录，分页结束后一次发布，保留期间到达的会话状态。 */
+  private async refreshCatalog(cwd: string, archived: boolean) {
+    const fetched: Thread[] = [];
+    let cursor: string | null = null;
     do {
       const response: { data: Thread[]; nextCursor: string | null } =
         await this.request("thread/list", {
           limit: 100,
           sortKey: "updated_at",
           modelProviders: [],
+          cwd,
+          useStateDbOnly: true,
           archived,
           cursor,
         });
-      const sessions = { ...this.snapshot.sessions };
-      const order = [...this.snapshot.order];
-      for (const thread of response.data) {
-        const current = sessions[thread.id];
-        sessions[thread.id] = current
-          ? {
-              ...current,
-              archived,
-              thread: { ...thread, turns: current.thread.turns },
-            }
-          : { ...sessionFromThread(thread), archived };
-        if (!order.includes(thread.id)) order.push(thread.id);
-      }
+      fetched.push(...response.data);
       cursor = response.nextCursor;
-      this.update({
-        sessions,
-        order,
-        ...(archived ? { archivedCursor: cursor } : { cursor }),
-      });
     } while (cursor && !this.disposed);
+    if (this.disposed) return;
+    const sessions = { ...this.snapshot.sessions };
+    const order = new Set(this.snapshot.order);
+    for (const thread of fetched) {
+      const current = sessions[thread.id];
+      sessions[thread.id] = current
+        ? { ...current, archived, thread: { ...thread, turns: current.thread.turns } }
+        : { ...sessionFromThread(thread), archived };
+      order.add(thread.id);
+    }
+    this.update({ sessions, order: [...order], ...(archived ? { archivedCursor: cursor } : { cursor }) });
   }
+
+  /** 文件监听只读取发生变化的线程元数据，不重新扫描全历史目录。 */
+  async refreshChanged(paths: string[]) {
+    const changed = new Map<string, boolean>();
+    for (const path of paths) {
+      const id = path.match(/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$/i)?.[1];
+      if (id) changed.set(id, path.includes("archived_sessions"));
+    }
+    const fetched: Array<{ thread: Thread; archived: boolean }> = [];
+    for (const [id, archived] of changed) {
+      const current = this.snapshot.sessions[id];
+      if (!current || current.resumed || current.busy || current.sending) continue;
+      const { thread } = await this.request<{ thread: Thread }>("thread/read", { threadId: id, includeTurns: false });
+      fetched.push({ thread, archived });
+    }
+    if (this.disposed || !fetched.length) return;
+    const sessions = { ...this.snapshot.sessions };
+    const order = new Set(this.snapshot.order);
+    let dirty = false;
+    for (const { thread, archived } of fetched) {
+      const current = sessions[thread.id];
+      if (!current || current.resumed || current.busy || current.sending) continue;
+      if (current && current.archived === archived && current.thread.updatedAt === thread.updatedAt && current.thread.name === thread.name && current.thread.preview === thread.preview && current.thread.cwd === thread.cwd) continue;
+      sessions[thread.id] = current
+        ? { ...current, archived, thread: { ...thread, turns: current.thread.turns } }
+        : { ...sessionFromThread(thread), archived };
+      order.add(thread.id);
+      dirty = true;
+    }
+    if (dirty) this.update({ sessions, order: [...order] });
+  }
+
   /** 新建明确绑定项目目录的原生线程。 */
   async create(cwd: string): Promise<string> {
     const { thread, sandbox } = await this.request<{
@@ -493,9 +583,19 @@ export class CodexClient {
         });
         this.patch(id, {
           thread: { ...thread, turns: page.data.reverse() },
+          ...(this.snapshot.lastModel ? { model: this.snapshot.lastModel.model, effort: this.snapshot.lastModel.effort } : {}),
           loaded: true,
           historyCursor: page.nextCursor,
+          effort: "medium",
         });
+        if (thread.path) {
+          try {
+            const history = await invoke<{ tokenUsage: Session["tokenUsage"]; effort: string }>("codex_agent_read_usage", { path: thread.path });
+            const current = this.snapshot.sessions[id];
+            if (history && current && !current.busy && !current.compacting && current.effort === "medium")
+              this.patch(id, { tokenUsage: current.tokenUsage ?? history.tokenUsage, effort: history.effort || "medium" });
+          } catch (error) { console.error("Codex 历史用量读取失败", error); }
+        }
       })
       .finally(() => this.loads.delete(id));
     this.loads.set(id, loading);
@@ -669,7 +769,7 @@ export class CodexClient {
           threadId: id,
           input,
           ...(initial.model ? { model: initial.model } : {}),
-          ...(initial.effort ? { effort: initial.effort } : {}),
+          effort: initial.effort || "medium",
           sandboxPolicy: policy,
         });
       const latest = this.snapshot.sessions[id];
@@ -1015,6 +1115,7 @@ export class CodexClient {
   /** 卸载插件时取消监听与本插件进程。 */
   async dispose() {
     this.disposed = true;
+    clearTimeout(this.streamTimer);
     await this.startup;
     this.unlisten?.();
     this.disconnected("Codex 插件已关闭");

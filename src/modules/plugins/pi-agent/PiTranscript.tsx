@@ -29,6 +29,7 @@ import { splitUserAttachmentText } from "./piAttachments";
 import { findLiteralMatches } from "@/modules/editor/lib/textSearch";
 import { ZoomableImage } from "@/modules/reader/ZoomableImage";
 import { MarkdownTable } from "@/modules/markdown/MarkdownTable";
+import { MarkdownLink } from "@/modules/markdown/MarkdownLink";
 import {
   buildTimelineBlocks,
   itemText,
@@ -50,7 +51,7 @@ const STREAMDOWN_CONTROLS = {
   code: { copy: true, download: false },
   table: false,
 } as const;
-const STREAMDOWN_COMPONENTS = { img: ZoomableImage, table: MarkdownTable };
+const STREAMDOWN_COMPONENTS = { a: MarkdownLink, img: ZoomableImage, table: MarkdownTable };
 
 type MessageActions = {
   onCopy?: (text: string) => void;

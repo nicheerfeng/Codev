@@ -54,3 +54,8 @@ export function resourceSwitchReason(
   if (pending) return "正在处理请求，请稍后切换";
   return "";
 }
+
+/** 用户进入编辑时读取已有明文密钥。 */
+export function readResourceKey(id: string): Promise<string> {
+  return invoke("codex_resources_key", { id });
+}

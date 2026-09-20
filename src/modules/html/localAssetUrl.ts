@@ -99,20 +99,25 @@ export function mapMarkupOutsideScripts(
   return parts.join("");
 }
 
-/** 内联脚本很大时，srcdoc 会继承父页 CSP 把页面跑黑。 */
+/** 含执行脚本的页面使用独立文档，避免 srcdoc 继承父页 CSP 阻断初始化。 */
 export function htmlNeedsAssetDocument(html: string): boolean {
   const script = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
-  let bytes = 0;
   for (const match of html.matchAll(script)) {
     const attrs = match[1] ?? "";
     if (/\btype\s*=\s*["']application\/(?:ld\+)?json["']/i.test(attrs)) {
       continue;
     }
-    if (/\bsrc\s*=/i.test(attrs)) continue;
-    bytes += match[2].length;
-    if (bytes > 24 * 1024) return true;
+    if (/\bsrc\s*=/i.test(attrs) || match[2].trim()) return true;
   }
   return false;
+}
+
+/** 保留文档目录层级，让动态 script、fetch 和相对资源按真实文件目录解析。 */
+export function htmlDocumentUrl(
+  path: string,
+  toSrc: (path: string) => string,
+): string {
+  return `${toSrc(nativeFsPath(path)).replace(/%2f|%5c/gi, "/")}?codev-preview=1`;
 }
 
 /** 相对/空锚点改成页内哈希，避免 srcdoc 打开 Codev。 */

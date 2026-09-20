@@ -157,6 +157,29 @@ export function sessionFromThread(thread: Thread): Session {
   };
 }
 
+/** 完成事件可能只携带最终答复，按编号合并并保留已经收到的过程顺序。 */
+function mergeTurnItems(previous: Item[], incoming: Item[]): Item[] {
+  const merged = new Map(previous.map((item) => [item.id, item]));
+  for (const item of incoming) merged.set(item.id, { ...merged.get(item.id), ...item });
+  return [...merged.values()];
+}
+
+/** 兼容 app-server 用量字段命名，缺少上报时保持未知。 */
+function normalizeTokenUsage(raw: unknown): Session["tokenUsage"] {
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as {
+    last?: { totalTokens?: number; total_tokens?: number };
+    total?: { totalTokens?: number; total_tokens?: number };
+    modelContextWindow?: number | null;
+    model_context_window?: number | null;
+  };
+  return {
+    last: { totalTokens: Number(value.last?.totalTokens ?? value.last?.total_tokens ?? 0) },
+    total: { totalTokens: Number(value.total?.totalTokens ?? value.total?.total_tokens ?? 0) },
+    modelContextWindow: value.modelContextWindow ?? value.model_context_window ?? null,
+  };
+}
+
 /** 按原生线程、轮次和消息编号合并增量，最终消息覆盖流式副本。 */
 export function reduceNotification(
   session: Session,
@@ -166,7 +189,7 @@ export function reduceNotification(
   if (method === "thread/tokenUsage/updated")
     return {
       ...session,
-      tokenUsage: params.tokenUsage as Session["tokenUsage"],
+      tokenUsage: normalizeTokenUsage(params.tokenUsage ?? params.token_usage),
       compacting: false,
     };
   if (method === "thread/name/updated")
@@ -213,7 +236,7 @@ export function reduceNotification(
       ...turn,
       ...completed,
       completedAt: completed.completedAt ?? Date.now() / 1000,
-      items: completed.items?.length ? completed.items : turn.items,
+      items: mergeTurnItems(turn.items, completed.items ?? []),
     };
     next = {
       ...next,
@@ -226,7 +249,7 @@ export function reduceNotification(
   if (method === "item/started" || method === "item/completed") {
     const incoming = params.item as Item;
     const item =
-      incoming.type === "reasoning"
+      ["reasoning", "webSearch"].includes(incoming.type)
         ? {
             ...incoming,
             status: method === "item/started" ? "inProgress" : "completed",
@@ -234,11 +257,17 @@ export function reduceNotification(
         : incoming;
     const itemIndex = turn.items.findIndex((i) => i.id === item.id);
     if (itemIndex < 0) turn.items.push(item);
-    else turn.items[itemIndex] = item;
+    else turn.items[itemIndex] = method === "item/started"
+      ? { ...item, ...turn.items[itemIndex] }
+      : { ...turn.items[itemIndex], ...item };
   }
   if (method.endsWith("/delta") || method.endsWith("Delta")) {
     const itemId = params.itemId as string;
-    const itemIndex = turn.items.findIndex((i) => i.id === itemId);
+    let itemIndex = turn.items.findIndex((i) => i.id === itemId);
+    if (itemIndex < 0 && (method === "item/agentMessage/delta" || method === "item/plan/delta")) {
+      itemIndex = turn.items.length;
+      turn.items.push({ id: itemId, type: method === "item/plan/delta" ? "plan" : "agentMessage", text: "" });
+    }
     if (itemIndex >= 0) {
       const item = { ...turn.items[itemIndex] };
       const delta = String(params.delta ?? "");
@@ -265,6 +294,7 @@ export function reduceNotification(
 
 /** 提取真实消息摘要，保留开头并由界面截断尾部。 */
 export function itemText(item: Item): string {
+  if (item.type === "agentMessage" || item.type === "plan") return item.text ?? "";
   if (item.text) return item.text;
   if (item.type === "userMessage")
     return ((item.content as Array<{ text?: string; path?: string }>) ?? [])
@@ -275,6 +305,12 @@ export function itemText(item: Item): string {
       ...(item.summary ?? []),
       ...((item.content as string[]) ?? []),
     ].join("\n");
+  if (item.type === "webSearch") {
+    const action = item.action as { type?: string; query?: string; queries?: string[]; url?: string; pattern?: string } | null;
+    if (action?.type === "open_page") return `打开网页 · ${action.url ?? ""}`;
+    if (action?.type === "find_in_page") return `页内查找 · ${action.pattern ?? ""} · ${action.url ?? ""}`;
+    return `搜索 · ${action?.queries?.join(" · ") || action?.query || (typeof item.query === "string" ? item.query : "")}`;
+  }
   if (item.command) return item.command;
   if (item.changes) return item.changes.map((change) => change.path).join(", ");
   return item.tool ?? item.type;

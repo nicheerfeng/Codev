@@ -27,6 +27,7 @@ import {
   deleteResource,
   listResources,
   saveResource,
+  readResourceKey,
   probeResource,
   RESOURCE_NOTE,
   type ResourceCatalog,
@@ -45,6 +46,8 @@ export function CodexResources({
 }) {
   const [catalog, setCatalog] = useState<ResourceCatalog | null>(null);
   const [open, setOpen] = useState(false);
+  const [selectedId, setSelectedId] = useState(state.resourceId);
+  useEffect(() => { setSelectedId(state.resourceId); }, [state.resourceId, open]);
   const [editing, setEditing] = useState<{
     id: string;
     alias: string;
@@ -79,9 +82,10 @@ export function CodexResources({
     setSaving(true);
     try {
       setCatalog(await saveResource(editing));
+      setSelectedId(editing.id);
       if (editing.id === state.resourceId) setEditedCurrent(true);
       setEditing(null);
-      toast.success("资源已保存，选择资源或重新应用后生效");
+      toast.success("资源已保存，点击应用后生效");
     } catch (failure) {
       setError(String(failure));
     } finally {
@@ -168,8 +172,8 @@ export function CodexResources({
                       <li>
                         多渠道 API 保存在
                         ~/.codex/codev.json；别名与地址明文保存，key 使用
-                        Windows
-                        用户加密保护。传输是否加密取决于所配置地址是否使用
+                        Windows 用户加密保护；应用时同步 config.toml 和 auth.json。
+                        传输是否加密取决于所配置地址是否使用
                         HTTPS。
                       </li>
                       <li>
@@ -178,8 +182,8 @@ export function CodexResources({
                         保持不变，原线程可在下次输入时恢复。
                       </li>
                       <li>
-                        账号登录请先选择“原生资源”，在终端按 Codex
-                        官方登录流程操作后应用资源。其他客户端持有的同一线程不能同时写入；跨
+                        此处管理 API key 资源；应用会更新共享 Codex 配置。
+                        其他客户端持有的同一线程不能同时写入；跨
                         provider 或目录的历史迁移需另行处理，不保证自动同步。
                       </li>
                     </ul>
@@ -192,7 +196,7 @@ export function CodexResources({
                   <strong className="font-normal">
                     {catalog?.provider ?? "读取中"}
                   </strong>
-                  （来自原生配置）
+                  （来自 config.toml）
                 </span>
                 <Button
                   variant="outline"
@@ -223,27 +227,23 @@ export function CodexResources({
                 {catalog?.resources.map((resource) => (
                   <div
                     key={resource.id}
-                    className="flex min-w-0 items-center gap-2 border-b border-border p-3 last:border-0"
+                    className={`flex min-w-0 items-center gap-2 border-b border-border px-3 py-2 last:border-0 ${selectedId === resource.id ? "bg-accent ring-1 ring-inset ring-primary/40" : ""}`}
                   >
-                    <div className="min-w-0 flex-1 select-text">
-                      <div className="truncate text-xs">
-                        {resource.alias}
-                        {state.resourceId === resource.id && (
-                          <span className="ml-2 text-[10px] text-muted-foreground">
-                            当前资源
-                          </span>
-                        )}
-                      </div>
-                      <div
-                        className="truncate text-[11px] text-muted-foreground"
-                        title={resource.baseUrl}
-                      >
-                        {resource.baseUrl || "Codex 默认地址"}
-                      </div>
-                      <div className="text-[10px] text-muted-foreground">
-                        {resource.keyMask}
-                      </div>
-                    </div>
+                    <button
+                      type="button"
+                      aria-pressed={selectedId === resource.id}
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left text-xs"
+                      onClick={() => setSelectedId(resource.id)}
+                    >
+                      <span className={`size-3 shrink-0 rounded-full border ${selectedId === resource.id ? "border-primary bg-primary" : "border-muted-foreground"}`} />
+                      <span className="max-w-28 shrink-0 truncate" title={resource.alias}>{resource.alias}</span>
+                      {state.resourceId === resource.id && <span className="shrink-0 text-[10px] text-muted-foreground">使用中</span>}
+                      <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground" title={resource.baseUrl}>{resource.baseUrl || "Codex 默认地址"}</span>
+                      <span className="shrink-0 text-[10px] text-muted-foreground">key：*</span>
+                    </button>
+                    <Button variant="ghost" size="icon-xs" title={`编辑 ${resource.alias}`} aria-label={`编辑 ${resource.alias}`} onClick={() => { setSelectedId(resource.id); setError(""); void readResourceKey(resource.id).then(key => setEditing({ ...resource, key })).catch(failure => setError(String(failure))); }}>
+                      <HugeiconsIcon icon={PencilEdit01Icon} size={13} />
+                    </Button>
                     {resource.id !== "native" && (
                       <>
                         <Button
@@ -263,18 +263,6 @@ export function CodexResources({
                           }}
                         >
                           {probing === resource.id ? "探测中…" : "探测"}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          title={`编辑 ${resource.alias}`}
-                          aria-label={`编辑 ${resource.alias}`}
-                          onClick={() => {
-                            setEditing({ ...resource, key: "" });
-                            setError("");
-                          }}
-                        >
-                          <HugeiconsIcon icon={PencilEdit01Icon} size={13} />
                         </Button>
                         <Button
                           variant="ghost"
@@ -304,6 +292,7 @@ export function CodexResources({
                         .then((value) => {
                           setCatalog(value);
                           setRemove(null);
+                          if (selectedId === remove) setSelectedId(state.resourceId);
                         })
                         .catch((failure) => setError(String(failure)))
                         .finally(() => setSaving(false));
@@ -346,7 +335,7 @@ export function CodexResources({
                   />
                   <Input
                     aria-label="资源 API key"
-                    type="password"
+                    type="text"
                     autoComplete="new-password"
                     placeholder="API key（编辑时留空保留原密钥）"
                     value={editing.key}
@@ -388,10 +377,10 @@ export function CodexResources({
                   <Button
                     size="xs"
                     variant="outline"
-                    disabled={Boolean(reason)}
-                    onClick={() => select(state.resourceId)}
+                    disabled={Boolean(reason) || saving || !catalog?.resources.some(resource => resource.id === selectedId)}
+                    onClick={() => select(selectedId)}
                   >
-                    应用当前资源
+                    应用选中资源
                   </Button>
                 </span>
               </div>

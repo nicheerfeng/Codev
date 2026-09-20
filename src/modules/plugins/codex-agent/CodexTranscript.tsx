@@ -3,7 +3,7 @@ import { findLiteralMatches } from "@/modules/editor/lib/textSearch";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Textarea } from "@/components/ui/textarea";
-import { Streamdown } from "streamdown";
+import { Streamdown, defaultRemarkPlugins } from "streamdown";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowDown01Icon,
@@ -16,11 +16,13 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { ZoomableImage } from "@/modules/reader/ZoomableImage";
 import { MarkdownTable } from "@/modules/markdown/MarkdownTable";
+import { CodexFileLink, FileLinkContext, localFileLinks } from "./CodexFileLink";
 import { Button } from "@/components/ui/button";
 import { itemText, type Item, type Session, type Turn } from "./protocol";
 import type { CodexClient } from "./client";
 import { editableLastUser } from "./editLastUser";
 import { Tool } from "./controls";
+import { WebSearchDetails } from "./WebSearchDetails";
 import {
   activityLabel,
   elapsedText,
@@ -29,7 +31,9 @@ import {
   toolOutput,
 } from "./timeline";
 
-const components = { img: ZoomableImage, table: MarkdownTable };
+const remarkPlugins = [...Object.values(defaultRemarkPlugins), localFileLinks];
+
+const components = { a: CodexFileLink, img: ZoomableImage, table: MarkdownTable };
 
 /** 删除记录定位原目录，其余文件交给主阅读器打开。 */
 function openChangedFile(
@@ -58,6 +62,7 @@ function Markdown({ text }: { text: string }) {
     <div className="codex-markdown">
       <Streamdown
         components={components}
+        remarkPlugins={remarkPlugins}
         controls={{ code: { copy: true, download: false }, table: false }}
       >
         {text}
@@ -253,19 +258,13 @@ function Activity({
       <summary>
         <HugeiconsIcon icon={ArrowDown01Icon} size={12} />
         <span>{activityLabel(item)}</span>
-        <small>
-          {item.status === "failed"
-            ? "执行失败"
-            : item.status === "inProgress"
-              ? "执行中"
-              : item.status === "completed"
-                ? "已完成"
-                : ""}
-        </small>
+
       </summary>
       <div className="codex-activity-body">
         {item.type === "reasoning" ? (
           <Markdown text={text} />
+        ) : item.type === "webSearch" ? (
+          <WebSearchDetails item={item} />
         ) : item.changes ? (
           item.changes.map((change) => (
             <div key={change.path}>
@@ -482,6 +481,7 @@ function TurnView({
     .find((item) => item.type === "agentMessage");
   const blocks: Array<{ id: string; process: boolean; items: Item[] }> = [];
   for (const item of turn.items) {
+    if (["agentMessage", "reasoning", "plan"].includes(item.type) && !itemText(item).trim()) continue;
     const message =
       item.type === "userMessage" ||
       (item.type === "agentMessage" &&
@@ -726,6 +726,7 @@ export function CodexTranscript({
     }
   };
   return (
+    <FileLinkContext.Provider value={{ cwd: session.thread.cwd, onOpenFile }}>
     <div className="codex-transcript-wrap">
       {query && (
         <div className="flex items-center gap-2 px-3 text-xs">
@@ -858,10 +859,10 @@ export function CodexTranscript({
           })}
         </div>
         {session.busy && !session.turnId && (
-          <p className="codex-live">正在连接会话...</p>
+          <p className="codex-transcript-content codex-live">正在连接会话...</p>
         )}
         {session.error && (
-          <p role="alert" className="text-destructive whitespace-pre-wrap">
+          <p role="alert" className="codex-transcript-content text-destructive whitespace-pre-wrap">
             {session.error}
           </p>
         )}
@@ -879,5 +880,6 @@ export function CodexTranscript({
         </Button>
       )}
     </div>
+    </FileLinkContext.Provider>
   );
 }

@@ -145,3 +145,5 @@
 @media (prefers-reduced-motion: reduce) {
   .pi-agent .pi-summary-transition { animation: none; }
 }
+
+.pi-agent .pi-markdown ul, .pi-agent .pi-markdown ol { padding-inline-start: 1.5rem; list-style-position: outside; }

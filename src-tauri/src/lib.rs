@@ -454,6 +454,7 @@ pub fn run() {
         })
         .manage(pty::PtyState::default())
         .manage(fs::watch::FsWatchState::default())
+        .manage(fs::search::SearchState::default())
         .manage(fs::transfer::TransferState::default())
         .manage(history::HistoryState::default())
         .manage(pi_agent::PiAgentState::default())
@@ -507,6 +508,8 @@ pub fn run() {
             fs::watch::fs_watch_add,
             fs::watch::fs_watch_remove,
             fs::search::fs_search,
+            fs::search::fs_search_query,
+            fs::search::fs_search_cancel,
             fs::search::fs_list_files,
             fs::grep::fs_grep,
             fs::grep::fs_grep_interactive,
@@ -534,9 +537,12 @@ pub fn run() {
             codex_agent::resources::codex_resources_save,
             codex_agent::resources::codex_resources_delete,
             codex_agent::resources::codex_resources_model,
+            codex_agent::resources::codex_resources_key,
+            codex_agent::resources::codex_resources_models,
+            codex_agent::usage::codex_agent_read_usage,
+            codex_agent::resources::codex_resources_rollback,
             codex_agent::resources::codex_resources_probe,
             pi_agent::pi_agent_list_sessions,
-            pi_agent::pi_agent_list_all_sessions,
             pi_agent::pi_agent_delete_session,
             pi_agent::pi_agent_read_models,
             pi_agent::pi_agent_write_models,

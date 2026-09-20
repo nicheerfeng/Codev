@@ -32,19 +32,14 @@ import {
 import { itemText } from "./protocol";
 import { watchHistory } from "./historyWatch";
 
-/** 从统一布局文件恢复六视口位置，重复会话只保留一个实例。 */
+/** 只恢复视口数量；启动不读取旧会话，等待用户选择。 */
 function readSlots(): (string | null)[] {
   try {
     const saved: unknown = JSON.parse(
       uiState.getItem("codev.codex.slots") ?? "null",
     );
     if (Array.isArray(saved) && saved.length) {
-      const seen = new Set<string>();
-      return saved.slice(0, 6).map((id) => {
-        if (typeof id !== "string" || seen.has(id)) return null;
-        seen.add(id);
-        return id;
-      });
+      return saved.slice(0, 6).map(() => null);
     }
   } catch {
     /* 首次启动采用单视口。 */
@@ -85,11 +80,11 @@ function Workspace({
   onOpenFile?: (path: string) => void;
 }) {
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot);
-  useEffect(
-    () =>
-      watchHistory(client, (error) => console.error("Codex 历史监听", error)),
-    [client],
-  );
+  const hasSelectedHistory = state.order.length > 0;
+  useEffect(() => {
+    if (!hasSelectedHistory) return;
+    return watchHistory(client, error => console.error("Codex 历史监听", error));
+  }, [client, hasSelectedHistory]);
   const activity = useRef(new Map<string, ProjectActivity>());
   useEffect(() => {
     const threads: ActivityThread[] = Object.values(state.sessions).map(
@@ -132,7 +127,6 @@ function Workspace({
   const [search, setSearch] = useState("");
   const [creating, setCreating] = useState(false);
   const [hover, setHover] = useState<number | null>(null);
-  const restored = useRef(false);
   const selected = slots[focused] ?? null;
   const current = selected ? state.sessions[selected] : undefined;
   const multi = slots.length > 1;
@@ -191,18 +185,6 @@ function Workspace({
   useEffect(() => {
     uiState.setItem("codev.codex.sidebar.width", String(width));
   }, [width]);
-  useEffect(() => {
-    if (!state.connected || restored.current) return;
-    restored.current = true;
-    for (const id of slots)
-      if (id)
-        void client.load(id).catch((error) => {
-          toast.error(String(error));
-          setSlots((currentSlots) =>
-            currentSlots.map((slot) => (slot === id ? null : slot)),
-          );
-        });
-  }, [state.connected, slots, client]);
   /** 点击已展示会话只聚焦，拖放已有会话则交换两个视口。 */
   const place = (id: string, target?: number) => {
     const previous = slots.indexOf(id);
@@ -219,6 +201,14 @@ function Workspace({
       client.patch(id, { error: String(error) });
       toast.error(String(error));
     });
+  };
+  /** 空视口选择目录只加载关联历史，新对话由独立新建入口创建。 */
+  const chooseProject = async () => {
+    const cwd = await open({ directory: true });
+    if (!cwd) return;
+    setCollapsed(false);
+    try { await client.refreshProject(cwd); }
+    catch (error) { toast.error(String(error)); }
   };
   /** 明确选择工作目录后新建线程，不发送模型请求。 */
   const create = async (cwd?: string) => {
@@ -464,7 +454,7 @@ function Workspace({
                         variant="outline"
                         size="sm"
                         disabled={!state.connected || creating}
-                        onClick={() => void create()}
+                        onClick={() => void chooseProject()}
                       >
                         <HugeiconsIcon icon={Folder01Icon} size={14} />
                         选择项目
