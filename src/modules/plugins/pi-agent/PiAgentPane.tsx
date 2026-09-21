@@ -360,11 +360,16 @@ export function PiAgentPane({
         waiting: requests.some((request) => request.key === thread.key),
       };
       if (index >= 0) result[index] = row;
-      else if (thread.view.items.length || path || thread.key === selected)
+      else if (
+        thread.view.items.length ||
+        path ||
+        thread.key === selected ||
+        draftHasPayload(drafts[thread.key])
+      )
         result.unshift(row);
     }
     return result;
-  }, [sessions, threads, requests, selected]);
+  }, [sessions, threads, requests, selected, drafts]);
   useEffect(() => {
     const replacements: Array<[string, string]> = [];
     for (const row of rows) {

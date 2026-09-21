@@ -292,9 +292,7 @@ describe("Codex native client", () => {
     expect(client.getSnapshot().sessions[id].model).toBe("selected-model");
     expect(client.getSnapshot().sessions[id].effort).toBe("high");
     expect(client.getSnapshot().sessions.two.model).toBe("");
-    expect(
-      transport.sent.find((m) => m.method === "thread/start")?.params?.model,
-    ).toBe("selected-model");
+    expect(transport.sent.some((m) => m.method === "thread/start")).toBe(false);
   });
   it("blocks switching with multiple viewports or hidden active threads", async () => {
     client.setMulti(true);

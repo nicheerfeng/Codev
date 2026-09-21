@@ -598,6 +598,7 @@ const TextWindowPreview = forwardRef<
 });
 
 // 直接交给 WebView 解码媒体或 PDF；图片用视口滚轮缩放、拖动平移。
+/** 渲染媒体并保留 PDF/媒体阅览器的滚动位置。 */
 function AssetPreview({ path }: { path: string }) {
   const extension = path.split(".").pop()?.toLowerCase() ?? "";
   const isImage = [
@@ -616,6 +617,30 @@ function AssetPreview({ path }: { path: string }) {
   const isPdf = extension === "pdf";
   const [source, setSource] = useState<string | null>(null);
   const [assetError, setAssetError] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pdfRef = useRef<HTMLIFrameElement>(null);
+
+  useEffect(
+    () => bindFileScroll(scrollRef.current, path),
+    [path, source],
+  );
+
+  useEffect(() => {
+    if (!isPdf || !pdfRef.current) return;
+    const frame = pdfRef.current;
+    const onLoad = () => {
+      try {
+        frame.contentWindow?.addEventListener("keydown", (event) => {
+          if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+            event.preventDefault();
+            window.dispatchEvent(new CustomEvent("codev-search-focus"));
+          }
+        }, true);
+      } catch { /* PDF viewer may be isolated by WebView. */ }
+    };
+    frame.addEventListener("load", onLoad);
+    return () => frame.removeEventListener("load", onLoad);
+  }, [isPdf, source]);
 
   useEffect(() => {
     let cancelled = false;
@@ -653,6 +678,7 @@ function AssetPreview({ path }: { path: string }) {
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <div
+        ref={scrollRef}
         className={
           isImage
             ? "min-h-0 flex-1"
@@ -687,6 +713,7 @@ function AssetPreview({ path }: { path: string }) {
         )}
         {source && isPdf && (
           <iframe
+            ref={pdfRef}
             src={source}
             className="h-full min-h-[32rem] w-full border-0"
             title={filenameFromPath(path)}

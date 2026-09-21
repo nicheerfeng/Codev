@@ -436,6 +436,10 @@ pub fn run() {
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(tauri_plugin_log::log::LevelFilter::Info)
+                // 开发与审核窗口只输出到终端，避免默认 LogDir 在权限受限目录初始化失败。
+                .targets([tauri_plugin_log::Target::new(
+                    tauri_plugin_log::TargetKind::Stdout,
+                )])
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())

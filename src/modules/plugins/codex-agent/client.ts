@@ -82,6 +82,18 @@ export class CodexClient {
   private owner = crypto.randomUUID();
   private requestedResource: string | undefined;
   private draining = new Set<string>();
+  /** 将内存草稿键映射到物化后的原生线程 ID。 */
+  private threadId(id: string): string {
+    return this.snapshot.sessions[id]?.thread.id ?? id;
+  }
+  /** 丢弃尚未发送且仍停留在内存中的草稿线程。 */
+  discardDraft(id: string) {
+    const session = this.snapshot.sessions[id];
+    if (!session?.draftThread || session.draft.trim() || session.attachments.length || session.images.length || session.skills.length) return;
+    const sessions = { ...this.snapshot.sessions };
+    delete sessions[id];
+    this.update({ sessions, order: this.snapshot.order.filter((key) => key !== id) });
+  }
   scrollPositions = new Map<string, { top: number; follow: boolean }>();
 
   /** 提供 React 稳定的外部状态订阅。 */
@@ -212,6 +224,7 @@ export class CodexClient {
       pending.reject(new Error(message));
     }
     this.pending.clear();
+    this.connectionId = 0;
     this.update({
       connected: false,
       error: message,
@@ -254,6 +267,7 @@ export class CodexClient {
     const params = message.params ?? {};
     if (method === "bridge/closed") {
       this.disconnected("Codex 连接已结束，请重新连接");
+      void invoke("codex_agent_close", { connectionId: null }).catch(() => undefined);
       return;
     }
     if (method === "bridge/error") {
@@ -263,7 +277,10 @@ export class CodexClient {
     if (method === "skills/changed")
       this.update({ skillsRevision: this.snapshot.skillsRevision + 1 });
     if (method === "thread/started") this.remember(params.thread as Thread);
-    const id = (params.threadId ?? params.thread_id) as string | undefined;
+    const protocolId = (params.threadId ?? params.thread_id) as string | undefined;
+    const id = protocolId
+      ? Object.keys(this.snapshot.sessions).find((key) => this.snapshot.sessions[key].thread.id === protocolId) ?? protocolId
+      : undefined;
     if (
       id &&
       [
@@ -391,7 +408,7 @@ export class CodexClient {
         });
         if (this.disposed) return;
         await this.request("initialize", {
-          clientInfo: { name: "codev", title: "Codev", version: "1.0.3" },
+          clientInfo: { name: "codev", title: "Codev", version: "1.0.4" },
           capabilities: { experimentalApi: true },
         });
         await this.write({ method: "initialized" });
@@ -405,26 +422,22 @@ export class CodexClient {
           stateUnknown: false,
           resourceId: ready.resourceId,
           provider: ready.provider,
-          lastModel: ready.lastModel ?? null,
+          // 每次连接都以当前资源的实时目录重建，不沿用旧渠道模型缓存。
+          lastModel: null,
         });
         this.update({ models: [], modelCatalogError: undefined });
         try {
           const upstream = await invoke<Array<{ id: string; name?: string }>>("codex_resources_models", { id: ready.resourceId });
           const available = mergeModels([], upstream ?? []);
           if (!available.length) throw new Error("当前资源没有返回可用模型");
-          if (this.snapshot.switching && !available.some(model => model.model === ready.lastModel?.model))
-            throw new Error("资源模型清单在切换期间发生变化，请重新应用");
           let choice = this.snapshot.lastModel;
-          if (choice && canonicalModel(choice.model, available) !== choice.model) {
-            choice = { ...choice, model: canonicalModel(choice.model, available) };
+          if (!choice || !available.some(model => model.model === choice?.model)) {
+            choice = { model: available[0].model, effort: available[0].defaultReasoningEffort || "" };
             await invoke("codex_resources_model", { id: ready.resourceId, provider: ready.provider, choice });
           }
-          if (available.length && !available.some(model => model.model === choice?.model)) {
-            choice = { model: available[0].model, effort: "" };
-            await invoke("codex_resources_model", { id: ready.resourceId, provider: ready.provider, choice });
-          }
+          const selectedChoice = choice;
           await invoke("codex_agent_ready", { connectionId: this.connectionId, commit: true });
-          this.update({ models: available, lastModel: choice, connected: true,
+          this.update({ models: available, lastModel: selectedChoice, connected: true,
             sessions: Object.fromEntries(Object.entries(this.snapshot.sessions).map(([id, session]) => [id, {
               ...session,
               model: canonicalModel(session.model || session.thread.model || "", available),
@@ -528,24 +541,12 @@ export class CodexClient {
 
   /** 新建明确绑定项目目录的原生线程。 */
   async create(cwd: string): Promise<string> {
-    const { thread, sandbox } = await this.request<{
-      thread: Thread;
-      sandbox: SandboxPolicy;
-    }>("thread/start", {
-      cwd,
-      modelProvider: this.snapshot.provider,
-      ...(this.snapshot.lastModel?.model
-        ? { model: this.snapshot.lastModel.model }
-        : {}),
-      sandbox: "danger-full-access",
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
-    });
+    const id = `draft:${crypto.randomUUID()}`;
+    const thread: Thread = { id, name: null, preview: "", cwd, updatedAt: Date.now(), turns: [], model: this.snapshot.lastModel?.model ?? null };
     this.remember(thread);
     this.patch(thread.id, {
       loaded: true,
-      resumed: true,
-      effectiveSandbox: sandbox,
+      draftThread: true,
       ...(this.snapshot.lastModel?.model
         ? {
             model: this.snapshot.lastModel.model,
@@ -559,7 +560,22 @@ export class CodexClient {
         ...this.snapshot.order.filter((id) => id !== thread.id),
       ],
     });
-    return thread.id;
+    return id;
+  }
+  /** 首次发送前将内存草稿物化为 Codex 原生线程。 */
+  private async materializeDraft(id: string): Promise<string> {
+    const session = this.snapshot.sessions[id];
+    if (!session?.draftThread) return id;
+    const { thread, sandbox } = await this.request<{ thread: Thread; sandbox: SandboxPolicy }>("thread/start", {
+      cwd: session.thread.cwd,
+      modelProvider: this.snapshot.provider,
+      ...(session.model ? { model: session.model } : {}),
+      sandbox: session.sandbox,
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
+    });
+    this.patch(id, { thread, draftThread: false, resumed: true, loaded: true, effectiveSandbox: sandbox });
+    return id;
   }
   /** 每个线程只加载一次历史，重复点击复用现有状态。 */
   load(id: string): Promise<void> {
@@ -576,26 +592,31 @@ export class CodexClient {
           data: Turn[];
           nextCursor: string | null;
         }>("thread/turns/list", {
-          threadId: id,
+          threadId: this.threadId(id),
           limit: 30,
           sortDirection: "desc",
           itemsView: "full",
         });
+        const savedEffort = this.snapshot.sessions[id]?.effort || "";
+        const historyPath = thread.path || this.snapshot.sessions[id]?.thread.path;
         this.patch(id, {
           thread: { ...thread, turns: page.data.reverse() },
-          ...(this.snapshot.lastModel ? { model: this.snapshot.lastModel.model, effort: this.snapshot.lastModel.effort } : {}),
+          ...(this.snapshot.lastModel ? { model: this.snapshot.lastModel.model } : {}),
           loaded: true,
           historyCursor: page.nextCursor,
-          effort: "medium",
+          effort: savedEffort,
         });
-        if (thread.path) {
+        if (historyPath) {
           try {
-            const history = await invoke<{ tokenUsage: Session["tokenUsage"]; effort: string }>("codex_agent_read_usage", { path: thread.path });
+            const history = await invoke<{ tokenUsage: Session["tokenUsage"]; effort: string }>("codex_agent_read_usage", { path: historyPath });
             const current = this.snapshot.sessions[id];
-            if (history && current && !current.busy && !current.compacting && current.effort === "medium")
-              this.patch(id, { tokenUsage: current.tokenUsage ?? history.tokenUsage, effort: history.effort || "medium" });
+            if (history && current && !current.busy && !current.compacting)
+              this.patch(id, { tokenUsage: current.tokenUsage ?? history.tokenUsage,
+                ...(current.effort === savedEffort && !savedEffort ? { effort: history.effort || "medium" } : {}),
+              });
           } catch (error) { console.error("Codex 历史用量读取失败", error); }
         }
+        if (!this.snapshot.sessions[id]?.effort) this.patch(id, { effort: "medium" });
       })
       .finally(() => this.loads.delete(id));
     this.loads.set(id, loading);
@@ -667,7 +688,7 @@ export class CodexClient {
     do {
       const page: { data: Turn[]; nextCursor: string | null } =
         await this.request("thread/turns/list", {
-          threadId: id,
+          threadId: this.threadId(id),
           cursor,
           limit: 100,
           sortDirection: "asc",
@@ -695,6 +716,7 @@ export class CodexClient {
   }
   /** 在发送前恢复会话，运行中的输入走 steer 并绑定当前轮次。 */
   async send(id: string, queued?: Draft, leadingInputs: Input[] = []) {
+    id = await this.materializeDraft(id);
     const live = this.snapshot.sessions[id];
     const initial = live && queued ? { ...live, ...queued } : live;
     if (
@@ -719,7 +741,7 @@ export class CodexClient {
           thread: Thread;
           sandbox: SandboxPolicy;
         }>("thread/resume", {
-          threadId: id,
+          threadId: this.threadId(id),
           approvalPolicy: "on-request",
           modelProvider: this.snapshot.provider,
           approvalsReviewer: "user",
@@ -760,13 +782,13 @@ export class CodexClient {
       );
       if (initial.turnId)
         await this.request("turn/steer", {
-          threadId: id,
+          threadId: this.threadId(id),
           expectedTurnId: initial.turnId,
           input,
         });
       else
         await this.request("turn/start", {
-          threadId: id,
+          threadId: this.threadId(id),
           input,
           ...(initial.model ? { model: initial.model } : {}),
           effort: initial.effort || "medium",
@@ -1080,6 +1102,7 @@ export class CodexClient {
   }
   /** 通过原生接口分叉线程，保留原始历史不做本地文件复制。 */
   async fork(id: string, lastTurnId?: string): Promise<string> {
+    const source = this.snapshot.sessions[id]?.thread;
     const { thread } = await this.request<{ thread: Thread }>("thread/fork", {
       threadId: id,
       ...(lastTurnId ? { lastTurnId } : {}),
@@ -1089,8 +1112,20 @@ export class CodexClient {
       approvalPolicy: "on-request",
       approvalsReviewer: "user",
     });
+    const base = source?.name || source?.preview || "新线程";
+    const used = new Set(Object.values(this.snapshot.sessions)
+      .filter(session => session.thread.cwd === source?.cwd)
+      .map(session => session.thread.name || session.thread.preview || ""));
+    let index = 1;
+    let name = `${base} · 分叉 ${index}`;
+    while (used.has(name)) name = `${base} · 分叉 ${++index}`;
+    await this.request("thread/name/set", { threadId: thread.id, name });
+    thread.name = name;
     this.remember(thread);
     this.patch(thread.id, { thread, resumed: true });
+    this.update({
+      order: [thread.id, ...this.snapshot.order.filter((item) => item !== thread.id)],
+    });
     await this.load(thread.id);
     return thread.id;
   }

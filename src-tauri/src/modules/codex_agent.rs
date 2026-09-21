@@ -124,7 +124,9 @@ impl Process {
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        Err("Codex 正在退出但尚未完成，请稍后重新连接；资源未切换".into())
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        Err("Codex 退出超时，旧进程已强制回收；资源未切换".into())
     }
     /// 在持有进程操作锁时查询原生状态，阻止切换检查期间发起新任务。
     fn query(&mut self, method: &str, params: Value) -> Result<Value, String> {
@@ -270,7 +272,10 @@ pub fn codex_agent_start(
             .is_none()
         {
             process.verify_idle()?;
-            process.shutdown_idle()?;
+            if let Err(error) = process.shutdown_idle() {
+                *slot = None;
+                return Err(error);
+            }
         }
     }
     *slot = None;
@@ -433,6 +438,7 @@ pub async fn codex_agent_prepare_switch(
         }
         if let Err(error) = process.shutdown_idle() {
             resources::codex_resources_rollback()?;
+            *slot = None;
             return Err(error);
         }
         *slot = None;

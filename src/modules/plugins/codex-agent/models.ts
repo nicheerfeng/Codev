@@ -2,7 +2,8 @@ import type { Model } from "./protocol";
 
 /** 已知渠道别名仅在基础模型可用时归一，不猜测其他模型后缀。 */
 export function canonicalModel(id: string, available: Array<{ model: string }>): string {
-  const base = id.endsWith("-codex5") ? id.slice(0, -7) : id;
+  const match = id.match(/^(.*)-[A-Za-z]+\d+$/);
+  const base = match?.[1] ?? id;
   return available.some(item => item.model === base) ? base : id;
 }
 

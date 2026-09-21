@@ -643,7 +643,7 @@ export function CodexComposer({
               {client.getSnapshot().modelCatalogError && <p className="px-2 py-1 text-xs text-muted-foreground">{client.getSnapshot().modelCatalogError}</p>}
               <div className="reader-scrollbar max-h-60 overflow-auto">
                 <div className="px-3 py-2 text-xs text-muted-foreground break-words">
-                  资源方：{resourceId === "native" ? "初始配置" : resourceName?.id === resourceId ? resourceName.alias : "读取中…"}
+                  资源方：{resourceName?.id === resourceId ? resourceName.alias : "读取中…"}
                 </div>
                 {models
                   .filter((item) =>
@@ -661,7 +661,7 @@ export function CodexComposer({
                       className={`h-auto w-full justify-start gap-2 rounded-lg py-2 text-left ${session.model === item.model ? "bg-accent" : ""}`}
                       onClick={() => {
                         void client
-                          .selectModel(id, item.model, item.defaultReasoningEffort)
+                          .selectModel(id, item.model, item.defaultReasoningEffort || session.effort || "medium")
                           .catch((error) => toast.error(String(error)));
                         setModelOpen(false);
                       }}
@@ -706,7 +706,7 @@ export function CodexComposer({
                 position="popper"
                 className="rounded-xl"
               >
-                {[...new Set([...(activeModel?.supportedReasoningEfforts.map(option => option.reasoningEffort) ?? []), session.effort || "medium"])].map((effort) => (
+                {[...new Set([...(activeModel?.supportedReasoningEfforts.length ? activeModel.supportedReasoningEfforts.map(option => option.reasoningEffort) : ["none", "minimal", "low", "medium", "high", "xhigh", "max"]), session.effort || "medium"])].map((effort) => (
                   <SelectItem
                     key={effort}
                     value={effort}
@@ -745,7 +745,7 @@ export function CodexComposer({
           <div className="ml-auto flex shrink-0 items-center gap-1">
             {session.compacting ? (
               <span className="text-[10px] text-muted-foreground">
-                压缩中 / 等待更新
+                正在压缩上下文
               </span>
             ) : (
               session.tokenUsage && (
@@ -763,6 +763,7 @@ export function CodexComposer({
               <Button
                 variant="secondary"
                 className="rounded-full"
+                data-running-stop="true"
                 size="icon-sm"
                 title="停止"
                 aria-label="停止"

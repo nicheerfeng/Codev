@@ -86,6 +86,7 @@ export type Message = {
 };
 export type Session = {
   thread: Thread;
+  draftThread: boolean;
   loaded: boolean;
   resumed: boolean;
   turnId: string | null;
@@ -127,6 +128,7 @@ export type Draft = Pick<
 export function sessionFromThread(thread: Thread): Session {
   return {
     thread,
+    draftThread: false,
     loaded: false,
     resumed: false,
     turnId: null,
