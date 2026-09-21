@@ -18,7 +18,9 @@ fn read_usage(path: &Path) -> Result<Option<Value>, String> {
         if effort.is_none() {
             if let Ok(value) = serde_json::from_slice::<Value>(line) {
                 if value["type"] == "turn_context" {
-                    effort = Some(value["payload"]["effort"].as_str().filter(|value| !value.is_empty()).unwrap_or("medium").to_string());
+                    effort = value["payload"]["effort"].as_str()
+                        .or_else(|| value["payload"]["reasoning_effort"].as_str())
+                        .filter(|value| !value.trim().is_empty()).map(str::to_owned);
                 }
             }
         }
@@ -93,6 +95,7 @@ mod tests {
         assert_eq!(usage["tokenUsage"]["modelContextWindow"], 100000);
         assert_eq!(usage["effort"], "medium");
         writeln!(file, "{{\"type\":\"turn_context\",\"payload\":{{\"effort\":\"high\"}}}}").unwrap();
+        writeln!(file, "{{\"type\":\"turn_context\",\"payload\":{{\"model\":\"test\"}}}}").unwrap();
         writeln!(file, "{{\"type\":\"compacted\"}}").unwrap();
         let history = read_usage(file.path()).unwrap().unwrap();
         assert!(history["tokenUsage"].is_null());

@@ -26,6 +26,7 @@ import { WebSearchDetails } from "./WebSearchDetails";
 import {
   activityLabel,
   elapsedText,
+  isCompaction,
   isTool,
   processLabel,
   toolOutput,
@@ -352,12 +353,14 @@ function Process({
   }, [running]);
   const steps: Array<{ id: string; items: Item[]; message: boolean }> = [];
   for (const item of items) {
+    if (isCompaction(item)) continue;
     const message = item.type === "agentMessage" || item.type === "plan";
     const previous = steps[steps.length - 1];
     if (!message && previous && !previous.message) previous.items.push(item);
     else steps.push({ id: item.id, items: [item], message });
   }
-  const tools = items.filter(isTool).length;
+  const visibleItems = items.filter((item) => !isCompaction(item));
+  const tools = visibleItems.filter(isTool).length;
   const elapsed = elapsedText(turn, running, now);
   const files = [
     ...new Map(
@@ -384,8 +387,8 @@ function Process({
             {processLabel(turn, running)}
           </span>
           <span className="codex-process-meta">
-            {items.length
-              ? `${items.length} 个步骤${tools ? ` · ${tools} 次工具调用` : ""}`
+            {visibleItems.length
+              ? `${visibleItems.length} 个步骤${tools ? ` · ${tools} 次工具调用` : ""}`
               : "等待模型响应"}
             {elapsed ? ` · 用时 ${elapsed}` : ""}
           </span>
@@ -481,6 +484,7 @@ function TurnView({
     .find((item) => item.type === "agentMessage");
   const blocks: Array<{ id: string; process: boolean; items: Item[] }> = [];
   for (const item of turn.items) {
+    if (isCompaction(item)) continue;
     if (["agentMessage", "reasoning", "plan"].includes(item.type) && !itemText(item).trim()) continue;
     const message =
       item.type === "userMessage" ||
@@ -753,7 +757,7 @@ export function CodexTranscript({
         </div>
       )}
       <div
-        className="codex-transcript reader-scrollbar"
+        className="codex-transcript reader-scrollbar select-text"
         tabIndex={0}
         ref={root}
         onWheel={(event) => {
@@ -858,7 +862,7 @@ export function CodexTranscript({
             );
           })}
         </div>
-        {session.busy && !session.turnId && (
+        {session.busy && !session.turnId && !session.compacting && (
           <p className="codex-transcript-content codex-live">正在连接会话...</p>
         )}
         {session.error && (

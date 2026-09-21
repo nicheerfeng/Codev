@@ -815,7 +815,7 @@ export function PiComposer(props: Props) {
               <Button
                 variant="secondary"
                 size="icon-sm"
-                className="rounded-full"
+                className="rounded-full pi-stop-pulse"
                 title="停止生成"
                 aria-label="停止生成"
                 onClick={props.onStop}

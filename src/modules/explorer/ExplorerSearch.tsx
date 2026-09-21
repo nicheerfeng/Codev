@@ -8,8 +8,6 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
-  ArrowDown01Icon,
-  ArrowRight01Icon,
   Cancel01Icon,
   Folder01Icon,
   Search01Icon,
@@ -124,6 +122,7 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
     {
       rootPath,
       onOpenFile,
+      onRevealDirectory,
       onAddAsRoot,
       onCopyPaths,
       onCutPaths,
@@ -144,15 +143,6 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [searching, setSearching] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [expanded, setExpanded] = useState<Set<string>>(new Set());
-    const [children, setChildren] = useState<Record<string, SearchHit[]>>({});
-    const [folderErrors, setFolderErrors] = useState<Record<string, string>>(
-      {},
-    );
-    const [loadingFolders, setLoadingFolders] = useState<Set<string>>(
-      new Set(),
-    );
-    const generation = useRef(0);
     const [visibleCount, setVisibleCount] = useState(200);
     const sentinel = useRef<HTMLDivElement>(null);
     const [stats, setStats] = useState<SearchResult | null>(null);
@@ -234,65 +224,11 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
     }, [query, retryToken, rootPath]);
 
     useEffect(() => {
-      generation.current++;
-      setExpanded(new Set());
-      setChildren({});
-      setFolderErrors({});
-      setLoadingFolders(new Set());
       setVisibleCount(200);
       setStats(null);
     }, [query, rootPath]);
-    /** 在结果树中按需加载目录，查询切换后丢弃旧目录响应。 */
-    const toggleDirectory = async (hit: SearchHit) => {
-      if (expanded.has(hit.path)) {
-        setExpanded((current) => {
-          const next = new Set(current);
-          next.delete(hit.path);
-          return next;
-        });
-        return;
-      }
-      setExpanded((current) => new Set(current).add(hit.path));
-      if (children[hit.path] || loadingFolders.has(hit.path)) return;
-      const revision = generation.current;
-      setLoadingFolders((current) => new Set(current).add(hit.path));
-      setFolderErrors((current) => ({ ...current, [hit.path]: "" }));
-      try {
-        const entries = await invoke<Array<{ name: string; kind: string }>>(
-          "fs_read_dir",
-          {
-            path: hit.path,
-            showHidden: true,
-            workspace: currentWorkspaceEnv(),
-          },
-        );
-        if (revision !== generation.current) return;
-        setChildren((current) => ({
-          ...current,
-          [hit.path]: entries.map((entry) => ({
-            name: entry.name,
-            path: `${hit.path}/${entry.name}`,
-            rel: `${hit.rel}/${entry.name}`,
-            is_dir: entry.kind === "dir",
-          })),
-        }));
-      } catch (error) {
-        if (revision === generation.current)
-          setFolderErrors((current) => ({
-            ...current,
-            [hit.path]: String(error),
-          }));
-      } finally {
-        if (revision === generation.current)
-          setLoadingFolders((current) => {
-            const next = new Set(current);
-            next.delete(hit.path);
-            return next;
-          });
-      }
-    };
     const visible: Array<SearchHit & { depth: number; key: string }> = [];
-    /** 展平已展开的结果目录，键盘顺序与屏幕顺序一致。 */
+    /** 结果列表保持与原文件树一致的平面命中顺序。 */
     const appendVisible = (
       hits: SearchHit[],
       depth: number,
@@ -301,8 +237,6 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
       for (const hit of hits) {
         const key = `${parent}/${hit.path}`;
         visible.push({ ...hit, depth, key });
-        if (expanded.has(hit.path))
-          appendVisible(children[hit.path] ?? [], depth + 1, key);
       }
     };
     appendVisible(results.slice(0, visibleCount), 0, "");
@@ -348,8 +282,8 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
         return;
       }
       onSelectPath?.(hit.path, false);
-      if (hit.is_dir) void toggleDirectory(hit);
-      else onOpenFile(hit.path);
+      onRevealDirectory?.(hit.path);
+      if (!hit.is_dir) onOpenFile(hit.path);
     };
 
     return (
@@ -454,9 +388,6 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
                             type="button"
                             data-index={index}
                             style={{ paddingLeft: 8 + hit.depth * 14 }}
-                            aria-expanded={
-                              hit.is_dir ? expanded.has(hit.path) : undefined
-                            }
                             onClick={(event) =>
                               handleSelect(hit, event.ctrlKey || event.metaKey)
                             }
@@ -479,19 +410,7 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
                             )}
                             title={hit.path}
                           >
-                            {hit.is_dir ? (
-                              <HugeiconsIcon
-                                icon={
-                                  expanded.has(hit.path)
-                                    ? ArrowDown01Icon
-                                    : ArrowRight01Icon
-                                }
-                                size={12}
-                                className="shrink-0"
-                              />
-                            ) : (
-                              <span className="w-3 shrink-0" />
-                            )}
+                            <span className="w-3 shrink-0" />
                             {url ? (
                               <img
                                 src={url}
@@ -596,35 +515,6 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
                           </ContextMenuItem>
                         </ContextMenuContent>
                       </ContextMenu>
-                      {expanded.has(hit.path) &&
-                        loadingFolders.has(hit.path) && (
-                          <p className="px-6 py-1 text-xs text-muted-foreground">
-                            读取目录中…
-                          </p>
-                        )}
-                      {expanded.has(hit.path) && folderErrors[hit.path] && (
-                        <p className="px-6 py-1 text-xs text-destructive">
-                          {folderErrors[hit.path]}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setExpanded((current) => {
-                                const next = new Set(current);
-                                next.delete(hit.path);
-                                return next;
-                              });
-                            }}
-                          >
-                            收起后重试
-                          </button>
-                        </p>
-                      )}
-                      {expanded.has(hit.path) &&
-                        children[hit.path]?.length === 0 && (
-                          <p className="px-6 py-1 text-xs text-muted-foreground">
-                            空文件夹
-                          </p>
-                        )}
                     </Fragment>
                   );
                 })

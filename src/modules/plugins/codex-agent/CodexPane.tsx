@@ -189,6 +189,8 @@ function Workspace({
   const place = (id: string, target?: number) => {
     const previous = slots.indexOf(id);
     const index = target ?? (previous >= 0 ? previous : focused);
+    const replaced = slots[index];
+    if (replaced && replaced !== id) client.discardDraft(replaced);
     setFocused(index);
     setSlots((currentSlots) => {
       const next = [...currentSlots];
@@ -224,6 +226,8 @@ function Workspace({
   };
   /** 关闭展示位置保留线程运行，统计跟随实际视口更新。 */
   const close = (index: number) => {
+    const closing = slots[index];
+    if (closing) client.discardDraft(closing);
     setSlots((currentSlots) =>
       currentSlots.length === 1
         ? [null]

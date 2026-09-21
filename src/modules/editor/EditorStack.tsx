@@ -33,7 +33,10 @@ export function EditorStack({
         ((t.kind === "markdown" || t.kind === "html") && t.viewMode === "raw")),
   );
   // 仅保留当前文件和未保存文件的编辑器实例，干净后台标签重新激活时再加载。
-  const mountedEditors = editors.filter((t) => t.id === activeId || t.dirty);
+  // PDF 内置阅读器在卸载时会丢失页码与滚动位置，保持已打开 PDF 实例驻留。
+  const mountedEditors = editors.filter(
+    (t) => t.id === activeId || t.dirty || t.path.toLowerCase().endsWith(".pdf"),
+  );
 
   // Stable per-tab callbacks. Inline arrows in `ref` and `onDirtyChange`
   // change identity every render, which makes React detach+reattach the ref

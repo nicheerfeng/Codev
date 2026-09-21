@@ -4,6 +4,11 @@
 .pi-agent .pi-markdown { overflow-wrap: anywhere; font-size: 13px; line-height: 1.75; }
 .pi-agent .pi-user-text { line-height: 1.45; }
 .pi-agent .pi-running-dot { position: relative; }
+.pi-agent .pi-stop-pulse > span { animation: pi-stop-pulse 2.2s ease-in-out infinite; }
+@keyframes pi-stop-pulse {
+  0%, 100% { opacity: .82; transform: scale(.94); }
+  50% { opacity: 1; transform: scale(1); }
+}
 .pi-agent .pi-running-dot::after {
   content: "";
   position: absolute;
@@ -143,7 +148,8 @@
   to { opacity: 1; transform: translateY(0); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .pi-agent .pi-summary-transition { animation: none; }
+  .pi-agent .pi-summary-transition,
+  .pi-agent .pi-stop-pulse > span { animation: none; }
 }
 
 .pi-agent .pi-markdown ul, .pi-agent .pi-markdown ol { padding-inline-start: 1.5rem; list-style-position: outside; }

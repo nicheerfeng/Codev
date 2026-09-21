@@ -73,10 +73,12 @@ export function projectName(path: string) {
   return path.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? path;
 }
 /** 将已有顺序应用到新发现的项目或会话。 */
-function ordered(ids: string[], order: string[]) {
+function ordered(ids: string[], order: string[], prependUnseen = false) {
+  const unseen = ids.filter((id) => !order.includes(id));
   return [
+    ...(prependUnseen ? unseen : []),
     ...order.filter((id) => ids.includes(id)),
-    ...ids.filter((id) => !order.includes(id)),
+    ...(!prependUnseen ? unseen : []),
   ];
 }
 
@@ -152,7 +154,7 @@ export function CodexSidebar({
   const { projectMap, projects, sessionIds, sessionsByProject } = useMemo(() => {
     const projectMap = new Map<string, string>();
     const sessionsByProject = new Map<string, typeof state.sessions[string][]>();
-    const sessionIds = ordered(state.order, layout.sessionOrder);
+    const sessionIds = ordered(state.order, layout.sessionOrder, true);
     for (const cwd of [...layout.projects, ...(state.historyProjects ?? [])])
       if (!layout.hidden.includes(pathKey(cwd))) projectMap.set(pathKey(cwd), cwd);
     for (const id of sessionIds) {

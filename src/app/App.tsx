@@ -1090,6 +1090,12 @@ export default function App() {
 
   useGlobalShortcuts(shortcutHandlers, { isDisabled: shortcutsDisabled });
 
+  useEffect(() => {
+    const focusSearch = () => searchInlineRef.current?.focus();
+    window.addEventListener("codev-search-focus", focusSearch);
+    return () => window.removeEventListener("codev-search-focus", focusSearch);
+  }, []);
+
   const registerTerminalHandle = useCallback(
     (leafId: number, h: TerminalPaneHandle | null) => {
       if (h) terminalRefs.current.set(leafId, h);

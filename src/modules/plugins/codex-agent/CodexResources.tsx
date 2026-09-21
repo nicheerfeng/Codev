@@ -61,6 +61,7 @@ export function CodexResources({
   const [error, setError] = useState("");
   const [remove, setRemove] = useState<string | null>(null);
   const reason = client.switchReason();
+  const switching = state.switching;
   /** 每次打开设置刷新档案，不向前端读取密钥。
    */
   const refresh = () => {
@@ -94,6 +95,7 @@ export function CodexResources({
   };
   /** 切换失败保持当前显示并呈现原生核验结果。 */
   const select = (id: string) => {
+    setSelectedId(id);
     void client
       .switchResource(id)
       .then(() => setEditedCurrent(false))
@@ -101,7 +103,7 @@ export function CodexResources({
   };
   return (
     <>
-      <span title={reason || "切换登录资源"} className="flex min-w-0 max-w-36">
+      <span title={reason || "切换登录资源"} className="flex min-w-0 max-w-40 items-center gap-1">
         <Select
           value={state.resourceId}
           disabled={Boolean(reason) || !catalog}
@@ -122,6 +124,7 @@ export function CodexResources({
             ))}
           </SelectContent>
         </Select>
+        {switching && <span className="size-3 shrink-0 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground" aria-label="正在切换资源" />}
       </span>
       {children}
       <Button
@@ -384,7 +387,13 @@ export function CodexResources({
                   </Button>
                 </span>
               </div>
-              {editedCurrent && (
+              {switching && (
+                <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="size-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground" />
+                  正在切换资源，正在关闭旧运行时并建立新连接…
+                </p>
+              )}
+              {editedCurrent && !switching && (
                 <p role="status" className="text-xs text-muted-foreground">
                   当前档案已修改，重新应用后生效。
                 </p>

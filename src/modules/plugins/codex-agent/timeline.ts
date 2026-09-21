@@ -1,10 +1,20 @@
 import { itemText, type Item, type Turn } from "./protocol";
 
+/** 判断上下文压缩事件，压缩只由输入区状态呈现。 */
+export function isCompaction(item: Item): boolean {
+  return ["contextCompaction", "context_compaction"].includes(item.type);
+}
+
 /** 仅统计原生工具条目，思考和沟通文字不计为工具调用。 */
 export function isTool(item: Item): boolean {
-  return !["userMessage", "agentMessage", "reasoning", "plan"].includes(
+  return ![
+    "userMessage",
+    "agentMessage",
+    "reasoning",
+    "plan",
+  ].includes(
     item.type,
-  );
+  ) && !isCompaction(item);
 }
 
 /** 将真实思考或工具预览归一为从开头截断的一行文本。 */
