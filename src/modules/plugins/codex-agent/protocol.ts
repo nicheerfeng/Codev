@@ -42,6 +42,13 @@ export type Turn = {
   durationMs?: number | null;
 };
 export type Thread = {
+  parentThreadId?: string;
+  source?: {
+    subagent?: { thread_spawn?: { parent_thread_id: string } };
+    subAgent?: { thread_spawn?: { parent_thread_id: string } };
+  };
+  agentNickname?: string | null;
+  status?: { type: string };
   id: string;
   name: string | null;
   preview: string;
@@ -188,6 +195,9 @@ export function reduceNotification(
   method: string,
   params: Record<string, unknown>,
 ): Session {
+  if (method === "thread/closed" || (method === "thread/status/changed" &&
+      ["idle", "notLoaded", "systemError"].includes(String((params.status as { type?: string })?.type))))
+    return { ...session, busy: false, turnId: null, stopping: false, compacting: false };
   if (method === "thread/tokenUsage/updated")
     return {
       ...session,
@@ -211,9 +221,11 @@ export function reduceNotification(
       requests: session.requests.filter((r) => r.id !== params.requestId),
     };
   const turnId =
+    // 未知通知不能生成幽灵轮次；线程级状态在上方独立处理。
     (params.turnId as string | undefined) ??
     (params.turn as Turn | undefined)?.id;
-  if (!turnId) return session;
+  if (!turnId || (!["turn/started", "turn/completed", "item/started", "item/completed"].includes(method) &&
+      !method.endsWith("/delta") && !method.endsWith("Delta"))) return session;
   const turns = [...session.thread.turns];
   let index = turns.findIndex((t) => t.id === turnId);
   if (index < 0) {
@@ -244,6 +256,8 @@ export function reduceNotification(
       ...next,
       turnId: null,
       busy: false,
+      compacting: false,
+      stopping: false,
       requests: next.requests.filter((r) => r.params.turnId !== turnId),
       error: completed.error?.message ?? null,
     };

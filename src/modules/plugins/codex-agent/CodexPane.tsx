@@ -5,7 +5,6 @@ import {
   GridViewIcon,
   LayoutRightIcon,
   Search01Icon,
-  RefreshIcon,
   Folder01Icon,
   Cancel01Icon,
 } from "@hugeicons/core-free-icons";
@@ -16,6 +15,7 @@ import { uiState } from "@/lib/uiState";
 import { CodexClient } from "./client";
 import { Approval, Title, Tool } from "./controls";
 import { CodexComposer } from "./CodexComposer";
+import { parentThread } from "./subagents";
 import { CodexSidebar } from "./CodexSidebar";
 import { CodexTranscript } from "./CodexTranscript";
 import { CodexResources } from "./CodexResources";
@@ -185,12 +185,17 @@ function Workspace({
   useEffect(() => {
     uiState.setItem("codev.codex.sidebar.width", String(width));
   }, [width]);
-  /** 点击已展示会话只聚焦，拖放已有会话则交换两个视口。 */
+  /** 点击按顺序补空位，只有明确拖入目标才替换或交换。 */
   const place = (id: string, target?: number) => {
+    id = client.sessionKey(id);
     const previous = slots.indexOf(id);
-    const index = target ?? (previous >= 0 ? previous : focused);
+    const index = target ?? (previous >= 0 ? previous : multi ? slots.indexOf(null) : 0);
+    if (index < 0) {
+      toast.info("建议拖拽覆盖已有窗口或者新开窗口");
+      return false;
+    }
     const replaced = slots[index];
-    if (replaced && replaced !== id) client.discardDraft(replaced);
+    if (replaced && replaced !== id && previous < 0) client.discardDraft(replaced);
     setFocused(index);
     setSlots((currentSlots) => {
       const next = [...currentSlots];
@@ -203,6 +208,7 @@ function Workspace({
       client.patch(id, { error: String(error) });
       toast.error(String(error));
     });
+    return true;
   };
   /** 空视口选择目录只加载关联历史，新对话由独立新建入口创建。 */
   const chooseProject = async () => {
@@ -214,15 +220,24 @@ function Workspace({
   };
   /** 明确选择工作目录后新建线程，不发送模型请求。 */
   const create = async (cwd?: string) => {
+    if (multi && !slots.includes(null)) {
+      toast.info("建议关闭已有窗口或者新开窗口");
+      return false;
+    }
     setCreating(true);
     try {
       const path = cwd ?? (await open({ directory: true }));
-      if (path) place(await client.create(path));
+      if (path) {
+        const id = await client.create(path);
+        if (place(id)) return true;
+        client.discardDraft(id);
+      }
     } catch (error) {
       toast.error(String(error));
     } finally {
       setCreating(false);
     }
+    return false;
   };
   /** 关闭展示位置保留线程运行，统计跟随实际视口更新。 */
   const close = (index: number) => {
@@ -268,7 +283,7 @@ function Workspace({
           {current ? <Title session={current} client={client} /> : "Codex"}
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <CodexResources client={client} state={state}>
+          <CodexResources client={client} state={state} active={active}>
             <Button
               variant="ghost"
               size="icon-sm"
@@ -313,18 +328,6 @@ function Workspace({
             </Button>
           </CodexResources>
         </div>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          title="刷新会话"
-          aria-label="刷新会话"
-          disabled={!state.connected}
-          onClick={() =>
-            void client.refresh().catch((error) => toast.error(String(error)))
-          }
-        >
-          <HugeiconsIcon icon={RefreshIcon} size={15} />
-        </Button>
       </header>
       {searchOpen && (
         <div className="flex items-center gap-2 border-b border-border px-3 py-1">
@@ -411,13 +414,18 @@ function Workspace({
                         ))}
                       </div>
                     )}
-                    <CodexComposer
+                    {parentThread(session.thread) ? (
+                      <p className="px-3 py-3 text-center text-xs text-muted-foreground">
+                        子代理由主线程调度，无法直接输入
+                      </p>
+                    ) : <CodexComposer
                       onSelect={place}
+                      onNew={create}
                       session={session}
                       client={client}
                       models={state.models}
                       connected={state.connected && !state.switching}
-                    />
+                    />}
                   </div>
                 ) : (
                   <div className="codex-empty">

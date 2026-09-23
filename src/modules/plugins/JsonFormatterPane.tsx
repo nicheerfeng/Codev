@@ -24,20 +24,32 @@ type Props = {
   onClose?: () => void;
 };
 
+/** 将原生解析异常转为简短提示，截断只作可能性说明。 */
+function jsonParseHint(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return /unexpected end|unterminated/i.test(message)
+    ? "内容可能被截断，请检查结尾是否完整"
+    : "请检查引号、逗号或括号";
+}
+
 /** 自动识别 JSON 或 JSONL，并返回可继续编辑的格式化文本。 */
 export function formatJsonText(value: string): string {
   if (!value.trim()) return value;
   try {
     return JSON.stringify(JSON.parse(value), null, 2);
-  } catch {
+  } catch (error) {
+    const lines = value.split(/\r?\n/);
+    // 多行 JSON 首行无法独立解析时，保留整段 JSON 的错误原因。
+    try { JSON.parse(lines.find(line => line.trim()) ?? ""); }
+    catch { throw new Error(`JSON 格式不正确：${jsonParseHint(error)}`); }
     return value
     .split(/\r?\n/)
     .map((line, index) => {
       if (!line.trim()) return "";
       try {
         return JSON.stringify(JSON.parse(line), null, 2);
-      } catch {
-        throw new Error(`第 ${index + 1} 行不是有效 JSON`);
+      } catch (error) {
+        throw new Error(`第 ${index + 1} 行不是有效 JSON：${jsonParseHint(error)}`);
       }
     })
       .join("\n");
@@ -57,6 +69,7 @@ function revealSearchMatch(view: EditorView, query: string, index: number) {
 /** 渲染一个独立的 JSON/JSONL 可编辑格式化页面。 */
 export function JsonFormatterPane({ onAdd, onClose }: Props) {
   const [value, setValue] = useState("");
+  const [parseNotice, setParseNotice] = useState("");
   const [query, setQuery] = useState("");
   const [activeMatch, setActiveMatch] = useState(0);
   const cmRef = useRef<ReactCodeMirrorRef>(null);
@@ -82,11 +95,15 @@ export function JsonFormatterPane({ onAdd, onClose }: Props) {
           let formatted: string;
           try {
             formatted = formatJsonText(pasted);
-          } catch {
-            return false;
+          } catch (error) {
+            event.preventDefault();
+            view.dispatch(view.state.replaceSelection(pasted));
+            setParseNotice(error instanceof Error ? error.message : "JSON 格式不正确");
+            return true;
           }
           event.preventDefault();
           view.dispatch(view.state.replaceSelection(formatted));
+          setParseNotice("");
           return true;
         },
       }),
@@ -192,10 +209,18 @@ export function JsonFormatterPane({ onAdd, onClose }: Props) {
           </button>
         )}
       </header>
+      {parseNotice && (
+        <div role="status" aria-live="polite" className="flex shrink-0 items-center gap-2 border-b border-border/50 px-3 py-1 text-[11px] text-amber-700 dark:text-amber-300/80">
+          <span className="min-w-0 flex-1 break-words">{parseNotice}；原文已保留</span>
+          <button type="button" aria-label="关闭解析提示" className="shrink-0 rounded p-1 hover:bg-muted" onClick={() => setParseNotice("")}>
+            <HugeiconsIcon icon={Cancel01Icon} size={11} />
+          </button>
+        </div>
+      )}
       <CodeMirror
         ref={cmRef}
         value={value}
-        onChange={setValue}
+        onChange={(next) => { setValue(next); setParseNotice(""); }}
         theme={theme}
         extensions={extensions}
         height="100%"

@@ -1,3 +1,5 @@
+import { usePreferencesStore } from "@/modules/settings/preferences";
+import { setAutoCheckUpdates, setUpdateCheckHours } from "@/modules/settings/store";
 import { useCallback, useEffect, useState } from "react";
 import { getIdentifier, getVersion } from "@tauri-apps/api/app";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -18,6 +20,8 @@ import {
 
 /** 主设置只负责 Codev 本机版本和 GitHub 发行检测。 */
 export function VersionSection() {
+  const enabled = usePreferencesStore(state => state.autoCheckUpdates);
+  const hours = usePreferencesStore(state => state.updateCheckHours);
   const [channel, setChannel] = useState<VersionChannelState>({
     ...EMPTY_VERSION_CHANNEL,
     releaseUrl: CODEV_RELEASES_URL,
@@ -90,6 +94,14 @@ export function VersionSection() {
             size={14}
           />
         </Button>
+      </div>
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border p-3 text-xs">
+        <label className="flex items-center gap-2"><input type="checkbox" checked={enabled} onChange={event => void setAutoCheckUpdates(event.target.checked)} />自动检查更新</label>
+        <label className="ml-auto flex items-center gap-2">检查间隔
+          <select aria-label="更新检查间隔" className="rounded border border-border bg-background px-2 py-1" value={hours} disabled={!enabled} onChange={event => void setUpdateCheckHours(Number(event.target.value))}>
+            {[1, 2, 4, 8, 12, 24, 48, 168].map(value => <option key={value} value={value}>{value} 小时</option>)}
+          </select>
+        </label>
       </div>
       <VersionChannelCard
         title="本机 Codev"

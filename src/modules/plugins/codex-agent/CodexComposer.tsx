@@ -14,6 +14,8 @@ import {
   File01Icon,
   Tick02Icon,
   Folder01Icon,
+  PencilEdit01Icon,
+  Delete02Icon,
 } from "@hugeicons/core-free-icons";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -65,14 +67,16 @@ export function CodexComposer({
   models,
   connected,
   onSelect,
+  onNew,
 }: {
   session: Session;
   client: CodexClient;
   models: Model[];
   connected: boolean;
   onSelect: (id: string) => void;
+  onNew: (cwd: string) => Promise<boolean>;
 }) {
-  const id = session.thread.id;
+  const id = client.sessionKey(session.thread.id);
   const dropHover = useCodexComposerDropStore(
     (state) => state.hover && state.hoverKey === id,
   );
@@ -90,16 +94,26 @@ export function CodexComposer({
     client.subscribe,
     client.getSnapshot,
   );
-  const [resourceName, setResourceName] = useState<{ id: string; alias: string } | null>(null);
+  const [resourceName, setResourceName] = useState<{
+    id: string;
+    alias: string;
+  } | null>(null);
   // 打开模型菜单时读取生效资源的别名，避免显示设置中尚未应用的选择。
   useEffect(() => {
     if (!modelOpen) return;
     let cancelled = false;
-    void listResources().then(catalog => {
-      const resource = catalog.resources.find(item => item.id === resourceId);
-      if (!cancelled && resource) setResourceName({ id: resourceId, alias: resource.alias });
-    }).catch(error => toast.error(String(error)));
-    return () => { cancelled = true; };
+    void listResources()
+      .then((catalog) => {
+        const resource = catalog.resources.find(
+          (item) => item.id === resourceId,
+        );
+        if (!cancelled && resource)
+          setResourceName({ id: resourceId, alias: resource.alias });
+      })
+      .catch((error) => toast.error(String(error)));
+    return () => {
+      cancelled = true;
+    };
   }, [modelOpen, resourceId]);
   const slashOpen = !commandDismissed && /^\/[^\s]*$/.test(session.draft);
   // biome-ignore lint/correctness/useExhaustiveDependencies: 原生 skills/changed 事件要求重新读取目录。
@@ -159,7 +173,9 @@ export function CodexComposer({
   }, [session.focusRevision]);
   const selectedModel = session.model || session.thread.model || "";
   const model = models.find((item) => item.model === selectedModel);
-  const activeModel = model ?? (!selectedModel ? models.find((item) => item.isDefault) : undefined);
+  const activeModel =
+    model ??
+    (!selectedModel ? models.find((item) => item.isDefault) : undefined);
   const effectiveMode = sandboxMode(session.effectiveSandbox);
   const effectiveLabel = effectiveMode
     ? SANDBOX_LABELS[effectiveMode]
@@ -217,8 +233,8 @@ export function CodexComposer({
       try {
         if (command.name === "compact") await client.compact(id);
         if (command.name === "fork") onSelect(await client.fork(id));
-        if (command.name === "new")
-          onSelect(await client.create(session.thread.cwd));
+        if (command.name === "new" && !(await onNew(session.thread.cwd)))
+          return;
         if (command.name === "model") setModelOpen(true);
         if (command.name === "stop") {
           client.patch(id, { draft: "" });
@@ -254,16 +270,20 @@ export function CodexComposer({
     <footer className="codex-composer-footer">
       {session.queue.length > 0 && (
         <div
-          className="reader-scrollbar mx-auto mb-2 max-h-32 max-w-3xl overflow-auto rounded-lg border border-border/70 px-2 py-1.5 text-xs"
+          className="reader-scrollbar mx-auto mb-2 max-h-32 max-w-3xl overflow-auto rounded-lg border border-border/70 bg-muted/20 px-2 py-1.5 text-xs"
           aria-label="待发送队列"
           role="region"
         >
-          <div className="flex justify-between text-muted-foreground">
+          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
             <span>待发送 · {session.queue.length}</span>
             {session.queueError && (
-              <button type="button" onClick={() => client.retryQueue(id)}>
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => client.retryQueue(id)}
+              >
                 重试队列
-              </button>
+              </Button>
             )}
           </div>
           {session.queueError && (
@@ -273,7 +293,7 @@ export function CodexComposer({
           )}
           {session.queue.map((entry) => (
             <div key={entry.id} className="flex items-start gap-2 py-1">
-              <span className="min-w-0 flex-1 whitespace-pre-wrap">
+              <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]">
                 {entry.draft || "附件任务"}
                 {entry.attachments.length +
                   entry.images.length +
@@ -282,27 +302,50 @@ export function CodexComposer({
                   ? " · 含附件"
                   : ""}
               </span>
-              {(["steer", "edit", "delete"] as const).map((action) => (
-                <button
-                  type="button"
-                  key={action}
+              <div className="flex shrink-0 items-center gap-0.5">
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  title="安排到当前步骤之后"
+                  aria-label="安排到当前步骤之后"
                   disabled={session.sending}
-                  aria-label={
-                    {
-                      steer: "安排到当前步骤之后",
-                      edit: "退回编辑",
-                      delete: "删除排队消息",
-                    }[action]
-                  }
                   onClick={() =>
                     void client
-                      .queueAction(id, entry.id, action)
+                      .queueAction(id, entry.id, "steer")
                       .catch((error) => toast.error(String(error)))
                   }
                 >
-                  {{ steer: "追加", edit: "编辑", delete: "删除" }[action]}
-                </button>
-              ))}
+                  <HugeiconsIcon icon={ArrowUp01Icon} size={13} />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  title="退回输入框编辑"
+                  aria-label="退回编辑"
+                  disabled={session.sending}
+                  onClick={() =>
+                    void client
+                      .queueAction(id, entry.id, "edit")
+                      .catch((error) => toast.error(String(error)))
+                  }
+                >
+                  <HugeiconsIcon icon={PencilEdit01Icon} size={13} />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  title="删除排队消息"
+                  aria-label="删除排队消息"
+                  disabled={session.sending}
+                  onClick={() =>
+                    void client
+                      .queueAction(id, entry.id, "delete")
+                      .catch((error) => toast.error(String(error)))
+                  }
+                >
+                  <HugeiconsIcon icon={Delete02Icon} size={13} />
+                </Button>
+              </div>
             </div>
           ))}
         </div>
@@ -640,10 +683,17 @@ export function CodexComposer({
                 onChange={(event) => setFilter(event.target.value)}
                 className="mb-2 h-8 rounded-lg text-xs!"
               />
-              {client.getSnapshot().modelCatalogError && <p className="px-2 py-1 text-xs text-muted-foreground">{client.getSnapshot().modelCatalogError}</p>}
+              {client.getSnapshot().modelCatalogError && (
+                <p className="px-2 py-1 text-xs text-muted-foreground">
+                  {client.getSnapshot().modelCatalogError}
+                </p>
+              )}
               <div className="reader-scrollbar max-h-60 overflow-auto">
                 <div className="px-3 py-2 text-xs text-muted-foreground break-words">
-                  资源方：{resourceName?.id === resourceId ? resourceName.alias : "读取中…"}
+                  资源方：
+                  {resourceName?.id === resourceId
+                    ? resourceName.alias
+                    : "读取中…"}
                 </div>
                 {models
                   .filter((item) =>
@@ -661,7 +711,13 @@ export function CodexComposer({
                       className={`h-auto w-full justify-start gap-2 rounded-lg py-2 text-left ${session.model === item.model ? "bg-accent" : ""}`}
                       onClick={() => {
                         void client
-                          .selectModel(id, item.model, item.defaultReasoningEffort || session.effort || "medium")
+                          .selectModel(
+                            id,
+                            item.model,
+                            item.defaultReasoningEffort ||
+                              session.effort ||
+                              "medium",
+                          )
                           .catch((error) => toast.error(String(error)));
                         setModelOpen(false);
                       }}
@@ -670,7 +726,12 @@ export function CodexComposer({
                         <span className="block truncate text-xs">
                           {item.displayName?.trim() || item.model}
                         </span>
-                        {item.displayName?.trim() && item.displayName.trim() !== item.model && <span className="block truncate text-[10px] text-muted-foreground">{item.model}</span>}
+                        {item.displayName?.trim() &&
+                          item.displayName.trim() !== item.model && (
+                            <span className="block truncate text-[10px] text-muted-foreground">
+                              {item.model}
+                            </span>
+                          )}
                       </span>
                       {session.model === item.model && (
                         <HugeiconsIcon icon={Tick02Icon} size={14} />
@@ -680,16 +741,12 @@ export function CodexComposer({
               </div>
             </PopoverContent>
           </Popover>
-          {(
+          {
             <Select
               value={session.effort || "medium"}
               onValueChange={(value) =>
                 void client
-                  .selectModel(
-                    id,
-                    selectedModel,
-                    value,
-                  )
+                  .selectModel(id, selectedModel, value)
                   .catch((error) => toast.error(String(error)))
               }
               disabled={disabled}
@@ -706,17 +763,31 @@ export function CodexComposer({
                 position="popper"
                 className="rounded-xl"
               >
-                {[...new Set([...(activeModel?.supportedReasoningEfforts.length ? activeModel.supportedReasoningEfforts.map(option => option.reasoningEffort) : ["none", "minimal", "low", "medium", "high", "xhigh", "max"]), session.effort || "medium"])].map((effort) => (
-                  <SelectItem
-                    key={effort}
-                    value={effort}
-                  >
+                {[
+                  ...new Set([
+                    ...(activeModel?.supportedReasoningEfforts.length
+                      ? activeModel.supportedReasoningEfforts.map(
+                          (option) => option.reasoningEffort,
+                        )
+                      : [
+                          "none",
+                          "minimal",
+                          "low",
+                          "medium",
+                          "high",
+                          "xhigh",
+                          "max",
+                        ]),
+                    session.effort || "medium",
+                  ]),
+                ].map((effort) => (
+                  <SelectItem key={effort} value={effort}>
                     {effort}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-          )}
+          }
           <Select
             value={session.sandbox}
             onValueChange={(value) =>
@@ -759,7 +830,7 @@ export function CodexComposer({
                 </span>
               )
             )}
-            {session.busy && (
+            {client.taskBusy(id) && (
               <Button
                 variant="secondary"
                 className="rounded-full"
@@ -767,9 +838,7 @@ export function CodexComposer({
                 size="icon-sm"
                 title="停止"
                 aria-label="停止"
-                disabled={
-                  !session.turnId || session.sending || session.stopping
-                }
+                disabled={session.sending || session.stopping}
                 onClick={() =>
                   void client
                     .stopAndRestore(id)

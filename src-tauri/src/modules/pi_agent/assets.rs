@@ -21,7 +21,6 @@ const RECOMMENDED_NPM_PACKAGES: &[&str] = &[
     "pi-mcp-adapter",
     "pi-lens",
     "pi-subagents",
-    "@kky42/pi-flow",
     "@ogulcancelik/pi-codex-subagents",
     "pi-intercom",
     "pi-feishu-lark",

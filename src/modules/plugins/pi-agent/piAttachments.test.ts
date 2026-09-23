@@ -53,6 +53,7 @@ describe("pi attachments", () => {
       ],
     });
     expect(draftHasPayload({ text: "", images: [], files: [] })).toBe(false);
+    expect(draftHasPayload(undefined)).toBe(false);
     expect(
       draftHasPayload({
         text: "",

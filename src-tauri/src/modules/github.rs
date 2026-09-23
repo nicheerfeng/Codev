@@ -23,7 +23,13 @@ fn release_url_for(channel: &str) -> Result<&'static str, String> {
 
 /// 用本机 HTTP 拉 GitHub latest，避免 WebView 缺 User-Agent 被 403。
 #[tauri::command]
-pub fn github_latest_release(channel: String) -> Result<GithubRelease, String> {
+pub async fn github_latest_release(channel: String) -> Result<GithubRelease, String> {
+    tauri::async_runtime::spawn_blocking(move || fetch_release(&channel))
+        .await.map_err(|error| error.to_string())?
+}
+
+/// 阻塞 HTTP 请求在后台工作线程执行，避免检查更新占用界面线程。
+fn fetch_release(channel: &str) -> Result<GithubRelease, String> {
     let url = release_url_for(channel.trim())?;
     let response = ureq::get(url)
         .set("User-Agent", "Codev")

@@ -1,3 +1,4 @@
+import { UpdateNotice } from "./UpdateNotice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -240,6 +241,7 @@ export function Header({
         </div>
 
         <div className="flex shrink-0 items-center gap-0.5">
+          <UpdateNotice />
           {settingsButton}
 
           <Button

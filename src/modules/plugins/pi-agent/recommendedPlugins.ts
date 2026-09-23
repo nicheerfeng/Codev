@@ -26,12 +26,6 @@ export const RECOMMENDED_PI_PLUGINS: RecommendedPiPlugin[] = [
     repoUrl: "https://github.com/nicobailon/pi-subagents",
   },
   {
-    name: "Pi Flow",
-    package: "@kky42/pi-flow",
-    summary: "多后端子代理和动态工作流编排。",
-    repoUrl: "https://github.com/kky42/pi-flow",
-  },
-  {
     name: "Codex Subagents",
     package: "@ogulcancelik/pi-codex-subagents",
     summary: "Codex 风格的会话级子代理、模板和实时 overlay。",
