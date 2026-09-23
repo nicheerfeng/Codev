@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils";
 import { forwardRef, type ComponentProps, type MouseEvent } from "react";
 import { openImageLightbox } from "./imageLightboxStore";
+import { ImageContextMenu } from "./ImageContextMenu";
 
 type Props = ComponentProps<"img"> & { node?: unknown };
 
@@ -15,6 +16,7 @@ export const ZoomableImage = forwardRef<HTMLImageElement, Props>(
       if (src) openImageLightbox(src, image.alt);
     };
     return (
+      <ImageContextMenu src={props.src ?? ""}>
       <img
         {...props}
         ref={ref}
@@ -22,6 +24,7 @@ export const ZoomableImage = forwardRef<HTMLImageElement, Props>(
         className={cn("cursor-zoom-in", className)}
         onClick={open}
       />
+      </ImageContextMenu>
     );
   },
 );

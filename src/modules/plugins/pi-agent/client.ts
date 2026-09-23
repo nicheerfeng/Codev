@@ -22,6 +22,8 @@ export type PiThread = {
   key: string;
   cwd: string;
   runtimeId: number | null;
+  /** 当前 Pi runtime 实际绑定的 provider/model。 */
+  runtimeModelKey: string | null;
   catalogEpoch: number;
   view: PiViewState;
 };
@@ -52,6 +54,12 @@ export class PiWorkspaceClient {
   private compactionContinue = new Set<string>();
   private statsTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private stop: Promise<() => void>;
+
+  /** 生成模型身份键，目录刷新不会改变同一模型的 runtime 绑定。 */
+  private modelKey(model: PiModel | null | undefined): string | null {
+    if (!model?.provider || !model.id) return null;
+    return `${model.provider}\u0000${model.id}`;
+  }
 
   /** 注册一次事件监听，以 runtimeId 分发并合并流式渲染刷新。 */
   constructor(
@@ -158,6 +166,7 @@ export class PiWorkspaceClient {
     if (event.type === "process_exit") {
       this.rejectRequests(payload.sessionId, "Pi 会话已结束");
       thread.runtimeId = null;
+      thread.runtimeModelKey = null;
     }
     if (event.type === "agent_settled" && thread.runtimeId !== null) {
       const resumeQueue = this.compactionResume.delete(thread.key);
@@ -224,13 +233,17 @@ export class PiWorkspaceClient {
   private async adaptCatalogRuntime(thread: PiThread): Promise<boolean> {
     if (
       thread.runtimeId === null ||
-      thread.catalogEpoch === this.catalogEpoch ||
       thread.view.status === "running" ||
       thread.view.status === "stopping" ||
       thread.view.status === "starting" ||
       thread.view.compaction?.status === "running"
     )
       return false;
+    const selectedKey = this.modelKey(thread.view.model);
+    if (!selectedKey || selectedKey === thread.runtimeModelKey) {
+      thread.catalogEpoch = this.catalogEpoch;
+      return false;
+    }
     thread.view = { ...thread.view, error: CATALOG_ADAPT_NOTICE };
     this.publish();
     await this.close(thread.key);
@@ -294,6 +307,7 @@ export class PiWorkspaceClient {
       key,
       cwd,
       runtimeId: null,
+      runtimeModelKey: null,
       catalogEpoch: 0,
       view: {
         ...INITIAL_PI_VIEW_STATE,
@@ -342,17 +356,6 @@ export class PiWorkspaceClient {
       ];
       if (!thread.view.items.length)
         hydrates.push(this.sendRequest(thread, { type: "get_messages" }));
-      else {
-        const last = thread.view.items[thread.view.items.length - 1];
-        if (
-          last?.id &&
-          !last.id.startsWith("history-") &&
-          !last.id.startsWith("local-user-")
-        )
-          hydrates.push(
-            this.sendRequest(thread, { type: "get_entries", since: last.id }),
-          );
-      }
       if (!thread.view.models.length && !this.catalogModels.length)
         hydrates.push(
           this.sendRequest(thread, { type: "get_available_models" }),
@@ -367,6 +370,7 @@ export class PiWorkspaceClient {
           modelId: model.id,
         });
       }
+      thread.runtimeModelKey = this.modelKey(model ?? thread.view.model);
       if (intendedThinking && intendedThinking !== "off")
         await this.sendRequest(thread, {
           type: "set_thinking_level",
@@ -910,14 +914,15 @@ export class PiWorkspaceClient {
       thread.view.compaction?.status === "running";
     if (
       !busy &&
-      thread.runtimeId !== null &&
-      thread.catalogEpoch === this.catalogEpoch
+      thread.runtimeId !== null
     ) {
       await this.sendRequest(thread, {
         type: "set_model",
         provider: model.provider,
         modelId: model.id,
       });
+      thread.runtimeModelKey = this.modelKey(model);
+      thread.catalogEpoch = this.catalogEpoch;
       return;
     }
     if (thread.view.sessionFile)
@@ -1017,6 +1022,7 @@ export class PiWorkspaceClient {
     const id = thread.runtimeId;
     await closePiAgent(id);
     thread.runtimeId = null;
+    thread.runtimeModelKey = null;
     thread.view = piViewReducer(thread.view, {
       type: "event",
       payload: {
