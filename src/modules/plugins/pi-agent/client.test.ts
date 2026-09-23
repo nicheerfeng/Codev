@@ -86,8 +86,53 @@ vi.mock("./native", () => ({
   }),
 }));
 import { COMPACTION_CONTINUE_PROMPT, PiWorkspaceClient } from "./client";
+import { piViewReducer } from "./reducer";
 
 describe("Pi RPC workspace", () => {
+  // 冷历史的展示片段 ID 不可作为原生游标；直接恢复并压缩，保留历史。
+  it("compacts cold history without using display IDs as entry cursors", async () => {
+    const native = await import("./native");
+    const original = vi.mocked(native.sendPiCommand).getMockImplementation()!;
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("cold-compact", "D:/one", "history.jsonl");
+      await client.hydrateFromDisk(thread);
+      thread.view = piViewReducer(thread.view, {
+        type: "history",
+        messages: [{
+          id: "e6d9f10d",
+          message: { role: "assistant", content: [
+            { type: "thinking", thinking: "分析" },
+            { type: "text", text: "历史回答" },
+          ] },
+        }],
+        prepend: false,
+        offset: 80,
+        hasMore: true,
+      });
+      const items = thread.view.items;
+      expect(items[items.length - 1]?.id).toBe("e6d9f10d:1");
+      expect(thread.runtimeId).toBeNull();
+      vi.mocked(native.sendPiCommand).mockClear();
+      vi.mocked(native.sendPiCommand).mockImplementation(async (id, command) => {
+        if (command.type === "get_entries")
+          throw new Error(`Entry not found: ${command.since}`);
+        return original(id, command);
+      });
+      await client.compact(thread);
+      expect(native.startPiAgent).toHaveBeenCalledWith("D:/one", "history.jsonl", false);
+      expect(thread.view.compaction?.status).toBe("done");
+      expect(thread.view.items).toBe(items);
+      const commands = vi.mocked(native.sendPiCommand).mock.calls.map(([, command]) => command.type);
+      expect(commands).toContain("compact");
+      expect(commands).not.toContain("get_entries");
+      expect(commands).not.toContain("get_messages");
+      expect(commands).not.toContain("prompt");
+    } finally {
+      vi.mocked(native.sendPiCommand).mockImplementation(original);
+      client.dispose();
+    }
+  });
   // 延迟压缩期间不发送图片队列，完成后顺序投递且不重载原聊天。
   it("buffers compaction inputs with images and flushes after success without reloading history", async () => {
     const native = await import("./native");

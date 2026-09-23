@@ -50,7 +50,7 @@ export function ImageLightbox() {
       >
         <HugeiconsIcon icon={Cancel01Icon} size={16} />
       </button>
-      <ImageViewport src={item.src} alt={item.alt} />
+      <ImageViewport src={item.src} alt={item.alt} onBackgroundClick={closeImageLightbox} />
     </div>
   );
   return createPortal(overlay, document.body);

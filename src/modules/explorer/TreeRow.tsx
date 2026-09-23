@@ -89,8 +89,9 @@ function EntryRowImpl(props: EntryRowProps) {
       onClick={handleClick}
       onDoubleClick={() => actions.beginRename(path)}
       className={cn(
-        "group flex h-6 w-full min-w-0 cursor-pointer items-center gap-2 rounded-sm px-1.5 text-left text-[13px] transition-colors hover:bg-accent/70",
-        isSelected ? "bg-accent text-foreground" : "text-foreground/85",
+        "group relative flex h-6 w-full min-w-0 cursor-pointer items-center gap-2 rounded-sm border border-transparent px-1.5 text-left text-[13px] transition-colors hover:bg-accent/70",
+        isSelected &&
+          "border-primary/35 bg-primary/12 text-foreground shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary)_10%,transparent)] hover:bg-primary/16",
         isDropTarget && "bg-primary/10 ring-1 ring-inset ring-primary/60",
       )}
       style={{ paddingLeft }}
@@ -105,6 +106,9 @@ function EntryRowImpl(props: EntryRowProps) {
           />
         ) : null}
       </span>
+      {isSelected && (
+        <span className="absolute top-1 bottom-1 left-0 w-0.5 rounded-full bg-primary" />
+      )}
       {iconUrl ? (
         <img src={iconUrl} alt="" className="size-4 shrink-0" />
       ) : (

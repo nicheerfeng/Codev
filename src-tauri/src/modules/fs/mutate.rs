@@ -52,26 +52,19 @@ pub fn fs_rename(from: String, to: String, workspace: Option<WorkspaceEnv>) -> R
     })
 }
 
-/// Deletes a file or directory (recursively for dirs). Callers are
-/// responsible for confirming destructive operations with the user.
+/// 将文件或目录移入系统回收站；失败时返回错误，不执行永久删除。
 #[tauri::command]
 pub fn fs_delete(path: String, workspace: Option<WorkspaceEnv>) -> Result<(), String> {
     let workspace = WorkspaceEnv::from_option(workspace);
     let p = resolve_path(&path, &workspace);
-    let meta = std::fs::symlink_metadata(&p).map_err(|e| {
+    std::fs::symlink_metadata(&p).map_err(|e| {
         log::debug!("fs_delete stat({}) failed: {e}", p.display());
         e.to_string()
     })?;
 
-    let result = if meta.is_dir() {
-        std::fs::remove_dir_all(&p)
-    } else {
-        std::fs::remove_file(&p)
-    };
-
-    result.map_err(|e| {
+    trash::delete(&p).map_err(|e| {
         log::warn!("fs_delete({}) failed: {e}", p.display());
-        e.to_string()
+        format!("移入回收站失败：{e}")
     })
 }
 
