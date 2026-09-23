@@ -91,9 +91,9 @@ export function draftHasPayload(draft: {
   text: string;
   images: PiImage[];
   files?: PiPathAttachment[];
-}): boolean {
+} | undefined): boolean {
   return Boolean(
-    draft.text.trim() || draft.images.length || (draft.files?.length ?? 0),
+    draft && (draft.text.trim() || draft.images.length || (draft.files?.length ?? 0)),
   );
 }
 

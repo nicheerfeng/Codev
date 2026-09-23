@@ -4,6 +4,7 @@ import { sandboxPolicy, type SandboxPolicy } from "./sandbox";
 import { resourceSwitchReason } from "./resources";
 import { canonicalModel, mergeModels } from "./models";
 import { prependPrompt } from "./promptHistory";
+import { parentThread, taskFamily } from "./subagents";
 import { editableLastUser, originalInputs } from "./editLastUser";
 import {
   reduceNotification,
@@ -72,6 +73,20 @@ export class CodexClient {
   private listeners = new Set<() => void>();
   private pending = new Map<string, Pending>();
   private loads = new Map<string, Promise<void>>();
+  private agentReads = new Set<string>();
+  /** 按事件读取单个线程的原生标题与归属，不读取对话或扫描目录。 */
+  private async readAgentMetadata(id: string) {
+    if (this.agentReads.has(id)) return;
+    this.agentReads.add(id);
+    try {
+      const { thread } = await this.request<{ thread: Thread }>("thread/read", { threadId: id, includeTurns: false });
+      if (!this.disposed) this.remember(thread);
+    } catch (error) {
+      console.error("读取子代理元数据失败", error);
+    } finally {
+      this.agentReads.delete(id);
+    }
+  }
   private refreshes = new Map<string, Promise<void>>();
   private historyProjects = new Set<string>();
   private connectionId = 0;
@@ -85,6 +100,10 @@ export class CodexClient {
   /** 将内存草稿键映射到物化后的原生线程 ID。 */
   private threadId(id: string): string {
     return this.snapshot.sessions[id]?.thread.id ?? id;
+  }
+  /** 原生线程编号始终映射到唯一的界面会话，保留草稿视口标识。 */
+  sessionKey(id: string): string {
+    return Object.keys(this.snapshot.sessions).find(key => this.snapshot.sessions[key].thread.id === id) ?? id;
   }
   /** 丢弃尚未发送且仍停留在内存中的草稿线程。 */
   discardDraft(id: string) {
@@ -204,17 +223,23 @@ export class CodexClient {
         sessions: { ...this.snapshot.sessions, [id]: { ...current, ...patch } },
       });
   }
+  /** 汇总当前线程及子代理活动，供停止入口使用。 */
+  taskBusy(id: string): boolean {
+    return taskFamily(this.snapshot.sessions, id).some(key =>
+      this.snapshot.sessions[key]?.busy || this.snapshot.activeThreads.includes(key));
+  }
   /** 将原生线程纳入列表并保留已加载的对话和草稿。 */
   private remember(thread: Thread) {
-    const current = this.snapshot.sessions[thread.id];
+    const key = Object.keys(this.snapshot.sessions).find(key => this.snapshot.sessions[key].thread.id === thread.id) ?? thread.id;
+    const current = this.snapshot.sessions[key];
     const session = current
-      ? { ...current, thread: { ...thread, turns: current.thread.turns } }
+      ? { ...current, thread: { ...current.thread, ...thread, turns: current.thread.turns } }
       : sessionFromThread(thread);
     this.update({
-      sessions: { ...this.snapshot.sessions, [thread.id]: session },
-      order: this.snapshot.order.includes(thread.id)
+      sessions: { ...this.snapshot.sessions, [key]: session },
+      order: this.snapshot.order.includes(key)
         ? this.snapshot.order
-        : [...this.snapshot.order, thread.id],
+        : [...this.snapshot.order, key],
     });
   }
   /** 断开时立即释放等待中的请求，避免界面永远处于运行态。 */
@@ -281,6 +306,14 @@ export class CodexClient {
     const id = protocolId
       ? Object.keys(this.snapshot.sessions).find((key) => this.snapshot.sessions[key].thread.id === protocolId) ?? protocolId
       : undefined;
+    if (id && method === "thread/deleted") {
+      this.removeSessions([id]);
+      return;
+    }
+    if (id && ["thread/archived", "thread/unarchived"].includes(method)) {
+      this.patch(id, { archived: method === "thread/archived", resumed: false });
+      return;
+    }
     if (
       id &&
       [
@@ -327,10 +360,23 @@ export class CodexClient {
       return;
     }
     if (id && this.snapshot.sessions[id]) {
-      this.streaming = method.endsWith("/delta") || method.endsWith("Delta");
-      this.patch(id, reduceNotification(this.snapshot.sessions[id], method, params));
+      const item = params.item as import("./protocol").Item | undefined;
+      if (item?.type === "subAgentActivity" && typeof item.agentThreadId === "string" && item.agentThreadId !== protocolId) {
+        const childKey = this.sessionKey(item.agentThreadId);
+        if (!this.snapshot.sessions[childKey]) {
+          void this.readAgentMetadata(item.agentThreadId);
+        }
+
+      }
+      const delta = method.endsWith("/delta") || method.endsWith("Delta");
+      if (delta && parentThread(this.snapshot.sessions[id].thread) && !this.snapshot.sessions[id].loaded) return;
+      this.streaming = delta || !!parentThread(this.snapshot.sessions[id].thread);
+      const session = this.snapshot.sessions[id];
+      const next = reduceNotification(session, method, params);
+      if (next !== session) this.patch(id, next);
       this.streaming = false;
       if (method === "turn/completed") {
+        void this.readAgentMetadata(this.threadId(id));
         const turn = params.turn as Turn;
         if (
           turn.status !== "completed" &&
@@ -353,6 +399,7 @@ export class CodexClient {
   }
   /** 建立有超时和发送失败清理的请求关联。 */
   request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+    if (typeof params.threadId === "string") params = { ...params, threadId: this.threadId(params.threadId) };
     if (
       this.snapshot.switching &&
       [
@@ -408,7 +455,7 @@ export class CodexClient {
         });
         if (this.disposed) return;
         await this.request("initialize", {
-          clientInfo: { name: "codev", title: "Codev", version: "1.0.4" },
+          clientInfo: { name: "codev", title: "Codev", version: "1.0.5" },
           capabilities: { experimentalApi: true },
         });
         await this.write({ method: "initialized" });
@@ -427,7 +474,7 @@ export class CodexClient {
         });
         this.update({ models: [], modelCatalogError: undefined });
         try {
-          const upstream = await invoke<Array<{ id: string; name?: string }>>("codex_resources_models", { id: ready.resourceId });
+          const upstream = await invoke<Array<{ id: string; name?: string }>>("codex_resources_models", { id: "native" });
           const available = mergeModels([], upstream ?? []);
           if (!available.length) throw new Error("当前资源没有返回可用模型");
           let choice = this.snapshot.lastModel;
@@ -499,11 +546,12 @@ export class CodexClient {
     const sessions = { ...this.snapshot.sessions };
     const order = new Set(this.snapshot.order);
     for (const thread of fetched) {
-      const current = sessions[thread.id];
-      sessions[thread.id] = current
-        ? { ...current, archived, thread: { ...thread, turns: current.thread.turns } }
+      const key = this.sessionKey(thread.id);
+      const current = sessions[key];
+      sessions[key] = current
+        ? { ...current, archived, thread: { ...current.thread, ...thread, turns: current.thread.turns } }
         : { ...sessionFromThread(thread), archived };
-      order.add(thread.id);
+      order.add(key);
     }
     this.update({ sessions, order: [...order], ...(archived ? { archivedCursor: cursor } : { cursor }) });
   }
@@ -531,7 +579,7 @@ export class CodexClient {
       if (!current || current.resumed || current.busy || current.sending) continue;
       if (current && current.archived === archived && current.thread.updatedAt === thread.updatedAt && current.thread.name === thread.name && current.thread.preview === thread.preview && current.thread.cwd === thread.cwd) continue;
       sessions[thread.id] = current
-        ? { ...current, archived, thread: { ...thread, turns: current.thread.turns } }
+        ? { ...current, archived, thread: { ...current.thread, ...thread, turns: current.thread.turns } }
         : { ...sessionFromThread(thread), archived };
       order.add(thread.id);
       dirty = true;
@@ -574,7 +622,15 @@ export class CodexClient {
       approvalPolicy: "on-request",
       approvalsReviewer: "user",
     });
-    this.patch(id, { thread, draftThread: false, resumed: true, loaded: true, effectiveSandbox: sandbox });
+    const live = this.snapshot.sessions[thread.id];
+    const current = this.snapshot.sessions[id];
+    const sessions = { ...this.snapshot.sessions };
+    delete sessions[thread.id];
+    sessions[id] = { ...current, ...(live ? { busy: live.busy, turnId: live.turnId, requests: live.requests } : {}),
+      thread: { ...thread, turns: live?.thread.turns.length ? live.thread.turns : current.thread.turns },
+      draftThread: false, resumed: true, loaded: true, effectiveSandbox: sandbox };
+    this.update({ sessions, order: this.snapshot.order.filter(key => key !== thread.id),
+      activeThreads: [...new Set(this.snapshot.activeThreads.map(key => key === thread.id ? id : key))] });
     return id;
   }
   /** 每个线程只加载一次历史，重复点击复用现有状态。 */
@@ -600,7 +656,7 @@ export class CodexClient {
         const savedEffort = this.snapshot.sessions[id]?.effort || "";
         const historyPath = thread.path || this.snapshot.sessions[id]?.thread.path;
         this.patch(id, {
-          thread: { ...thread, turns: page.data.reverse() },
+          thread: { ...this.snapshot.sessions[id].thread, ...thread, turns: page.data.reverse() },
           ...(this.snapshot.lastModel ? { model: this.snapshot.lastModel.model } : {}),
           loaded: true,
           historyCursor: page.nextCursor,
@@ -660,7 +716,9 @@ export class CodexClient {
   }
   /** 原生删除成功才移除界面缓存，不直接操作会话文件。 */
   async deleteThread(id: string) {
+    id = this.sessionKey(id);
     const session = this.snapshot.sessions[id];
+    if (!session) throw new Error("线程已不存在，请刷新列表");
     if (
       session.busy ||
       session.sending ||
@@ -668,14 +726,23 @@ export class CodexClient {
       session.requests.length
     )
       throw new Error("请先停止任务并处理队列和审批");
-    await this.request("thread/delete", { threadId: id });
+    const family = taskFamily(this.snapshot.sessions, id);
+    if (!session.draftThread) await this.request("thread/delete", { threadId: id });
+    this.removeSessions(family);
+  }
+  /** 清除原生已删除线程的列表、活动记录和阅读位置；通知先于响应时可重复调用。 */
+  private removeSessions(ids: string[]) {
+    const removed = new Set(ids);
     const sessions = { ...this.snapshot.sessions };
-    delete sessions[id];
+    for (const id of removed) {
+      delete sessions[id];
+      this.scrollPositions.delete(id);
+    }
     this.update({
       sessions,
-      order: this.snapshot.order.filter((key) => key !== id),
+      order: this.snapshot.order.filter((key) => !removed.has(key)),
+      activeThreads: this.snapshot.activeThreads.filter(key => !removed.has(key)),
     });
-    this.scrollPositions.delete(id);
   }
   /** 导出读取完整历史，不占用线程写锁或覆盖当前分页缓存。 */
   async exportThread(id: string) {
@@ -971,7 +1038,11 @@ export class CodexClient {
       throw new Error("正在提交消息，请稍后停止");
     this.patch(id, { stopping: true });
     try {
-      await this.interrupt(id);
+      const targets = taskFamily(this.snapshot.sessions, id).filter(key =>
+        this.snapshot.sessions[key].busy || this.snapshot.activeThreads.includes(key));
+      const results = await Promise.allSettled(targets.map(key => this.interrupt(key)));
+      const failure = results.find(result => result.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
       this.restoreDraft(id, this.snapshot.sessions[id].queue);
       this.patch(id, { queue: [], queueError: null });
     } finally {
@@ -1089,8 +1160,18 @@ export class CodexClient {
   }
   /** 中止指定视口的轮次，不关闭其他线程。 */
   async interrupt(id: string) {
-    const turnId = this.snapshot.sessions[id]?.turnId;
-    if (turnId) await this.request("turn/interrupt", { threadId: id, turnId });
+    let turnId = this.snapshot.sessions[id]?.turnId;
+    if (!turnId) {
+      const { thread } = await this.request<{ thread: Thread }>("thread/read", { threadId: this.threadId(id), includeTurns: true });
+      turnId = thread.turns.find(turn => turn.status === "inProgress")?.id ?? null;
+      if (!turnId && ["idle", "notLoaded"].includes(thread.status?.type ?? "")) {
+        this.patch(id, { busy: false, turnId: null, stopping: false });
+        this.update({ activeThreads: this.snapshot.activeThreads.filter(key => key !== id) });
+        return;
+      }
+      if (!turnId) throw new Error("尚未取得活动轮次，请稍后重试停止");
+    }
+    await this.request("turn/interrupt", { threadId: this.threadId(id), turnId });
   }
   /** 使用官方重命名接口同步标题与历史列表。 */
   async rename(id: string, name: string) {
@@ -1131,6 +1212,10 @@ export class CodexClient {
   }
   /** 原生归档与恢复同步右侧分组，不删除会话文件。 */
   async archive(id: string, archived: boolean) {
+    id = this.sessionKey(id);
+    const session = this.snapshot.sessions[id];
+    if (!session) throw new Error("线程已不存在，请刷新列表");
+    if (session.draftThread) throw new Error("未发送的草稿尚未保存，无法归档");
     if (this.snapshot.sessions[id]?.busy)
       throw new Error("请先停止运行中的会话");
     await this.request(archived ? "thread/archive" : "thread/unarchive", {

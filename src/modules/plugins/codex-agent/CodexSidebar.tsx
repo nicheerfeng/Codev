@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { parentThread } from "./subagents";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowDown01Icon,
@@ -287,8 +288,11 @@ export function CodexSidebar({
   };
   /** 线程行沿用 Pi 的单行标题、状态点与右键操作布局。 */
   const row = (session: Session) => {
-    const { thread } = session;
-    const title = thread.name || thread.preview || "新线程";
+    const thread = { ...session.thread, id: client.sessionKey(session.thread.id) };
+    const title = thread.agentNickname || thread.name || thread.preview || "新线程";
+    const children = childrenByParent.get(session.thread.id) ?? [];
+    const collapseKey = `subagents:${session.thread.id}`;
+    const childrenClosed = layout.collapsed.includes(collapseKey);
     return (
       <ContextMenu key={thread.id}>
         <ContextMenuTrigger asChild>
@@ -300,13 +304,14 @@ export function CodexSidebar({
             {...(!filter && !session.archived
               ? itemProps("session", thread.id, pathKey(thread.cwd), title)
               : {})}
-            className={`codex-session group ${selected === thread.id ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}
+            className={`codex-session group ${selected === client.sessionKey(thread.id) ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}
           >
+
             {inline?.id === thread.id ? (
               <Input
                 autoFocus
                 aria-label="线程名称"
-                className="h-8 text-xs"
+                className="h-8 min-w-0 flex-1 text-xs"
                 value={inline.name}
                 onFocus={(event) => event.currentTarget.select()}
                 onChange={(event) =>
@@ -348,9 +353,27 @@ export function CodexSidebar({
                 <span className="min-w-0 flex-1 truncate text-xs">{title}</span>
               </button>
             )}
+            {!!children.length && (
+              <button
+                type="button"
+                data-no-drag=""
+                aria-expanded={!childrenClosed}
+                aria-label={`${childrenClosed ? "展开" : "收起"} ${children.length} 个子任务`}
+                title="展开或收起子任务"
+                onClick={(event) => { event.stopPropagation(); toggle(collapseKey); }}
+                onDoubleClick={(event) => event.stopPropagation()}
+                className={`mr-1 flex h-7 min-w-7 shrink-0 justify-center items-center gap-0.5 rounded px-1 text-[10px] hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring ${children.some(child => child.requests.length) ? "text-amber-600 dark:text-amber-300" : children.some(child => child.busy) ? "animate-pulse text-[#477faf] dark:text-[#a6cceb]" : "text-muted-foreground"}`}
+              >
+                <HugeiconsIcon size={12} icon={childrenClosed ? ArrowRight01Icon : ArrowDown01Icon} />
+                <span>{children.length}</span>
+              </button>
+            )}
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent className="rounded-xl">
+          <ContextMenuItem onSelect={() => void client.stopAndRestore(thread.id).catch(error => toast.error(String(error)))}>
+            停止此线程及子任务
+          </ContextMenuItem>
           <ContextMenuItem
             onSelect={() => setEditing({ id: thread.id, name: title })}
           >
@@ -404,6 +427,26 @@ export function CodexSidebar({
       </ContextMenu>
     );
   };
+  const childrenByParent = useMemo(() => {
+    const children = new Map<string, Session[]>();
+    for (const session of Object.values(state.sessions)) {
+      const parent = parentThread(session.thread);
+      if (parent) children.set(parent, [...(children.get(parent) ?? []), session]);
+    }
+    return children;
+  }, [state.sessions]);
+  /** 父线程保留原生子代理层级，折叠只控制子行显示，不改变会话与选中状态。 */
+  const treeRow = (session: Session, ancestors: string[] = []): React.ReactNode => {
+    const id = session.thread.id;
+    if (ancestors.includes(id)) return null;
+    const children = childrenByParent.get(id) ?? [];
+    return <div key={id}>
+      {row(session)}
+      {!!children.length && !layout.collapsed.includes(`subagents:${id}`) && <div className="ml-4 border-l border-border pl-2">
+        {children.map(child => treeRow(child, [...ancestors, id]))}
+      </div>}
+    </div>;
+  };
   /** 项目默认展示五条线程，可展开更多并独立创建会话。 */
   const project = (key: string, archived = false) => {
     const cwd =
@@ -416,6 +459,7 @@ export function CodexSidebar({
     const rows = (sessionsByProject.get(key) ?? [])
       .filter(
         (session) =>
+          !parentThread(session.thread) &&
           pathKey(session.thread.cwd) === key &&
           session.archived === archived &&
           (!query ||
@@ -545,7 +589,7 @@ export function CodexSidebar({
           <div className="ml-3 border-l border-border/60 pl-1">
             {rows
               .slice(0, query ? rows.length : (counts[nodeKey] ?? 5))
-              .map(row)}
+              .map(session => treeRow(session))}
             {!rows.length && (
               <p className="px-2 py-2 text-[11px] text-muted-foreground">
                 暂无会话
@@ -764,6 +808,7 @@ export function CodexSidebar({
                   .map((id) => state.sessions[id])
                   .filter(
                     (session) =>
+                      !parentThread(session.thread) &&
                       !session.archived &&
                       pathKey(session.thread.cwd) === pathKey(home) &&
                       (!query ||
@@ -776,7 +821,7 @@ export function CodexSidebar({
                   : rows.slice(0, counts[pathKey(home)] ?? 5);
                 return (
                   <>
-                    {visible.map(row)}
+                    {visible.filter(session => !parentThread(session.thread)).map(session => treeRow(session))}
                     {visible.length < rows.length && (
                       <Button
                         variant="ghost"

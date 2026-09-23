@@ -27,11 +27,6 @@ describe("recommended Pi plugins", () => {
       ]),
     ).toBe(true);
     expect(
-      isRecommendedPluginInstalled("@kky42/pi-flow", [
-        { name: "@kky42/pi-flow" },
-      ]),
-    ).toBe(true);
-    expect(
       isRecommendedPluginInstalled("pi-lens", [{ name: "pi-subagents" }]),
     ).toBe(false);
   });

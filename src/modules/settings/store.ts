@@ -69,6 +69,8 @@ export const EDITOR_THEME_LABELS: Record<EditorThemeId, string> = {
 };
 
 export type Preferences = {
+  autoCheckUpdates: boolean;
+  updateCheckHours: number;
   locale: Locale;
   theme: ThemePref;
   themeId: string;
@@ -163,6 +165,8 @@ export const TERMINAL_SCROLLBACK_PRESETS = [
 ] as const;
 
 export const DEFAULT_PREFERENCES: Preferences = {
+  autoCheckUpdates: true,
+  updateCheckHours: 4,
   locale: "zh",
   theme: "system",
   themeId: DEFAULT_THEME_ID,
@@ -266,6 +270,8 @@ export async function loadPreferences(): Promise<Preferences> {
 
   return {
     locale: coerceLocale(get<unknown>(KEY_LOCALE)),
+    autoCheckUpdates: get<boolean>("autoCheckUpdates") ?? true,
+    updateCheckHours: get<number>("updateCheckHours") ?? 4,
     theme: get<ThemePref>(KEY_THEME) ?? DEFAULT_PREFERENCES.theme,
     themeId,
     backgroundKind:
@@ -608,6 +614,8 @@ export async function onPreferencesChange(
   cb: (key: PrefKey, value: unknown) => void,
 ): Promise<UnlistenFn> {
   const map: Record<string, PrefKey> = {
+    autoCheckUpdates: "autoCheckUpdates",
+    updateCheckHours: "updateCheckHours",
     [KEY_LOCALE]: "locale",
     [KEY_THEME]: "theme",
     [KEY_THEME_ID]: "themeId",
@@ -656,4 +664,14 @@ export async function onPreferencesChange(
     unsubLocal();
     unsubEvent();
   };
+}
+
+/** 保存自动更新检测开关并同步主窗口。 */
+export async function setAutoCheckUpdates(value: boolean): Promise<void> {
+  await writePref("autoCheckUpdates", value);
+}
+
+/** 保存以小时为单位的检查间隔。 */
+export async function setUpdateCheckHours(value: number): Promise<void> {
+  if (Number.isFinite(value) && value >= 1 && value <= 168) await writePref("updateCheckHours", value);
 }

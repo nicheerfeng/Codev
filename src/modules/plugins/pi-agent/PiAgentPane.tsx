@@ -33,8 +33,19 @@ import {
   type PiThread,
 } from "./client";
 import { INITIAL_PI_VIEW_STATE, objectValue } from "./reducer";
+
+/** 判断路径是否为嵌套在父会话 JSONL 下的 pi-subagents 子会话。 */
+function isNestedPiSubagentSession(path: string) {
+  const normalized = path.replace(/\\/g, "/").toLowerCase();
+  const segments = normalized.split("/");
+  return (
+    segments.slice(0, -1).some((segment) => segment.endsWith(".jsonl")) ||
+    /\/[^/]+\/[^/]+\/run-\d+\/session\.jsonl$/.test(normalized)
+  );
+}
 import {
   listPiSessions,
+  listPiSubagentRuns,
   watchPiSessions,
   probePiAgent,
   sendPiCommand,
@@ -103,20 +114,34 @@ export function PiAgentPane({
   const activityRef = useRef(new Map<string, ProjectActivity>());
   const [threads, setThreads] = useState<PiThread[]>([]);
   const [sessions, setSessions] = useState<PiSessionSummary[]>([]);
+  const [subagentRuns, setSubagentRuns] = useState<
+    Record<string, Awaited<ReturnType<typeof listPiSubagentRuns>>>
+  >({});
   const [sessionsReady, setSessionsReady] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
   const [viewportKeys, setViewportKeys] = useState<(string | null)[]>([]);
   const [activeViewport, setActiveViewport] = useState(0);
   const [dropViewport, setDropViewport] = useState<number | null>(null);
-  /** 将选中的会话放入目标视口；已有会话可直接切焦点或交换位置。 */
+  /** 点击顺序填充空位；仅明确拖入目标时允许替换或交换会话。 */
   const activateThread = (key: string | null, target?: number) => {
     if (viewportKeys.length) {
       const existing = key === null ? -1 : viewportKeys.indexOf(key);
-      const index = target ?? (existing >= 0 ? existing : activeViewport);
+      const index =
+        target ??
+        (key === null
+          ? activeViewport
+          : existing >= 0
+            ? existing
+            : viewportKeys.indexOf(null));
+      if (index < 0) {
+        toast.info("建议拖拽覆盖已有窗口或者新开窗口");
+        return false;
+      }
       setActiveViewport(index);
       setViewportKeys((slots) => placePiSession(slots, index, key));
     }
     setSelected(key);
+    return true;
   };
   /** 退出并行模式保留当前会话，隐藏视口不停止后台任务。 */
   const toggleViewports = () => {
@@ -220,14 +245,55 @@ export function PiAgentPane({
   );
   const selectedProjectRef = useRef(project);
   selectedProjectRef.current = project;
+  /** 统一 Windows 扩展路径格式，避免 mission 使用 \\?\\ 前缀时丢失子任务挂载。 */
+  const subagentOwnerKey = (value: string) =>
+    value
+      .replace(/\\/g, "/")
+      .replace(/^\/\/?\?\//, "")
+      .replace(/\/$/, "")
+      .toLowerCase();
   /** 仅读取用户选择的项目目录，合并到已访问项目缓存。 */
   const refreshSessions = useCallback(async (cwd?: string) => {
     const target = cwd ?? selectedProjectRef.current;
     if (!target) return;
     const result = await listPiSessions(target);
-    setSessions(current => [...current.filter(item => pathKey(item.cwd) !== pathKey(target)), ...result]);
+    setSessions((current) => [
+      ...current.filter(
+        (item) =>
+          pathKey(item.cwd) !== pathKey(target) &&
+          !isNestedPiSubagentSession(item.path),
+      ),
+      ...result.filter((item) => !isNestedPiSubagentSession(item.path)),
+    ]);
     setSessionsReady(true);
   }, []);
+  /** 按父 Pi 会话读取 pi-subagents 任务摘要，不混入普通会话列表。 */
+  useEffect(() => {
+    if (!initialized || !sessions.length) return;
+    let disposed = false;
+    const paths = [
+      ...new Set(sessions.map((session) => session.path).filter(Boolean)),
+    ];
+    const refresh = () =>
+      void Promise.all(
+        paths.map(
+          async (path) =>
+            [subagentOwnerKey(path), await listPiSubagentRuns(path)] as const,
+        ),
+      )
+        .then((entries) => {
+          if (!disposed) setSubagentRuns(Object.fromEntries(entries));
+        })
+        .catch((error) => {
+          if (!disposed) setNotice(`读取 Pi 子代理状态失败：${String(error)}`);
+        });
+    refresh();
+    const timer = setInterval(refresh, 2500);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
+  }, [initialized, sessions]);
   /** 选择项目后才监听该项目的会话文件，连续写入合并为一次刷新。 */
   useEffect(() => {
     if (!initialized || !project) return;
@@ -242,17 +308,24 @@ export function PiAgentPane({
         timer = undefined;
         reading = true;
         dirty = false;
-        try { await refreshSessions(project); }
-        catch (error) { if (!disposed) setNotice(String(error)); }
-        finally { reading = false; if (dirty && !disposed) schedule(); }
+        try {
+          await refreshSessions(project);
+        } catch (error) {
+          if (!disposed) setNotice(String(error));
+        } finally {
+          reading = false;
+          if (dirty && !disposed) schedule();
+        }
       }, 1500);
     };
     const stop = watchPiSessions(schedule, project);
-    void stop.catch(error => { if (!disposed) setNotice(String(error)); });
+    void stop.catch((error) => {
+      if (!disposed) setNotice(String(error));
+    });
     return () => {
       disposed = true;
       clearTimeout(timer);
-      void stop.then(cleanup => cleanup()).catch(() => {});
+      void stop.then((cleanup) => cleanup()).catch(() => {});
     };
   }, [initialized, project, refreshSessions]);
   useEffect(() => {
@@ -325,13 +398,17 @@ export function PiAgentPane({
   const previousIdentities = useRef(new Map<string, string>());
   const rows = useMemo<SidebarThread[]>(() => {
     const result: SidebarThread[] = sessions
-      .filter((session) => session.path)
+      .filter(
+        (session) => session.path && !isNestedPiSubagentSession(session.path),
+      )
       .map((session) => ({
         ...session,
         key: session.path,
+        subagents: subagentRuns[subagentOwnerKey(session.path)] ?? [],
       }));
     for (const thread of threads) {
       const path = thread.view.sessionFile ?? "";
+      if (isNestedPiSubagentSession(path)) continue;
       const index = result.findIndex(
         (row) =>
           row.key === thread.key ||
@@ -358,18 +435,36 @@ export function PiAgentPane({
             ? "running"
             : thread.view.status,
         waiting: requests.some((request) => request.key === thread.key),
+        subagents:
+          subagentRuns[subagentOwnerKey(path || old?.path || "")] ?? [],
       };
       if (index >= 0) result[index] = row;
       else if (
         thread.view.items.length ||
         path ||
         thread.key === selected ||
+        viewportKeys.includes(thread.key) ||
         draftHasPayload(drafts[thread.key])
       )
         result.unshift(row);
     }
-    return result;
-  }, [sessions, threads, requests, selected, drafts]);
+    const childPaths = new Set(
+      Object.values(subagentRuns)
+        .flat()
+        .flatMap((run) =>
+          run.session ? [subagentOwnerKey(run.session.path)] : [],
+        ),
+    );
+    return result.filter((row) => !childPaths.has(subagentOwnerKey(row.path)));
+  }, [
+    sessions,
+    threads,
+    requests,
+    selected,
+    drafts,
+    subagentRuns,
+    viewportKeys,
+  ]);
   useEffect(() => {
     const replacements: Array<[string, string]> = [];
     for (const row of rows) {
@@ -425,6 +520,10 @@ export function PiAgentPane({
   };
   /** 新线程建立后绑定该项目，其他线程的进程继续运行。 */
   const create = async (path: string) => {
+    if (viewportKeys.length && !viewportKeys.includes(null)) {
+      toast.info("建议关闭已有窗口或者新开窗口");
+      return;
+    }
     setProject(path);
     const key = nextDraftKey(path);
     if (!pinnedDrafts.current.has(key)) {
@@ -446,8 +545,8 @@ export function PiAgentPane({
   };
   /** 首次选择读取历史，后续复用内存中的会话和已加载分页。 */
   const select = async (thread: SidebarThread, targetIndex?: number) => {
+    if (!activateThread(thread.key, targetIndex)) return;
     setProject(thread.cwd);
-    activateThread(thread.key, targetIndex);
     setSearchOpen(false);
     const target = await ensure(thread);
     if (
@@ -556,27 +655,33 @@ export function PiAgentPane({
     if (command) {
       if (draft.images.length || draft.files.length)
         throw new Error("请先移除附件再执行会话命令");
-      const thread = await ensure(
-        rows.find((row) => row.key === selected),
-        selected,
-      );
-      if (command.name === "fork") {
-        const target = rows.find((row) => row.key === thread.key);
-        if (!target) throw new Error("当前线程尚未建立，无法分叉");
-        await forkThread(target);
-      } else
-        await operate(thread, "正在压缩上下文…", async () => {
-          setDrafts((value) => ({
-            ...value,
-            [draftKey]:
-              value[draftKey] === draft ? EMPTY_DRAFT : value[draftKey],
-          }));
-          await client.current!.compact(thread, command.argument);
-        });
-      setDrafts((value) => ({
+      operationKeys.current.add(draftKey);
+      setOperations((value) => ({
         ...value,
-        [draftKey]: value[draftKey] === draft ? EMPTY_DRAFT : value[draftKey],
+        [draftKey]:
+          command.name === "compact" ? "正在压缩上下文…" : "正在处理命令…",
       }));
+      setDrafts((value) => ({ ...value, [draftKey]: EMPTY_DRAFT }));
+      try {
+        const thread = await ensure(
+          rows.find((row) => row.key === selected),
+          selected,
+        );
+        if (command.name === "fork") {
+          const target = rows.find((row) => row.key === thread.key);
+          if (!target) throw new Error("当前线程尚未建立，无法分叉");
+          await forkThread(target);
+        } else await client.current!.compact(thread, command.argument);
+      } catch (error) {
+        setDrafts((value) => ({
+          ...value,
+          [draftKey]: value[draftKey] === EMPTY_DRAFT ? draft : value[draftKey],
+        }));
+        throw error;
+      } finally {
+        operationKeys.current.delete(draftKey);
+        setOperations((value) => ({ ...value, [draftKey]: "" }));
+      }
       return;
     }
     if (!draftHasPayload(draft)) return;
@@ -1329,7 +1434,7 @@ export function PiAgentPane({
                     busy={
                       pending.has(draftKey) ||
                       !!operations[draftKey] ||
-                      view.status === "starting"
+                      (view.status === "starting" && localCommand(draft.text)?.name !== "compact")
                     }
                     focusRevision={focusRevisions[draftKey] ?? 0}
                     disabled={

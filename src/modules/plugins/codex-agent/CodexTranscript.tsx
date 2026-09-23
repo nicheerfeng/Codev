@@ -262,7 +262,9 @@ function Activity({
 
       </summary>
       <div className="codex-activity-body">
-        {item.type === "reasoning" ? (
+        {item.type === "subAgentActivity" ? (
+          <p>{String(item.agentPath ?? "子代理")} · {({ started: "已启动", interacted: "已交互", completed: "已完成", interrupted: "已停止" } as Record<string, string>)[String(item.kind)] ?? "状态更新"}</p>
+        ) : item.type === "reasoning" ? (
           <Markdown text={text} />
         ) : item.type === "webSearch" ? (
           <WebSearchDetails item={item} />
@@ -863,7 +865,7 @@ export function CodexTranscript({
           })}
         </div>
         {session.busy && !session.turnId && !session.compacting && (
-          <p className="codex-transcript-content codex-live">正在连接会话...</p>
+          <p className="codex-transcript-content codex-live">{session.sending ? "正在提交任务…" : "正在同步任务状态…"}</p>
         )}
         {session.error && (
           <p role="alert" className="codex-transcript-content text-destructive whitespace-pre-wrap">

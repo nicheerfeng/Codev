@@ -19,6 +19,7 @@ export function isTool(item: Item): boolean {
 
 /** 将真实思考或工具预览归一为从开头截断的一行文本。 */
 export function activityLabel(item: Item): string {
+  if (item.type === "subAgentActivity") return `${({ started: "子代理启动", interacted: "子代理交互", completed: "子代理完成", interrupted: "子代理停止" } as Record<string, string>)[String(item.kind)] ?? "子代理"} · ${String(item.agentPath ?? item.agentThreadId ?? "")}`;
   const text = itemText(item).replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
   if (item.type === "reasoning")
     return `${item.status === "inProgress" ? "思考中" : "已思考"} · ${text}`;

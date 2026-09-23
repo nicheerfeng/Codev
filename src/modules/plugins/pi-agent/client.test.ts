@@ -85,7 +85,7 @@ vi.mock("./native", () => ({
     );
   }),
 }));
-import { COMPACTION_CONTINUE_PROMPT, PiWorkspaceClient } from "./client";
+import { PiWorkspaceClient } from "./client";
 import { piViewReducer } from "./reducer";
 
 describe("Pi RPC workspace", () => {
@@ -95,17 +95,26 @@ describe("Pi RPC workspace", () => {
     const original = vi.mocked(native.sendPiCommand).getMockImplementation()!;
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
     try {
-      const thread = await client.open("cold-compact", "D:/one", "history.jsonl");
+      const thread = await client.open(
+        "cold-compact",
+        "D:/one",
+        "history.jsonl",
+      );
       await client.hydrateFromDisk(thread);
       thread.view = piViewReducer(thread.view, {
         type: "history",
-        messages: [{
-          id: "e6d9f10d",
-          message: { role: "assistant", content: [
-            { type: "thinking", thinking: "分析" },
-            { type: "text", text: "历史回答" },
-          ] },
-        }],
+        messages: [
+          {
+            id: "e6d9f10d",
+            message: {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "分析" },
+                { type: "text", text: "历史回答" },
+              ],
+            },
+          },
+        ],
         prepend: false,
         offset: 80,
         hasMore: true,
@@ -114,16 +123,24 @@ describe("Pi RPC workspace", () => {
       expect(items[items.length - 1]?.id).toBe("e6d9f10d:1");
       expect(thread.runtimeId).toBeNull();
       vi.mocked(native.sendPiCommand).mockClear();
-      vi.mocked(native.sendPiCommand).mockImplementation(async (id, command) => {
-        if (command.type === "get_entries")
-          throw new Error(`Entry not found: ${command.since}`);
-        return original(id, command);
-      });
+      vi.mocked(native.sendPiCommand).mockImplementation(
+        async (id, command) => {
+          if (command.type === "get_entries")
+            throw new Error(`Entry not found: ${command.since}`);
+          return original(id, command);
+        },
+      );
       await client.compact(thread);
-      expect(native.startPiAgent).toHaveBeenCalledWith("D:/one", "history.jsonl", false);
+      expect(native.startPiAgent).toHaveBeenCalledWith(
+        "D:/one",
+        "history.jsonl",
+        false,
+      );
       expect(thread.view.compaction?.status).toBe("done");
       expect(thread.view.items).toBe(items);
-      const commands = vi.mocked(native.sendPiCommand).mock.calls.map(([, command]) => command.type);
+      const commands = vi
+        .mocked(native.sendPiCommand)
+        .mock.calls.map(([, command]) => command.type);
       expect(commands).toContain("compact");
       expect(commands).not.toContain("get_entries");
       expect(commands).not.toContain("get_messages");
@@ -275,7 +292,7 @@ describe("Pi RPC workspace", () => {
       }
     },
   );
-  it("resumes a running turn after threshold compaction settles", async () => {
+  it("does not inject a user prompt after native threshold compaction settles", async () => {
     const native = await import("./native");
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
     try {
@@ -312,13 +329,14 @@ describe("Pi RPC workspace", () => {
         expect(
           vi
             .mocked(native.sendPiCommand)
-            .mock.calls.some(
-              ([, cmd]) =>
-                cmd.type === "prompt" &&
-                cmd.message === COMPACTION_CONTINUE_PROMPT,
-            ),
+            .mock.calls.some(([, cmd]) => cmd.type === "get_state"),
         ).toBe(true),
       );
+      expect(
+        vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.some(([, cmd]) => cmd.type === "prompt"),
+      ).toBe(false);
     } finally {
       client.dispose();
     }
@@ -940,9 +958,9 @@ describe("Pi RPC workspace", () => {
       client.editLastUser(thread, "终止后修改", images),
     ).resolves.toBe(true);
     expect(
-      vi.mocked(native.sendPiCommand).mock.calls.find(
-        ([, command]) => command.type === "prompt",
-      )?.[1],
+      vi
+        .mocked(native.sendPiCommand)
+        .mock.calls.find(([, command]) => command.type === "prompt")?.[1],
     ).toMatchObject({ type: "prompt", message: "终止后修改", images });
     expect(restore).toHaveBeenCalledTimes(1);
     client.dispose();

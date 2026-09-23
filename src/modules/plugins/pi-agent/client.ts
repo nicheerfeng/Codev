@@ -14,8 +14,6 @@ import type { PiEventEnvelope, PiImage, PiModel, PiViewState } from "./types";
 
 export const CATALOG_ADAPT_NOTICE =
   "当前选择不在历史会话配置中，正在更新以适配";
-export const COMPACTION_CONTINUE_PROMPT =
-  "请继续完成刚才被上下文压缩中断的任务。";
 
 export type PiThread = {
   loadingHistory: boolean;
@@ -51,7 +49,6 @@ export class PiWorkspaceClient {
   private draining = new Set<string>();
   private manualCompactions = new Set<string>();
   private compactionResume = new Set<string>();
-  private compactionContinue = new Set<string>();
   private statsTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private stop: Promise<() => void>;
 
@@ -130,14 +127,6 @@ export class PiWorkspaceClient {
       this.finishCompaction(thread, success);
       if (success && event.willRetry) this.compactionResume.add(thread.key);
       else this.compactionResume.delete(thread.key);
-      if (
-        success &&
-        !event.willRetry &&
-        thread.view.status === "running" &&
-        !thread.view.localQueue?.length
-      )
-        this.compactionContinue.add(thread.key);
-      else this.compactionContinue.delete(thread.key);
       void this.refreshState(thread)
         .then(() => {
           if (success && !event.willRetry && !running)
@@ -170,12 +159,10 @@ export class PiWorkspaceClient {
     }
     if (event.type === "agent_settled" && thread.runtimeId !== null) {
       const resumeQueue = this.compactionResume.delete(thread.key);
-      const resumeTurn = this.compactionContinue.delete(thread.key);
       void this.refreshState(thread)
         .then(async () => {
           if (resumeQueue || thread.view.localQueue?.length)
             await this.drainQueue(thread);
-          else if (resumeTurn) await this.continueAfterCompaction(thread);
         })
         .catch((error) => this.error(thread.key, error));
     }
@@ -254,13 +241,13 @@ export class PiWorkspaceClient {
 
   /** 首次真实 RPC 操作时才为线程启动 Pi runtime。 */
   private async ensureRuntime(thread: PiThread): Promise<void> {
-    if (thread.runtimeId !== null) {
-      this.touchRuntime(thread);
-      return;
-    }
     const pending = this.opening.get(thread.key);
     if (pending) {
       await pending;
+      return;
+    }
+    if (thread.runtimeId !== null) {
+      this.touchRuntime(thread);
       return;
     }
     const operation = this.start(
@@ -428,6 +415,7 @@ export class PiWorkspaceClient {
       thread.view.compaction?.status === "running"
     )
       throw new Error("请等待当前任务完成后再压缩");
+    await this.ensureRuntime(thread);
     this.startCompaction(thread);
     this.manualCompactions.add(thread.key);
     try {
@@ -444,22 +432,6 @@ export class PiWorkspaceClient {
     this.finishCompaction(thread, true);
     await this.refreshState(thread);
     await this.drainQueue(thread);
-  }
-
-  /** 阈值压缩不会原生续跑，settled 后再发一轮短 prompt。 */
-  private async continueAfterCompaction(thread: PiThread) {
-    if (
-      this.disposed ||
-      thread.runtimeId === null ||
-      thread.view.compaction?.status === "running" ||
-      thread.view.localQueue?.length
-    )
-      return;
-    this.beginPrompt(thread, COMPACTION_CONTINUE_PROMPT);
-    await this.request(thread, {
-      type: "prompt",
-      message: COMPACTION_CONTINUE_PROMPT,
-    });
   }
 
   /** 运行期间定时读取实时上下文用量，停止后自动释放定时器。 */
@@ -816,7 +788,6 @@ export class PiWorkspaceClient {
       ...(Array.isArray(queued?.steering) ? queued.steering : []),
       ...(Array.isArray(queued?.followUp) ? queued.followUp : []),
     ]);
-    this.compactionContinue.delete(thread.key);
     this.compactionResume.delete(thread.key);
     thread.view = piViewReducer(thread.view, { type: "stopping" });
     this.publish();
@@ -912,10 +883,7 @@ export class PiWorkspaceClient {
       thread.view.status === "stopping" ||
       thread.view.status === "starting" ||
       thread.view.compaction?.status === "running";
-    if (
-      !busy &&
-      thread.runtimeId !== null
-    ) {
+    if (!busy && thread.runtimeId !== null) {
       await this.sendRequest(thread, {
         type: "set_model",
         provider: model.provider,

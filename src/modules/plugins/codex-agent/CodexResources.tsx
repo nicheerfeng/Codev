@@ -39,10 +39,12 @@ export function CodexResources({
   client,
   state,
   children,
+  active = true,
 }: {
   client: CodexClient;
   state: Snapshot;
   children?: ReactNode;
+  active?: boolean;
 }) {
   const [catalog, setCatalog] = useState<ResourceCatalog | null>(null);
   const [open, setOpen] = useState(false);
@@ -73,10 +75,11 @@ export function CodexResources({
       .catch((failure) => setError(String(failure)));
   };
   useEffect(() => {
+    if (!active) return;
     void listResources()
       .then(setCatalog)
       .catch((failure) => setError(String(failure)));
-  }, [state.resourceId, open]);
+  }, [state.resourceId, open, active]);
   /** 保存后清空明文输入，当前资源的修改通过显式重新应用生效。 */
   const save = async () => {
     if (!editing) return;

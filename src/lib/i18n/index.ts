@@ -304,6 +304,16 @@ const ZH: Record<string, string> = {
   "View on GitHub": "在 GitHub 查看",
   "Report an issue": "报告问题",
   "Checking...": "检查中…",
+  "Check for updates": "检查更新",
+  "Checking for updates…": "正在检查更新…",
+  "Up to date": "已是最新版本",
+  "Could not check for updates": "暂时无法检查，请稍后重试",
+  "Version not recognized. Try again later.": "暂未识别到版本，请稍后重试",
+  "Update available": "有新版本可用",
+  "No release notes": "暂无更新说明",
+  "Click to open the GitHub release page": "点击可打开 GitHub Release 下载页",
+  "Current version": "当前版本",
+  "Latest version": "最新版本",
 };
 
 /** 根据当前语言把界面文案映射为中文，未收录文案保持英文。 */

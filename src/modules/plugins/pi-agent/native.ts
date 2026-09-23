@@ -20,6 +20,21 @@ export type PiAsset = {
   summary?: string | null;
 };
 
+export type PiSubagentRun = {
+  session?: PiSessionSummary | null;
+  runId: string;
+  agent: string;
+  title: string;
+  status: string;
+  summary?: string | null;
+  updatedAt: string;
+};
+
+/** 读取当前父 Pi 会话关联的 pi-subagents 运行摘要。 */
+export function listPiSubagentRuns(ownerSessionPath: string): Promise<PiSubagentRun[]> {
+  return invoke<PiSubagentRun[]>("pi_agent_list_subagent_runs", { ownerSessionPath });
+}
+
 /** 读取 Pi 技能或插件目录的只读展示数据。 */
 export function listPiAssets(kind: "skills" | "plugins"): Promise<PiAsset[]> {
   return invoke<PiAsset[]>("pi_agent_list_assets", { kind });

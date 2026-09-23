@@ -484,14 +484,15 @@ pub(super) fn parse_session_history(
                 } else {
                     has_more = true;
                 }
-                newest_first.len() < page
+                // 满页后仍需读到下一条消息，才能准确判断是否还有更早历史。
+                !has_more
                     || model.is_none()
                     || thinking_level.is_none()
                     || session_name.is_none()
                     || context_tokens.is_none()
             }
             _ => {
-                newest_first.len() < page
+                !has_more
                     || model.is_none()
                     || thinking_level.is_none()
                     || session_name.is_none()
@@ -613,8 +614,20 @@ pub(super) fn list_sessions(cwd: &str, limit: usize) -> Vec<PiSessionSummary> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
+                // pi-subagents 的子会话由 mission 观测器挂到父线程下，不能作为平级 Pi 线程扫描。
+                if path.file_name().and_then(|value| value.to_str()) == Some("subagent")
+                    || path.with_extension("jsonl").is_file() {
+                    continue;
+                }
                 pending.push(path);
             } else if path.extension().and_then(|value| value.to_str()) == Some("jsonl") {
+                // pi-subagents 将子会话放在 parent.jsonl/<run>/run-N/session.jsonl；
+                // 嵌套 transcript 由 mission 观测器挂载，不能进入平级列表。
+                if path.ancestors().skip(1).any(|ancestor| {
+                    ancestor.extension().and_then(|value| value.to_str()) == Some("jsonl")
+                }) {
+                    continue;
+                }
                 if let Some(summary) = parse_session_summary(&path, Some(cwd)) {
                     summaries.push(summary);
                 }

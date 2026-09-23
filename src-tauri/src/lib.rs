@@ -554,6 +554,7 @@ pub fn run() {
             pi_agent::pi_agent_clone_session,
             pi_agent::pi_agent_append_session,
             pi_agent::pi_agent_list_models,
+            pi_agent::pi_agent_list_subagent_runs,
             pi_agent::pi_agent_start,
             pi_agent::pi_agent_send,
             pi_agent::pi_agent_close,
