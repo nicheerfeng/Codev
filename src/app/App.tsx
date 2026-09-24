@@ -744,7 +744,7 @@ export default function App() {
   });
 
   const openNewTab = useCallback(() => {
-    newTab(inheritedCwdForNewTab());
+    return newTab(inheritedCwdForNewTab());
   }, [newTab, inheritedCwdForNewTab]);
 
   const cdInNewTab = useCallback(

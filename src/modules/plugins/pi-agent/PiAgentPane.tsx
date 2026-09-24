@@ -76,6 +76,7 @@ import {
 import { usePiComposerNativeDrop } from "./piComposerDrop";
 import { usePiComposerDropStore } from "./piComposerDropStore";
 import { PiTranscript } from "./PiTranscript";
+import { ResizableViewportGrid } from "@/components/ResizableViewportGrid";
 import { PiSettings } from "./PiSettings";
 import { plainStatusText } from "./statusText";
 import type { PiMessageItem, PiModel, PiSessionSummary } from "./types";
@@ -945,6 +946,10 @@ export function PiAgentPane({
     setRequests((value) => value.filter((item) => item !== request));
   };
   const selectedKey = selected;
+  const viewportCount = viewportKeys.length || 1;
+  const viewportColumns =
+    viewportCount > 4 ? 3 : viewportCount > 1 ? 2 : 1;
+  const viewportRows = Math.ceil(viewportCount / viewportColumns);
   return (
     <section
       data-testid="pi-agent"
@@ -1078,12 +1083,14 @@ export function PiAgentPane({
             temporaryHome={piHome}
           />
         )}
-        <div
-          className="order-first grid min-h-0 min-w-0 flex-1 gap-1 overflow-hidden"
-          style={{
-            gridTemplateColumns: `repeat(${viewportKeys.length > 4 ? 3 : viewportKeys.length > 1 ? 2 : 1}, minmax(0, 1fr))`,
-            gridTemplateRows: `repeat(${viewportKeys.length > 4 ? 2 : viewportKeys.length > 2 ? 2 : 1}, minmax(0, 1fr))`,
-          }}
+        <ResizableViewportGrid
+          className="order-first min-h-0 min-w-0 flex-1"
+          columns={viewportColumns}
+          rows={viewportRows}
+          positions={Array.from({ length: viewportCount }, (_, index) => ({
+            column: index % viewportColumns,
+            row: Math.floor(index / viewportColumns),
+          }))}
         >
           {(viewportKeys.length ? viewportKeys : [selected]).map(
             (paneKey, paneIndex) => {
@@ -1448,7 +1455,7 @@ export function PiAgentPane({
               );
             },
           )}
-        </div>
+        </ResizableViewportGrid>
       </div>
       <PiSettings
         open={settingsOpen && active}

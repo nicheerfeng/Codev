@@ -143,33 +143,28 @@ export function UpdateNotice() {
           </TooltipContent>
         </Tooltip>
       )}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            disabled={busy}
-            aria-label={checkLabel}
-            aria-busy={busy}
-            title={checkLabel}
-            className="size-7 shrink-0 rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-60"
-            onClick={() => void checkRelease(true)}
-          >
-            <HugeiconsIcon
-              icon={Refresh03Icon}
-              size={15}
-              strokeWidth={1.75}
-              className={
-                busy
-                  ? "animate-spin"
-                  : "transition-transform duration-200 group-hover/button:rotate-45"
-              }
-            />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">{checkLabel}</TooltipContent>
-      </Tooltip>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        disabled={busy}
+        aria-label={checkLabel}
+        aria-busy={busy}
+        title={checkLabel}
+        className="size-7 shrink-0 rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-60"
+        onClick={() => void checkRelease(true)}
+      >
+        <HugeiconsIcon
+          icon={Refresh03Icon}
+          size={15}
+          strokeWidth={1.75}
+          className={
+            busy
+              ? "animate-spin"
+              : "transition-transform duration-200 group-hover/button:rotate-45"
+          }
+        />
+      </Button>
     </div>
   );
 }

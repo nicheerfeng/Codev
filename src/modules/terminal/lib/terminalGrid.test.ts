@@ -1,30 +1,42 @@
 import { describe, expect, it } from "vitest";
-import { terminalGrid } from "./terminalGrid";
+import {
+  fillTerminalViewport,
+  placeTerminalInViewport,
+  terminalGrid,
+} from "./terminalGrid";
 
-describe("terminal grid", () => {
-  it.each([1, 2, 3, 4, 5, 6])("lays out %i views within the grid", (count) => {
-    const grid = terminalGrid([1, 2, 3, 4, 5, 6], 1, count);
-    expect(grid.visibleIds).toHaveLength(count);
-    expect(grid.columns * grid.rows).toBeGreaterThanOrEqual(count);
-  });
-  it("replaces the last viewport for an existing hidden terminal without paging", () => {
-    const ids = [1, 2, 3, 4, 5, 6, 7];
-    expect(terminalGrid(ids, 2, 6).visibleIds).toEqual(
-      terminalGrid(ids, 5, 6).visibleIds,
-    );
-    expect(terminalGrid(ids, 7, 6)).toMatchObject({
-      visibleIds: [1, 2, 3, 4, 5, 7],
+describe("terminal viewport slots", () => {
+  it("keeps new viewports empty and only includes explicitly assigned terminals", () => {
+    expect(terminalGrid([11, null, null])).toMatchObject({
+      slots: [11, null, null],
+      visibleIds: [11],
+      columns: 3,
+      rows: 1,
     });
   });
-  it("never displays more than six or creates missing sessions", () => {
-    expect(terminalGrid([1, 2, 3, 4, 5, 6, 7], 1, 7).visibleIds).toEqual([
-      1, 2, 3, 4, 5, 6,
-    ]);
-    expect(terminalGrid([1, 2], 1, 6).visibleIds).toEqual([1, 2]);
+
+  it("fills the first empty slot and refuses implicit replacement when full", () => {
+    expect(fillTerminalViewport([11, null, 33], 22)).toEqual([11, 22, 33]);
+    expect(fillTerminalViewport([11, 22], 33)).toBeNull();
+    expect(fillTerminalViewport([11, 22], 22)).toEqual([11, 22]);
   });
-  it("uses the new order and recovers when the active tab is removed", () => {
-    expect(terminalGrid([3, 1, 2], 1, 2).visibleIds).toEqual([3, 1]);
-    expect(terminalGrid([1, 2], 3, 2).visibleIds).toEqual([1, 2]);
-    expect(terminalGrid([], -1, 6).visibleIds).toEqual([]);
+
+  it("replaces the explicit drop target and swaps an already visible terminal", () => {
+    expect(placeTerminalInViewport([11, 22, null], 0, 33)).toEqual([
+      33,
+      22,
+      null,
+    ]);
+    expect(placeTerminalInViewport([11, 22, null], 1, 11)).toEqual([
+      22,
+      11,
+      null,
+    ]);
+  });
+
+  it("limits layouts to six and computes the existing row arrangement", () => {
+    expect(terminalGrid([1, 2, 3, 4, 5, 6, 7]).slots).toHaveLength(6);
+    expect(terminalGrid([1, 2, 3, 4]).columns).toBe(2);
+    expect(terminalGrid([1, 2, 3, 4, 5, 6]).columns).toBe(3);
   });
 });

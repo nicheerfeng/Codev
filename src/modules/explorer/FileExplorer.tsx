@@ -781,9 +781,10 @@ export const FileExplorer = memo(
       return null;
     }, [activeRoot]);
 
-    /** 在目标根树挂载后展开并定位搜索命中的目录。 */
+    /** 在目标根树挂载后定位目录，并消费请求以免后续渲染重复展开。 */
     const revealRootPath = useCallback((root: string, path: string) => {
       treeRefs.current.get(root)?.revealPath(path);
+      setRootRevealRequest(null);
     }, []);
 
     /** 将搜索命中的目录路由到拥有它的工作区根树。 */

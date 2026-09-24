@@ -79,7 +79,10 @@ export class CodexClient {
     if (this.agentReads.has(id)) return;
     this.agentReads.add(id);
     try {
-      const { thread } = await this.request<{ thread: Thread }>("thread/read", { threadId: id, includeTurns: false });
+      const { thread } = await this.request<{ thread: Thread }>("thread/read", {
+        threadId: id,
+        includeTurns: false,
+      });
       if (!this.disposed) this.remember(thread);
     } catch (error) {
       console.error("读取子代理元数据失败", error);
@@ -103,15 +106,29 @@ export class CodexClient {
   }
   /** 原生线程编号始终映射到唯一的界面会话，保留草稿视口标识。 */
   sessionKey(id: string): string {
-    return Object.keys(this.snapshot.sessions).find(key => this.snapshot.sessions[key].thread.id === id) ?? id;
+    return (
+      Object.keys(this.snapshot.sessions).find(
+        (key) => this.snapshot.sessions[key].thread.id === id,
+      ) ?? id
+    );
   }
   /** 丢弃尚未发送且仍停留在内存中的草稿线程。 */
   discardDraft(id: string) {
     const session = this.snapshot.sessions[id];
-    if (!session?.draftThread || session.draft.trim() || session.attachments.length || session.images.length || session.skills.length) return;
+    if (
+      !session?.draftThread ||
+      session.draft.trim() ||
+      session.attachments.length ||
+      session.images.length ||
+      session.skills.length
+    )
+      return;
     const sessions = { ...this.snapshot.sessions };
     delete sessions[id];
-    this.update({ sessions, order: this.snapshot.order.filter((key) => key !== id) });
+    this.update({
+      sessions,
+      order: this.snapshot.order.filter((key) => key !== id),
+    });
   }
   scrollPositions = new Map<string, { top: number; follow: boolean }>();
 
@@ -188,7 +205,20 @@ export class CodexClient {
       if (!this.snapshot.connected)
         throw new Error(this.snapshot.error ?? "资源连接失败");
       const choice = this.snapshot.lastModel;
-      if (choice) this.update({ sessions: Object.fromEntries(Object.entries(this.snapshot.sessions).map(([key, session]) => [key, { ...session, model: choice.model, effort: choice.effort, error: null }])) });
+      if (choice)
+        this.update({
+          sessions: Object.fromEntries(
+            Object.entries(this.snapshot.sessions).map(([key, session]) => [
+              key,
+              {
+                ...session,
+                model: choice.model,
+                effort: choice.effort,
+                error: null,
+              },
+            ]),
+          ),
+        });
     } catch (error) {
       await invoke("codex_resources_rollback");
       if (!this.snapshot.connected || !this.connectionId) {
@@ -204,14 +234,15 @@ export class CodexClient {
   private update(patch: Partial<Snapshot>) {
     this.snapshot = { ...this.snapshot, ...patch };
     if (this.streaming) {
-      if (!this.streamTimer) this.streamTimer = setTimeout(() => {
-        this.streamTimer = undefined;
-        this.listeners.forEach(listener => listener());
-      }, 16);
+      if (!this.streamTimer)
+        this.streamTimer = setTimeout(() => {
+          this.streamTimer = undefined;
+          this.listeners.forEach((listener) => listener());
+        }, 16);
     } else {
       clearTimeout(this.streamTimer);
       this.streamTimer = undefined;
-      this.listeners.forEach(listener => listener());
+      this.listeners.forEach((listener) => listener());
     }
   }
 
@@ -225,15 +256,24 @@ export class CodexClient {
   }
   /** 汇总当前线程及子代理活动，供停止入口使用。 */
   taskBusy(id: string): boolean {
-    return taskFamily(this.snapshot.sessions, id).some(key =>
-      this.snapshot.sessions[key]?.busy || this.snapshot.activeThreads.includes(key));
+    return taskFamily(this.snapshot.sessions, id).some(
+      (key) =>
+        this.snapshot.sessions[key]?.busy ||
+        this.snapshot.activeThreads.includes(key),
+    );
   }
   /** 将原生线程纳入列表并保留已加载的对话和草稿。 */
   private remember(thread: Thread) {
-    const key = Object.keys(this.snapshot.sessions).find(key => this.snapshot.sessions[key].thread.id === thread.id) ?? thread.id;
+    const key =
+      Object.keys(this.snapshot.sessions).find(
+        (key) => this.snapshot.sessions[key].thread.id === thread.id,
+      ) ?? thread.id;
     const current = this.snapshot.sessions[key];
     const session = current
-      ? { ...current, thread: { ...current.thread, ...thread, turns: current.thread.turns } }
+      ? {
+          ...current,
+          thread: { ...current.thread, ...thread, turns: current.thread.turns },
+        }
       : sessionFromThread(thread);
     this.update({
       sessions: { ...this.snapshot.sessions, [key]: session },
@@ -292,7 +332,9 @@ export class CodexClient {
     const params = message.params ?? {};
     if (method === "bridge/closed") {
       this.disconnected("Codex 连接已结束，请重新连接");
-      void invoke("codex_agent_close", { connectionId: null }).catch(() => undefined);
+      void invoke("codex_agent_close", { connectionId: null }).catch(
+        () => undefined,
+      );
       return;
     }
     if (method === "bridge/error") {
@@ -302,16 +344,23 @@ export class CodexClient {
     if (method === "skills/changed")
       this.update({ skillsRevision: this.snapshot.skillsRevision + 1 });
     if (method === "thread/started") this.remember(params.thread as Thread);
-    const protocolId = (params.threadId ?? params.thread_id) as string | undefined;
+    const protocolId = (params.threadId ?? params.thread_id) as
+      | string
+      | undefined;
     const id = protocolId
-      ? Object.keys(this.snapshot.sessions).find((key) => this.snapshot.sessions[key].thread.id === protocolId) ?? protocolId
+      ? (Object.keys(this.snapshot.sessions).find(
+          (key) => this.snapshot.sessions[key].thread.id === protocolId,
+        ) ?? protocolId)
       : undefined;
     if (id && method === "thread/deleted") {
       this.removeSessions([id]);
       return;
     }
     if (id && ["thread/archived", "thread/unarchived"].includes(method)) {
-      this.patch(id, { archived: method === "thread/archived", resumed: false });
+      this.patch(id, {
+        archived: method === "thread/archived",
+        resumed: false,
+      });
       return;
     }
     if (
@@ -361,16 +410,25 @@ export class CodexClient {
     }
     if (id && this.snapshot.sessions[id]) {
       const item = params.item as import("./protocol").Item | undefined;
-      if (item?.type === "subAgentActivity" && typeof item.agentThreadId === "string" && item.agentThreadId !== protocolId) {
+      if (
+        item?.type === "subAgentActivity" &&
+        typeof item.agentThreadId === "string" &&
+        item.agentThreadId !== protocolId
+      ) {
         const childKey = this.sessionKey(item.agentThreadId);
         if (!this.snapshot.sessions[childKey]) {
           void this.readAgentMetadata(item.agentThreadId);
         }
-
       }
       const delta = method.endsWith("/delta") || method.endsWith("Delta");
-      if (delta && parentThread(this.snapshot.sessions[id].thread) && !this.snapshot.sessions[id].loaded) return;
-      this.streaming = delta || !!parentThread(this.snapshot.sessions[id].thread);
+      if (
+        delta &&
+        parentThread(this.snapshot.sessions[id].thread) &&
+        !this.snapshot.sessions[id].loaded
+      )
+        return;
+      this.streaming =
+        delta || !!parentThread(this.snapshot.sessions[id].thread);
       const session = this.snapshot.sessions[id];
       const next = reduceNotification(session, method, params);
       if (next !== session) this.patch(id, next);
@@ -399,7 +457,8 @@ export class CodexClient {
   }
   /** 建立有超时和发送失败清理的请求关联。 */
   request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-    if (typeof params.threadId === "string") params = { ...params, threadId: this.threadId(params.threadId) };
+    if (typeof params.threadId === "string")
+      params = { ...params, threadId: this.threadId(params.threadId) };
     if (
       this.snapshot.switching &&
       [
@@ -474,25 +533,56 @@ export class CodexClient {
         });
         this.update({ models: [], modelCatalogError: undefined });
         try {
-          const upstream = await invoke<Array<{ id: string; name?: string }>>("codex_resources_models", { id: "native" });
+          const upstream = await invoke<Array<{ id: string; name?: string }>>(
+            "codex_resources_models",
+            { id: "native" },
+          );
           const available = mergeModels([], upstream ?? []);
           if (!available.length) throw new Error("当前资源没有返回可用模型");
           let choice = this.snapshot.lastModel;
-          if (!choice || !available.some(model => model.model === choice?.model)) {
-            choice = { model: available[0].model, effort: available[0].defaultReasoningEffort || "" };
-            await invoke("codex_resources_model", { id: ready.resourceId, provider: ready.provider, choice });
+          if (
+            !choice ||
+            !available.some((model) => model.model === choice?.model)
+          ) {
+            choice = {
+              model: available[0].model,
+              effort: available[0].defaultReasoningEffort || "",
+            };
+            await invoke("codex_resources_model", {
+              id: ready.resourceId,
+              provider: ready.provider,
+              choice,
+            });
           }
           const selectedChoice = choice;
-          await invoke("codex_agent_ready", { connectionId: this.connectionId, commit: true });
-          this.update({ models: available, lastModel: selectedChoice, connected: true,
-            sessions: Object.fromEntries(Object.entries(this.snapshot.sessions).map(([id, session]) => [id, {
-              ...session,
-              model: canonicalModel(session.model || session.thread.model || "", available),
-            }])),
+          await invoke("codex_agent_ready", {
+            connectionId: this.connectionId,
+            commit: true,
+          });
+          this.update({
+            models: available,
+            lastModel: selectedChoice,
+            connected: true,
+            sessions: Object.fromEntries(
+              Object.entries(this.snapshot.sessions).map(([id, session]) => [
+                id,
+                {
+                  ...session,
+                  model: canonicalModel(
+                    session.model || session.thread.model || "",
+                    available,
+                  ),
+                },
+              ]),
+            ),
           });
         } catch (error) {
           if (this.snapshot.switching) throw error;
-          this.update({ models: [], connected: true, modelCatalogError: String(error) });
+          this.update({
+            models: [],
+            connected: true,
+            modelCatalogError: String(error),
+          });
         }
       } catch (error) {
         this.disconnected(String(error));
@@ -509,7 +599,8 @@ export class CodexClient {
   }
   /** 手动刷新仅覆盖本次已由用户选择的项目，启动时没有隐式历史范围。 */
   async refresh(archived = false): Promise<void> {
-    for (const cwd of this.historyProjects) await this.refreshProject(cwd, archived);
+    for (const cwd of this.historyProjects)
+      await this.refreshProject(cwd, archived);
   }
   /** 用户选择项目后按 cwd 查询，重复点击复用正在执行的请求。 */
   refreshProject(cwd: string, archived = false): Promise<void> {
@@ -520,7 +611,9 @@ export class CodexClient {
     const key = `${cwd}:${archived}`;
     const pending = this.refreshes.get(key);
     if (pending) return pending;
-    const task = this.refreshCatalog(cwd, archived).finally(() => this.refreshes.delete(key));
+    const task = this.refreshCatalog(cwd, archived).finally(() =>
+      this.refreshes.delete(key),
+    );
     this.refreshes.set(key, task);
     return task;
   }
@@ -549,25 +642,43 @@ export class CodexClient {
       const key = this.sessionKey(thread.id);
       const current = sessions[key];
       sessions[key] = current
-        ? { ...current, archived, thread: { ...current.thread, ...thread, turns: current.thread.turns } }
+        ? {
+            ...current,
+            archived,
+            thread: {
+              ...current.thread,
+              ...thread,
+              turns: current.thread.turns,
+            },
+          }
         : { ...sessionFromThread(thread), archived };
       order.add(key);
     }
-    this.update({ sessions, order: [...order], ...(archived ? { archivedCursor: cursor } : { cursor }) });
+    this.update({
+      sessions,
+      order: [...order],
+      ...(archived ? { archivedCursor: cursor } : { cursor }),
+    });
   }
 
   /** 文件监听只读取发生变化的线程元数据，不重新扫描全历史目录。 */
   async refreshChanged(paths: string[]) {
     const changed = new Map<string, boolean>();
     for (const path of paths) {
-      const id = path.match(/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$/i)?.[1];
+      const id = path.match(
+        /([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$/i,
+      )?.[1];
       if (id) changed.set(id, path.includes("archived_sessions"));
     }
     const fetched: Array<{ thread: Thread; archived: boolean }> = [];
     for (const [id, archived] of changed) {
       const current = this.snapshot.sessions[id];
-      if (!current || current.resumed || current.busy || current.sending) continue;
-      const { thread } = await this.request<{ thread: Thread }>("thread/read", { threadId: id, includeTurns: false });
+      if (!current || current.resumed || current.busy || current.sending)
+        continue;
+      const { thread } = await this.request<{ thread: Thread }>("thread/read", {
+        threadId: id,
+        includeTurns: false,
+      });
       fetched.push({ thread, archived });
     }
     if (this.disposed || !fetched.length) return;
@@ -576,10 +687,27 @@ export class CodexClient {
     let dirty = false;
     for (const { thread, archived } of fetched) {
       const current = sessions[thread.id];
-      if (!current || current.resumed || current.busy || current.sending) continue;
-      if (current && current.archived === archived && current.thread.updatedAt === thread.updatedAt && current.thread.name === thread.name && current.thread.preview === thread.preview && current.thread.cwd === thread.cwd) continue;
+      if (!current || current.resumed || current.busy || current.sending)
+        continue;
+      if (
+        current &&
+        current.archived === archived &&
+        current.thread.updatedAt === thread.updatedAt &&
+        current.thread.name === thread.name &&
+        current.thread.preview === thread.preview &&
+        current.thread.cwd === thread.cwd
+      )
+        continue;
       sessions[thread.id] = current
-        ? { ...current, archived, thread: { ...current.thread, ...thread, turns: current.thread.turns } }
+        ? {
+            ...current,
+            archived,
+            thread: {
+              ...current.thread,
+              ...thread,
+              turns: current.thread.turns,
+            },
+          }
         : { ...sessionFromThread(thread), archived };
       order.add(thread.id);
       dirty = true;
@@ -590,7 +718,15 @@ export class CodexClient {
   /** 新建明确绑定项目目录的原生线程。 */
   async create(cwd: string): Promise<string> {
     const id = `draft:${crypto.randomUUID()}`;
-    const thread: Thread = { id, name: null, preview: "", cwd, updatedAt: Date.now(), turns: [], model: this.snapshot.lastModel?.model ?? null };
+    const thread: Thread = {
+      id,
+      name: null,
+      preview: "",
+      cwd,
+      updatedAt: Date.now(),
+      turns: [],
+      model: this.snapshot.lastModel?.model ?? null,
+    };
     this.remember(thread);
     this.patch(thread.id, {
       loaded: true,
@@ -614,7 +750,10 @@ export class CodexClient {
   private async materializeDraft(id: string): Promise<string> {
     const session = this.snapshot.sessions[id];
     if (!session?.draftThread) return id;
-    const { thread, sandbox } = await this.request<{ thread: Thread; sandbox: SandboxPolicy }>("thread/start", {
+    const { thread, sandbox } = await this.request<{
+      thread: Thread;
+      sandbox: SandboxPolicy;
+    }>("thread/start", {
       cwd: session.thread.cwd,
       modelProvider: this.snapshot.provider,
       ...(session.model ? { model: session.model } : {}),
@@ -626,11 +765,33 @@ export class CodexClient {
     const current = this.snapshot.sessions[id];
     const sessions = { ...this.snapshot.sessions };
     delete sessions[thread.id];
-    sessions[id] = { ...current, ...(live ? { busy: live.busy, turnId: live.turnId, requests: live.requests } : {}),
-      thread: { ...thread, turns: live?.thread.turns.length ? live.thread.turns : current.thread.turns },
-      draftThread: false, resumed: true, loaded: true, effectiveSandbox: sandbox };
-    this.update({ sessions, order: this.snapshot.order.filter(key => key !== thread.id),
-      activeThreads: [...new Set(this.snapshot.activeThreads.map(key => key === thread.id ? id : key))] });
+    sessions[id] = {
+      ...current,
+      ...(live
+        ? { busy: live.busy, turnId: live.turnId, requests: live.requests }
+        : {}),
+      thread: {
+        ...thread,
+        turns: live?.thread.turns.length
+          ? live.thread.turns
+          : current.thread.turns,
+      },
+      draftThread: false,
+      resumed: true,
+      loaded: true,
+      effectiveSandbox: sandbox,
+    };
+    this.update({
+      sessions,
+      order: this.snapshot.order.filter((key) => key !== thread.id),
+      activeThreads: [
+        ...new Set(
+          this.snapshot.activeThreads.map((key) =>
+            key === thread.id ? id : key,
+          ),
+        ),
+      ],
+    });
     return id;
   }
   /** 每个线程只加载一次历史，重复点击复用现有状态。 */
@@ -654,25 +815,41 @@ export class CodexClient {
           itemsView: "full",
         });
         const savedEffort = this.snapshot.sessions[id]?.effort || "";
-        const historyPath = thread.path || this.snapshot.sessions[id]?.thread.path;
+        const historyPath =
+          thread.path || this.snapshot.sessions[id]?.thread.path;
         this.patch(id, {
-          thread: { ...this.snapshot.sessions[id].thread, ...thread, turns: page.data.reverse() },
-          ...(this.snapshot.lastModel ? { model: this.snapshot.lastModel.model } : {}),
+          thread: {
+            ...this.snapshot.sessions[id].thread,
+            ...thread,
+            turns: page.data.reverse(),
+          },
+          ...(this.snapshot.lastModel
+            ? { model: this.snapshot.lastModel.model }
+            : {}),
           loaded: true,
           historyCursor: page.nextCursor,
           effort: savedEffort,
         });
         if (historyPath) {
           try {
-            const history = await invoke<{ tokenUsage: Session["tokenUsage"]; effort: string }>("codex_agent_read_usage", { path: historyPath });
+            const history = await invoke<{
+              tokenUsage: Session["tokenUsage"];
+              effort: string;
+            }>("codex_agent_read_usage", { path: historyPath });
             const current = this.snapshot.sessions[id];
             if (history && current && !current.busy && !current.compacting)
-              this.patch(id, { tokenUsage: current.tokenUsage ?? history.tokenUsage,
-                ...(current.effort === savedEffort && !savedEffort ? { effort: history.effort || "medium" } : {}),
+              this.patch(id, {
+                tokenUsage: current.tokenUsage ?? history.tokenUsage,
+                ...(current.effort === savedEffort && !savedEffort
+                  ? { effort: history.effort || "medium" }
+                  : {}),
               });
-          } catch (error) { console.error("Codex 历史用量读取失败", error); }
+          } catch (error) {
+            console.error("Codex 历史用量读取失败", error);
+          }
         }
-        if (!this.snapshot.sessions[id]?.effort) this.patch(id, { effort: "medium" });
+        if (!this.snapshot.sessions[id]?.effort)
+          this.patch(id, { effort: "medium" });
       })
       .finally(() => this.loads.delete(id));
     this.loads.set(id, loading);
@@ -727,7 +904,8 @@ export class CodexClient {
     )
       throw new Error("请先停止任务并处理队列和审批");
     const family = taskFamily(this.snapshot.sessions, id);
-    if (!session.draftThread) await this.request("thread/delete", { threadId: id });
+    if (!session.draftThread)
+      await this.request("thread/delete", { threadId: id });
     this.removeSessions(family);
   }
   /** 清除原生已删除线程的列表、活动记录和阅读位置；通知先于响应时可重复调用。 */
@@ -741,7 +919,9 @@ export class CodexClient {
     this.update({
       sessions,
       order: this.snapshot.order.filter((key) => !removed.has(key)),
-      activeThreads: this.snapshot.activeThreads.filter(key => !removed.has(key)),
+      activeThreads: this.snapshot.activeThreads.filter(
+        (key) => !removed.has(key),
+      ),
     });
   }
   /** 导出读取完整历史，不占用线程写锁或覆盖当前分页缓存。 */
@@ -1038,10 +1218,15 @@ export class CodexClient {
       throw new Error("正在提交消息，请稍后停止");
     this.patch(id, { stopping: true });
     try {
-      const targets = taskFamily(this.snapshot.sessions, id).filter(key =>
-        this.snapshot.sessions[key].busy || this.snapshot.activeThreads.includes(key));
-      const results = await Promise.allSettled(targets.map(key => this.interrupt(key)));
-      const failure = results.find(result => result.status === "rejected");
+      const targets = taskFamily(this.snapshot.sessions, id).filter(
+        (key) =>
+          this.snapshot.sessions[key].busy ||
+          this.snapshot.activeThreads.includes(key),
+      );
+      const results = await Promise.allSettled(
+        targets.map((key) => this.interrupt(key)),
+      );
+      const failure = results.find((result) => result.status === "rejected");
       if (failure?.status === "rejected") throw failure.reason;
       this.restoreDraft(id, this.snapshot.sessions[id].queue);
       this.patch(id, { queue: [], queueError: null });
@@ -1162,16 +1347,30 @@ export class CodexClient {
   async interrupt(id: string) {
     let turnId = this.snapshot.sessions[id]?.turnId;
     if (!turnId) {
-      const { thread } = await this.request<{ thread: Thread }>("thread/read", { threadId: this.threadId(id), includeTurns: true });
-      turnId = thread.turns.find(turn => turn.status === "inProgress")?.id ?? null;
-      if (!turnId && ["idle", "notLoaded"].includes(thread.status?.type ?? "")) {
+      const { thread } = await this.request<{ thread: Thread }>("thread/read", {
+        threadId: this.threadId(id),
+        includeTurns: true,
+      });
+      turnId =
+        thread.turns.find((turn) => turn.status === "inProgress")?.id ?? null;
+      if (
+        !turnId &&
+        ["idle", "notLoaded"].includes(thread.status?.type ?? "")
+      ) {
         this.patch(id, { busy: false, turnId: null, stopping: false });
-        this.update({ activeThreads: this.snapshot.activeThreads.filter(key => key !== id) });
+        this.update({
+          activeThreads: this.snapshot.activeThreads.filter(
+            (key) => key !== id,
+          ),
+        });
         return;
       }
       if (!turnId) throw new Error("尚未取得活动轮次，请稍后重试停止");
     }
-    await this.request("turn/interrupt", { threadId: this.threadId(id), turnId });
+    await this.request("turn/interrupt", {
+      threadId: this.threadId(id),
+      turnId,
+    });
   }
   /** 使用官方重命名接口同步标题与历史列表。 */
   async rename(id: string, name: string) {
@@ -1194,9 +1393,11 @@ export class CodexClient {
       approvalsReviewer: "user",
     });
     const base = source?.name || source?.preview || "新线程";
-    const used = new Set(Object.values(this.snapshot.sessions)
-      .filter(session => session.thread.cwd === source?.cwd)
-      .map(session => session.thread.name || session.thread.preview || ""));
+    const used = new Set(
+      Object.values(this.snapshot.sessions)
+        .filter((session) => session.thread.cwd === source?.cwd)
+        .map((session) => session.thread.name || session.thread.preview || ""),
+    );
     let index = 1;
     let name = `${base} · 分叉 ${index}`;
     while (used.has(name)) name = `${base} · 分叉 ${++index}`;
@@ -1205,7 +1406,10 @@ export class CodexClient {
     this.remember(thread);
     this.patch(thread.id, { thread, resumed: true });
     this.update({
-      order: [thread.id, ...this.snapshot.order.filter((item) => item !== thread.id)],
+      order: [
+        thread.id,
+        ...this.snapshot.order.filter((item) => item !== thread.id),
+      ],
     });
     await this.load(thread.id);
     return thread.id;

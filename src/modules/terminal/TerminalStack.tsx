@@ -9,13 +9,16 @@ import { PaneTreeView } from "./PaneTreeView";
 import type { TerminalPaneHandle } from "./TerminalPane";
 import { labelFor } from "@/modules/tabs";
 import { terminalGrid } from "./lib/terminalGrid";
+import { ResizableViewportGrid } from "@/components/ResizableViewportGrid";
 
 type Props = {
   tabs: Tab[];
   activeId: number;
-  viewCount?: number;
+  viewSlots: (number | null)[];
+  dropViewport: number | null;
   visible?: boolean;
   onSelect: (id: number) => void;
+  onCloseViewport: (index: number) => void;
   onRename: (id: number, title: string) => void;
   onDuplicate: (cwd?: string) => void;
   onClose: (id: number) => void;
@@ -40,9 +43,11 @@ type Bundle = {
 export function TerminalStack({
   tabs,
   activeId,
-  viewCount = 1,
+  viewSlots,
+  dropViewport,
   visible = true,
   onSelect,
+  onCloseViewport,
   onRename,
   onDuplicate,
   onClose,
@@ -63,11 +68,28 @@ export function TerminalStack({
     setRename(null);
   };
   const terminals = useMemo(() => selectLiveTerminals(tabs), [tabs]);
-  const grid = terminalGrid(
-    tabs.map((tab) => tab.id),
-    activeId,
-    viewCount,
-  );
+  const multi = viewSlots.length > 1;
+  const displaySlots = multi
+    ? viewSlots
+    : [tabs.some((tab) => tab.id === activeId) ? activeId : (tabs[0]?.id ?? null)];
+  const grid = terminalGrid(displaySlots);
+  const positions = [
+    ...terminals.map((terminal) => {
+      const position = grid.slots.indexOf(terminal.id);
+      if (!visible || position < 0) return null;
+      return {
+        column: position % grid.columns,
+        row: Math.floor(position / grid.columns),
+      };
+    }),
+    ...(multi
+      ? grid.slots.flatMap((id, index) =>
+          id === null
+            ? [{ column: index % grid.columns, row: Math.floor(index / grid.columns) }]
+            : [],
+        )
+      : []),
+  ];
 
   const registerRef = useRef(registerHandle);
   const searchReadyRef = useRef(onSearchReady);
@@ -116,32 +138,22 @@ export function TerminalStack({
   }, [terminals]);
 
   return (
-    <div className="relative h-full w-full min-w-0 overflow-hidden">
+    <ResizableViewportGrid
+      columns={grid.columns}
+      rows={grid.rows}
+      positions={positions}
+    >
       {terminals.map((t) => {
-        const position = grid.visibleIds.indexOf(t.id);
+        const position = grid.slots.indexOf(t.id);
         const tabVisible = visible && position >= 0;
-        const row = Math.floor(Math.max(0, position) / grid.columns);
-        const rowColumns = Math.max(
-          1,
-          Math.min(grid.columns, grid.visibleIds.length - row * grid.columns),
-        );
         return (
           <div
             key={t.id}
             data-terminal-tab={t.id}
-            className="absolute flex min-h-0 min-w-0 flex-col overflow-hidden"
-            style={{
-              left: `${((Math.max(0, position) % grid.columns) * 100) / rowColumns}%`,
-              top: `${(row * 100) / grid.rows}%`,
-              width: `${100 / rowColumns}%`,
-              height: `${100 / grid.rows}%`,
-              border: viewCount > 1 ? "1px solid var(--border)" : undefined,
-              visibility: tabVisible ? "visible" : "hidden",
-              pointerEvents: tabVisible ? "auto" : "none",
-            }}
-            aria-hidden={!tabVisible}
+            data-terminal-viewport-index={position >= 0 ? position : undefined}
+            className={`flex min-h-0 min-w-0 flex-col overflow-hidden ${multi ? "rounded-md border border-border" : ""} ${dropViewport === position ? "ring-2 ring-primary/60" : ""}`}
           >
-            {viewCount > 1 && (
+            {multi && (
               <div
                 className={`flex h-6 shrink-0 items-center gap-1 border-b border-border/60 px-2 text-[11px] ${t.id === activeId ? "bg-accent text-foreground" : "text-muted-foreground"}`}
               >
@@ -200,10 +212,10 @@ export function TerminalStack({
                 </button>
                 <button
                   type="button"
-                  aria-label="关闭终端视口"
-                  title="关闭终端"
+                  aria-label={multi ? "关闭视口" : "关闭终端"}
+                  title={multi ? "关闭视口" : "关闭终端"}
                   className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-                  onClick={() => onClose(t.id)}
+                  onClick={() => (multi ? onCloseViewport(position) : onClose(t.id))}
                 >
                   <HugeiconsIcon icon={Cancel01Icon} size={12} />
                 </button>
@@ -221,6 +233,32 @@ export function TerminalStack({
           </div>
         );
       })}
-    </div>
+      {multi &&
+        grid.slots.map((id, index) =>
+          id === null ? (
+            <div
+              key={`empty-${index}`}
+              data-terminal-viewport-index={index}
+              className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-md border border-dashed ${dropViewport === index ? "border-primary ring-2 ring-primary/40" : "border-border"}`}
+            >
+              <div className="flex h-6 shrink-0 items-center gap-1 border-b border-border/60 px-2 text-[11px] text-muted-foreground">
+                <span className="min-w-0 flex-1 truncate">视口 {index + 1}</span>
+                <button
+                  type="button"
+                  aria-label={`关闭视口 ${index + 1}`}
+                  title="关闭视口"
+                  className="flex size-5 shrink-0 items-center justify-center rounded-sm hover:bg-muted hover:text-foreground"
+                  onClick={() => onCloseViewport(index)}
+                >
+                  <HugeiconsIcon icon={Cancel01Icon} size={12} />
+                </button>
+              </div>
+              <div className="grid min-h-0 flex-1 place-items-center px-3 text-center text-xs text-muted-foreground">
+                从右侧拖入终端，或点击右侧终端填入
+              </div>
+            </div>
+          ) : null,
+        )}
+    </ResizableViewportGrid>
   );
 }

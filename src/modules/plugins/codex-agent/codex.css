@@ -5,8 +5,8 @@
 .codex-body { display:flex; flex:1; min-width:0; min-height:0; overflow:hidden; }
 .codex-grid { display:grid; flex:1; min-width:0; min-height:0; gap:4px; overflow:hidden; }
 .codex-slot { position:relative; min-width:0; min-height:0; overflow:hidden; }
-.codex-multi > .codex-slot { border:1px solid var(--border); border-radius:6px; }
-.codex-multi > .codex-focused { border-color:color-mix(in srgb,var(--primary) 50%,var(--border)); }
+.codex-multi .codex-slot { border:1px solid var(--border); border-radius:6px; }
+.codex-multi .codex-focused { border-color:color-mix(in srgb,var(--primary) 50%,var(--border)); }
 .codex-slot.codex-drop-target { outline:2px solid var(--primary); outline-offset:-2px; background:var(--accent); }
 .codex-viewport { display:flex; flex-direction:column; height:100%; min-width:0; }
 .codex-viewport-header { display:flex; align-items:center; flex-shrink:0; gap:4px; min-height:30px; padding:3px 8px; border-bottom:1px solid var(--border); }
