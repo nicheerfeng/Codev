@@ -26,7 +26,12 @@ import { TerminalStack } from "./TerminalStack";
 import type { TerminalPaneHandle } from "./TerminalPane";
 import { COMPACT_CONTENT, COMPACT_ITEM } from "../explorer/lib/menuItemClass";
 import { leafIds, findLeafCwd } from "./lib/panes";
-import { terminalGrid, MAX_TERMINAL_VIEWS } from "./lib/terminalGrid";
+import {
+  fillTerminalViewport,
+  placeTerminalInViewport,
+  terminalGrid,
+  MAX_TERMINAL_VIEWS,
+} from "./lib/terminalGrid";
 import { toast } from "sonner";
 
 type Props = {
@@ -38,8 +43,8 @@ type Props = {
   activeId: number;
   onSelect: (id: number) => void;
   onClose: (id: number) => void;
-  onNew: () => void;
-  onDuplicate: (cwd?: string) => void;
+  onNew: () => number;
+  onDuplicate: (cwd?: string) => number;
   onShowTerminals: (ids: number[]) => void;
   onRename: (id: number, title: string) => void;
   onReorder: (fromId: number, toGapIndex: number) => void;
@@ -89,6 +94,21 @@ export function TerminalPanel({
   );
   /** 即使点击已选中的终端，也将键盘输入焦点送回对应视口。 */
   const selectTerminal = (id: number) => {
+    if (multi) {
+      const next = fillTerminalViewport(viewSlots, id);
+      if (!next) {
+        toast.info(
+          viewSlots.length >= MAX_TERMINAL_VIEWS
+            ? "视口已满，请拖拽终端到目标视口进行替换。"
+            : "建议拖拽覆盖已有视口或者增加视口。",
+          {
+          id: "terminal-viewport-full",
+          },
+        );
+        return;
+      }
+      setViewSlots(next);
+    }
     onSelect(id);
     const tab = tabs.find((entry) => entry.id === id);
     if (tab?.kind === "terminal")
@@ -103,24 +123,52 @@ export function TerminalPanel({
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [navCollapsed, setNavCollapsed] = useState(false);
-  const [viewCount, setViewCount] = useState(1);
-  const grid = terminalGrid(
-    tabs.map((tab) => tab.id),
-    activeId,
-    viewCount,
-  );
+  const [viewSlots, setViewSlots] = useState<(number | null)[]>([]);
+  const [dropViewport, setDropViewport] = useState<number | null>(null);
+  const multi = viewSlots.length > 1;
+  const displaySlots = multi
+    ? viewSlots
+    : [tabs.some((tab) => tab.id === activeId) ? activeId : (tabs[0]?.id ?? null)];
+  const grid = terminalGrid(displaySlots);
   const visibleKey = grid.visibleIds.join(",");
+  const tabIdsKey = tabs.map((tab) => tab.id).join(",");
   useEffect(() => {
     if (!visible) return;
     onShowTerminals(visibleKey ? visibleKey.split(",").map(Number) : []);
   }, [visibleKey, onShowTerminals, visible]);
+  useEffect(() => {
+    const live = new Set(tabIdsKey ? tabIdsKey.split(",").map(Number) : []);
+    setViewSlots((slots) =>
+      slots.some((id) => id !== null && !live.has(id))
+        ? slots.map((id) => (id !== null && !live.has(id) ? null : id))
+        : slots,
+    );
+  }, [tabIdsKey]);
 
-  /** 切换单组视口容量。 */
-  const changeViewCount = (count: number) => {
-    setViewCount(count);
+  /** 切换多视口并保持新视口为空，后续由点击或拖拽填入终端。 */
+  const toggleViewports = () => {
+    setViewSlots((slots) =>
+      slots.length > 1
+        ? []
+        : [tabs.some((tab) => tab.id === activeId) ? activeId : null, null],
+    );
   };
 
-  /** 新建和复制共用六终端上限，多视口下同步增加展示容量。 */
+  /** 关闭单个视口但保留其中的终端会话。 */
+  const closeViewport = (index: number) => {
+    const next = viewSlots.filter((_, position) => position !== index);
+    if (next.length > 1) setViewSlots(next);
+    else {
+      setViewSlots([]);
+      const fallback =
+        next[0] ??
+        (tabs.some((tab) => tab.id === activeId) ? activeId : tabs[0]?.id);
+      if (fallback !== undefined && fallback !== null) onSelect(fallback);
+    }
+    setDropViewport(null);
+  };
+
+  /** 新建或复制只占用空视口，视口已满时不创建隐藏终端。 */
   const createTerminal = (cwd?: string, duplicate = false) => {
     if (tabs.length >= MAX_TERMINAL_VIEWS) {
       toast.info("最多支持 6 个终端，请先关闭不需要的终端。", {
@@ -128,9 +176,22 @@ export function TerminalPanel({
       });
       return;
     }
-    if (viewCount > 1) setViewCount(Math.max(2, tabs.length + 1));
-    if (duplicate) onDuplicate(cwd);
-    else onNew();
+    const emptySlot = multi ? viewSlots.indexOf(null) : -1;
+    if (multi && emptySlot < 0) {
+      toast.info("请先增加一个空视口，再新建或复制终端。", {
+        id: "terminal-viewport-full",
+      });
+      return;
+    }
+    const id = duplicate ? onDuplicate(cwd) : onNew();
+    if (multi && emptySlot >= 0)
+      setViewSlots((slots) => {
+        const next = [...slots];
+        const firstEmpty = next.indexOf(null);
+        if (firstEmpty >= 0) next[firstEmpty] = id;
+        return next;
+      });
+    onSelect(id);
   };
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [dropGap, setDropGap] = useState<number | null>(null);
@@ -145,8 +206,25 @@ export function TerminalPanel({
     fromId: number;
     active: boolean;
     gap: number;
+    targetViewport: number | null;
   } | null>(null);
   const suppressClickRef = useRef<number | null>(null);
+
+  /** 查找指针下方的终端视口，用于显式拖拽替换。 */
+  const viewportAtPoint = (x: number, y: number): number | null => {
+    if (!multi) return null;
+    const target = document
+      .elementFromPoint(x, y)
+      ?.closest<HTMLElement>("[data-terminal-viewport-index]");
+    return target ? Number(target.dataset.terminalViewportIndex) : null;
+  };
+
+  /** 将侧栏终端放入用户指定视口，已展示终端与目标交换位置。 */
+  const dropTerminalIntoViewport = (id: number, index: number) => {
+    if (!multi || index < 0 || index >= viewSlots.length) return;
+    setViewSlots((slots) => placeTerminalInViewport(slots, index, id));
+    onSelect(id);
+  };
 
   /** 根据指针纵坐标计算终端列表中的插入间隙。 */
   const gapAtY = (clientY: number) => {
@@ -168,6 +246,7 @@ export function TerminalPanel({
     dragRef.current = null;
     setDraggingId(null);
     setDropGap(null);
+    setDropViewport(null);
     document.body.style.userSelect = "";
   };
 
@@ -230,9 +309,11 @@ export function TerminalPanel({
             <TerminalStack
               tabs={tabs}
               activeId={activeId}
-              viewCount={viewCount}
+              viewSlots={viewSlots}
+              dropViewport={dropViewport}
               visible={visible}
               onSelect={selectTerminal}
+              onCloseViewport={closeViewport}
               onRename={onRename}
               onDuplicate={(cwd) => createTerminal(cwd, true)}
               onClose={onClose}
@@ -274,34 +355,32 @@ export function TerminalPanel({
                 <>
                   <button
                     type="button"
-                    aria-label={viewCount > 1 ? "退出终端多视口" : "终端多视口"}
-                    title={viewCount > 1 ? "退出终端多视口" : "终端多视口"}
-                    aria-pressed={viewCount > 1}
-                    onClick={() => changeViewCount(viewCount > 1 ? 1 : 2)}
+                    aria-label={multi ? "退出终端多视口" : "终端多视口"}
+                    title={multi ? "退出终端多视口" : "终端多视口"}
+                    aria-pressed={multi}
+                    onClick={toggleViewports}
                     className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
                   >
                     <HugeiconsIcon icon={GridViewIcon} size={14} />
                   </button>
-                  {viewCount > 1 && (
+                  {multi && (
                     <button
                       type="button"
                       aria-label="增加终端视口"
                       title="增加终端视口"
                       className="h-[22px] shrink-0 rounded-sm px-2 text-[10px] font-normal text-muted-foreground hover:bg-muted hover:text-foreground"
                       onClick={() => {
-                        if (grid.visibleIds.length >= MAX_TERMINAL_VIEWS) {
+                        if (viewSlots.length >= MAX_TERMINAL_VIEWS) {
                           toast.info(
-                            "最多支持 6 个终端，请先关闭不需要的终端。",
+                            "最多支持 6 个终端视口，请关闭不需要的视口。",
                             { id: "terminal-view-limit" },
                           );
                           return;
                         }
-                        if (grid.visibleIds.length < tabs.length)
-                          changeViewCount(grid.visibleIds.length + 1);
-                        else createTerminal();
+                        setViewSlots((slots) => [...slots, null]);
                       }}
                     >
-                      + {grid.visibleIds.length}/6
+                      + {viewSlots.length}/6
                     </button>
                   )}
                 </>
@@ -364,6 +443,7 @@ export function TerminalPanel({
                             fromId: tab.id,
                             active: false,
                             gap: index,
+                            targetViewport: null,
                           };
                           event.currentTarget.setPointerCapture(
                             event.pointerId,
@@ -380,8 +460,15 @@ export function TerminalPanel({
                             setDraggingId(drag.fromId);
                             document.body.style.userSelect = "none";
                           }
-                          drag.gap = gapAtY(event.clientY);
-                          setDropGap(drag.gap);
+                          drag.targetViewport = viewportAtPoint(
+                            event.clientX,
+                            event.clientY,
+                          );
+                          setDropViewport(drag.targetViewport);
+                          if (drag.targetViewport === null) {
+                            drag.gap = gapAtY(event.clientY);
+                            setDropGap(drag.gap);
+                          } else setDropGap(null);
                         }}
                         onPointerUp={(event) => {
                           const drag = dragRef.current;
@@ -393,14 +480,21 @@ export function TerminalPanel({
                             window.setTimeout(() => {
                               suppressClickRef.current = null;
                             }, 0);
-                            const fromIndex = tabs.findIndex(
-                              (item) => item.id === drag.fromId,
-                            );
-                            if (
-                              drag.gap !== fromIndex &&
-                              drag.gap !== fromIndex + 1
-                            ) {
-                              onReorder(drag.fromId, drag.gap);
+                            if (drag.targetViewport !== null) {
+                              dropTerminalIntoViewport(
+                                drag.fromId,
+                                drag.targetViewport,
+                              );
+                            } else {
+                              const fromIndex = tabs.findIndex(
+                                (item) => item.id === drag.fromId,
+                              );
+                              if (
+                                drag.gap !== fromIndex &&
+                                drag.gap !== fromIndex + 1
+                              ) {
+                                onReorder(drag.fromId, drag.gap);
+                              }
                             }
                           }
                           endDrag(event.currentTarget);

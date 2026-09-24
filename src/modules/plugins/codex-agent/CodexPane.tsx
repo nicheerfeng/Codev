@@ -31,6 +31,7 @@ import {
 } from "./projectActivity";
 import { itemText } from "./protocol";
 import { watchHistory } from "./historyWatch";
+import { ResizableViewportGrid } from "@/components/ResizableViewportGrid";
 
 /** 只恢复视口数量；启动不读取旧会话，等待用户选择。 */
 function readSlots(): (string | null)[] {
@@ -130,6 +131,8 @@ function Workspace({
   const selected = slots[focused] ?? null;
   const current = selected ? state.sessions[selected] : undefined;
   const multi = slots.length > 1;
+  const viewportColumns = slots.length > 4 ? 3 : multi ? 2 : 1;
+  const viewportRows = Math.ceil(slots.length / viewportColumns);
   // biome-ignore lint/correctness/useExhaustiveDependencies: 切换线程或提交输入后退出旧的搜索定位。
   useEffect(() => {
     setSearch("");
@@ -364,12 +367,14 @@ function Workspace({
         </div>
       )}
       <div className="codex-body">
-        <main
-          className={`codex-grid ${multi ? "codex-multi" : ""}`}
-          style={{
-            gridTemplateColumns: `repeat(${slots.length > 4 ? 3 : multi ? 2 : 1}, minmax(0, 1fr))`,
-            gridTemplateRows: `repeat(${slots.length > 2 ? 2 : 1}, minmax(0, 1fr))`,
-          }}
+        <ResizableViewportGrid
+          className={`min-h-0 min-w-0 flex-1 !overflow-auto ${multi ? "codex-multi" : ""}`}
+          columns={viewportColumns}
+          rows={viewportRows}
+          positions={slots.map((_, index) => ({
+            column: index % viewportColumns,
+            row: Math.floor(index / viewportColumns),
+          }))}
         >
           {slots.map((id, index) => {
             const session = id ? state.sessions[id] : null;
@@ -477,7 +482,7 @@ function Workspace({
               </section>
             );
           })}
-        </main>
+        </ResizableViewportGrid>
         {!collapsed && (
           <CodexSidebar
             client={client}

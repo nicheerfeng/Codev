@@ -1,16 +1,40 @@
 export const MAX_TERMINAL_VIEWS = 6;
 
-/** 只展示一组终端，选择未显示的已有终端时替换末尾视口。 */
-export function terminalGrid(ids: number[], activeId: number, count: number) {
-  const capacity = Math.min(MAX_TERMINAL_VIEWS, Math.max(1, Math.floor(count)));
-  const visibleIds = ids.slice(0, capacity);
-  if (ids.includes(activeId) && !visibleIds.includes(activeId))
-    visibleIds[visibleIds.length - 1] = activeId;
-  const displayed = Math.max(1, visibleIds.length);
-  const columns = displayed <= 3 ? displayed : displayed === 4 ? 2 : 3;
+/** 计算用户显式创建的终端视口布局，不自动填入其他终端。 */
+export function terminalGrid(slots: (number | null)[]) {
+  const viewSlots = slots.slice(0, MAX_TERMINAL_VIEWS);
+  const count = Math.max(1, viewSlots.length);
+  const columns = count <= 3 ? count : count === 4 ? 2 : 3;
   return {
-    visibleIds,
+    slots: viewSlots,
+    visibleIds: viewSlots.filter((id): id is number => id !== null),
     columns,
-    rows: Math.ceil(displayed / columns),
+    rows: Math.ceil(count / columns),
   };
+}
+
+/** 点击侧栏终端时只填入第一个空视口，已显示终端只聚焦。 */
+export function fillTerminalViewport(
+  slots: (number | null)[],
+  id: number,
+): (number | null)[] | null {
+  if (slots.includes(id)) return [...slots];
+  const empty = slots.indexOf(null);
+  if (empty < 0) return null;
+  const next = [...slots];
+  next[empty] = id;
+  return next;
+}
+
+/** 拖入指定视口时替换内容，并交换已经展示的终端避免重复。 */
+export function placeTerminalInViewport(
+  slots: (number | null)[],
+  index: number,
+  id: number,
+): (number | null)[] {
+  const next = [...slots];
+  const previous = next.indexOf(id);
+  if (previous >= 0 && previous !== index) next[previous] = next[index];
+  next[index] = id;
+  return next;
 }
