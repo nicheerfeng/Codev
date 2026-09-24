@@ -1,5 +1,6 @@
 import type { EditorPaneHandle } from "@/modules/editor";
 import type { HtmlTab, Tab } from "@/modules/tabs";
+import { useCallback, useEffect, useState } from "react";
 import { HtmlPreviewPane } from "./HtmlPreviewPane";
 
 type Props = {
@@ -14,7 +15,7 @@ type Props = {
   onFocusSearch: () => void;
 };
 
-/** 仅挂载当前活动的 HTML 渲染页，避免后台脚本继续运行。 */
+/** 保留已打开 HTML 的文档实例，切换 Codev 标签时维持页面交互状态。 */
 export function HtmlStack({
   tabs,
   activeId,
@@ -29,14 +30,83 @@ export function HtmlStack({
       tab.viewMode === "rendered" &&
       !tab.cold,
   );
-  if (!activeHtml) return null;
+  const [mountedIds, setMountedIds] = useState<number[]>([]);
+  const liveIds = new Set(
+    tabs.filter((tab) => tab.kind === "html").map((tab) => tab.id),
+  );
+  const cachedIds = mountedIds.filter((id) => liveIds.has(id));
+  const visibleIds = activeHtml
+    ? [...new Set([...cachedIds, activeHtml.id])]
+    : cachedIds;
+
+  useEffect(() => {
+    setMountedIds((current) => {
+      const next = current.filter((id) => liveIds.has(id));
+      if (activeHtml && !next.includes(activeHtml.id)) next.push(activeHtml.id);
+      return next.length === current.length &&
+        next.every((id, index) => id === current[index])
+        ? current
+        : next;
+    });
+  }, [activeHtml, tabs]);
+
   return (
-    <div className="relative h-full w-full">
+    <div className="relative h-full w-full overflow-hidden">
+      {visibleIds.map((id) => {
+        const tab = tabs.find(
+          (candidate): candidate is HtmlTab =>
+            candidate.id === id && candidate.kind === "html",
+        );
+        if (!tab) return null;
+        return (
+          <CachedHtmlPreview
+            key={tab.id}
+            tab={tab}
+            active={activeHtml?.id === tab.id}
+            registerHandle={registerHandle}
+            onSetHtmlView={onSetHtmlView}
+            onFocusSearch={onFocusSearch}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+/** 保持已访问页的 iframe 挂载，并只向当前页注册编辑器句柄。 */
+function CachedHtmlPreview({
+  tab,
+  active,
+  registerHandle,
+  onSetHtmlView,
+  onFocusSearch,
+}: {
+  tab: HtmlTab;
+  active: boolean;
+  registerHandle: Props["registerHandle"];
+  onSetHtmlView: Props["onSetHtmlView"];
+  onFocusSearch: Props["onFocusSearch"];
+}) {
+  const setHandle = useCallback(
+    (handle: EditorPaneHandle | null) =>
+      registerHandle(tab.id, active ? handle : null, "html"),
+    [active, registerHandle, tab.id],
+  );
+
+  return (
+    <div
+      className="absolute inset-0"
+      style={{
+        visibility: active ? "visible" : "hidden",
+        pointerEvents: active ? "auto" : "none",
+      }}
+      aria-hidden={!active}
+      inert={!active}
+    >
       <HtmlPreviewPane
-        key={activeHtml.id}
-        ref={(handle) => registerHandle(activeHtml.id, handle, "html")}
-        path={activeHtml.path}
-        onSetView={(mode) => onSetHtmlView(activeHtml.id, mode)}
+        ref={setHandle}
+        path={tab.path}
+        onSetView={(mode) => onSetHtmlView(tab.id, mode)}
         onFocusSearch={onFocusSearch}
       />
     </div>

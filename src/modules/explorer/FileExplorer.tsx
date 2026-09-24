@@ -50,6 +50,7 @@ import {
 } from "./lib/rootCollapse";
 import { useRootReorder } from "./lib/useRootReorder";
 import { replacePathPrefix } from "@/lib/pathPrefix";
+import { useExplorerDnd } from "./lib/useExplorerDnd";
 import {
   selectExplorerClipboard,
   type ExplorerClipboardPayload,
@@ -144,9 +145,11 @@ function RootSection({
   insertBefore,
   root,
   active,
+  selected,
   revealRequest,
   onRevealPath,
   onActivate,
+  onSelectRoot,
   onRemove,
   onCopy,
   onRename,
@@ -157,15 +160,18 @@ function RootSection({
   onPaste,
   open,
   onOpenChange,
+  pathDropTarget,
   children,
 }: {
   reorderHeaderProps: React.HTMLAttributes<HTMLDivElement>;
   insertBefore: boolean;
   root: string;
   active: boolean;
+  selected: boolean;
   revealRequest: { nonce: number; path: string } | null;
   onRevealPath: (root: string, path: string) => void;
   onActivate: () => void;
+  onSelectRoot: () => void;
   onRemove: () => void;
   onCopy: () => void;
   onRename: (name: string) => void;
@@ -176,6 +182,7 @@ function RootSection({
   onPaste?: () => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  pathDropTarget?: RootTreeProps["pathDropTarget"];
   children: React.ReactNode;
 }) {
   const t = useT();
@@ -183,6 +190,13 @@ function RootSection({
   const [rootHeaderHovered, setRootHeaderHovered] = useState(false);
   const color = rootColor(root);
   const canRename = root !== "/" && !/^[A-Za-z]:\/$/.test(root);
+  const rootDnd = useExplorerDnd({
+    rootPath: root,
+    isDir: (path) => path === root,
+    selectedPaths: [root],
+    onMove: () => {},
+    pathDropTarget,
+  });
 
   useEffect(() => {
     if (!revealRequest) return;
@@ -208,20 +222,35 @@ function RootSection({
           <div
             {...reorderHeaderProps}
             data-root-reorder-header=""
-            className="flex h-7 shrink-0 cursor-pointer items-center gap-1 overflow-hidden border-b border-l-2 border-border/60 px-2 text-xs font-medium select-none"
+            className={`relative flex h-7 shrink-0 cursor-pointer items-center gap-1 overflow-hidden border-b border-l-2 px-2 text-xs font-medium select-none ${selected ? "border-primary ring-1 ring-inset ring-primary/80" : "border-border/60"}`}
             style={{
               borderLeftColor: color,
-              backgroundColor: `color-mix(in srgb, ${color} ${active ? 100 : 70}%, var(--background))`,
+              backgroundColor: selected
+                ? "color-mix(in srgb, var(--primary) 24%, var(--background))"
+                : `color-mix(in srgb, ${color} ${active ? 100 : 70}%, var(--background))`,
               color: "var(--foreground)",
             }}
             onMouseEnter={() => setRootHeaderHovered(true)}
             onMouseLeave={() => setRootHeaderHovered(false)}
+            onPointerDown={(event) => {
+              reorderHeaderProps.onPointerDown?.(event);
+              rootDnd.onPointerDown(event);
+            }}
+            onClickCapture={(event) => {
+              reorderHeaderProps.onClickCapture?.(event);
+              rootDnd.onClickCapture(event);
+            }}
+            onContextMenu={() => onSelectRoot()}
             onClick={() => {
+              onSelectRoot();
               onActivate();
               onOpenChange(!open);
             }}
             title={root}
           >
+            {selected && (
+              <span className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-primary" />
+            )}
             <button
               type="button"
               className="size-4 shrink-0 text-muted-foreground hover:text-foreground"
@@ -699,6 +728,15 @@ export const FileExplorer = memo(
       });
     }, []);
 
+    /** 选择工作区根目录并清理之前残留的子目录选择。 */
+    const selectRoot = useCallback(
+      (root: string) => {
+        setSelectedPaths([root]);
+        onSetActiveRoot(root);
+      },
+      [onSetActiveRoot],
+    );
+
     /** 移除项目根目录时同步清理侧栏中的选中路径。 */
     const removeRoot = useCallback(
       (root: string) => {
@@ -1030,6 +1068,7 @@ export const FileExplorer = memo(
                       insertBefore={showRootGap(index)}
                       root={root}
                       active={root === activeRoot}
+                      selected={selectedPaths.includes(root)}
                       revealRequest={
                         rootRevealRequest?.root === root
                           ? rootRevealRequest
@@ -1037,6 +1076,7 @@ export const FileExplorer = memo(
                       }
                       onRevealPath={revealRootPath}
                       onActivate={() => onSetActiveRoot(root)}
+                      onSelectRoot={() => selectRoot(root)}
                       onRemove={() => removeRoot(root)}
                       onCopy={() => void copyToClipboard(root)}
                       onRename={(name) => void renameRoot(root, name)}
@@ -1059,6 +1099,7 @@ export const FileExplorer = memo(
                       }
                       open={!collapsedRoots.has(rootCollapseKey(root))}
                       onOpenChange={(nextOpen) => setRootOpen(root, nextOpen)}
+                      pathDropTarget={treeProps.pathDropTarget}
                     >
                       <RootTree
                         ref={(h) => {
