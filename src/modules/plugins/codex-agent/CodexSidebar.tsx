@@ -371,9 +371,6 @@ export function CodexSidebar({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent className="rounded-xl">
-          <ContextMenuItem onSelect={() => void client.stopAndRestore(thread.id).catch(error => toast.error(String(error)))}>
-            停止此线程及子任务
-          </ContextMenuItem>
           <ContextMenuItem
             onSelect={() => setEditing({ id: thread.id, name: title })}
           >
