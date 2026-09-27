@@ -738,6 +738,16 @@ export class PiWorkspaceClient {
   }
 
   /** 按原生队列快照修改单条消息，重建失败时将未发送文本退回草稿。 */
+  private async clearQueue(thread: PiThread): Promise<Record<string, unknown> | null> {
+    try {
+      return objectValue(await this.request(thread, { type: "clear_queue" }));
+    } catch (error) {
+      if (/unknown command\s*:\s*clear_queue/i.test(String(error))) return null;
+      throw error;
+    }
+  }
+
+  /** 按原生队列快照修改单条消息，重建失败时将未发送文本退回草稿。 */
   async updateQueuedMessage(
     thread: PiThread,
     kind: "steering" | "followUp",
@@ -746,9 +756,9 @@ export class PiWorkspaceClient {
     action: "edit" | "delete" | "steer",
     restore: (texts: string[]) => void,
   ) {
-    const snapshot = objectValue(
-      await this.request(thread, { type: "clear_queue" }),
-    );
+    const snapshot = await this.clearQueue(thread);
+    if (!snapshot)
+      throw new Error("当前 Pi runtime 不支持编辑已排队消息");
     const entries = (["steering", "followUp"] as const).flatMap((mode) =>
       (Array.isArray(snapshot?.[mode]) ? (snapshot[mode] as string[]) : []).map(
         (message, position) => ({ mode, position, message }),
@@ -781,12 +791,19 @@ export class PiWorkspaceClient {
 
   /** 先取回未执行的队列文本，再中断运行，恢复操作始终绑定原线程。 */
   async stopAndRestore(thread: PiThread, restore: (texts: string[]) => void) {
-    const queued = objectValue(
-      await this.request(thread, { type: "clear_queue" }),
-    );
+    const queued = await this.clearQueue(thread);
+    const steering = Array.isArray(queued?.steering)
+      ? queued.steering
+      : thread.view.queue.steering;
+    const followUp = Array.isArray(queued?.followUp)
+      ? queued.followUp
+      : thread.view.queue.followUp;
+    const localQueue = (thread.view.localQueue ?? []).map((entry) => entry.text);
+    thread.view = { ...thread.view, localQueue: [], queueSendingId: undefined };
     restore([
-      ...(Array.isArray(queued?.steering) ? queued.steering : []),
-      ...(Array.isArray(queued?.followUp) ? queued.followUp : []),
+      ...steering,
+      ...followUp,
+      ...localQueue,
     ]);
     this.compactionResume.delete(thread.key);
     thread.view = piViewReducer(thread.view, { type: "stopping" });
