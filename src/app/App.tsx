@@ -1032,8 +1032,6 @@ export default function App() {
       "view.zoomOut": zoomOut,
       "view.zoomReset": zoomReset,
       "view.zenMode": () => setZenMode((v) => !v),
-      "editor.undo": () => editorRefs.current.get(activeId)?.undo(),
-      "editor.redo": () => editorRefs.current.get(activeId)?.redo(),
     }),
     [
       activeId,
@@ -1060,9 +1058,6 @@ export default function App() {
           ? leafIds(activeTab.paneTree).length
           : null;
       if (shouldDisablePaneSwapShortcut(id, terminalPaneCount)) return true;
-      if (id === "editor.undo" || id === "editor.redo") {
-        return activeTab?.kind !== "editor";
-      }
       if (id === "terminal.clear") {
         // Only intercept ⌘K while a terminal is focused; elsewhere let the key
         // fall through (we never preventDefault when disabled).
@@ -1171,7 +1166,11 @@ export default function App() {
   );
 
   const activeDocumentCanReplace =
-    activeTab?.kind !== "html" || activeTab.viewMode === "raw";
+    (activeTab?.kind !== "html" || activeTab.viewMode === "raw") &&
+    !(
+      activeTab?.kind === "editor" &&
+      activeTab.path.toLowerCase().endsWith(".pdf")
+    );
 
   const searchTarget = useMemo<SearchTarget>(() => {
     if (isTerminalTab && activeLeafId !== null && activeSearchAddon)

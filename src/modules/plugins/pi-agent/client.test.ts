@@ -57,7 +57,10 @@ vi.mock("./native", () => ({
           error: "prompt rejected",
           data:
             command.type === "clear_queue"
-              ? { steering: ["排队指令"], followUp: ["后续任务"] }
+              ? {
+                  steering: [{ text: "排队指令", images: [] }],
+                  followUp: [{ text: "后续任务", images: [] }],
+                }
               : command.type === "fork" || command.type === "clone"
                 ? {
                     cancelled: mock.cancelBranch,
@@ -980,7 +983,7 @@ describe("Pi RPC workspace", () => {
     expect(thread.view.model).toMatchObject({ id: "gpt-new" });
     client.dispose();
   });
-  it("restarts an idle runtime on the next send after catalog reload", async () => {
+  it("uses set_model RPC on the next send after catalog reload", async () => {
     const native = await import("./native");
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
     const thread = await client.open("one", "D:/one");
@@ -993,11 +996,16 @@ describe("Pi RPC workspace", () => {
     mock.close.mockClear();
     vi.mocked(native.sendPiCommand).mockClear();
     await client.request(thread, { type: "prompt", message: "下一轮" });
-    expect(mock.close).toHaveBeenCalledWith(previous);
-    expect(thread.runtimeId).not.toBe(previous);
-    expect(thread.view.error).toBe(
-      "当前选择不在历史会话配置中，正在更新以适配",
-    );
+    // 新期望：不关闭 runtime，使用 set_model RPC 无感切换
+    expect(mock.close).not.toHaveBeenCalled();
+    expect(thread.runtimeId).toBe(previous);
+    // 验证发送了 set_model RPC
+    expect(
+      vi
+        .mocked(native.sendPiCommand)
+        .mock.calls.find(([, command]) => command.type === "set_model"),
+    ).toBeTruthy();
+    // 验证仍然发送了 prompt
     expect(
       vi
         .mocked(native.sendPiCommand)

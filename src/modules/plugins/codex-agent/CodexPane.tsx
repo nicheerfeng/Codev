@@ -7,6 +7,8 @@ import {
   Search01Icon,
   Folder01Icon,
   Cancel01Icon,
+  Maximize01Icon,
+  Minimize01Icon,
 } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -84,7 +86,9 @@ function Workspace({
   const hasSelectedHistory = state.order.length > 0;
   useEffect(() => {
     if (!hasSelectedHistory) return;
-    return watchHistory(client, error => console.error("Codex 历史监听", error));
+    return watchHistory(client, (error) =>
+      console.error("Codex 历史监听", error),
+    );
   }, [client, hasSelectedHistory]);
   const activity = useRef(new Map<string, ProjectActivity>());
   useEffect(() => {
@@ -118,6 +122,9 @@ function Workspace({
   }, [state.sessions, state.connected, active]);
   const [slots, setSlots] = useState(readSlots);
   const [focused, setFocused] = useState(0);
+  const [maximizedViewport, setMaximizedViewport] = useState<number | null>(
+    null,
+  );
   const [collapsed, setCollapsed] = useState(
     () => uiState.getItem("codev.codex.sidebar.collapsed") === "true",
   );
@@ -192,13 +199,15 @@ function Workspace({
   const place = (id: string, target?: number) => {
     id = client.sessionKey(id);
     const previous = slots.indexOf(id);
-    const index = target ?? (previous >= 0 ? previous : multi ? slots.indexOf(null) : 0);
+    const index =
+      target ?? (previous >= 0 ? previous : multi ? slots.indexOf(null) : 0);
     if (index < 0) {
       toast.info("建议拖拽覆盖已有窗口或者新开窗口");
       return false;
     }
     const replaced = slots[index];
-    if (replaced && replaced !== id && previous < 0) client.discardDraft(replaced);
+    if (replaced && replaced !== id && previous < 0)
+      client.discardDraft(replaced);
     setFocused(index);
     setSlots((currentSlots) => {
       const next = [...currentSlots];
@@ -218,8 +227,11 @@ function Workspace({
     const cwd = await open({ directory: true });
     if (!cwd) return;
     setCollapsed(false);
-    try { await client.refreshProject(cwd); }
-    catch (error) { toast.error(String(error)); }
+    try {
+      await client.refreshProject(cwd);
+    } catch (error) {
+      toast.error(String(error));
+    }
   };
   /** 明确选择工作目录后新建线程，不发送模型请求。 */
   const create = async (cwd?: string) => {
@@ -371,10 +383,18 @@ function Workspace({
           className={`min-h-0 min-w-0 flex-1 !overflow-auto ${multi ? "codex-multi" : ""}`}
           columns={viewportColumns}
           rows={viewportRows}
-          positions={slots.map((_, index) => ({
-            column: index % viewportColumns,
-            row: Math.floor(index / viewportColumns),
-          }))}
+          positions={slots.map((_, index) =>
+            maximizedViewport !== null && index !== maximizedViewport
+              ? null
+              : {
+                  column:
+                    maximizedViewport !== null ? 0 : index % viewportColumns,
+                  row:
+                    maximizedViewport !== null
+                      ? 0
+                      : Math.floor(index / viewportColumns),
+                },
+          )}
         >
           {slots.map((id, index) => {
             const session = id ? state.sessions[id] : null;
@@ -392,6 +412,23 @@ function Workspace({
                     {multi && (
                       <header className="codex-viewport-header">
                         <Title session={session} client={client} />
+                        <Tool
+                          icon={
+                            maximizedViewport === index
+                              ? Minimize01Icon
+                              : Maximize01Icon
+                          }
+                          label={
+                            maximizedViewport === index
+                              ? "还原视口"
+                              : "放大视口"
+                          }
+                          onClick={() =>
+                            setMaximizedViewport(
+                              maximizedViewport === index ? null : index,
+                            )
+                          }
+                        />
                         <Tool
                           icon={Cancel01Icon}
                           label="关闭视口"
@@ -423,14 +460,16 @@ function Workspace({
                       <p className="px-3 py-3 text-center text-xs text-muted-foreground">
                         子代理由主线程调度，无法直接输入
                       </p>
-                    ) : <CodexComposer
-                      onSelect={place}
-                      onNew={create}
-                      session={session}
-                      client={client}
-                      models={state.models}
-                      connected={state.connected && !state.switching}
-                    />}
+                    ) : (
+                      <CodexComposer
+                        onSelect={place}
+                        onNew={create}
+                        session={session}
+                        client={client}
+                        models={state.models}
+                        connected={state.connected && !state.switching}
+                      />
+                    )}
                   </div>
                 ) : (
                   <div className="codex-empty">
@@ -451,7 +490,24 @@ function Workspace({
                       </>
                     )}
                     {multi && (
-                      <div className="absolute top-1 right-1">
+                      <div className="absolute top-1 right-1 flex gap-1">
+                        <Tool
+                          icon={
+                            maximizedViewport === index
+                              ? Minimize01Icon
+                              : Maximize01Icon
+                          }
+                          label={
+                            maximizedViewport === index
+                              ? "还原视口"
+                              : "放大视口"
+                          }
+                          onClick={() =>
+                            setMaximizedViewport(
+                              maximizedViewport === index ? null : index,
+                            )
+                          }
+                        />
                         <Tool
                           icon={Cancel01Icon}
                           label="关闭视口"

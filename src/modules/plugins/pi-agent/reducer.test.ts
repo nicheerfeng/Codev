@@ -193,13 +193,13 @@ describe("piViewReducer", () => {
       type: "event",
       payload: rpc({
         type: "queue_update",
-        steering: ["先修复这个"],
-        followUp: ["完成后总结", "完成后测试"],
+        steering: [{ text: "先修复这个" }],
+        followUp: [{ text: "完成后总结" }, { text: "完成后测试" }],
       }),
     });
     expect(state.queue).toEqual({
-      steering: ["先修复这个"],
-      followUp: ["完成后总结", "完成后测试"],
+      steering: [{ text: "先修复这个" }],
+      followUp: [{ text: "完成后总结" }, { text: "完成后测试" }],
       pendingCount: 3,
     });
   });
@@ -209,8 +209,8 @@ describe("piViewReducer", () => {
       type: "event",
       payload: rpc({
         type: "queue_update",
-        steering: ["先修复这个"],
-        followUp: ["完成后总结"],
+        steering: [{ text: "先修复这个" }],
+        followUp: [{ text: "完成后总结" }],
       }),
     });
     const cleared = piViewReducer(queued, {
@@ -219,7 +219,10 @@ describe("piViewReducer", () => {
         type: "response",
         command: "clear_queue",
         success: true,
-        data: { steering: ["先修复这个"], followUp: ["完成后总结"] },
+        data: {
+          steering: [{ text: "先修复这个" }],
+          followUp: [{ text: "完成后总结" }],
+        },
       }),
     });
     expect(cleared.queue).toEqual(queued.queue);

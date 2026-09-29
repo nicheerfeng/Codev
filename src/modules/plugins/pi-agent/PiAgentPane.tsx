@@ -7,6 +7,8 @@ import {
   Settings01Icon,
   LayoutRightIcon,
   GridViewIcon,
+  Maximize01Icon,
+  Minimize01Icon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -209,6 +211,9 @@ export function PiAgentPane({
     thread: SidebarThread;
     name: string;
   } | null>(null);
+  const [maximizedViewport, setMaximizedViewport] = useState<number | null>(
+    null,
+  );
   const [requests, setRequests] = useState<ExtensionRequest[]>([]);
   const [answer, setAnswer] = useState("");
   const [extensionStatus, setExtensionStatus] = useState<
@@ -947,8 +952,7 @@ export function PiAgentPane({
   };
   const selectedKey = selected;
   const viewportCount = viewportKeys.length || 1;
-  const viewportColumns =
-    viewportCount > 4 ? 3 : viewportCount > 1 ? 2 : 1;
+  const viewportColumns = viewportCount > 4 ? 3 : viewportCount > 1 ? 2 : 1;
   const viewportRows = Math.ceil(viewportCount / viewportColumns);
   return (
     <section
@@ -1087,10 +1091,18 @@ export function PiAgentPane({
           className="order-first min-h-0 min-w-0 flex-1"
           columns={viewportColumns}
           rows={viewportRows}
-          positions={Array.from({ length: viewportCount }, (_, index) => ({
-            column: index % viewportColumns,
-            row: Math.floor(index / viewportColumns),
-          }))}
+          positions={Array.from({ length: viewportCount }, (_, index) =>
+            maximizedViewport !== null && index !== maximizedViewport
+              ? null
+              : {
+                  column:
+                    maximizedViewport !== null ? 0 : index % viewportColumns,
+                  row:
+                    maximizedViewport !== null
+                      ? 0
+                      : Math.floor(index / viewportColumns),
+                },
+          )}
         >
           {(viewportKeys.length ? viewportKeys : [selected]).map(
             (paneKey, paneIndex) => {
@@ -1121,10 +1133,41 @@ export function PiAgentPane({
                     data-pi-viewport-index={paneIndex}
                     className={`flex min-h-0 flex-col rounded-md border border-dashed ${dropViewport === paneIndex ? "border-primary bg-accent/40" : "border-border"}`}
                   >
-                    <div className="flex h-7 items-center justify-between px-2 text-[11px] text-muted-foreground">
-                      视口 {paneIndex + 1}
+                    <div className="flex h-7 items-center gap-1 px-2 text-[11px] text-muted-foreground">
+                      <span className="min-w-0 flex-1">
+                        视口 {paneIndex + 1}
+                      </span>
                       <button
                         type="button"
+                        className="size-5 shrink-0 rounded hover:bg-accent"
+                        aria-label={
+                          maximizedViewport === paneIndex
+                            ? "还原视口"
+                            : "放大视口"
+                        }
+                        title={
+                          maximizedViewport === paneIndex
+                            ? "还原到分组视图"
+                            : "放大视口"
+                        }
+                        onClick={() =>
+                          setMaximizedViewport(
+                            maximizedViewport === paneIndex ? null : paneIndex,
+                          )
+                        }
+                      >
+                        <HugeiconsIcon
+                          icon={
+                            maximizedViewport === paneIndex
+                              ? Minimize01Icon
+                              : Maximize01Icon
+                          }
+                          size={12}
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        className="size-5 shrink-0 rounded hover:bg-accent"
                         aria-label={`关闭视口 ${paneIndex + 1}`}
                         onClick={() => closeViewport(paneIndex)}
                       >
@@ -1220,6 +1263,34 @@ export function PiAgentPane({
                           {activeCwd ? ` (${projectName(activeCwd)})` : ""}
                         </button>
                       )}
+                      <button
+                        type="button"
+                        className="size-5 shrink-0 rounded hover:bg-accent"
+                        aria-label={
+                          maximizedViewport === paneIndex
+                            ? "还原视口"
+                            : "放大视口"
+                        }
+                        title={
+                          maximizedViewport === paneIndex
+                            ? "还原到分组视图"
+                            : "放大视口"
+                        }
+                        onClick={() =>
+                          setMaximizedViewport(
+                            maximizedViewport === paneIndex ? null : paneIndex,
+                          )
+                        }
+                      >
+                        <HugeiconsIcon
+                          icon={
+                            maximizedViewport === paneIndex
+                              ? Minimize01Icon
+                              : Maximize01Icon
+                          }
+                          size={12}
+                        />
+                      </button>
                       <button
                         type="button"
                         aria-label={`关闭视口 ${paneIndex + 1}`}
@@ -1441,7 +1512,8 @@ export function PiAgentPane({
                     busy={
                       pending.has(draftKey) ||
                       !!operations[draftKey] ||
-                      (view.status === "starting" && localCommand(draft.text)?.name !== "compact")
+                      (view.status === "starting" &&
+                        localCommand(draft.text)?.name !== "compact")
                     }
                     focusRevision={focusRevisions[draftKey] ?? 0}
                     disabled={

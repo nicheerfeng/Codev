@@ -330,10 +330,29 @@ export function PiComposer(props: Props) {
           </div>
           {props.view.localQueue.map((item) => (
             <div key={item.id} className="flex items-start gap-2 py-1">
-              <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]">
-                {item.text}
-                {item.images.length > 0 && ` · ${item.images.length} 张图片`}
-              </span>
+              <div className="flex min-w-0 flex-1 items-start gap-2">
+                {item.images.length > 0 && (
+                  <div className="flex shrink-0 flex-wrap gap-1">
+                    {item.images.map((image, index) => (
+                      <ZoomableImage
+                        key={`${item.id}-${image.mimeType}-${image.data.length}-${image.data.slice(0, 12)}-${image.data.slice(-12)}`}
+                        src={`data:${image.mimeType};base64,${image.data}`}
+                        alt={`排队图片 ${index + 1}`}
+                        className="size-10 rounded-md object-cover"
+                        onClick={(event) => event.stopPropagation()}
+                      />
+                    ))}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 whitespace-pre-wrap text-left [overflow-wrap:anywhere]"
+                  disabled={props.disabled}
+                  onClick={() => props.onLocalQueueAction?.(item.id, "edit")}
+                >
+                  {item.text}
+                </button>
+              </div>
               <Button
                 variant="ghost"
                 size="icon-xs"
@@ -373,8 +392,11 @@ export function PiComposer(props: Props) {
             待处理消息 · {props.view.queue.pendingCount}
           </div>
           {(["steering", "followUp"] as const).flatMap((kind) =>
-            props.view.queue[kind].map((text, index) => (
-              <div className="pi-queue-item" key={`${kind}-${index}-${text}`}>
+            props.view.queue[kind].map((item, index) => (
+              <div
+                className="pi-queue-item"
+                key={`${kind}-${index}-${item.text.slice(0, 30)}`}
+              >
                 <span className="pi-queue-mode">
                   {kind === "steering" ? "下一步" : "随后"}
                 </span>
@@ -385,10 +407,25 @@ export function PiComposer(props: Props) {
                   title={kind === "followUp" ? "安排到当前步骤之后" : undefined}
                   onClick={() => {
                     if (kind === "followUp")
-                      props.onQueueAction(kind, index, text, "steer");
+                      props.onQueueAction(kind, index, item.text, "steer");
                   }}
                 >
-                  {text}
+                  {item.images && item.images.length > 0 && (
+                    <div className="mb-1 flex flex-wrap gap-1">
+                      {item.images.map((img, imgIdx) => {
+                        const stableKey = `${item.text.length}-${img.mimeType}-${img.data.slice(0, 8)}-${img.data.slice(-8)}`;
+                        return (
+                          <ZoomableImage
+                            key={stableKey}
+                            src={img.data}
+                            alt={`队列图片 ${imgIdx + 1}`}
+                            className="h-10 w-10 rounded object-cover"
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
+                  {item.text}
                 </button>
                 <div className="flex shrink-0 items-center gap-0.5">
                   {kind === "followUp" && (
@@ -399,7 +436,7 @@ export function PiComposer(props: Props) {
                       aria-label="安排到当前步骤之后"
                       disabled={props.disabled}
                       onClick={() =>
-                        props.onQueueAction(kind, index, text, "steer")
+                        props.onQueueAction(kind, index, item.text, "steer")
                       }
                     >
                       <HugeiconsIcon icon={ArrowUp01Icon} size={13} />
@@ -412,7 +449,7 @@ export function PiComposer(props: Props) {
                     aria-label="退回编辑"
                     disabled={props.disabled}
                     onClick={() =>
-                      props.onQueueAction(kind, index, text, "edit")
+                      props.onQueueAction(kind, index, item.text, "edit")
                     }
                   >
                     <HugeiconsIcon icon={PencilEdit01Icon} size={13} />
@@ -424,7 +461,7 @@ export function PiComposer(props: Props) {
                     aria-label="删除排队消息"
                     disabled={props.disabled}
                     onClick={() =>
-                      props.onQueueAction(kind, index, text, "delete")
+                      props.onQueueAction(kind, index, item.text, "delete")
                     }
                   >
                     <HugeiconsIcon icon={Delete02Icon} size={13} />

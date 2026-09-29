@@ -1,7 +1,12 @@
 import type { Tab } from "@/modules/tabs";
 import type { SearchAddon } from "@xterm/addon-search";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Copy01Icon, Cancel01Icon } from "@hugeicons/core-free-icons";
+import {
+  Copy01Icon,
+  Cancel01Icon,
+  Maximize01Icon,
+  Minimize01Icon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { selectLiveTerminals } from "./lib/liveTerminals";
 import { leafIds, findLeafCwd } from "./lib/panes";
@@ -61,6 +66,9 @@ export function TerminalStack({
   const [rename, setRename] = useState<{ id: number; text: string } | null>(
     null,
   );
+  const [maximizedViewport, setMaximizedViewport] = useState<number | null>(
+    null,
+  );
   /** 保存视口标题到终端共享状态，侧栏同步更新。 */
   const commitRename = () => {
     if (!rename) return;
@@ -70,8 +78,14 @@ export function TerminalStack({
   const terminals = useMemo(() => selectLiveTerminals(tabs), [tabs]);
   const multi = viewSlots.length > 1;
   const displaySlots = multi
-    ? viewSlots
-    : [tabs.some((tab) => tab.id === activeId) ? activeId : (tabs[0]?.id ?? null)];
+    ? maximizedViewport !== null
+      ? [viewSlots[maximizedViewport]]
+      : viewSlots
+    : [
+        tabs.some((tab) => tab.id === activeId)
+          ? activeId
+          : (tabs[0]?.id ?? null),
+      ];
   const grid = terminalGrid(displaySlots);
   const positions = [
     ...terminals.map((terminal) => {
@@ -85,7 +99,12 @@ export function TerminalStack({
     ...(multi
       ? grid.slots.flatMap((id, index) =>
           id === null
-            ? [{ column: index % grid.columns, row: Math.floor(index / grid.columns) }]
+            ? [
+                {
+                  column: index % grid.columns,
+                  row: Math.floor(index / grid.columns),
+                },
+              ]
             : [],
         )
       : []),
@@ -210,12 +229,42 @@ export function TerminalStack({
                 >
                   <HugeiconsIcon icon={Copy01Icon} size={12} />
                 </button>
+                {multi && (
+                  <button
+                    type="button"
+                    aria-label={
+                      maximizedViewport === position ? "还原视口" : "放大视口"
+                    }
+                    title={
+                      maximizedViewport === position
+                        ? "还原到分组视图"
+                        : "放大视口"
+                    }
+                    className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                    onClick={() =>
+                      setMaximizedViewport(
+                        maximizedViewport === position ? null : position,
+                      )
+                    }
+                  >
+                    <HugeiconsIcon
+                      icon={
+                        maximizedViewport === position
+                          ? Minimize01Icon
+                          : Maximize01Icon
+                      }
+                      size={12}
+                    />
+                  </button>
+                )}
                 <button
                   type="button"
                   aria-label={multi ? "关闭视口" : "关闭终端"}
                   title={multi ? "关闭视口" : "关闭终端"}
                   className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-                  onClick={() => (multi ? onCloseViewport(position) : onClose(t.id))}
+                  onClick={() =>
+                    multi ? onCloseViewport(position) : onClose(t.id)
+                  }
                 >
                   <HugeiconsIcon icon={Cancel01Icon} size={12} />
                 </button>
@@ -242,7 +291,33 @@ export function TerminalStack({
               className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-md border border-dashed ${dropViewport === index ? "border-primary ring-2 ring-primary/40" : "border-border"}`}
             >
               <div className="flex h-6 shrink-0 items-center gap-1 border-b border-border/60 px-2 text-[11px] text-muted-foreground">
-                <span className="min-w-0 flex-1 truncate">视口 {index + 1}</span>
+                <span className="min-w-0 flex-1 truncate">
+                  视口 {index + 1}
+                </span>
+                <button
+                  type="button"
+                  aria-label={
+                    maximizedViewport === index ? "还原视口" : "放大视口"
+                  }
+                  title={
+                    maximizedViewport === index ? "还原到分组视图" : "放大视口"
+                  }
+                  className="flex size-5 shrink-0 items-center justify-center rounded-sm hover:bg-muted hover:text-foreground"
+                  onClick={() =>
+                    setMaximizedViewport(
+                      maximizedViewport === index ? null : index,
+                    )
+                  }
+                >
+                  <HugeiconsIcon
+                    icon={
+                      maximizedViewport === index
+                        ? Minimize01Icon
+                        : Maximize01Icon
+                    }
+                    size={12}
+                  />
+                </button>
                 <button
                   type="button"
                   aria-label={`关闭视口 ${index + 1}`}

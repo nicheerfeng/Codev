@@ -93,15 +93,15 @@ function basename(path: string): string {
 }
 
 const ROOT_COLORS = [
-  "#71869a",
-  "#668b85",
-  "#7c9070",
-  "#6f809f",
-  "#8c8c6e",
-  "#6c9090",
+  "#3b82f6",
+  "#22c55e",
+  "#f59e0b",
+  "#ef4444",
+  "#8b5cf6",
+  "#06b6d4",
 ] as const;
 
-/** 将根目录绝对路径稳定映射到低饱和项目色。 */
+/** 将根目录绝对路径稳定映射到高饱和项目色。 */
 function rootColor(path: string): string {
   let hash = 2166136261;
   for (const char of path.replace(/\\/g, "/").toLowerCase()) {
@@ -144,7 +144,6 @@ function RootSection({
   reorderHeaderProps,
   insertBefore,
   root,
-  active,
   selected,
   revealRequest,
   onRevealPath,
@@ -166,7 +165,6 @@ function RootSection({
   reorderHeaderProps: React.HTMLAttributes<HTMLDivElement>;
   insertBefore: boolean;
   root: string;
-  active: boolean;
   selected: boolean;
   revealRequest: { nonce: number; path: string } | null;
   onRevealPath: (root: string, path: string) => void;
@@ -222,12 +220,9 @@ function RootSection({
           <div
             {...reorderHeaderProps}
             data-root-reorder-header=""
-            className={`relative flex h-7 shrink-0 cursor-pointer items-center gap-1 overflow-hidden border-b border-l-2 px-2 text-xs font-medium select-none ${selected ? "border-primary ring-1 ring-inset ring-primary/80" : "border-border/60"}`}
+            className={`relative flex h-7 shrink-0 cursor-pointer items-center gap-1 overflow-hidden border-b border-l-2 px-2 text-xs font-medium select-none hover:bg-accent/70 ${selected ? "border-primary bg-primary/12 ring-1 ring-inset ring-primary/80" : "border-border/60"}`}
             style={{
               borderLeftColor: color,
-              backgroundColor: selected
-                ? "color-mix(in srgb, var(--primary) 24%, var(--background))"
-                : `color-mix(in srgb, ${color} ${active ? 100 : 70}%, var(--background))`,
               color: "var(--foreground)",
             }}
             onMouseEnter={() => setRootHeaderHovered(true)}
@@ -265,7 +260,7 @@ function RootSection({
               </span>
             </button>
             <img
-              src={folderIconUrl(basename(root), false)}
+              src={folderIconUrl(basename(root), false, color)}
               alt=""
               height={14}
               width={14}
@@ -1067,7 +1062,6 @@ export const FileExplorer = memo(
                       reorderHeaderProps={rootReorder.headerProps(root)}
                       insertBefore={showRootGap(index)}
                       root={root}
-                      active={root === activeRoot}
                       selected={selectedPaths.includes(root)}
                       revealRequest={
                         rootRevealRequest?.root === root

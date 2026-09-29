@@ -354,6 +354,7 @@ function Process({
     if (!touched.current) setExpanded(running);
   }, [running]);
   const steps: Array<{ id: string; items: Item[]; message: boolean }> = [];
+  const compactions = items.filter(isCompaction);
   for (const item of items) {
     if (isCompaction(item)) continue;
     const message = item.type === "agentMessage" || item.type === "plan";
@@ -373,7 +374,20 @@ function Process({
   ];
   return (
     <>
-      <details className="codex-process" open={expanded || Boolean(query)}>
+      {compactions.map((item) => (
+        <div
+          key={`compaction-${item.id}`}
+          role="status"
+          className="codex-process-summary flex items-center gap-2 py-1.5 text-xs text-muted-foreground"
+        >
+          <HugeiconsIcon icon={ArrowDown01Icon} size={12} />
+          <span className={item.status === "inProgress" ? "codex-live" : ""}>
+            {item.status === "inProgress" ? "正在压缩上下文" : "上下文已压缩"}
+          </span>
+        </div>
+      ))}
+      {visibleItems.length > 0 && (
+        <details className="codex-process" open={expanded || Boolean(query)}>
         <summary
           className="codex-process-summary flex max-w-full cursor-pointer list-none items-center gap-2 py-1.5 text-xs font-normal text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
           onClick={(event) => {
@@ -409,7 +423,8 @@ function Process({
             ),
           )}
         </div>
-      </details>
+        </details>
+      )}
       {files.length > 0 && (
         <details className="codex-file-summary my-1 min-w-0 text-xs font-normal text-muted-foreground">
           <summary className="flex cursor-pointer list-none items-center gap-2 py-1 leading-6 [overflow-wrap:anywhere] [&::-webkit-details-marker]:hidden">

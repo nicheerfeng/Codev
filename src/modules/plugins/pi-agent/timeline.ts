@@ -1,4 +1,8 @@
 import type { PiToolItem, PiTranscriptItem } from "./types";
+import {
+  hasVisibleTranscriptText,
+  isVisibleTimelineItem,
+} from "./transcriptVisibility";
 
 export type PiTimelineBlock =
   | { id: string; kind: "item"; item: PiTranscriptItem }
@@ -101,6 +105,7 @@ export function activityPreview(item: PiTranscriptItem): string {
           : "已完成";
     return `${status} · ${toolSummary(item)}`.replace(/\s+/gu, " ");
   }
+  if (!hasVisibleTranscriptText(item.text)) return "";
   const text = item.text.replace(/\s+/gu, " ").trim();
   const preview = text.length > 160 ? `${text.slice(0, 160)}…` : text;
   return `${item.streaming ? "思考中" : "已思考"}${preview ? ` · ${preview}` : " · 等待内容"}`;
@@ -113,7 +118,7 @@ export function currentActivity(
   const live = [...items]
     .reverse()
     .find((item) => item.kind === "tool" && item.status === "running");
-  return live ?? items[items.length - 1];
+  return live ?? [...items].reverse().find(isVisibleTimelineItem);
 }
 
 /** 从当前记录生成外部摘要，与动画使用相同的记录来源。 */
@@ -204,6 +209,8 @@ export function buildTimelineBlocks(
     turnStartedAt = undefined;
   };
   for (const item of items) {
+    // 先过滤展示噪声，再判断轮次末尾；否则尾部空思考会吞掉独立最终回复。
+    if (!isVisibleTimelineItem(item)) continue;
     if (item.kind === "message" && item.role === "user") {
       flush(false);
       blocks.push({ id: item.id, kind: "item", item });

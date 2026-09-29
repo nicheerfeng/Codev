@@ -1,5 +1,6 @@
 import { bindFileScroll } from "@/modules/reader/fileScroll";
 import { ImageViewport } from "@/modules/reader/ImageViewport";
+import { PdfPreview } from "@/modules/reader/pdf/PdfPreview";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
@@ -597,8 +598,7 @@ const TextWindowPreview = forwardRef<
   );
 });
 
-// 直接交给 WebView 解码媒体或 PDF；图片用视口滚轮缩放、拖动平移。
-/** 渲染媒体并保留 PDF/媒体阅览器的滚动位置。 */
+/** 渲染图片、音频和视频；PDF 走独立的可搜索阅读组件。 */
 function AssetPreview({ path }: { path: string }) {
   const extension = path.split(".").pop()?.toLowerCase() ?? "";
   const isImage = [
@@ -614,33 +614,11 @@ function AssetPreview({ path }: { path: string }) {
   ].includes(extension);
   const isVideo = ["mp4", "webm", "ogg", "mov"].includes(extension);
   const isAudio = ["mp3", "wav", "flac", "aac", "m4a"].includes(extension);
-  const isPdf = extension === "pdf";
   const [source, setSource] = useState<string | null>(null);
   const [assetError, setAssetError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const pdfRef = useRef<HTMLIFrameElement>(null);
 
-  useEffect(
-    () => bindFileScroll(scrollRef.current, path),
-    [path, source],
-  );
-
-  useEffect(() => {
-    if (!isPdf || !pdfRef.current) return;
-    const frame = pdfRef.current;
-    const onLoad = () => {
-      try {
-        frame.contentWindow?.addEventListener("keydown", (event) => {
-          if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
-            event.preventDefault();
-            window.dispatchEvent(new CustomEvent("codev-search-focus"));
-          }
-        }, true);
-      } catch { /* PDF viewer may be isolated by WebView. */ }
-    };
-    frame.addEventListener("load", onLoad);
-    return () => frame.removeEventListener("load", onLoad);
-  }, [isPdf, source]);
+  useEffect(() => bindFileScroll(scrollRef.current, path), [path, source]);
 
   useEffect(() => {
     let cancelled = false;
@@ -711,22 +689,31 @@ function AssetPreview({ path }: { path: string }) {
             src={source}
           />
         )}
-        {source && isPdf && (
-          <iframe
-            ref={pdfRef}
-            src={source}
-            className="h-full min-h-[32rem] w-full border-0"
-            title={filenameFromPath(path)}
-          />
-        )}
       </div>
     </div>
   );
 }
 
-// 提供只读预览器的编辑器句柄，保持标签和刷新接口稳定。
+/** 在媒体预览之前分派 PDF，直接向顶部搜索栏暴露完整搜索句柄。 */
 export const FilePreviewPane = memo(
-  forwardRef<EditorPaneHandle, Props>(function FilePreviewPane(
+  forwardRef<EditorPaneHandle, Props>(function FilePreviewPane(props, ref) {
+    if (!props.textOnly && props.path.toLowerCase().endsWith(".pdf")) {
+      return (
+        <PdfPreview
+          key={props.path}
+          ref={ref}
+          path={props.path}
+          onDirtyChange={props.onDirtyChange}
+        />
+      );
+    }
+    return <MediaOrTextPreviewPane ref={ref} {...props} />;
+  }),
+);
+
+// 提供只读预览器的编辑器句柄，保持标签和刷新接口稳定。
+const MediaOrTextPreviewPane = memo(
+  forwardRef<EditorPaneHandle, Props>(function MediaOrTextPreviewPane(
     { path, onDirtyChange, textOnly = false },
     ref,
   ) {

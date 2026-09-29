@@ -1,0 +1,17 @@
+.codev-pdf .pdf-tool {
+  display: inline-flex;
+  height: 26px;
+  min-width: 26px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  padding: 0 6px;
+}
+.codev-pdf .pdf-tool:hover:not(:disabled) { background: var(--accent); }
+.codev-pdf .pdf-tool:disabled { opacity: 0.4; }
+.codev-pdf .pdf-tool:focus-visible { outline: 2px solid var(--ring); }
+.codev-pdf-scroll { background: var(--muted); }
+/* PDF.js 自身的文字层负责命中高亮；不使用浏览器页面搜索。 */
+.codev-pdf .pdfViewer { padding: 8px 0; }
+.codev-pdf .pdfViewer .page { background: white; }

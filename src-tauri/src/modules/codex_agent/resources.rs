@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -91,6 +92,26 @@ pub fn home() -> Result<PathBuf, String> {
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|p| p.join(".codex")))
         .ok_or("Codex 目录不可用".into())
+}
+
+/// 读取 Codex 个人全局指令文件。
+#[tauri::command]
+pub fn codex_resources_read_instructions() -> Result<String, String> {
+    let path = home()?.join("AGENTS.md");
+    Ok(fs::read_to_string(path).unwrap_or_default())
+}
+
+/// 保存 Codex 个人全局指令文件；空内容删除文件。
+#[tauri::command]
+pub fn codex_resources_write_instructions(content: String) -> Result<(), String> {
+    let path = home()?.join("AGENTS.md");
+    if content.trim().is_empty() {
+        if path.exists() { fs::remove_file(path).map_err(|error| error.to_string())?; }
+    } else {
+        fs::write(path, if content.ends_with('\n') { content } else { format!("{content}\n") })
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 /// 读取固定 provider 与选中的原生 profile，不返回认证内容。

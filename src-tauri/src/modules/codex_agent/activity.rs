@@ -25,7 +25,11 @@ impl Activity {
             }
         }
         let params = &message["params"];
-        let thread = params["threadId"].as_str().unwrap_or("");
+        let thread = params
+            .get("threadId")
+            .or_else(|| params.get("thread_id"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
         match method {
             "turn/started" => {
                 self.active.insert(thread.into());
@@ -67,6 +71,23 @@ impl Activity {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn normalizes_snake_case_thread_ids() {
+        let mut state = Activity {
+            ready: true,
+            ..Default::default()
+        };
+        state.receive(&json!({
+            "method": "turn/started",
+            "params": {"thread_id": "snake"}
+        }));
+        state.receive(&json!({
+            "method": "turn/completed",
+            "params": {"thread_id": "snake"}
+        }));
+        assert!(state.check().is_ok());
+    }
+
     /// 隐藏会话和待审批不会被当前视口的空闲状态覆盖。
     #[test]
     fn tracks_hidden_threads_and_approvals() {

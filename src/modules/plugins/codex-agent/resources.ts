@@ -59,3 +59,13 @@ export function resourceSwitchReason(
 export function readResourceKey(id: string): Promise<string> {
   return invoke("codex_resources_key", { id });
 }
+
+/** 读取 Codex 个人全局 AGENTS.md。 */
+export function readCodexInstructions(): Promise<string> {
+  return invoke("codex_resources_read_instructions");
+}
+
+/** 保存 Codex 个人全局 AGENTS.md。 */
+export function writeCodexInstructions(content: string): Promise<void> {
+  return invoke("codex_resources_write_instructions", { content });
+}
