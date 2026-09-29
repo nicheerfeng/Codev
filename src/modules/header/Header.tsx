@@ -251,13 +251,13 @@ export function Header({
             onClick={onToggleTerminalPanel}
             title={t(
               terminalPanelCollapsed
-                ? "Show terminal panel"
-                : "Hide terminal panel",
+                ? "Show plugin panel"
+                : "Hide plugin panel",
             )}
             aria-label={t(
               terminalPanelCollapsed
-                ? "Show terminal panel"
-                : "Hide terminal panel",
+                ? "Show plugin panel"
+                : "Hide plugin panel",
             )}
           >
             <HugeiconsIcon icon={TerminalIcon} size={15} strokeWidth={1.75} />

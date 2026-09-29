@@ -85,6 +85,14 @@ pub struct PiModelsFile {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PiPromptFile {
+    path: String,
+    exists: bool,
+    content: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PiSessionHistory {
     messages: Vec<Value>,
     model: Option<Value>,
@@ -673,6 +681,38 @@ pub fn pi_agent_append_session(request: PiSessionAppendRequest) -> Result<(), St
 #[tauri::command]
 pub fn pi_agent_list_models() -> Result<Vec<PiListedModel>, String> {
     list_models_from_file()
+}
+
+/// 读取 Pi 全局提示词文件，不启动 runtime。
+#[tauri::command]
+pub fn pi_agent_read_prompts() -> Result<Vec<PiPromptFile>, String> {
+    let home = pi_home_dir().ok_or_else(|| "无法定位 Pi 配置目录".to_string())?;
+    let path = home.join("APPEND_SYSTEM.md");
+    let content = fs::read_to_string(&path).unwrap_or_default();
+    Ok(vec![PiPromptFile {
+        path: canonical_display(&path),
+        exists: path.exists(),
+        content,
+    }])
+}
+
+/// 保存 Pi 全局提示词文件；空内容删除文件。
+#[tauri::command]
+pub fn pi_agent_write_prompt(name: String, content: String) -> Result<(), String> {
+    if name != "APPEND_SYSTEM.md" {
+        return Err("不支持的 Pi 提示词文件".to_string());
+    }
+    let home = pi_home_dir().ok_or_else(|| "无法定位 Pi 配置目录".to_string())?;
+    let path = home.join(name);
+    if content.trim().is_empty() {
+        if path.exists() {
+            fs::remove_file(path).map_err(|error| error.to_string())?;
+        }
+    } else {
+        fs::write(path, if content.ends_with('\n') { content } else { format!("{content}\n") })
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 /// 返回 Pi models.json 的原始文本，不在 Codev 内复制模型密钥。

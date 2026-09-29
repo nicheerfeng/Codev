@@ -216,7 +216,7 @@ export class PiWorkspaceClient {
     this.publish();
   }
 
-  /** 空闲发送才按 catalog 代次重建当前线程；运行中的进程不跟随。 */
+  /** 空闲发送才按 catalog 代次切换模型；优先使用 set_model RPC，失败才重启进程。 */
   private async adaptCatalogRuntime(thread: PiThread): Promise<boolean> {
     if (
       thread.runtimeId === null ||
@@ -231,6 +231,31 @@ export class PiWorkspaceClient {
       thread.catalogEpoch = this.catalogEpoch;
       return false;
     }
+
+    // 优先使用 Pi 原生的 set_model RPC，无需重启进程
+    const model = thread.view.model;
+    if (model?.provider && model.id) {
+      try {
+        await this.sendRequest(thread, {
+          type: "set_model",
+          provider: model.provider,
+          modelId: model.id,
+        });
+        thread.runtimeModelKey = selectedKey;
+        thread.catalogEpoch = this.catalogEpoch;
+        return true;
+      } catch (error) {
+        // set_model 失败（可能是旧版 Pi 不支持），回退到重启 runtime
+        thread.view = { ...thread.view, error: CATALOG_ADAPT_NOTICE };
+        this.publish();
+        await this.close(thread.key);
+        thread.view = { ...thread.view, error: CATALOG_ADAPT_NOTICE };
+        this.publish();
+        return true;
+      }
+    }
+
+    // 模型信息不完整，回退到重启
     thread.view = { ...thread.view, error: CATALOG_ADAPT_NOTICE };
     this.publish();
     await this.close(thread.key);
@@ -343,6 +368,18 @@ export class PiWorkspaceClient {
       ];
       if (!thread.view.items.length)
         hydrates.push(this.sendRequest(thread, { type: "get_messages" }));
+      else {
+        const last = thread.view.items[thread.view.items.length - 1];
+        if (
+          last?.id &&
+          !last.id.startsWith("history-") &&
+          !last.id.startsWith("local-user-") &&
+          !last.id.includes(":")
+        )
+          hydrates.push(
+            this.sendRequest(thread, { type: "get_entries", since: last.id }),
+          );
+      }
       if (!thread.view.models.length && !this.catalogModels.length)
         hydrates.push(
           this.sendRequest(thread, { type: "get_available_models" }),
@@ -684,6 +721,8 @@ export class PiWorkspaceClient {
           this.catalogModels[0] ??
           thread.view.model,
       };
+      // 清空 runtimeModelKey，强制下次操作时重新同步配置到 runtime
+      thread.runtimeModelKey = null;
       this.fillContextPercent(thread);
     }
     this.publish();
@@ -738,7 +777,9 @@ export class PiWorkspaceClient {
   }
 
   /** 按原生队列快照修改单条消息，重建失败时将未发送文本退回草稿。 */
-  private async clearQueue(thread: PiThread): Promise<Record<string, unknown> | null> {
+  private async clearQueue(
+    thread: PiThread,
+  ): Promise<Record<string, unknown> | null> {
     try {
       return objectValue(await this.request(thread, { type: "clear_queue" }));
     } catch (error) {
@@ -757,12 +798,17 @@ export class PiWorkspaceClient {
     restore: (texts: string[]) => void,
   ) {
     const snapshot = await this.clearQueue(thread);
-    if (!snapshot)
-      throw new Error("当前 Pi runtime 不支持编辑已排队消息");
+    if (!snapshot) throw new Error("当前 Pi runtime 不支持编辑已排队消息");
     const entries = (["steering", "followUp"] as const).flatMap((mode) =>
-      (Array.isArray(snapshot?.[mode]) ? (snapshot[mode] as string[]) : []).map(
-        (message, position) => ({ mode, position, message }),
-      ),
+      (Array.isArray(snapshot?.[mode])
+        ? (snapshot[mode] as Array<{ text: string; images?: PiImage[] }>)
+        : []
+      ).map((item, position) => ({
+        mode,
+        position,
+        message: item.text,
+        images: item.images,
+      })),
     );
     const byIndex = entries.find(
       (entry) => entry.mode === kind && entry.position === index,
@@ -793,22 +839,26 @@ export class PiWorkspaceClient {
   async stopAndRestore(thread: PiThread, restore: (texts: string[]) => void) {
     const queued = await this.clearQueue(thread);
     const steering = Array.isArray(queued?.steering)
-      ? queued.steering
-      : thread.view.queue.steering;
+      ? queued.steering.map((item: any) =>
+          typeof item === "string" ? item : item.text,
+        )
+      : thread.view.queue.steering.map((item) => item.text);
     const followUp = Array.isArray(queued?.followUp)
-      ? queued.followUp
-      : thread.view.queue.followUp;
-    const localQueue = (thread.view.localQueue ?? []).map((entry) => entry.text);
+      ? queued.followUp.map((item: any) =>
+          typeof item === "string" ? item : item.text,
+        )
+      : thread.view.queue.followUp.map((item) => item.text);
+    const localQueue = (thread.view.localQueue ?? []).map(
+      (entry) => entry.text,
+    );
     thread.view = { ...thread.view, localQueue: [], queueSendingId: undefined };
-    restore([
-      ...steering,
-      ...followUp,
-      ...localQueue,
-    ]);
+    restore([...steering, ...followUp, ...localQueue]);
     this.compactionResume.delete(thread.key);
     thread.view = piViewReducer(thread.view, { type: "stopping" });
     this.publish();
     await this.request(thread, { type: "abort" });
+    // 清空 runtimeModelKey，强制下次操作时检测模型变化
+    thread.runtimeModelKey = null;
     await this.refreshState(thread);
   }
 

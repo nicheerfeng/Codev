@@ -2,7 +2,9 @@
 
 产品边界见 [CODEV.md](CODEV.md)。本文件只记录开发、核验和发版必须遵守的工作方式。
 
-## 界面核验
+## Rust 缓存硬性规则
+
+任何 `cargo test`、`cargo check`、`tauri dev` 或构建命令都必须使用 `C:\Users\79988\AppData\Local\codev-cargo-target` 作为 `CARGO_TARGET_DIR`。严禁使用仓库内 `src-tauri/target`、D 盘缓存或临时新建缓存目录；执行前必须确认没有并发的 `cargo.exe`、`rustc.exe` 或 Tauri 编译进程。若 C 盘缓存不可用，立即停止并报告，不得绕过。命令执行后必须检查实际输出路径，确认没有回落到仓库内 `target`。
 
 小修复、交互回归、拖拽和窗口行为，禁止先打便携包。便携构建只用于正式发版。
 
@@ -24,7 +26,6 @@ pnpm tauri dev --config src-tauri/tauri.portable.conf.json
 构建缓存固定复用 `C:\Users\79988\AppData\Local\codev-cargo-target`。审核热窗、`tauri dev`、`cargo check` 和日常测试禁止临时改用 D 盘缓存、仓库内 `target` 或新的临时 `CARGO_TARGET_DIR`；启动前先确认没有并发的 Cargo/Rust 编译进程，避免重复冷编译占满磁盘带宽。若 C 盘缓存权限或锁异常，先停止并报告，不得自行切换缓存盘绕过问题。
 构建缓存固定复用 `C:\Users\79988\AppData\Local\codev-cargo-target`。审核热窗、`tauri dev`、`cargo check` 和日常测试禁止临时改用 D 盘缓存、仓库内 `target` 或新的临时 `CARGO_TARGET_DIR`；启动前先确认没有并发的 Cargo/Rust 编译进程，避免重复冷编译占满磁盘带宽。若 C 盘缓存权限或锁异常，先停止并报告，不得自行切换缓存盘绕过问题。
 构建缓存固定复用 `C:\Users\79988\AppData\Local\codev-cargo-target`。审核热窗、`tauri dev`、`cargo check` 和日常测试禁止临时改用 D 盘缓存、仓库内 `target` 或新的临时 `CARGO_TARGET_DIR`；启动前先确认没有并发的 Cargo/Rust 编译进程，避免重复冷编译占满磁盘带宽。若 C 盘缓存权限或锁异常，先停止并报告，不得自行切换缓存盘绕过问题。
-
 
 这条命令使用 `app.teague.codev.portable`，与安装版 `app.teague.codev` 并存。Vite 热更新走 `http://localhost:1420`，安装版不占用该端口。界面改完后由 agent 直接启动这个审核窗口，并写明要看的点和反馈方式；不要只把命令丢给用户自己跑。
 

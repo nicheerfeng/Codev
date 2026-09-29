@@ -16,6 +16,12 @@ export type PiSessionSummary = {
   messageCount: number;
 };
 
+export type PiPromptFile = {
+  path: string;
+  exists: boolean;
+  content: string;
+};
+
 export type PiModelsFile = {
   path: string;
   exists: boolean;
@@ -73,9 +79,15 @@ export type PiMessageItem = {
 };
 
 export type PiImage = { type: "image"; data: string; mimeType: string };
+
+export type PiQueueItem = {
+  text: string;
+  images?: PiImage[];
+};
+
 export type PiQueueState = {
-  steering: string[];
-  followUp: string[];
+  steering: PiQueueItem[];
+  followUp: PiQueueItem[];
   pendingCount: number;
 };
 

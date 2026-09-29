@@ -86,6 +86,7 @@ export function CodexComposer({
   const [commandIndex, setCommandIndex] = useState(0);
   const [commandDismissed, setCommandDismissed] = useState(false);
   const [commandBusy, setCommandBusy] = useState(false);
+  const [now, setNow] = useState(Date.now());
   const commandList = useRef<HTMLDivElement>(null);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [skillsError, setSkillsError] = useState("");
@@ -115,6 +116,11 @@ export function CodexComposer({
       cancelled = true;
     };
   }, [modelOpen, resourceId]);
+  useEffect(() => {
+    if (!session.compacting) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [session.compacting]);
   const slashOpen = !commandDismissed && /^\/[^\s]*$/.test(session.draft);
   // biome-ignore lint/correctness/useExhaustiveDependencies: 原生 skills/changed 事件要求重新读取目录。
   useEffect(() => {
@@ -167,7 +173,6 @@ export function CodexComposer({
     session.submitted,
     session.thread.turns.flatMap((turn) => turn.items),
   );
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 附件或停止恢复完成后聚焦原线程。
   useEffect(() => {
     if (session.focusRevision) input.current?.focus();
   }, [session.focusRevision]);
@@ -182,7 +187,7 @@ export function CodexComposer({
     : session.effectiveSandbox?.type === "externalSandbox"
       ? "外部沙箱"
       : "未启动";
-  const disabled = !connected || !session.loaded || commandBusy;
+  const disabled = !connected || !session.loaded;
   const payload = Boolean(
     session.draft.trim() ||
       session.attachments.length ||
@@ -208,7 +213,7 @@ export function CodexComposer({
   };
   /** 发送成功前保留草稿，恢复输入焦点。 */
   const send = async (mode: "followUp" | "steer" = "followUp") => {
-    if (disabled) return;
+    if (disabled || commandBusy) return;
     recall.current = -1;
     const command = parseCommand(session.draft);
     if (command) {
@@ -231,7 +236,10 @@ export function CodexComposer({
       }
       setCommandBusy(true);
       try {
-        if (command.name === "compact") await client.compact(id);
+        if (command.name === "compact") {
+          client.patch(id, { draft: "" });
+          await client.compact(id);
+        }
         if (command.name === "fork") onSelect(await client.fork(id));
         if (command.name === "new" && !(await onNew(session.thread.cwd)))
           return;
@@ -348,6 +356,19 @@ export function CodexComposer({
               </div>
             </div>
           ))}
+        </div>
+      )}
+      {session.compactionNotice && (
+        <div
+          role="status"
+          className="mx-auto mb-2 max-w-3xl text-center text-xs text-muted-foreground"
+        >
+          {session.compactionNotice.status === "running"
+            ? "正在压缩上下文"
+            : session.compactionNotice.status === "done"
+              ? "上下文已压缩"
+              : "上下文压缩失败"}
+          {` · 用时 ${Math.max(0, Math.floor(((session.compactionNotice.finishedAt ?? now) - session.compactionNotice.startedAt) / 1000))} 秒`}
         </div>
       )}
       <div
@@ -504,14 +525,27 @@ export function CodexComposer({
             ))}
           </div>
         )}
+        {false && (
+          <div
+            role="status"
+            className="mx-auto mb-2 max-w-3xl text-center text-xs text-muted-foreground"
+          >
+            {session.compactionNotice!.status === "running"
+              ? "正在压缩上下文"
+              : session.compactionNotice!.status === "done"
+                ? "上下文已压缩"
+                : "上下文压缩失败"}
+            {session.compactionNotice!.status === "running" &&
+              ` · 用时 ${Math.max(0, Math.floor((now - session.compactionNotice!.startedAt) / 1000))} 秒`}
+            {session.compactionNotice!.status !== "running" &&
+              session.compactionNotice!.finishedAt &&
+              ` · 用时 ${Math.max(0, Math.floor((session.compactionNotice!.finishedAt! - session.compactionNotice!.startedAt) / 1000))} 秒`}
+          </div>
+        )}
         <Textarea
           ref={input}
           aria-label="发送给 Codex"
-          placeholder={
-            session.busy
-              ? "追加任务，或输入 / 命令…"
-              : "描述任务，或输入 / 命令…"
-          }
+          placeholder="描述任务，或输入 / 命令…"
           disabled={disabled}
           value={session.draft}
           className="codex-prompt reader-scrollbar min-h-18 max-h-45 rounded-none border-0 bg-transparent! px-3 py-3 text-[13px]! shadow-none focus-visible:ring-0 [field-sizing:fixed]"
@@ -814,21 +848,15 @@ export function CodexComposer({
             </SelectContent>
           </Select>
           <div className="ml-auto flex shrink-0 items-center gap-1">
-            {session.compacting ? (
-              <span className="text-[10px] text-muted-foreground">
-                正在压缩上下文
+            {session.tokenUsage && (
+              <span
+                className="px-1 text-[10px] text-muted-foreground"
+                title={`${session.tokenUsage.last.totalTokens.toLocaleString()} tokens · 累计 ${session.tokenUsage.total.totalTokens.toLocaleString()}`}
+              >
+                {session.tokenUsage.modelContextWindow
+                  ? `${Math.round((session.tokenUsage.last.totalTokens / session.tokenUsage.modelContextWindow) * 100)}%`
+                  : `${session.tokenUsage.last.totalTokens.toLocaleString()} tokens`}
               </span>
-            ) : (
-              session.tokenUsage && (
-                <span
-                  className="px-1 text-[10px] text-muted-foreground"
-                  title={`${session.tokenUsage.last.totalTokens.toLocaleString()} tokens · 累计 ${session.tokenUsage.total.totalTokens.toLocaleString()}`}
-                >
-                  {session.tokenUsage.modelContextWindow
-                    ? `${Math.round((session.tokenUsage.last.totalTokens / session.tokenUsage.modelContextWindow) * 100)}%`
-                    : `${session.tokenUsage.last.totalTokens.toLocaleString()} tokens`}
-                </span>
-              )
             )}
             {client.taskBusy(id) && (
               <Button

@@ -43,17 +43,25 @@ function catBody(iconName: string): string | null {
   return null;
 }
 
-function buildDataUrl(iconName: string): string | null {
-  const cached = dataUrlCache.get(iconName);
+function tintIconBody(body: string, color: string): string {
+  return body
+    .replace(/stroke="#[0-9a-fA-F]{3,8}"/g, `stroke="${color}"`)
+    .replace(/fill="#[0-9a-fA-F]{3,8}"/g, `fill="${color}"`);
+}
+
+function buildDataUrl(iconName: string, tint?: string): string | null {
+  const cacheKey = tint ? `${iconName}@${tint.toLowerCase()}` : iconName;
+  const cached = dataUrlCache.get(cacheKey);
   if (cached !== undefined) return cached || null;
   const body = catBody(iconName);
   if (!body) {
-    dataUrlCache.set(iconName, "");
+    dataUrlCache.set(cacheKey, "");
     return null;
   }
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${CAT_W} ${CAT_H}">${body}</svg>`;
+  const svgBody = tint ? tintIconBody(body, tint) : body;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${CAT_W} ${CAT_H}">${svgBody}</svg>`;
   const url = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-  dataUrlCache.set(iconName, url);
+  dataUrlCache.set(cacheKey, url);
   return url;
 }
 
@@ -96,16 +104,22 @@ export function fileIconUrl(name: string): string {
   return buildDataUrl(DEFAULT_FILE) ?? "";
 }
 
-export function folderIconUrl(name: string, expanded: boolean): string {
+export function folderIconUrl(
+  name: string,
+  expanded: boolean,
+  tint?: string,
+): string {
   const lower = name.toLowerCase();
 
   const mapped = catFolderNames[lower];
   if (mapped) {
     const slug = toIconifySlug(mapped);
     const target = expanded ? `${slug}-open` : slug;
-    const url = buildDataUrl(target);
+    const url = buildDataUrl(target, tint);
     if (url) return url;
   }
 
-  return buildDataUrl(expanded ? DEFAULT_FOLDER_OPEN : DEFAULT_FOLDER) ?? "";
+  return (
+    buildDataUrl(expanded ? DEFAULT_FOLDER_OPEN : DEFAULT_FOLDER, tint) ?? ""
+  );
 }

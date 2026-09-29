@@ -6,6 +6,7 @@ import type {
   PiSessionSummary,
   PiStartResult,
   PiModelsFile,
+  PiPromptFile,
   PiSessionHistory,
   PiClonedSession,
   PiModel,
@@ -31,8 +32,12 @@ export type PiSubagentRun = {
 };
 
 /** 读取当前父 Pi 会话关联的 pi-subagents 运行摘要。 */
-export function listPiSubagentRuns(ownerSessionPath: string): Promise<PiSubagentRun[]> {
-  return invoke<PiSubagentRun[]>("pi_agent_list_subagent_runs", { ownerSessionPath });
+export function listPiSubagentRuns(
+  ownerSessionPath: string,
+): Promise<PiSubagentRun[]> {
+  return invoke<PiSubagentRun[]>("pi_agent_list_subagent_runs", {
+    ownerSessionPath,
+  });
 }
 
 /** 读取 Pi 技能或插件目录的只读展示数据。 */
@@ -104,6 +109,14 @@ export function readPiModels(): Promise<PiModelsFile> {
 /** 校验并直接保存 Pi 的 models.json 文件。 */
 export function writePiModels(content: string): Promise<void> {
   return invoke("pi_agent_write_models", { content });
+}
+
+export function readPiPrompts(): Promise<PiPromptFile[]> {
+  return invoke<PiPromptFile[]>("pi_agent_read_prompts");
+}
+
+export function writePiPrompt(name: string, content: string): Promise<void> {
+  return invoke("pi_agent_write_prompt", { name, content });
 }
 
 /** 向会话 JSONL 追加名称、模型或思考等级，不启动 runtime。 */

@@ -8,9 +8,11 @@ import {
   BookOpen01Icon,
   PuzzleIcon,
   InformationCircleIcon,
+  PencilEdit01Icon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -18,7 +20,13 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
-import { readPiModels, writePiModels } from "./native";
+import {
+  readPiModels,
+  readPiPrompts,
+  writePiModels,
+  writePiPrompt,
+} from "./native";
+import type { PiPromptFile } from "./types";
 import {
   splitModelConfig,
   joinModelConfig,
@@ -71,8 +79,11 @@ export function PiSettings({
   const [confirm, setConfirm] = useState(false);
   const [help, setHelp] = useState(false);
   const [panel, setPanel] = useState<
-    "models" | "skills" | "plugins" | "version"
+    "models" | "prompts" | "skills" | "plugins" | "version"
   >("models");
+  const [prompts, setPrompts] = useState<PiPromptFile[]>([]);
+  const [promptBusy, setPromptBusy] = useState(false);
+  const [promptMessage, setPromptMessage] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResults, setTestResults] = useState<Record<string, string>>({});
   const testAbort = useRef<AbortController | null>(null);
@@ -105,11 +116,30 @@ export function PiSettings({
       .catch((error) => {
         if (!cancelled) setLoadError(String(error));
       });
+    void readPiPrompts()
+      .then(setPrompts)
+      .catch((error) => setPromptMessage(String(error)));
     return () => {
       cancelled = true;
       testAbort.current?.abort();
     };
   }, [open]);
+  /** 保存追加 Agent 提示词并刷新文件状态。 */
+  const savePrompt = async (prompt: PiPromptFile) => {
+    setPromptBusy(true);
+    try {
+      await writePiPrompt(
+        prompt.path.split(/[\\/]/).pop() ?? "",
+        prompt.content,
+      );
+      setPromptMessage("提示词已保存");
+      setPrompts(await readPiPrompts());
+    } catch (error) {
+      setPromptMessage(String(error));
+    } finally {
+      setPromptBusy(false);
+    }
+  };
   /** 更新一项服务商草稿，其他服务商和模型编辑保持。 */
   const updateProvider = (change: Partial<ProviderDraft>) => {
     setDashboard((current) =>
@@ -388,6 +418,16 @@ export function PiSettings({
               模型选择
             </Button>
             <Button
+              variant={panel === "prompts" ? "secondary" : "ghost"}
+              size="sm"
+              aria-current={panel === "prompts" ? "page" : undefined}
+              className="mt-1 w-full justify-start rounded-lg px-2 text-xs"
+              onClick={() => setPanel("prompts")}
+            >
+              <HugeiconsIcon icon={PencilEdit01Icon} size={14} />
+              自定义提示词
+            </Button>
+            <Button
               variant={panel === "skills" ? "secondary" : "ghost"}
               size="sm"
               aria-current={panel === "skills" ? "page" : undefined}
@@ -422,7 +462,50 @@ export function PiSettings({
             className="flex min-h-0 min-w-0 flex-1 flex-col"
             aria-label="模型看板"
           >
-            {panel === "version" ? (
+            {panel === "prompts" ? (
+              <div className="reader-scrollbar min-h-0 flex-1 space-y-4 overflow-auto p-3 sm:p-4">
+                <div>
+                  <h2 className="text-sm font-medium">追加 Agent 提示词</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    保存后对后续 Pi 会话生效。追加在默认系统提示词之后。
+                  </p>
+                </div>
+                {prompts.map((prompt) => (
+                    <div key={prompt.path} className="space-y-2">
+                      <div className="flex items-center justify-end gap-2">
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          disabled={promptBusy}
+                          onClick={() => void savePrompt(prompt)}
+                        >
+                          保存
+                        </Button>
+                      </div>
+                      <Textarea
+                        value={prompt.content}
+                        onChange={(event) =>
+                          setPrompts((items) =>
+                            items.map((item) =>
+                              item.path === prompt.path
+                                ? { ...item, content: event.target.value }
+                                : item,
+                            ),
+                          )
+                        }
+                        placeholder="在此输入自定义提示词内容，将追加到 Pi 的默认系统提示词之后..."
+                        className="min-h-60 rounded-lg font-mono text-xs"
+                        disabled={promptBusy}
+                      />
+                    </div>
+                  ))}
+                {promptMessage && (
+                  <p className="text-xs text-muted-foreground">
+                    {promptMessage}
+                  </p>
+                )}
+              </div>
+            ) : panel === "version" ? (
               <PiVersionPanel />
             ) : panel !== "models" ? (
               <PiAssetsPanel kind={panel} />

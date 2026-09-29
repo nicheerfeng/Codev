@@ -118,6 +118,11 @@ export type Session = {
     modelContextWindow: number | null;
   } | null;
   compacting: boolean;
+  compactionNotice: {
+    status: "running" | "done" | "failed";
+    startedAt: number;
+    finishedAt?: number;
+  } | null;
   historyCursor: string | null;
   historyLoading: boolean;
   archived: boolean;
@@ -156,6 +161,7 @@ export function sessionFromThread(thread: Thread): Session {
     submitted: [],
     tokenUsage: null,
     compacting: false,
+    compactionNotice: null,
     historyCursor: null,
     historyLoading: false,
     archived: false,
@@ -197,12 +203,19 @@ export function reduceNotification(
 ): Session {
   if (method === "thread/closed" || (method === "thread/status/changed" &&
       ["idle", "notLoaded", "systemError"].includes(String((params.status as { type?: string })?.type))))
-    return { ...session, busy: false, turnId: null, stopping: false, compacting: false };
+    return {
+      ...session,
+      busy: false,
+      turnId: null,
+      stopping: false,
+      compacting: session.compactionNotice?.status === "running",
+    };
   if (method === "thread/tokenUsage/updated")
     return {
       ...session,
       tokenUsage: normalizeTokenUsage(params.tokenUsage ?? params.token_usage),
-      compacting: false,
+      compacting: session.compactionNotice?.status === "running",
+      compactionNotice: session.compactionNotice,
     };
   if (method === "thread/name/updated")
     return {
@@ -220,6 +233,29 @@ export function reduceNotification(
       ...session,
       requests: session.requests.filter((r) => r.id !== params.requestId),
     };
+  if (method === "item/started" || method === "item/completed") {
+    const item = params.item as Item | undefined;
+    if (item?.type === "contextCompaction" || item?.type === "context_compaction") {
+      const turnId = String(params.turnId ?? `compaction-${item.id}`);
+      const turns = [...session.thread.turns];
+      const index = turns.findIndex((turn) => turn.id === turnId);
+      const turn = index >= 0
+        ? { ...turns[index], items: [...turns[index].items.filter((entry) => entry.id !== item.id), item] }
+        : { id: turnId, status: "completed", items: [item] };
+      if (index >= 0) turns[index] = turn;
+      else turns.push(turn);
+      return {
+        ...session,
+        thread: { ...session.thread, turns },
+        compacting: method === "item/started",
+        compactionNotice: {
+          status: method === "item/started" ? "running" : "done",
+          startedAt: session.compactionNotice?.startedAt ?? Date.now(),
+          ...(method === "item/completed" ? { finishedAt: Date.now() } : {}),
+        },
+      };
+    }
+  }
   const turnId =
     // 未知通知不能生成幽灵轮次；线程级状态在上方独立处理。
     (params.turnId as string | undefined) ??
@@ -242,7 +278,7 @@ export function reduceNotification(
       items: started.items?.length ? started.items : turn.items,
       startedAt: started.startedAt ?? Date.now() / 1000,
     };
-    next = { ...next, turnId, busy: true, error: null };
+    next = { ...next, turnId, busy: true, error: null, compactionNotice: null };
   }
   if (method === "turn/completed") {
     const completed = params.turn as Turn;

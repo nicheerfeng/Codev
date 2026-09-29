@@ -100,6 +100,14 @@ export class CodexClient {
   private owner = crypto.randomUUID();
   private requestedResource: string | undefined;
   private draining = new Set<string>();
+  private compactionWaiters = new Map<
+    string,
+    {
+      resolve: () => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
   /** 将内存草稿键映射到物化后的原生线程 ID。 */
   private threadId(id: string): string {
     return this.snapshot.sessions[id]?.thread.id ?? id;
@@ -433,6 +441,20 @@ export class CodexClient {
       const next = reduceNotification(session, method, params);
       if (next !== session) this.patch(id, next);
       this.streaming = false;
+      if (method === "item/completed") {
+        const item = params.item as import("./protocol").Item | undefined;
+        if (
+          item?.type === "contextCompaction" ||
+          item?.type === "context_compaction"
+        ) {
+          const waiter = this.compactionWaiters.get(id);
+          if (waiter) {
+            clearTimeout(waiter.timer);
+            this.compactionWaiters.delete(id);
+            waiter.resolve();
+          }
+        }
+      }
       if (method === "turn/completed") {
         void this.readAgentMetadata(this.threadId(id));
         const turn = params.turn as Turn;
@@ -971,6 +993,7 @@ export class CodexClient {
       this.snapshot.switching ||
       !this.snapshot.connected ||
       initial.sending ||
+      initial.compacting ||
       initial.stopping ||
       (!initial.draft.trim() &&
         !initial.attachments.length &&
@@ -1085,7 +1108,10 @@ export class CodexClient {
     const session = this.snapshot.sessions[id];
     if (
       mode === "followUp" &&
-      (session.busy || session.sending || session.queue.length)
+      (session.busy ||
+        session.sending ||
+        session.compacting ||
+        session.queue.length)
     ) {
       const { draft, attachments, images, skills, directories } = session;
       if (
@@ -1122,6 +1148,7 @@ export class CodexClient {
     const session = this.snapshot.sessions[id];
     if (
       !session ||
+      session.compacting ||
       session.busy ||
       session.sending ||
       session.stopping ||
@@ -1303,16 +1330,35 @@ export class CodexClient {
       this.patch(id, { sending: false });
     }
   }
+  private waitForCompactionCompletion(id: string) {
+    const existing = this.compactionWaiters.get(id);
+    if (existing) return Promise.reject(new Error("压缩任务已在等待完成"));
+    const current = this.snapshot.sessions[id];
+    if (current?.compactionNotice?.status === "done") return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.compactionWaiters.delete(id);
+        reject(new Error("等待上下文压缩完成超时"));
+      }, 60_000);
+      this.compactionWaiters.set(id, { resolve, reject, timer });
+    });
+  }
+
   /** 使用原生压缩接口，先恢复历史线程；不把 slash 文本发送给模型。 */
   async compact(id: string) {
     const session = this.snapshot.sessions[id];
-    if (!session || session.busy || session.sending || this.snapshot.switching)
+    if (
+      !session ||
+      session.busy ||
+      session.sending ||
+      session.compacting ||
+      this.snapshot.switching
+    )
       throw new Error("当前线程忙碌，无法压缩上下文");
     this.patch(id, {
-      busy: true,
-      sending: true,
       error: null,
       compacting: true,
+      compactionNotice: { status: "running", startedAt: Date.now() },
     });
     try {
       if (!session.resumed) {
@@ -1334,12 +1380,33 @@ export class CodexClient {
           effectiveSandbox: sandbox,
         });
       }
+      const completion = this.waitForCompactionCompletion(id);
+      void completion.catch(() => undefined);
       await this.request("thread/compact/start", { threadId: id });
+      await completion;
     } catch (error) {
-      this.patch(id, { busy: false, compacting: false });
+      const waiter = this.compactionWaiters.get(id);
+      if (waiter) {
+        clearTimeout(waiter.timer);
+        this.compactionWaiters.delete(id);
+        waiter.reject(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      }
+      this.patch(id, {
+        busy: false,
+        compacting: false,
+        compactionNotice: {
+          status: "failed",
+          startedAt:
+            this.snapshot.sessions[id]?.compactionNotice?.startedAt ??
+            Date.now(),
+          finishedAt: Date.now(),
+        },
+      });
       throw error;
     } finally {
-      this.patch(id, { sending: false });
+      this.patch(id, { busy: false, sending: false });
       void this.drain(id);
     }
   }
@@ -1440,6 +1507,11 @@ export class CodexClient {
   async dispose() {
     this.disposed = true;
     clearTimeout(this.streamTimer);
+    for (const [id, waiter] of this.compactionWaiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error("Codex 插件已关闭"));
+      this.compactionWaiters.delete(id);
+    }
     await this.startup;
     this.unlisten?.();
     this.disconnected("Codex 插件已关闭");

@@ -3,6 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import path from "node:path";
 import { defineConfig } from "vite";
+import { pdfAssets } from "./build/pdfAssets";
 
 const host = process.env.TAURI_DEV_HOST;
 const rootDir = import.meta.dirname;
@@ -17,6 +18,7 @@ export default defineConfig({
     }),
     react(),
     tailwindcss(),
+    pdfAssets(),
   ],
   resolve: {
     alias: {

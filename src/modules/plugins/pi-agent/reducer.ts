@@ -136,18 +136,19 @@ function normalizeMessage(message: unknown, id: string): PiTranscriptItem[] {
         thinking: "",
         streaming: false,
         images: content.filter(
-          (part) => part.type === "image" && typeof part.data === "string",
+          (part) => part?.type === "image" && typeof part.data === "string",
         ),
         timestamp,
       },
     ];
   return content.flatMap((part, index): PiTranscriptItem[] => {
+    if (!part || typeof part !== "object") return [];
     if (part.type === "thinking")
       return [
         {
           id: `${id}:${index}`,
           kind: "thinking",
-          text: part.thinking ?? "",
+          text: typeof part.thinking === "string" ? part.thinking : "",
           streaming: false,
           timestamp,
         },
@@ -158,7 +159,7 @@ function normalizeMessage(message: unknown, id: string): PiTranscriptItem[] {
           id: `${id}:${index}`,
           kind: "message",
           role,
-          text: part.text ?? "",
+          text: typeof part.text === "string" ? part.text : "",
           thinking: "",
           streaming: false,
           timestamp,
@@ -299,14 +300,30 @@ function reduceEvent(
   }
   if (type === "queue_update") {
     const steering = Array.isArray(event.steering)
-      ? event.steering.filter(
-          (value): value is string => typeof value === "string",
-        )
+      ? event.steering
+          .filter(
+            (item): item is { text: string; images?: PiImage[] } =>
+              typeof item === "object" &&
+              item !== null &&
+              typeof item.text === "string",
+          )
+          .map((item) => ({
+            text: item.text,
+            images: Array.isArray(item.images) ? item.images : undefined,
+          }))
       : [];
     const followUp = Array.isArray(event.followUp)
-      ? event.followUp.filter(
-          (value): value is string => typeof value === "string",
-        )
+      ? event.followUp
+          .filter(
+            (item): item is { text: string; images?: PiImage[] } =>
+              typeof item === "object" &&
+              item !== null &&
+              typeof item.text === "string",
+          )
+          .map((item) => ({
+            text: item.text,
+            images: Array.isArray(item.images) ? item.images : undefined,
+          }))
       : [];
     return {
       ...state,
@@ -380,15 +397,21 @@ function reduceEvent(
     );
     const old = previous?.kind === "tool" ? previous : null;
     const currentTime = eventTimestamp(event);
+    const toolName = String(event.toolName ?? old?.name ?? "tool");
+
+    // 工具执行期间持续更新 phase，保持流式滚动
+    // 只有工具完成后才清空 phase，等待下一个信息流
+    const newPhase = type === "tool_execution_end" ? "" : `执行 ${toolName}`;
+
     return {
       ...state,
-      phase: "执行工具",
+      phase: newPhase,
       items: mergeItems(state.items, [
         {
           id,
           kind: "tool",
           toolCallId: id,
-          name: String(event.toolName ?? old?.name ?? "tool"),
+          name: toolName,
           args: event.args ?? old?.args ?? null,
           output:
             event.result !== undefined || event.partialResult !== undefined

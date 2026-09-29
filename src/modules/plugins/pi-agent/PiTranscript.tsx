@@ -51,7 +51,11 @@ const STREAMDOWN_CONTROLS = {
   code: { copy: true, download: false },
   table: false,
 } as const;
-const STREAMDOWN_COMPONENTS = { a: MarkdownLink, img: ZoomableImage, table: MarkdownTable };
+const STREAMDOWN_COMPONENTS = {
+  a: MarkdownLink,
+  img: ZoomableImage,
+  table: MarkdownTable,
+};
 
 type MessageActions = {
   onCopy?: (text: string) => void;
@@ -209,7 +213,7 @@ const TranscriptItem = memo(function TranscriptItem({
               aria-label="编辑最后一条输入"
               value={editText}
               disabled={editSubmitting}
-              className="pi-user-edit-input min-h-20 resize-y rounded-lg border-0 bg-transparent px-0 py-0 text-[13px] shadow-none focus-visible:ring-0"
+              className="pi-user-edit-input min-h-[2.5rem] resize-y rounded-lg border-0 bg-transparent px-0 py-0 text-[13px] shadow-none focus-visible:ring-0"
               onChange={(event) => setEditText(event.target.value)}
             />
           ) : item.kind === "message" && item.role === "user" ? (
