@@ -133,6 +133,29 @@ describe("Pi 思考展示兼容与最终回复边界", () => {
       "等待模型响应",
     );
   });
+  it("活动摘要优先显示后续流式思考，不被早先仍运行的并发工具覆盖", () => {
+    const tool: PiTranscriptItem = {
+      id: "tool",
+      kind: "tool",
+      toolCallId: "tool",
+      name: "bash",
+      args: { command: "long-running" },
+      output: "",
+      status: "running",
+      activityOrder: 3,
+    };
+    const thought = {
+      id: "thought",
+      kind: "thinking" as const,
+      text: "正在归纳刚完成的检查结果",
+      streaming: true,
+      activityOrder: 4,
+    };
+    expect(currentActivity([thought, tool])).toBe(thought);
+    expect(activitySummary(currentActivity([thought, tool]))).toContain(
+      "正在归纳刚完成的检查结果",
+    );
+  });
   it("同一消息的正文后跟空思考时保持原 contentIndex，不读取 signature", () => {
     const state = piViewReducer(INITIAL_PI_VIEW_STATE, {
       type: "history",

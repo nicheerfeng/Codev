@@ -300,14 +300,29 @@ export function CodexComposer({
             </p>
           )}
           {session.queue.map((entry) => (
-            <div key={entry.id} className="flex items-start gap-2 py-1">
-              <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]">
+            <div key={entry.id} className="flex items-center gap-2 py-1">
+              {entry.images.length > 0 && (
+                <div className="flex shrink-0 gap-1">
+                  {entry.images.slice(0, 3).map((src, index) => (
+                    <ZoomableImage
+                      key={`${entry.id}-${index}-${src.slice(-16)}`}
+                      src={src}
+                      alt={`排队图片 ${index + 1}`}
+                      className="size-8 rounded-md object-cover"
+                    />
+                  ))}
+                  {entry.images.length > 3 && (
+                    <span className="self-center text-[10px] text-muted-foreground">+{entry.images.length - 3}</span>
+                  )}
+                </div>
+              )}
+              <span
+                className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]"
+                title={entry.draft || "附件任务"}
+              >
                 {entry.draft || "附件任务"}
-                {entry.attachments.length +
-                  entry.images.length +
-                  entry.skills.length >
-                0
-                  ? " · 含附件"
+                {entry.attachments.length + entry.skills.length > 0
+                  ? ` · 含 ${entry.attachments.length + entry.skills.length} 个附件`
                   : ""}
               </span>
               <div className="flex shrink-0 items-center gap-0.5">

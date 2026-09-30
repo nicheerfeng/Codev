@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -54,9 +60,13 @@ function readSlots(): (string | null)[] {
 export function CodexPane({
   active = true,
   onOpenFile,
+  workspaceRoots = [],
+  onAddWorkspaceRoot,
 }: {
   active?: boolean;
   onOpenFile?: (path: string) => void;
+  workspaceRoots?: string[];
+  onAddWorkspaceRoot?: (path: string) => void;
 }) {
   const [client] = useState(() => new CodexClient());
   const disposal = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -69,7 +79,15 @@ export function CodexPane({
       }, 0);
     };
   }, [client]);
-  return <Workspace active={active} client={client} onOpenFile={onOpenFile} />;
+  return (
+    <Workspace
+      active={active}
+      client={client}
+      onOpenFile={onOpenFile}
+      workspaceRoots={workspaceRoots}
+      onAddWorkspaceRoot={onAddWorkspaceRoot}
+    />
+  );
 }
 
 /** 沿用 Pi 的整页顶部工具栏、右侧线程栏及最多六个并行视口。 */
@@ -77,10 +95,14 @@ function Workspace({
   active,
   client,
   onOpenFile,
+  workspaceRoots,
+  onAddWorkspaceRoot,
 }: {
   active: boolean;
   client: CodexClient;
   onOpenFile?: (path: string) => void;
+  workspaceRoots: string[];
+  onAddWorkspaceRoot?: (path: string) => void;
 }) {
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot);
   const hasSelectedHistory = state.order.length > 0;
@@ -145,7 +167,7 @@ function Workspace({
     setSearch("");
   }, [selected, current?.sendRevision]);
   const knownSessions = useRef(new Set<string>());
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!state.connected || state.loading) return;
     const removed = new Set(
       [...knownSessions.current].filter((id) => !state.sessions[id]),
@@ -550,6 +572,8 @@ function Workspace({
             onHover={setHover}
             width={width}
             onWidth={setWidth}
+            workspaceRoots={workspaceRoots}
+            onAddWorkspaceRoot={onAddWorkspaceRoot}
           />
         )}
       </div>

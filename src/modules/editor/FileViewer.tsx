@@ -4,6 +4,7 @@ import { FilePreviewPane, getPreviewKind } from "./FilePreviewPane";
 
 type Props = {
   path: string;
+  active?: boolean;
   overrideLanguage?: string | null;
   onDirtyChange?: (dirty: boolean) => void;
 };
@@ -25,6 +26,7 @@ export const FileViewer = memo(
         <FilePreviewPane
           ref={ref}
           path={props.path}
+          active={props.active}
           onDirtyChange={props.onDirtyChange}
         />
       );

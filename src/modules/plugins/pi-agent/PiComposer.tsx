@@ -48,7 +48,7 @@ type Props = {
   view: PiViewState;
   onSend: (behavior: "steer" | "followUp") => void;
   onStop: () => void;
-  onLocalQueueAction?: (id: string, action: "edit" | "delete") => void;
+  onLocalQueueAction?: (id: string, action: "edit" | "delete" | "steer") => void;
   onRetryQueue?: () => void;
   onQueueAction: (
     kind: "steering" | "followUp",
@@ -329,16 +329,16 @@ export function PiComposer(props: Props) {
             )}
           </div>
           {props.view.localQueue.map((item) => (
-            <div key={item.id} className="flex items-start gap-2 py-1">
-              <div className="flex min-w-0 flex-1 items-start gap-2">
+            <div key={item.id} className="flex items-center gap-2 py-1">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
                 {item.images.length > 0 && (
-                  <div className="flex shrink-0 flex-wrap gap-1">
-                    {item.images.map((image, index) => (
+                  <div className="flex shrink-0 gap-1">
+                    {item.images.slice(0, 3).map((image, index) => (
                       <ZoomableImage
                         key={`${item.id}-${image.mimeType}-${image.data.length}-${image.data.slice(0, 12)}-${image.data.slice(-12)}`}
                         src={`data:${image.mimeType};base64,${image.data}`}
                         alt={`排队图片 ${index + 1}`}
-                        className="size-10 rounded-md object-cover"
+                        className="size-8 rounded-md object-cover"
                         onClick={(event) => event.stopPropagation()}
                       />
                     ))}
@@ -346,13 +346,24 @@ export function PiComposer(props: Props) {
                 )}
                 <button
                   type="button"
-                  className="min-w-0 flex-1 whitespace-pre-wrap text-left [overflow-wrap:anywhere]"
+                  className="line-clamp-2 min-w-0 flex-1 text-left [overflow-wrap:anywhere]"
+                  title={item.text}
                   disabled={props.disabled}
                   onClick={() => props.onLocalQueueAction?.(item.id, "edit")}
                 >
-                  {item.text}
+                  {item.text || "图片消息"}
                 </button>
               </div>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                title="安排到当前步骤之后"
+                aria-label="安排到当前步骤之后"
+                disabled={props.view.queueSendingId === item.id || item.behavior === "steer"}
+                onClick={() => props.onLocalQueueAction?.(item.id, "steer")}
+              >
+                <HugeiconsIcon icon={ArrowUp01Icon} size={13} />
+              </Button>
               <Button
                 variant="ghost"
                 size="icon-xs"
@@ -400,48 +411,37 @@ export function PiComposer(props: Props) {
                 <span className="pi-queue-mode">
                   {kind === "steering" ? "下一步" : "随后"}
                 </span>
-                <button
-                  type="button"
-                  className="min-w-0 flex-1 whitespace-pre-wrap text-left [overflow-wrap:anywhere]"
-                  disabled={props.disabled || kind !== "followUp"}
-                  title={kind === "followUp" ? "安排到当前步骤之后" : undefined}
-                  onClick={() => {
-                    if (kind === "followUp")
-                      props.onQueueAction(kind, index, item.text, "steer");
-                  }}
-                >
+                <div className="flex min-w-0 flex-1 items-center gap-2">
                   {item.images && item.images.length > 0 && (
-                    <div className="mb-1 flex flex-wrap gap-1">
-                      {item.images.map((img, imgIdx) => {
+                    <div className="flex shrink-0 gap-1">
+                      {item.images.slice(0, 3).map((img, imgIdx) => {
                         const stableKey = `${item.text.length}-${img.mimeType}-${img.data.slice(0, 8)}-${img.data.slice(-8)}`;
                         return (
                           <ZoomableImage
                             key={stableKey}
                             src={img.data}
                             alt={`队列图片 ${imgIdx + 1}`}
-                            className="h-10 w-10 rounded object-cover"
+                            className="size-8 rounded object-cover"
                           />
                         );
                       })}
                     </div>
                   )}
-                  {item.text}
-                </button>
+                  <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]" title={item.text}>
+                    {item.text || "图片消息"}
+                  </span>
+                </div>
                 <div className="flex shrink-0 items-center gap-0.5">
-                  {kind === "followUp" && (
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      title="安排到当前步骤之后"
-                      aria-label="安排到当前步骤之后"
-                      disabled={props.disabled}
-                      onClick={() =>
-                        props.onQueueAction(kind, index, item.text, "steer")
-                      }
-                    >
-                      <HugeiconsIcon icon={ArrowUp01Icon} size={13} />
-                    </Button>
-                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    title={kind === "followUp" ? "安排到当前步骤之后" : "已安排为下一步"}
+                    aria-label="安排到当前步骤之后"
+                    disabled={props.disabled || kind === "steering"}
+                    onClick={() => props.onQueueAction(kind, index, item.text, "steer")}
+                  >
+                    <HugeiconsIcon icon={ArrowUp01Icon} size={13} />
+                  </Button>
                   <Button
                     variant="ghost"
                     size="icon-xs"

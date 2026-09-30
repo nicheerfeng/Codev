@@ -12,6 +12,7 @@ export const INITIAL_PI_VIEW_STATE: PiViewState = {
   commands: [],
   status: "stopped",
   items: [],
+  activityRevision: 0,
   sessionFile: null,
   sessionName: null,
   model: null,
@@ -363,10 +364,12 @@ function reduceEvent(
             streaming: true,
             timestamp,
           };
+    const activityOrder = (state.activityRevision ?? 0) + 1;
     return {
       ...state,
+      activityRevision: activityOrder,
       phase: item.kind === "thinking" ? "思考中" : "正在回复",
-      items: mergeItems(state.items, [item]),
+      items: mergeItems(state.items, [{ ...item, activityOrder }]),
     };
   }
   if (type === "message_end") {
@@ -375,9 +378,18 @@ function reduceEvent(
       value?.role === "assistant"
         ? streamBase(state.items)
         : `message-${state.items.length}`;
+    const items = normalizeMessage(value, id);
+    const activityRevision = (state.activityRevision ?? 0) + items.length;
     return {
       ...state,
-      items: mergeItems(state.items, normalizeMessage(value, id)),
+      activityRevision,
+      items: mergeItems(
+        state.items,
+        items.map((item, index) => ({
+          ...item,
+          activityOrder: activityRevision - items.length + index + 1,
+        })),
+      ),
       error:
         typeof value?.errorMessage === "string"
           ? value.errorMessage
@@ -398,16 +410,34 @@ function reduceEvent(
     const old = previous?.kind === "tool" ? previous : null;
     const currentTime = eventTimestamp(event);
     const toolName = String(event.toolName ?? old?.name ?? "tool");
+    const activityOrder = (state.activityRevision ?? 0) + 1;
 
-    // 工具执行期间持续更新 phase，保持流式滚动
-    // 只有工具完成后才清空 phase，等待下一个信息流
-    const newPhase = type === "tool_execution_end" ? "" : `执行 ${toolName}`;
+    // 并发工具只结束自身 phase；仍运行的其他调用继续作为活动状态。
+    const otherRunning =
+      type === "tool_execution_end"
+        ? [...state.items]
+            .reverse()
+            .find(
+              (item) =>
+                item.kind === "tool" &&
+                item.toolCallId !== id &&
+                item.status === "running",
+            )
+        : undefined;
+    const newPhase =
+      type === "tool_execution_end"
+        ? otherRunning?.kind === "tool"
+          ? `执行 ${otherRunning.name}`
+          : ""
+        : `执行 ${toolName}`;
 
     return {
       ...state,
+      activityRevision: activityOrder,
       phase: newPhase,
       items: mergeItems(state.items, [
         {
+          activityOrder,
           id,
           kind: "tool",
           toolCallId: id,

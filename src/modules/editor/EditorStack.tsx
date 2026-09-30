@@ -142,6 +142,7 @@ export function EditorStack({
               <FileViewer
                 ref={getRefCallback(t.id)}
                 path={t.path}
+                active={visible}
                 overrideLanguage={
                   t.kind === "html" ? undefined : t.overrideLanguage
                 }

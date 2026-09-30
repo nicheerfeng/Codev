@@ -32,6 +32,17 @@ type Pending = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+/** 统一 Pi 会话路径，避免 Windows 长路径与普通路径创建两个 runtime。 */
+function runtimeThreadKey(key: string, path?: string | null): string {
+  const value = path || key;
+  if (!value || value.startsWith("draft:")) return key;
+  return value
+    .replace(/\\/g, "/")
+    .replace(/^\/\/?\?\//, "")
+    .replace(/\/$/, "")
+    .toLowerCase();
+}
+
 /** 管理 Pi 原生进程与请求关联，切换界面不会停止其他线程。 */
 export class PiWorkspaceClient {
   /** 空闲 runtime 回收时间，线程数据仍保留在前端内存中。 */
@@ -310,9 +321,16 @@ export class PiWorkspaceClient {
 
   /** 新建或恢复指定线程，多次点击同一线程共用启动任务。 */
   open(key: string, cwd: string, path?: string): Promise<PiThread> {
-    const existing = this.threads.get(key);
+    const identity = runtimeThreadKey(key, path);
+    const existing =
+      this.threads.get(key) ??
+      [...this.threads.values()].find(
+        (thread) =>
+          thread.view.sessionFile &&
+          runtimeThreadKey(thread.key, thread.view.sessionFile) === identity,
+      );
     if (existing) return Promise.resolve(existing);
-    const pending = this.opening.get(key);
+    const pending = this.opening.get(identity);
     if (pending) return pending;
     const thread: PiThread = {
       loadingHistory: false,
@@ -518,6 +536,17 @@ export class PiWorkspaceClient {
     };
     this.publish();
     return item;
+  }
+
+  /** 调整本地暂存消息的投递顺序，不改动正文或图片附件。 */
+  setQueuedBehavior(thread: PiThread, id: string, behavior: "steer" | "followUp") {
+    thread.view = {
+      ...thread.view,
+      localQueue: thread.view.localQueue?.map((item) =>
+        item.id === id ? { ...item, behavior } : item,
+      ),
+    };
+    this.publish();
   }
 
   /** 原生明确接受后移除缓存；失败保留当前及后续消息，允许用户重试。 */
@@ -857,8 +886,6 @@ export class PiWorkspaceClient {
     thread.view = piViewReducer(thread.view, { type: "stopping" });
     this.publish();
     await this.request(thread, { type: "abort" });
-    // 清空 runtimeModelKey，强制下次操作时检测模型变化
-    thread.runtimeModelKey = null;
     await this.refreshState(thread);
   }
 

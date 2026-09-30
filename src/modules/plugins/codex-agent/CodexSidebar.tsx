@@ -94,6 +94,8 @@ export function CodexSidebar({
   onHover,
   width,
   onWidth,
+  workspaceRoots,
+  onAddWorkspaceRoot,
 }: {
   client: CodexClient;
   state: Snapshot;
@@ -104,6 +106,8 @@ export function CodexSidebar({
   onHover: (index: number | null) => void;
   width: number;
   onWidth: (width: number) => void;
+  workspaceRoots: string[];
+  onAddWorkspaceRoot?: (path: string) => void;
 }) {
   const [layout, setLayout] = useState(readLayout);
   const [filter, setFilter] = useState("");
@@ -553,6 +557,11 @@ export function CodexSidebar({
             <ContextMenuItem onSelect={() => void writeText(cwd)}>
               复制项目路径
             </ContextMenuItem>
+            {!workspaceRoots.some((root) => pathKey(root) === pathKey(cwd)) && (
+              <ContextMenuItem onSelect={() => onAddWorkspaceRoot?.(cwd)}>
+                添加到工作区
+              </ContextMenuItem>
+            )}
             <ContextMenuSub>
               <ContextMenuSubTrigger>移动到组</ContextMenuSubTrigger>
               <ContextMenuSubContent>
@@ -883,21 +892,26 @@ export function CodexSidebar({
           <span className="min-w-0 flex-1 truncate">{ghost.label}</span>
         </div>
       )}
-      <Dialog
-        open={!!confirm}
-        onOpenChange={(value) => {
-          if (!value && !deleting) setConfirm(null);
-        }}
-      >
-        <DialogContent
-          aria-describedby={undefined}
-          className="max-w-sm rounded-xl"
+      {confirm && (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-black/30 p-3 backdrop-blur-sm"
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && !deleting) setConfirm(null);
+          }}
         >
-          <DialogTitle>
-            {confirm?.kind === "thread" ? "彻底删除线程？" : "移除项目？"}
-          </DialogTitle>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="codex-delete-title"
+            className="grid w-full max-w-sm gap-4 rounded-xl bg-popover p-5 text-sm text-popover-foreground shadow-xl ring-1 ring-foreground/10"
+          >
+          <h2 className="font-heading text-base leading-none font-medium">
+            <span id="codex-delete-title">
+              {confirm.kind === "thread" ? "彻底删除线程？" : "移除项目？"}
+            </span>
+          </h2>
           <p className="text-xs text-muted-foreground">
-            {confirm?.kind === "thread"
+            {confirm.kind === "thread"
               ? "原生会话将被删除，此操作无法撤销。"
               : "仅移除项目入口，保留会话历史；可通过添加项目恢复。"}
           </p>
@@ -905,6 +919,7 @@ export function CodexSidebar({
             <Button
               variant="ghost"
               disabled={deleting}
+              autoFocus
               onClick={() => setConfirm(null)}
             >
               取消
@@ -932,8 +947,9 @@ export function CodexSidebar({
               确认
             </Button>
           </div>
-        </DialogContent>
-      </Dialog>
+          </div>
+        </div>
+      )}
       <Dialog
         open={Boolean(editing)}
         onOpenChange={(value) => {

@@ -43,7 +43,6 @@ import { usePiComposerDropStore } from "@/modules/plugins/pi-agent/piComposerDro
 import { createCodexComposerPathDropTarget } from "@/modules/plugins/codex-agent/codexComposerDrop";
 import { useCodexComposerDropStore } from "@/modules/plugins/codex-agent/codexComposerDropStore";
 import {
-  shouldDisablePaneSwapShortcut,
   type ShortcutHandlers,
   type ShortcutId,
   useGlobalShortcuts,
@@ -71,7 +70,6 @@ import {
   hasLeaf,
   leafIds,
   TerminalPanel,
-  type PaneBounds,
   type TerminalPaneHandle,
   TERMINAL_MIN_WIDTH,
   useTerminalPanelLayout,
@@ -153,7 +151,6 @@ export default function App() {
     focusPane,
     showTerminals,
     focusNextPaneInTab,
-    swapActivePaneInDirection,
     splitActivePane,
     closeActivePane,
     closePaneByLeaf,
@@ -413,6 +410,9 @@ export default function App() {
   );
 
   const activeTab = tabs.find((t) => t.id === activeId);
+  const activePdfTab =
+    activeTab?.kind === "editor" &&
+    activeTab.path.toLowerCase().endsWith(".pdf");
 
   // Terminal tabs live in the right-side dock panel; file tabs are assigned to
   // one of the two fixed editor groups in the central workspace.
@@ -968,28 +968,6 @@ export default function App() {
     [activeId, splitActivePane],
   );
 
-  const livePaneBounds = useCallback((tabId: number): PaneBounds[] => {
-    const tab = document.querySelector<HTMLElement>(
-      `[data-terminal-tab="${tabId}"]`,
-    );
-    if (!tab) return [];
-    return [...tab.querySelectorAll<HTMLElement>("[data-pane-leaf]")].flatMap(
-      (element) => {
-        const id = Number(element.dataset.paneLeaf);
-        if (!Number.isFinite(id)) return [];
-        const { left, right, top, bottom } = element.getBoundingClientRect();
-        return [{ id, left, right, top, bottom }];
-      },
-    );
-  }, []);
-
-  const swapActivePane = useCallback(
-    (direction: "left" | "right" | "up" | "down") => {
-      swapActivePaneInDirection(activeId, direction, livePaneBounds(activeId));
-    },
-    [activeId, livePaneBounds, swapActivePaneInDirection],
-  );
-
   const handleCloseTabOrPane = useCallback(() => {
     const t = tabsRef.current.find((x) => x.id === activeId);
     if (t?.kind === "terminal" && leafIds(t.paneTree).length > 1) {
@@ -1015,15 +993,12 @@ export default function App() {
       "pane.splitDown": () => splitActivePaneInActiveTab("col"),
       "pane.focusNext": () => focusNextPaneInTab(activeId, 1),
       "pane.focusPrev": () => focusNextPaneInTab(activeId, -1),
-      "pane.swapLeft": () => swapActivePane("left"),
-      "pane.swapRight": () => swapActivePane("right"),
-      "pane.swapUp": () => swapActivePane("up"),
-      "pane.swapDown": () => swapActivePane("down"),
       "terminal.clear": () => {
         clearFocusedTerminal();
       },
+      // PDF 搜索由内嵌的原生阅读器处理，避免 Ctrl+F 转入应用全局搜索。
       "search.focus": () => {
-        searchInlineRef.current?.focus();
+        if (!activePdfTab) searchInlineRef.current?.focus();
       },
       "settings.open": () => void openSettingsWindow(),
       "sidebar.toggle": toggleSidebar,
@@ -1042,22 +1017,17 @@ export default function App() {
       selectByIndex,
       splitActivePaneInActiveTab,
       focusNextPaneInTab,
-      swapActivePane,
       toggleSidebar,
       toggleExplorerFocus,
       zoomIn,
       zoomOut,
       zoomReset,
+      activePdfTab,
     ],
   );
 
   const shortcutsDisabled = useCallback(
     (id: ShortcutId, e: KeyboardEvent) => {
-      const terminalPaneCount =
-        activeTab?.kind === "terminal"
-          ? leafIds(activeTab.paneTree).length
-          : null;
-      if (shouldDisablePaneSwapShortcut(id, terminalPaneCount)) return true;
       if (id === "terminal.clear") {
         // Only intercept ⌘K while a terminal is focused; elsewhere let the key
         // fall through (we never preventDefault when disabled).
@@ -1173,6 +1143,7 @@ export default function App() {
     );
 
   const searchTarget = useMemo<SearchTarget>(() => {
+    if (activePdfTab) return null;
     if (isTerminalTab && activeLeafId !== null && activeSearchAddon)
       return {
         kind: "terminal",
@@ -1189,6 +1160,7 @@ export default function App() {
     return null;
   }, [
     isTerminalTab,
+    activePdfTab,
     isSearchableDocumentTab,
     activeLeafId,
     activeSearchAddon,
@@ -1516,6 +1488,8 @@ export default function App() {
                           tool={toolView}
                           active={rightDockView === "tools"}
                           onOpenFile={(path) => handleOpenFile(path, false)}
+                          workspaceRoots={workspaceRoots}
+                          onAddWorkspaceRoot={(path) => void addRoot(path)}
                         />
                       </div>
                     )}

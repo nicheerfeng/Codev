@@ -21,6 +21,25 @@ type Props = {
   className?: string;
 };
 
+/** 根据当前可见视口位置计算有效网格尺寸，隐藏视口不再占用布局空间。 */
+function visibleGridSize(
+  positions: ({ column: number; row: number } | null)[],
+  fallbackColumns: number,
+  fallbackRows: number,
+) {
+  const visible = positions.filter(
+    (position): position is { column: number; row: number } => position !== null,
+  );
+  return {
+    columns: visible.length
+      ? Math.max(...visible.map((position) => position.column + 1))
+      : fallbackColumns,
+    rows: visible.length
+      ? Math.max(...visible.map((position) => position.row + 1))
+      : fallbackRows,
+  };
+}
+
 /** 按行独立调整视口列宽，并在退出多视口后恢复均分。 */
 export function ResizableViewportGrid({
   children,
@@ -31,16 +50,20 @@ export function ResizableViewportGrid({
 }: Props) {
   const items = Children.toArray(children);
   const gridRef = useRef<HTMLDivElement>(null);
+  const visibleSize = useMemo(
+    () => visibleGridSize(positions, columns, rows),
+    [columns, positions, rows],
+  );
   const rowIndexes = useMemo(
     () =>
-      Array.from({ length: rows }, (_, row) =>
+      Array.from({ length: visibleSize.rows }, (_, row) =>
         positions
           .map((position, index) => ({ position, index }))
           .filter((item) => item.position?.row === row)
           .sort((left, right) => left.position!.column - right.position!.column)
           .map((item) => item.index),
       ),
-    [positions, rows],
+    [positions, visibleSize.rows],
   );
   const topology = rowIndexes.map((indexes) => indexes.length).join(":");
   const initialWeights = useMemo(
@@ -53,22 +76,23 @@ export function ResizableViewportGrid({
   const [weights, setWeights] = useState(initialWeights);
   const weightsRef = useRef(weights);
   const [rowHeights, setRowHeights] = useState(() =>
-    Array.from({ length: rows }, () => 1),
+    Array.from({ length: visibleSize.rows }, () => 1),
   );
   const rowHeightsRef = useRef(rowHeights);
   useLayoutEffect(() => {
     const next = initialWeights.map((row) => [...row]);
-    const nextHeights = Array.from({ length: rows }, () => 1);
+    const nextHeights = Array.from({ length: visibleSize.rows }, () => 1);
     weightsRef.current = next;
     rowHeightsRef.current = nextHeights;
     setWeights(next);
     setRowHeights(nextHeights);
-  }, [initialWeights, rows]);
+  }, [initialWeights, visibleSize.rows]);
   const minWidth =
-    Math.max(1, ...rowIndexes.map((indexes) => indexes.length)) *
+    Math.max(1, visibleSize.columns, ...rowIndexes.map((indexes) => indexes.length)) *
     MIN_VIEWPORT_WIDTH;
-  const minHeight = rows * MIN_VIEWPORT_HEIGHT;
-  const totalHeight = rowHeights.reduce((sum, part) => sum + part, 0) || rows;
+  const minHeight = visibleSize.rows * MIN_VIEWPORT_HEIGHT;
+  const totalHeight =
+    rowHeights.reduce((sum, part) => sum + part, 0) || visibleSize.rows;
   const rowTops = rowHeights.map((_, row) =>
     rowHeights.slice(0, row).reduce((sum, part) => sum + part, 0),
   );

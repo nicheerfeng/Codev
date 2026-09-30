@@ -511,11 +511,9 @@ pub fn run() {
             fs::transfer::fs_transfer_undo,
             fs::watch::fs_watch_add,
             fs::watch::fs_watch_remove,
-            fs::search::fs_search,
             fs::search::fs_search_query,
             fs::search::fs_search_cancel,
             fs::search::fs_list_files,
-            fs::grep::fs_grep,
             fs::grep::fs_grep_interactive,
             fs::grep::fs_glob,
             workspace::wsl_list_distros,
@@ -645,11 +643,10 @@ mod launch_target_tests {
     }
 
     #[test]
-    fn leaves_edge_pdf_viewer_internal_pages_alone() {
+    fn leaves_builtin_pdf_viewer_internal_pages_alone() {
         for uri in [
             "chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html",
             "edge://pdf/viewer",
-            "pdf.js",
         ] {
             assert!(!is_external_browser_url(uri), "{uri}");
         }

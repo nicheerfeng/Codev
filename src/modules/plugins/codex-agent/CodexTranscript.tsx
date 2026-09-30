@@ -25,6 +25,7 @@ import { Tool } from "./controls";
 import { WebSearchDetails } from "./WebSearchDetails";
 import {
   activityLabel,
+  displayItemDetails,
   elapsedText,
   isCompaction,
   isTool,
@@ -93,10 +94,18 @@ function Message({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(text);
   const [saving, setSaving] = useState(false);
+  const editInput = useRef<HTMLTextAreaElement>(null);
   const canEdit = Boolean(onEdit) && !forkDisabled;
   useEffect(() => {
     if (!canEdit && !saving) setEditing(false);
   }, [canEdit, saving]);
+  useLayoutEffect(() => {
+    const element = editInput.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(180, Math.max(40, element.scrollHeight))}px`;
+    element.style.overflowY = element.scrollHeight > 180 ? "auto" : "hidden";
+  }, [draft, editing]);
   const images = user
     ? (
         (item.content as Array<{
@@ -117,11 +126,12 @@ function Message({
             {editing ? (
               <>
                 <Textarea
+                  ref={editInput}
                   autoFocus
                   aria-label="编辑最后一条输入"
                   value={draft}
                   disabled={saving}
-                  className="min-h-20 resize-y rounded-lg border-0 bg-transparent px-0 py-0 text-[13px] shadow-none focus-visible:ring-0"
+                  className="min-h-10 w-full resize-none overflow-hidden rounded-lg border-0 bg-transparent px-0 py-0 text-[13px] shadow-none focus-visible:ring-0"
                   onChange={(event) => setDraft(event.target.value)}
                 />
               </>
@@ -286,7 +296,7 @@ function Activity({
             {toolOutput(item) && <pre>{toolOutput(item)}</pre>}
             <details open={query ? true : undefined}>
               <summary className="cursor-pointer text-[10px]">调用详情</summary>
-              <pre>{JSON.stringify(item, null, 2)}</pre>
+              <pre>{displayItemDetails(item)}</pre>
             </details>
           </>
         )}
@@ -386,8 +396,7 @@ function Process({
           </span>
         </div>
       ))}
-      {visibleItems.length > 0 && (
-        <details className="codex-process" open={expanded || Boolean(query)}>
+      <details className="codex-process" open={expanded || Boolean(query)}>
         <summary
           className="codex-process-summary flex max-w-full cursor-pointer list-none items-center gap-2 py-1.5 text-xs font-normal text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
           onClick={(event) => {
@@ -405,7 +414,7 @@ function Process({
           <span className="codex-process-meta">
             {visibleItems.length
               ? `${visibleItems.length} 个步骤${tools ? ` · ${tools} 次工具调用` : ""}`
-              : "等待模型响应"}
+              : "思考过程"}
             {elapsed ? ` · 用时 ${elapsed}` : ""}
           </span>
         </summary>
@@ -423,8 +432,7 @@ function Process({
             ),
           )}
         </div>
-        </details>
-      )}
+      </details>
       {files.length > 0 && (
         <details className="codex-file-summary my-1 min-w-0 text-xs font-normal text-muted-foreground">
           <summary className="flex cursor-pointer list-none items-center gap-2 py-1 leading-6 [overflow-wrap:anywhere] [&::-webkit-details-marker]:hidden">
@@ -502,7 +510,6 @@ function TurnView({
   const blocks: Array<{ id: string; process: boolean; items: Item[] }> = [];
   for (const item of turn.items) {
     if (isCompaction(item)) continue;
-    if (["agentMessage", "reasoning", "plan"].includes(item.type) && !itemText(item).trim()) continue;
     const message =
       item.type === "userMessage" ||
       (item.type === "agentMessage" &&
@@ -512,6 +519,8 @@ function TurnView({
     if (!message && previous?.process) previous.items.push(item);
     else blocks.push({ id: item.id, process: !message, items: [item] });
   }
+  if (!blocks.some((block) => block.process))
+    blocks.unshift({ id: `process-${turn.id}`, process: true, items: [] });
   return (
     <>
       {blocks.map((block) =>

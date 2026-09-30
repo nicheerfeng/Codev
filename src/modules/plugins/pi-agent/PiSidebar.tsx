@@ -88,6 +88,8 @@ type Props = {
   onExport: (thread: SidebarThread) => void;
   onClose: (thread: SidebarThread) => void;
   onCopyPath: (path: string) => void;
+  workspaceRoots: string[];
+  onAddWorkspaceRoot?: (path: string) => void;
   projectOrder: string[];
   sessionOrder: string[];
   onProjectOrder: (order: string[]) => void;
@@ -480,7 +482,7 @@ export function PiSidebar(props: Props) {
                 title="展开或收起子任务"
                 onClick={(event) => { event.stopPropagation(); toggle(`subagents:${sessionIdentity(thread.path, thread.key)}`); }}
                 onDoubleClick={(event) => event.stopPropagation()}
-                className={`mr-1 flex h-7 min-w-7 shrink-0 justify-center items-center gap-0.5 rounded px-1 text-[10px] hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring ${thread.subagents.some(run => ["running", "queued"].includes(run.status)) ? "animate-pulse text-[#477faf] dark:text-[#a6cceb]" : thread.subagents.some(run => unreadTasks.has(run.runId)) ? "text-[#477faf] dark:text-[#a6cceb]" : "text-muted-foreground"}`}
+                className={`mr-1 flex h-7 min-w-7 shrink-0 justify-center items-center gap-0.5 rounded px-1 text-[10px] hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring ${thread.subagents.some(run => ["running", "queued"].includes(run.status)) ? "text-[#477faf] dark:text-[#a6cceb]" : thread.subagents.some(run => unreadTasks.has(run.runId)) ? "text-[#477faf] dark:text-[#a6cceb]" : "text-muted-foreground"}`}
               >
                 <HugeiconsIcon size={12} icon={collapsed.has(`subagents:${sessionIdentity(thread.path, thread.key)}`) ? ArrowRight01Icon : ArrowDown01Icon} />
                 <span>{thread.subagents.length}</span>
@@ -488,8 +490,8 @@ export function PiSidebar(props: Props) {
             )}
           </div>
           {!collapsed.has(`subagents:${sessionIdentity(thread.path, thread.key)}`) && thread.subagents?.map((run) => (
-            <button type="button" key={run.runId} disabled={!run.session} onClick={() => { if (run.session) { markTaskRead(run.runId); props.onSelect({ ...run.session, key: run.session.path }); } }} className={`ml-5 flex w-[calc(100%-1.25rem)] min-w-0 items-center gap-2 border-l border-border px-2 py-1 text-left text-[11px] text-muted-foreground hover:bg-accent ${props.selectedKey === run.session?.path ? "bg-accent" : ""}`}>
-              <span role="img" aria-label={run.status === "running" || run.status === "queued" ? "运行中" : run.status === "failed" ? "失败" : unreadTasks.has(run.runId) ? "已完成，待查看" : "已查看"} className={`size-1.5 shrink-0 rounded-full ${run.status === "running" || run.status === "queued" ? "pi-running-dot bg-[#477faf] text-[#477faf] dark:bg-[#a6cceb] dark:text-[#a6cceb]" : run.status === "failed" ? "bg-destructive" : unreadTasks.has(run.runId) ? "bg-[#477faf] dark:bg-[#a6cceb]" : "bg-muted-foreground/50"}`} />
+            <button type="button" key={run.runId} disabled={!run.session} onClick={() => { if (run.session) { markTaskRead(run.runId); props.onSelect({ ...run.session, key: run.session.path }); } }} className={`ml-5 flex w-[calc(100%-1.25rem)] min-w-0 items-center gap-2 border-l border-border px-2 py-1 text-left text-[11px] text-muted-foreground hover:bg-accent ${run.session && pathKey(props.selectedKey ?? "") === pathKey(run.session.path) ? "bg-accent" : ""}`}>
+              <span role="img" aria-label={run.status === "running" || run.status === "queued" ? "运行中" : run.status === "failed" ? "失败" : unreadTasks.has(run.runId) ? "已完成，待查看" : "已查看"} className={`size-1.5 shrink-0 rounded-full ${run.status === "running" || run.status === "queued" ? "bg-[#477faf] dark:bg-[#a6cceb]" : run.status === "failed" ? "bg-destructive" : unreadTasks.has(run.runId) ? "bg-[#477faf] dark:bg-[#a6cceb]" : "bg-muted-foreground/50"}`} />
               <span className="min-w-0 flex-1 truncate" title={run.summary || run.title}>{run.agent} · {run.title}</span>
             </button>
           ))}
@@ -667,6 +669,11 @@ export function PiSidebar(props: Props) {
             <ContextMenuItem onSelect={() => props.onNew(cwd)}>
               新建线程
             </ContextMenuItem>
+            {!props.workspaceRoots.some((root) => pathKey(root) === pathKey(cwd)) && (
+              <ContextMenuItem onSelect={() => props.onAddWorkspaceRoot?.(cwd)}>
+                添加到工作区
+              </ContextMenuItem>
+            )}
             <ContextMenuSub>
               <ContextMenuSubTrigger>移到组</ContextMenuSubTrigger>
               <ContextMenuSubContent>

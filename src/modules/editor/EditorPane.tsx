@@ -41,7 +41,7 @@ import {
   type TextSearchStatus,
 } from "./lib/textSearch";
 import { useEditorThemeExt } from "./lib/useEditorThemeExt";
-import { FilePreviewPane } from "./FilePreviewPane";
+import { AssetPreview, FilePreviewPane } from "./FilePreviewPane";
 import { shouldUseLargeStructuredTextPreview } from "./lib/largeStructuredText";
 
 export type EditorPaneHandle = TextSearchHandle & {
@@ -61,6 +61,7 @@ export type EditorPaneHandle = TextSearchHandle & {
 
 type Props = {
   path: string;
+  active?: boolean;
   overrideLanguage?: string | null;
   onDirtyChange?: (dirty: boolean) => void;
 };
@@ -115,7 +116,7 @@ function formatBytes(n: number): string {
 // skip re-rendering entirely when App re-renders (terminal events, tab churn).
 export const EditorPane = memo(
   forwardRef<EditorPaneHandle, Props>(function EditorPane(props, ref) {
-    const { path, overrideLanguage, onDirtyChange } = props;
+    const { path, overrideLanguage, onDirtyChange, active = true } = props;
 
     const { doc, onChange, save, reload, openAnyway } = useDocument({
       path,
@@ -542,7 +543,11 @@ export const EditorPane = memo(
       const isAudio = ["mp3", "wav", "flac", "aac", "m4a"].includes(ext);
       const isPdf = ext === "pdf";
 
-      if (isImage || isVideo || isAudio || isPdf) {
+      if (isPdf) {
+        return <AssetPreview path={path} active={active} />;
+      }
+
+      if (isImage || isVideo || isAudio) {
         const assetUrl = convertFileSrc(path);
         return (
           <div className="reader-scrollbar flex h-full min-h-0 flex-col items-center justify-center overflow-auto bg-background p-4">
@@ -576,13 +581,6 @@ export const EditorPane = memo(
                 preload="metadata"
                 className="w-full max-w-md"
                 src={assetUrl}
-              />
-            )}
-            {isPdf && (
-              <iframe
-                src={assetUrl}
-                className="w-full h-full border-none"
-                title={path.split("/").pop()}
               />
             )}
           </div>
