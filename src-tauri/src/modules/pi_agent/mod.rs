@@ -150,10 +150,16 @@ pub struct PiSubagentRun {
 
 /// 读取 pi-subagents mission 目录，不把子任务伪装成普通 Pi session。
 #[tauri::command]
-pub fn pi_agent_list_subagent_runs(owner_session_path: String) -> Result<Vec<PiSubagentRun>, String> {
-    let Some(home) = pi_home_dir() else { return Ok(Vec::new()); };
+pub fn pi_agent_list_subagent_runs(
+    owner_session_path: String,
+) -> Result<Vec<PiSubagentRun>, String> {
+    let Some(home) = pi_home_dir() else {
+        return Ok(Vec::new());
+    };
     let root = home.join(".pi-subagents").join("missions");
-    if !root.is_dir() { return Ok(Vec::new()); }
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
     let normalize = |value: &str| {
         value
             .replace('\\', "/")
@@ -166,35 +172,110 @@ pub fn pi_agent_list_subagent_runs(owner_session_path: String) -> Result<Vec<PiS
     let mut runs = Vec::new();
     for entry in fs::read_dir(root).map_err(|e| e.to_string())? {
         let path = entry.map_err(|e| e.to_string())?.path();
-        if path.extension().and_then(|v| v.to_str()) != Some("json") { continue; }
-        let Ok(value) = serde_json::from_str::<Value>(&fs::read_to_string(&path).map_err(|e| e.to_string())?) else { continue; };
-        let mission_owner = value.get("ownerSessionId").and_then(Value::as_str).unwrap_or("");
+        if path.extension().and_then(|v| v.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(value) =
+            serde_json::from_str::<Value>(&fs::read_to_string(&path).map_err(|e| e.to_string())?)
+        else {
+            continue;
+        };
+        let mission_owner = value
+            .get("ownerSessionId")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         let mission = normalize(mission_owner);
-        if mission != owner { continue; }
+        if mission != owner {
+            continue;
+        }
         let candidates = history::parse_session_summary(Path::new(&owner_session_path), None)
-            .map(|session| list_sessions(&session.cwd, usize::MAX)).unwrap_or_default();
-        let title = value.get("title").or_else(|| value.get("objective")).and_then(Value::as_str).unwrap_or("子代理任务").to_string();
-        let mission_status = value.get("status").and_then(Value::as_str).unwrap_or("unknown");
-        let updated_at = value.get("updatedAt").and_then(Value::as_str).unwrap_or("").to_string();
+            .map(|session| list_sessions(&session.cwd, usize::MAX))
+            .unwrap_or_default();
+        let title = value
+            .get("title")
+            .or_else(|| value.get("objective"))
+            .and_then(Value::as_str)
+            .unwrap_or("子代理任务")
+            .to_string();
+        let mission_status = value
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let updated_at = value
+            .get("updatedAt")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         if let Some(items) = value.get("runs").and_then(Value::as_array) {
             for item in items {
-                let Some(run_id) = item.get("runId").and_then(Value::as_str) else { continue; };
-                let status = item.get("status").and_then(Value::as_str).unwrap_or(mission_status).to_string();
-                let agent = item.get("agent").and_then(Value::as_str).unwrap_or("subagent").to_string();
-                let state = item.get("asyncDir").and_then(Value::as_str)
+                let Some(run_id) = item.get("runId").and_then(Value::as_str) else {
+                    continue;
+                };
+                let status = item
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or(mission_status)
+                    .to_string();
+                let agent = item
+                    .get("agent")
+                    .and_then(Value::as_str)
+                    .unwrap_or("subagent")
+                    .to_string();
+                let state = item
+                    .get("asyncDir")
+                    .and_then(Value::as_str)
                     .and_then(|dir| fs::read_to_string(Path::new(dir).join("status.json")).ok())
                     .and_then(|text| serde_json::from_str::<Value>(&text).ok());
-                if let Some(steps) = state.as_ref().and_then(|state| state.get("steps")).and_then(Value::as_array) {
+                if let Some(steps) = state
+                    .as_ref()
+                    .and_then(|state| state.get("steps"))
+                    .and_then(Value::as_array)
+                {
                     for (index, step) in steps.iter().enumerate() {
-                        let session = step.get("sessionFile").and_then(Value::as_str)
+                        let session = step
+                            .get("sessionFile")
+                            .and_then(Value::as_str)
                             .and_then(|path| history::parse_session_summary(Path::new(path), None));
-                        runs.push(PiSubagentRun { run_id: format!("{run_id}:{index}"), agent: step.get("agent").and_then(Value::as_str).unwrap_or(&agent).to_string(), title: title.clone(), status: step.get("status").and_then(Value::as_str).unwrap_or(&status).to_string(), summary: None, updated_at: updated_at.clone(), session });
+                        runs.push(PiSubagentRun {
+                            run_id: format!("{run_id}:{index}"),
+                            agent: step
+                                .get("agent")
+                                .and_then(Value::as_str)
+                                .unwrap_or(&agent)
+                                .to_string(),
+                            title: title.clone(),
+                            status: step
+                                .get("status")
+                                .and_then(Value::as_str)
+                                .unwrap_or(&status)
+                                .to_string(),
+                            summary: None,
+                            updated_at: updated_at.clone(),
+                            session,
+                        });
                     }
                 } else {
                     let prefix = format!("subagent-{agent}-{run_id}-");
-                    for candidate in candidates.iter().filter(|session| session.name.as_deref().is_some_and(|name| name.starts_with(&prefix))) {
-                        let session = history::parse_session_summary(Path::new(&candidate.path), None);
-                        runs.push(PiSubagentRun { run_id: format!("{run_id}:{}", candidate.id), agent: agent.clone(), title: title.clone(), status: status.clone(), summary: value.get("summary").and_then(Value::as_str).map(str::to_string), updated_at: updated_at.clone(), session });
+                    for candidate in candidates.iter().filter(|session| {
+                        session
+                            .name
+                            .as_deref()
+                            .is_some_and(|name| name.starts_with(&prefix))
+                    }) {
+                        let session =
+                            history::parse_session_summary(Path::new(&candidate.path), None);
+                        runs.push(PiSubagentRun {
+                            run_id: format!("{run_id}:{}", candidate.id),
+                            agent: agent.clone(),
+                            title: title.clone(),
+                            status: status.clone(),
+                            summary: value
+                                .get("summary")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            updated_at: updated_at.clone(),
+                            session,
+                        });
                     }
                 }
             }
@@ -240,7 +321,9 @@ pub fn pi_agent_watch_sessions(
     use notify::Watcher;
     let mut slot = state.watcher.lock().map_err(|_| "会话监听锁不可用")?;
     if !enabled {
-        if slot.as_ref().is_some_and(|(owner, _)| owner == &cwd) { *slot = None; }
+        if slot.as_ref().is_some_and(|(owner, _)| owner == &cwd) {
+            *slot = None;
+        }
         return Ok(());
     }
     if slot.as_ref().is_some_and(|(owner, _)| owner == &cwd) {
@@ -709,8 +792,15 @@ pub fn pi_agent_write_prompt(name: String, content: String) -> Result<(), String
             fs::remove_file(path).map_err(|error| error.to_string())?;
         }
     } else {
-        fs::write(path, if content.ends_with('\n') { content } else { format!("{content}\n") })
-            .map_err(|error| error.to_string())?;
+        fs::write(
+            path,
+            if content.ends_with('\n') {
+                content
+            } else {
+                format!("{content}\n")
+            },
+        )
+        .map_err(|error| error.to_string())?;
     }
     Ok(())
 }

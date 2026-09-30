@@ -5,6 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 static FILE_LOCK: Mutex<()> = Mutex::new(());
 static PENDING_SWITCH: Mutex<Option<Vec<(PathBuf, Option<Vec<u8>>)>>> = Mutex::new(None);
@@ -168,6 +169,32 @@ fn identify_resource(file: &ResourceFile, base: &str, key: &str) -> Result<Strin
     Ok(first.unwrap_or_else(|| "native".into()))
 }
 
+/// 首次读取时把旧 native 记录一次性改写为普通资源 ID。
+fn migrate_native(file: &mut ResourceFile, path: &Path) -> Result<bool, String> {
+    let Some(index) = file.resources.iter().position(|resource| resource.id == "native") else {
+        return Ok(false);
+    };
+    let root = path.parent().ok_or("资源档案路径无效")?;
+    let (provider, config) = native_config(root)?;
+    let (base, key) = current_credentials(root, &provider, &config)?;
+    let id = format!(
+        "resource-{:x}",
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos()
+    );
+    file.resources[index].id = id.clone();
+    file.resources[index].base_url = base;
+    file.resources[index].key = key;
+    if file.active_resource_id == "native" {
+        file.active_resource_id = id.clone();
+    }
+    let native_prefix = format!("{provider}/native");
+    if let Some(choice) = file.last_models.remove(&native_prefix) {
+        file.last_models.insert(format!("{provider}/{id}"), choice);
+    }
+    write_at(path, file)?;
+    Ok(true)
+}
+
 /// 读取 Codev 独立档案，未知版本明确拒绝覆盖。
 fn read_at(path: &Path) -> Result<ResourceFile, String> {
     let mut file: ResourceFile = match std::fs::read(path) {
@@ -180,6 +207,7 @@ fn read_at(path: &Path) -> Result<ResourceFile, String> {
     if file.version != 1 {
         return Err("不支持的 codev.json 版本".into());
     }
+    migrate_native(&mut file, path)?;
     let mut migrated = false;
     for resource in &mut file.resources {
         if resource.key.trim().is_empty() {
@@ -278,9 +306,18 @@ fn validate_url(value: &str) -> Result<String, String> {
 
 /// 构造不含真实密钥的资源列表。
 fn catalog(file: ResourceFile) -> Result<Catalog, String> {
-    let (provider, config) = native_config(&home()?)?;
-    let (current_base, current_key) = current_credentials(&home()?, &provider, &config)?;
-    let active_resource_id = identify_resource(&file, &current_base, &current_key)?;
+    let root = home()?;
+    let (provider, config) = native_config(&root)?;
+    let (current_base, current_key) = current_credentials(&root, &provider, &config)?;
+    let mut file = file;
+    let mut active_resource_id = identify_resource(&file, &current_base, &current_key)?;
+    if active_resource_id == "native" {
+        let id = format!("resource-{:x}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos());
+        file.resources.push(Resource { id: id.clone(), alias: "初始资源".into(), base_url: current_base.clone(), key: current_key.clone(), legacy_encrypted_key: None });
+        file.active_resource_id = id.clone();
+        active_resource_id = id;
+        write_at(&root.join("codev.json"), &file)?;
+    }
     let base_url = config
         .get("model_providers")
         .and_then(|p| p.get(&provider))
@@ -651,7 +688,22 @@ pub(super) fn configure_at(
     let (provider, config) = native_config(root)?;
     let (base, key) = current_credentials(root, &provider, &config)?;
     if let Some(id) = id { file.active_resource_id = id.to_string(); }
-    let id = identify_resource(&file, &base, &key)?;
+    let mut id = identify_resource(&file, &base, &key)?;
+    if id == "native" {
+        id = format!(
+            "resource-{:x}",
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos()
+        );
+        file.resources.push(Resource {
+            id: id.clone(),
+            alias: "初始资源".into(),
+            base_url: base,
+            key,
+            legacy_encrypted_key: None,
+        });
+        file.active_resource_id = id.clone();
+        write_at(&root.join("codev.json"), &file)?;
+    }
     let auth: serde_json::Value = std::fs::read(root.join("auth.json")).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
     let secret = auth.get("OPENAI_API_KEY").and_then(serde_json::Value::as_str).map(str::to_owned);
     command.env("CODEX_HOME", root);

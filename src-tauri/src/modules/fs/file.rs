@@ -282,9 +282,8 @@ fn read_text_lines_sync(
     if bytes.contains(&0) {
         return Err("该文件包含二进制内容，无法按文本窗口预览".to_string());
     }
-    let text = String::from_utf8(bytes).map_err(|_| {
-        "该文件不是 UTF-8 文本，无法按文本窗口预览".to_string()
-    })?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| "该文件不是 UTF-8 文本，无法按文本窗口预览".to_string())?;
     let mut lines: Vec<String> = text.split_inclusive('\n').map(str::to_string).collect();
     if lines.last().is_some_and(|line| line.is_empty()) {
         lines.pop();
@@ -344,7 +343,13 @@ fn read_text_line_previews_sync(
             }
             if let Some(newline) = buffer.iter().position(|byte| *byte == b'\n') {
                 if !truncated {
-                    append_preview_chars(&mut preview, &buffer[..newline], &mut chars, char_limit, &mut truncated);
+                    append_preview_chars(
+                        &mut preview,
+                        &buffer[..newline],
+                        &mut chars,
+                        char_limit,
+                        &mut truncated,
+                    );
                 }
                 reader.consume(newline + 1);
                 offset += newline as u64 + 1;
@@ -365,9 +370,8 @@ fn read_text_line_previews_sync(
         if preview.is_empty() && offset == line_start {
             break;
         }
-        let preview = String::from_utf8(preview).map_err(|_| {
-            "该文件不是 UTF-8 文本，无法按文本窗口预览".to_string()
-        })?;
+        let preview = String::from_utf8(preview)
+            .map_err(|_| "该文件不是 UTF-8 文本，无法按文本窗口预览".to_string())?;
         lines.push(TextLinePreview {
             preview,
             offset: line_start,
@@ -444,9 +448,8 @@ fn read_full_text_lines_sync(path: &Path, offsets: &[u64]) -> Result<String, Str
             return Err("该文件包含二进制内容，无法按文本窗口预览".to_string());
         }
         output.push_str(
-            std::str::from_utf8(&bytes).map_err(|_| {
-                "该文件不是 UTF-8 文本，无法按文本窗口预览".to_string()
-            })?,
+            std::str::from_utf8(&bytes)
+                .map_err(|_| "该文件不是 UTF-8 文本，无法按文本窗口预览".to_string())?,
         );
     }
     Ok(output)
@@ -555,7 +558,9 @@ pub async fn fs_find_text(
         &resolve_path(&path, &workspace),
         &query,
         case_sensitive.unwrap_or(false),
-        max_matches.unwrap_or(SEARCH_MAX_MATCHES).clamp(1, SEARCH_MAX_MATCHES),
+        max_matches
+            .unwrap_or(SEARCH_MAX_MATCHES)
+            .clamp(1, SEARCH_MAX_MATCHES),
     )
 }
 
@@ -664,7 +669,10 @@ fn read_file_sync(p: &Path, force: bool) -> Result<ReadResult, String> {
 /// 查找一行中的普通字面量位置，大小写忽略只折叠 ASCII 以保持字节偏移稳定。
 fn literal_positions(line: &str, query: &str, case_sensitive: bool) -> Vec<usize> {
     if case_sensitive {
-        return line.match_indices(query).map(|(offset, _)| offset).collect();
+        return line
+            .match_indices(query)
+            .map(|(offset, _)| offset)
+            .collect();
     }
     let folded_line = line.to_ascii_lowercase();
     let folded_query = query.to_ascii_lowercase();
@@ -833,9 +841,7 @@ pub async fn fs_write_file(
     if let Some(perms) = original_permissions {
         let _ = fs::set_permissions(&target, perms);
     }
-    let mtime = fs::metadata(&target)
-        .map(|m| mtime_millis(&m))
-        .unwrap_or(0);
+    let mtime = fs::metadata(&target).map(|m| mtime_millis(&m)).unwrap_or(0);
     let _ = app.emit(
         "fs:file-written",
         FileWrittenEvent {
@@ -979,14 +985,7 @@ mod tests {
 
         let first = read_text_lines_sync(&file, 0, index.offsets[0], index.offsets[1], 1).unwrap();
         assert_eq!(first.lines, vec!["{\"a\":1}\n"]);
-        let rest = read_text_lines_sync(
-            &file,
-            1,
-            index.offsets[1],
-            index.total_bytes,
-            8,
-        )
-        .unwrap();
+        let rest = read_text_lines_sync(&file, 1, index.offsets[1], index.total_bytes, 8).unwrap();
         assert_eq!(rest.lines, vec!["{\"b\":2}\n", "{\"c\":3}\n"]);
     }
 
@@ -1005,11 +1004,9 @@ mod tests {
         assert!(!window.lines[1].truncated);
         assert!(!window.has_more);
 
-        let copied = read_full_text_lines_sync(
-            &file,
-            &[window.lines[0].offset, window.lines[1].offset],
-        )
-        .unwrap();
+        let copied =
+            read_full_text_lines_sync(&file, &[window.lines[0].offset, window.lines[1].offset])
+                .unwrap();
         assert_eq!(copied, long);
     }
 

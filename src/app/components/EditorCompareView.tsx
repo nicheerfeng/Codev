@@ -10,6 +10,7 @@ import { HtmlStack } from "@/modules/html";
 import { ReaderContextMenu } from "@/modules/editor/ReaderContextMenu";
 import { TabBar } from "@/modules/tabs";
 import type { Tab } from "@/modules/tabs";
+import { useCallback, useRef } from "react";
 
 type EditorGroupId = "primary" | "secondary";
 
@@ -70,6 +71,14 @@ function EditorGroup({
     activeTab?.kind === "markdown" && activeTab.viewMode === "rendered";
   const showHtmlStack =
     activeTab?.kind === "html" && activeTab.viewMode === "rendered";
+  const htmlHandleRef = useRef<EditorPaneHandle | null>(null);
+  const registerGroupHandle = useCallback(
+    (id: number, handle: EditorPaneHandle | null, owner: "editor" | "markdown" | "html") => {
+      registerEditorHandle(id, handle, owner);
+      if (id === activeId && owner === "html") htmlHandleRef.current = handle;
+    },
+    [activeId, registerEditorHandle],
+  );
 
   return (
     <div
@@ -100,7 +109,9 @@ function EditorGroup({
           />
         </div>
       )}
-      <ReaderContextMenu>
+      <ReaderContextMenu
+        onRefreshHtml={() => htmlHandleRef.current?.reload()}
+      >
       <div
         className="absolute inset-0"
         onFocusCapture={() => {
@@ -116,7 +127,7 @@ function EditorGroup({
           <EditorStack
             tabs={tabs}
             activeId={activeId}
-            registerHandle={registerEditorHandle}
+            registerHandle={registerGroupHandle}
             onDirtyChange={onDirtyChange}
             onSetMarkdownView={onSetMarkdownView}
             onSetHtmlView={onSetHtmlView}
@@ -131,7 +142,7 @@ function EditorGroup({
           <HtmlStack
             tabs={tabs}
             activeId={activeId}
-            registerHandle={registerEditorHandle}
+            registerHandle={registerGroupHandle}
             onSetHtmlView={onSetHtmlView}
             onFocusSearch={onFocusSearch}
           />
@@ -145,7 +156,7 @@ function EditorGroup({
           <MarkdownStack
             tabs={tabs}
             activeId={activeId}
-            registerHandle={registerEditorHandle}
+            registerHandle={registerGroupHandle}
             onSetMarkdownView={onSetMarkdownView}
           />
         </div>

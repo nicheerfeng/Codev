@@ -1,5 +1,6 @@
 import { bindFileScroll } from "@/modules/reader/fileScroll";
 import { ImageViewport } from "@/modules/reader/ImageViewport";
+import { PdfPreview } from "@/modules/reader/pdf/PdfPreview";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
@@ -734,6 +735,16 @@ export function AssetPreview({
 /** 提供只读文件预览，并保留普通文本预览的编辑器句柄。 */
 export const FilePreviewPane = memo(
   forwardRef<EditorPaneHandle, Props>(function FilePreviewPane(props, ref) {
+    if (!props.textOnly && props.path.toLowerCase().endsWith(".pdf")) {
+      return (
+        <PdfPreview
+          key={props.path}
+          ref={ref}
+          path={props.path}
+          onDirtyChange={props.onDirtyChange}
+        />
+      );
+    }
     return <MediaOrTextPreviewPane ref={ref} {...props} />;
   }),
 );

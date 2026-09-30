@@ -5,14 +5,27 @@ import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, C
 
 type SelectionTarget = { text: string; replace?: (text: string) => void };
 
+/** 判断右键事件是否来自 HTML 预览 iframe。 */
+function isHtmlFrameTarget(target: EventTarget | null): target is HTMLIFrameElement {
+  return target instanceof HTMLIFrameElement;
+}
+
 /** 保存阅读区选区，提供 Codev 风格的剪贴板操作。 */
-export function ReaderContextMenu({ children }: { children: ReactNode }) {
+export function ReaderContextMenu({
+  children,
+  onRefreshHtml,
+}: {
+  children: ReactNode;
+  onRefreshHtml?: () => void;
+}) {
   const target = useRef<SelectionTarget>({ text: "" });
   const [selection, setSelection] = useState({ selected: false, editable: false });
+  const [htmlFrameContext, setHtmlFrameContext] = useState(false);
   const [error, setError] = useState("");
 
   /** 菜单抢占焦点前保存编辑器或渲染文档选区。 */
   function capture(element: HTMLElement, frameText?: string) {
+    setHtmlFrameContext(isHtmlFrameTarget(element));
     const editor = element.closest(".cm-editor");
     const view = editor ? EditorView.findFromDOM(editor as HTMLElement) : null;
     if (frameText !== undefined) target.current = { text: frameText };
@@ -50,6 +63,7 @@ export function ReaderContextMenu({ children }: { children: ReactNode }) {
       </div>
     </ContextMenuTrigger>
     <ContextMenuContent onCloseAutoFocus={(event) => event.preventDefault()}>
+      {htmlFrameContext && onRefreshHtml && <ContextMenuItem onSelect={onRefreshHtml}>刷新</ContextMenuItem>}
       <ContextMenuItem disabled={!selection.editable || !selection.selected} onSelect={() => void execute("cut")}>剪切<ContextMenuShortcut>Ctrl+X</ContextMenuShortcut></ContextMenuItem>
       <ContextMenuItem disabled={!selection.selected} onSelect={() => void execute("copy")}>复制<ContextMenuShortcut>Ctrl+C</ContextMenuShortcut></ContextMenuItem>
       <ContextMenuItem disabled={!selection.editable} onSelect={() => void execute("paste")}>粘贴<ContextMenuShortcut>Ctrl+V</ContextMenuShortcut></ContextMenuItem>

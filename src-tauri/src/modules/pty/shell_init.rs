@@ -139,10 +139,7 @@ fn ensure_utf8_locale(cmd: &mut CommandBuilder) {
     cmd.env("LANG", fallback);
 }
 
-fn apply_common(
-    cmd: &mut CommandBuilder,
-    cwd: Option<String>,
-) {
+fn apply_common(cmd: &mut CommandBuilder, cwd: Option<String>) {
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("CODEV_TERMINAL", "1");
@@ -1091,10 +1088,7 @@ mod tests {
         let mut command = CommandBuilder::new("shell");
         apply_common(&mut command, None);
 
-        assert_eq!(
-            command.get_env("CODEV_TERMINAL"),
-            Some(OsStr::new("1"))
-        );
+        assert_eq!(command.get_env("CODEV_TERMINAL"), Some(OsStr::new("1")));
         assert_eq!(command.get_env("TERM"), Some(OsStr::new("xterm-256color")));
     }
 }

@@ -1,9 +1,9 @@
 mod common;
 
-use common::FsFixture;
 use codev_lib::modules::fs::grep::fs_glob;
 use codev_lib::modules::fs::search::fs_list_files;
 use codev_lib::modules::fs::tree::{fs_read_dir, list_subdirs, EntryKind};
+use common::FsFixture;
 
 #[test]
 fn glob_finds_files_by_pattern() {

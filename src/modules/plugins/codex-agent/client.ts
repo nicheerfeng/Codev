@@ -568,7 +568,7 @@ export class CodexClient {
         try {
           const upstream = await invoke<Array<{ id: string; name?: string }>>(
             "codex_resources_models",
-            { id: "native" },
+            { id: ready.resourceId },
           );
           const available = mergeModels([], upstream ?? []);
           if (!available.length) throw new Error("当前资源没有返回可用模型");
