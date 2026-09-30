@@ -17,10 +17,55 @@ export function isTool(item: Item): boolean {
   ) && !isCompaction(item);
 }
 
+/** 清除可确认的 shell 启动包装，无法识别时原样返回。 */
+export function displayCommand(command: string): string {
+  const value = command.trim();
+  const match = value.match(
+    /^(?:"([^"]+\.exe)"|'([^']+\.exe)'|(\S+\.exe))\s+([\s\S]+)$/i,
+  );
+  if (!match) return command;
+  const executable = (match[1] ?? match[2] ?? match[3] ?? "")
+    .split(/[\\/]/)
+    .pop()!
+    .toLowerCase();
+  const args = match[4].trim();
+  let script: string | undefined;
+  if (["powershell.exe", "pwsh.exe"].includes(executable)) {
+    script = args.match(/^(?:(?:-[\w-]+)\s+)*(?:-command|-c)\s+([\s\S]+)$/i)?.[1];
+  } else if (["bash.exe", "bash", "sh.exe", "sh", "zsh.exe", "zsh"].includes(executable)) {
+    script = args.match(/^(?:(?:-[\w-]+)\s+)*-lc\s+([\s\S]+)$/i)?.[1];
+  } else if (["cmd.exe", "cmd"].includes(executable)) {
+    script = args.match(/^(?:(?:\/[\w]+)\s+)*\/c\s+([\s\S]+)$/i)?.[1];
+  }
+  if (!script) return command;
+  const trimmed = script.trim();
+  const quote = trimmed[0];
+  if (
+    (quote === "'" || quote === '"') &&
+    trimmed[trimmed.length - 1] === quote
+  )
+    return trimmed.slice(1, -1).trim() || command;
+  return trimmed || command;
+}
+
+/** 构造经过命令前缀清理的调用详情，不修改协议缓存。 */
+export function displayItemDetails(item: Item): string {
+  return JSON.stringify(
+    item.command ? { ...item, command: displayCommand(item.command) } : item,
+    null,
+    2,
+  );
+}
+
 /** 将真实思考或工具预览归一为从开头截断的一行文本。 */
 export function activityLabel(item: Item): string {
   if (item.type === "subAgentActivity") return `${({ started: "子代理启动", interacted: "子代理交互", completed: "子代理完成", interrupted: "子代理停止" } as Record<string, string>)[String(item.kind)] ?? "子代理"} · ${String(item.agentPath ?? item.agentThreadId ?? "")}`;
-  const text = itemText(item).replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
+  const text = (item.type === "commandExecution" && item.command
+    ? displayCommand(item.command)
+    : itemText(item))
+    .replace(/\*\*/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (item.type === "reasoning")
     return `${item.status === "inProgress" ? "思考中" : "已思考"} · ${text}`;
   const status = item.status === "inProgress" ? "正在运行" : item.status === "failed" ? "执行失败" : "已完成";

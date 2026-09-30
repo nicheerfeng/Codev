@@ -1,0 +1,470 @@
+import { useCallback, useEffect, useRef, useState , useMemo } from "react";
+import {
+  DndContext,
+  PointerSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  horizontalListSortingStrategy,
+  rectSortingStrategy,
+  useSortable,
+  arrayMove,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { cn } from "@renderer/lib/cn.js";
+import { IconX, SpinnerIcon } from "@renderer/lib/icons.js";
+import { getProviderIcon } from "@renderer/lib/providerIcon.js";
+import { projectDisplayColor } from "@renderer/lib/projectAvatar.js";
+import { useSessionStore, orchRunningAnchors } from "@renderer/stores/sessionStore.js";
+import type { Session } from "@contracts/session";
+import { TabBarChevronButton, TabBarOverflowMenu } from "./TabBarChrome.js";
+import { ProjectAvatar } from "./ProjectAvatar.js";
+
+/** Tab strip rendered along the top of the center pane in `tabs` display
+ *  mode. Each open tab shows the session's title, a running indicator
+ *  (spinner when the session has a turn in flight, static dot when idle),
+ *  and a close button. Clicking the tab body activates it; the × button
+ *  removes it from the strip (the session's in-flight turn is NOT
+ *  cancelled — see `closeTab` in the store).
+ *
+ *  Interaction model (VS Code / browser-style tab bar):
+ *   - Drag a tab to reorder it (via @dnd-kit; a 6px activation distance
+ *     distinguishes a drag from a click).
+ *   - When tabs overflow, left/right chevron buttons scroll the strip; the
+ *     mouse wheel is also translated to horizontal scroll. The native
+ *     scrollbar is hidden (`no-scrollbar`); edge fades hint at more content.
+ *   - A `⋯` menu on the right lists every tab for quick jumping when the
+ *     strip overflows.
+ *   - Middle-click on a tab closes it.
+ *
+ *  Only renders anything when the store's `openTabs` list is non-empty.
+ *  In `single` displayMode this component is never mounted (the
+ *  CenterPane router in App.tsx gates it). */
+export function SessionTabs() {
+  const tabs = useSessionStore((s) => s.openTabs);
+  const activeId = useSessionStore((s) => s.activeSessionId);
+  const sessionsByProject = useSessionStore((s) => s.sessionsByProject);
+  const pinnedSessions = useSessionStore((s) => s.pinnedSessions);
+  const streamSessions = useSessionStore((s) => s.streamSessions);
+  const orchWorkersById = useSessionStore((s) => s.orchWorkersById);
+  const runningBySession = useSessionStore((s) => s.runningBySession);
+  const orchRunsBySession = useSessionStore((s) => s.orchRunsBySession);
+  // 编排运行中 → 与普通回合运行同款 loading 指示(锚点 = 最早未结束派发)。
+  const orchAnchors = useMemo(() => orchRunningAnchors(orchRunsBySession), [orchRunsBySession]);
+  const unreadBySession = useSessionStore((s) => s.unreadBySession);
+  const selectSession = useSessionStore((s) => s.selectSession);
+  const closeTab = useSessionStore((s) => s.closeTab);
+  const reorderTab = useSessionStore((s) => s.reorderTab);
+  // Multi-row wrapping (toggled from the ⋯ overflow menu) vs the classic
+  // single horizontally-scrolling row.
+  const multiRow = useSessionStore((s) => s.tabBarMultiRow);
+  const setTabBarMultiRow = useSessionStore((s) => s.setTabBarMultiRow);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Maps a tab id → its DOM node, used to scrollIntoView the active tab.
+  const tabNodes = useRef<Map<string, HTMLDivElement>>(new Map());
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const recomputeScrollState = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // 1px tolerance to avoid float-rounding flakiness at the right edge.
+    setCanScrollLeft(el.scrollLeft > 0);
+    setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 1);
+  }, []);
+
+  // Keep scroll-boundary state fresh on mount, on tab add/remove, and on
+  // container resize. (Scroll position itself is tracked by onScroll.)
+  useEffect(() => {
+    recomputeScrollState();
+    const el = scrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => recomputeScrollState());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [tabs.length, recomputeScrollState]);
+
+  // Scroll the active tab into view whenever it changes — so selecting a
+  // background tab or opening a new one never leaves it hidden off-screen.
+  useEffect(() => {
+    if (!activeId) return;
+    const node = tabNodes.current.get(activeId);
+    node?.scrollIntoView({ inline: "nearest", behavior: "smooth", block: "nearest" });
+    // Recompute after the smooth scroll settles.
+    const t = setTimeout(recomputeScrollState, 260);
+    return () => clearTimeout(t);
+  }, [activeId, tabs.length, recomputeScrollState]);
+
+  const scrollByPage = useCallback((dir: 1 | -1) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: "smooth" });
+  }, []);
+
+  const onWheel = useCallback(
+    (e: React.WheelEvent) => {
+      // Translate vertical wheel into horizontal scroll so a plain mouse
+      // wheel can navigate the strip. Trackpad horizontal is already deltaX.
+      // In multi-row mode the wheel scrolls rows natively instead.
+      if (multiRow) return;
+      const el = scrollRef.current;
+      if (!el) return;
+      if (e.deltaY !== 0 && e.deltaX === 0) {
+        el.scrollLeft += e.deltaY;
+      }
+    },
+    [multiRow],
+  );
+
+  // ── Drag-and-drop (reorder) ──────────────────────────────────────────
+  // A 6px movement activates a drag; anything less is treated as a click
+  // (so tapping a tab to select it still works). Touch gets a slightly
+  // longer delay so a scroll gesture isn't hijacked.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 120, tolerance: 8 },
+    }),
+  );
+
+  const onDragEnd = useCallback(
+    (e: DragEndEvent) => {
+      const { active, over } = e;
+      if (!over || active.id === over.id) return;
+      const from = tabs.indexOf(String(active.id));
+      const to = tabs.indexOf(String(over.id));
+      if (from === -1 || to === -1) return;
+      reorderTab(from, to);
+    },
+    [tabs, reorderTab],
+  );
+
+  if (tabs.length === 0) return null;
+  // The ⋯ overflow menu doubles as the multi-row toggle's home, so it stays
+  // mounted in multi-row mode even though nothing scrolls horizontally.
+  const showOverflowMenu = multiRow || canScrollLeft || canScrollRight;
+  // rectSortingStrategy understands wrapped 2-D layouts; the horizontal
+  // strategy would drag tabs along a single axis only.
+  const sortStrategy = multiRow ? rectSortingStrategy : horizontalListSortingStrategy;
+
+  return (
+    <div
+      role="tablist"
+      aria-label="Session tabs"
+      className={cn(
+        "flex shrink-0 items-center gap-1 border-b border-edge/60 bg-surface-muted/40 dark:bg-surface/50 backdrop-blur-md px-1.5",
+        multiRow ? "min-h-8 py-0.5" : "h-8",
+      )}
+    >
+      {/* Left chevron — only when there's content scrolled off the left edge. */}
+      {canScrollLeft && (
+        <TabBarChevronButton
+          dir="left"
+          onClick={() => scrollByPage(-1)}
+          title="Scroll tabs left"
+        />
+      )}
+
+      {/* Scrollable tab track. The native scrollbar is hidden; navigation
+          is via chevrons + wheel + drag. Edge fades on either side hint at
+          overflow. */}
+      <div className="relative min-w-0 flex-1">
+        <div
+          ref={scrollRef}
+          onScroll={recomputeScrollState}
+          onWheel={onWheel}
+          className={cn(
+            "no-scrollbar flex items-center gap-1 py-0.5",
+            multiRow
+              ? // Wrapped rows, capped at ~3 rows — beyond that the track
+                // scrolls vertically.
+                "max-h-[82px] flex-wrap content-start items-start overflow-y-auto"
+              : "overflow-x-auto",
+          )}
+        >
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={onDragEnd}
+          >
+            <SortableContext
+              items={tabs}
+              strategy={sortStrategy}
+            >
+              {tabs.map((id) => {
+                const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id, orchWorkersById);
+                const isActive = id === activeId;
+                const running = !!runningBySession[id] || orchAnchors[id] != null;
+                const unread = unreadBySession[id] ?? 0;
+                return (
+                  <SortableSessionTab
+                    key={id}
+                    session={sess}
+                    sessionId={id}
+                    isActive={isActive}
+                    running={running}
+                    unreadCount={unread}
+                    multiRow={multiRow}
+                    registerNode={(node) => {
+                      if (node) tabNodes.current.set(id, node);
+                      else tabNodes.current.delete(id);
+                    }}
+                    onActivate={() => void selectSession(id)}
+                    onClose={() => closeTab(id)}
+                  />
+                );
+              })}
+            </SortableContext>
+          </DndContext>
+        </div>
+
+        {/* Edge fades — overlay only, pointer-events disabled so they never
+            intercept tab clicks. Shown per-direction based on scroll state. */}
+        {canScrollLeft && (
+          <div className="pointer-events-none absolute inset-y-0 left-0 w-6 bg-gradient-to-r from-surface to-transparent" />
+        )}
+        {canScrollRight && (
+          <div className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-surface to-transparent" />
+        )}
+      </div>
+
+      {/* Right chevron — only when there's content scrolled off the right edge. */}
+      {canScrollRight && (
+        <TabBarChevronButton
+          dir="right"
+          onClick={() => scrollByPage(1)}
+          title="Scroll tabs right"
+        />
+      )}
+
+      {/* Overflow menu — lists every tab for quick jumping. Shown when the
+          strip overflows, and always in multi-row mode (it hosts the layout
+          toggle). */}
+      {showOverflowMenu && (
+        <TabBarOverflowMenu
+          heading="Open tabs"
+          multiRow={multiRow}
+          onToggleMultiRow={setTabBarMultiRow}
+          items={tabs.map((id) => {
+            const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id, orchWorkersById);
+            return {
+              key: id,
+              label: sess?.title ?? "(unknown)",
+              active: id === activeId,
+              dotClass:
+                runningBySession[id] || orchAnchors[id] != null
+                  ? "bg-accent animate-pulse"
+                  : "bg-content-subtle/50",
+            };
+          })}
+          onSelect={(id) => void selectSession(id)}
+        />
+      )}
+    </div>
+  );
+}
+
+interface SortableTabProps {
+  session: Session | undefined;
+  sessionId: string;
+  isActive: boolean;
+  running: boolean;
+  /** Unread event count for this session (0 = no badge). Rendered as a small
+   *  accent-colored count badge on non-active tabs so the user can see which
+   *  background tabs have new activity. */
+  unreadCount: number;
+  /** Multi-row wrapping layout: tabs flex to fill their row between a min
+   *  floor and their max cap, so flexbox breaks lines at the FLOOR width —
+   *  a line only wraps when it genuinely can't hold another tab. Omit for
+   *  the single-row strip (natural-width chips, horizontal scroll). */
+  multiRow?: boolean;
+  registerNode: (node: HTMLDivElement | null) => void;
+  onActivate: () => void;
+  onClose: () => void;
+}
+
+/** A single session tab. Exported so the unified tab bar (tabs displayMode)
+ *  can render session tabs inside its own DndContext — `useSortable` binds
+ *  per-item, so the same component works under any shared context. */
+export function SortableSessionTab({
+  session,
+  sessionId,
+  isActive,
+  running,
+  unreadCount,
+  multiRow,
+  registerNode,
+  onActivate,
+  onClose,
+}: SortableTabProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: sessionId });
+
+  const title = session?.title ?? "(unknown)";
+
+  // Project identity for the tab: resolved from the store here (not passed
+  // down) so both hosts that render this component — SessionTabs and the
+  // unified tab bar — get the avatar without touching their prop plumbing.
+  // Unknown project (worker rows / init race) renders no avatar.
+  const projects = useSessionStore((s) => s.projects);
+  const projectColors = useSessionStore((s) => s.projectColors);
+  const project = session
+    ? projects.find((p) => p.id === session.projectId)
+    : undefined;
+
+  // Merge the dnd-kit node ref with our registry ref.
+  const setRefs = useCallback(
+    (node: HTMLDivElement | null) => {
+      setNodeRef(node);
+      registerNode(node);
+    },
+    [setNodeRef, registerNode],
+  );
+
+  // The sortable transform reorders visually during a drag; while dragging
+  // the source tab is dimmed and lifted slightly.
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    ...(isDragging
+      ? { zIndex: 10, opacity: 0.6 }
+      : undefined),
+  };
+
+  const handleClose = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      onClose();
+    },
+    [onClose],
+  );
+
+  // Middle-click closes (browser tab-bar convention).
+  const onMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button === 1) {
+        e.preventDefault();
+        onClose();
+      }
+    },
+    [onClose],
+  );
+
+  return (
+    <div
+      ref={setRefs}
+      style={style}
+      {...attributes}
+      {...listeners}
+      onClick={() => {
+        // A real drag is captured away by dnd-kit and never lands here; this
+        // fires only for an actual tap, which we treat as tab activation.
+        onActivate();
+      }}
+      onMouseDown={onMouseDown}
+      role="tab"
+      aria-selected={isActive}
+      title={title}
+      className={cn(
+        // Apple-style Compact Integrated Card Tab (方案 1)
+        "group flex h-[27px] max-w-[200px] cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 text-[11px] transition-all duration-150",
+        multiRow ? "min-w-[170px] flex-1" : "min-w-0 shrink-0",
+        isActive
+          ? "bg-surface text-content font-medium shadow-xs border border-edge/60 dark:bg-surface-hover dark:border-white/10 dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]"
+          : "text-content-muted hover:text-content hover:bg-surface-hover/50 border border-transparent",
+        isDragging && "shadow-lg opacity-80 z-20",
+      )}
+    >
+      {/* Project identity leads the tab: the owning project's colored
+          initial, so tabs from different projects read apart at a glance
+          (same mark as the sidebars' project rows). */}
+      {project && (
+        <ProjectAvatar
+          name={project.name}
+          color={projectDisplayColor(project, projectColors)}
+        />
+      )}
+      {/* Provider brand mark follows the project identity. */}
+      {(() => {
+        const { Icon, color } = getProviderIcon(session?.providerId);
+        return <Icon size={13} className={cn("shrink-0", color)} />;
+      })()}
+      {/* Running spinner — the only in-flight indicator on the tab. The old
+          idle dot is gone: with project + provider marks up front the chip
+          already has enough leading furniture. */}
+      {running && (
+        <SpinnerIcon size={12} className="shrink-0 animate-spin text-accent" />
+      )}
+      {/* Title fills every free pixel of the chip (flex-1) — on inactive
+          tabs the close button leaves the layout entirely until hover, so
+          the title owns the full tab width. */}
+      <span className="min-w-0 flex-1 truncate">{title}</span>
+      {/* Unread badge - shown on non-active tabs with pending unread events.
+          Leaves the layout on hover so the appearing close button gets the
+          room (the badge clears when the tab is activated — selectSession). */}
+      {!isActive && unreadCount > 0 && (
+        <span
+          className={cn(
+            "shrink-0 rounded-full bg-accent px-1 text-center text-[9px] font-medium leading-[14px] text-white",
+            "min-w-[14px] group-hover:hidden",
+          )}
+        >
+          {unreadCount > 9 ? "9+" : unreadCount}
+        </span>
+      )}
+      {/* Close button - occupies layout space ONLY when visible: always on
+          the active tab, on hover otherwise. On inactive tabs it's removed
+          from the flow (`hidden`) so the title fills the whole chip; hover
+          swaps it in (shifting the title a few px — standard tab-bar trade).
+          Explicit stopPropagation so it never starts a drag and never
+          activates the tab. */}
+      <button
+        type="button"
+        aria-label="Close tab"
+        onClick={handleClose}
+        onPointerDown={(e) => e.stopPropagation()}
+        className={cn(
+          "ml-0.5 h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-black/10 dark:hover:bg-white/15 hover:text-content",
+          isActive ? "inline-flex" : "hidden group-hover:inline-flex",
+        )}
+      >
+        <IconX size={11} />
+      </button>
+    </div>
+  );
+}
+
+/** Find a session across the per-project cache by id, falling back to the
+ *  global pinned bucket (pinned rows leave their project's list) and the
+ *  stream sidebar's cross-project aggregate (a `session.listAll` page-2+
+ *  row exists ONLY there — without the fallback its tab renders
+ *  "(unknown)"). The optional workersById map (orch-worker sub-sessions,
+ *  fetched on demand by the orchestration panel's "open worker" action) is
+ *  the final fallback — worker rows live in no list cache by design.
+ *  Returns undefined if none has it (init race / unknown id).
+ *  Exported for the unified tab bar, which resolves session rows the same
+ *  way. */
+export function findSession(
+  sessionsByProject: Record<string, Session[]>,
+  pinnedSessions: Session[],
+  streamSessions: Session[],
+  id: string,
+  workersById?: Record<string, Session>,
+): Session | undefined {
+  for (const list of Object.values(sessionsByProject)) {
+    if (!list) continue;
+    const hit = list.find((s) => s.id === id);
+    if (hit) return hit;
+  }
+  const pinnedHit = pinnedSessions.find((s) => s.id === id);
+  if (pinnedHit) return pinnedHit;
+  const streamHit = streamSessions.find((s) => s.id === id);
+  if (streamHit) return streamHit;
+  return workersById?.[id];
+}

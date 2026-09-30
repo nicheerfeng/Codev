@@ -59,10 +59,14 @@ export function ToolPanel({
   tool = "json",
   active = true,
   onOpenFile,
+  workspaceRoots = [],
+  onAddWorkspaceRoot,
 }: {
   tool?: ToolId;
   active?: boolean;
   onOpenFile?: (path: string) => void;
+  workspaceRoots?: string[];
+  onAddWorkspaceRoot?: (path: string) => void;
 }) {
   const piEnabled = usePluginStore(
     (state) => state.enabled[PI_AGENT_PLUGIN_ID],
@@ -96,6 +100,8 @@ export function ToolPanel({
             <CodexPane
               active={active && tool === "codex"}
               onOpenFile={onOpenFile}
+              workspaceRoots={workspaceRoots}
+              onAddWorkspaceRoot={onAddWorkspaceRoot}
             />
           </Suspense>
         )}
@@ -130,6 +136,8 @@ export function ToolPanel({
             <PiAgentPane
               active={active && tool === "pi"}
               onOpenFile={onOpenFile}
+              workspaceRoots={workspaceRoots}
+              onAddWorkspaceRoot={onAddWorkspaceRoot}
             />
           </Suspense>
         )}

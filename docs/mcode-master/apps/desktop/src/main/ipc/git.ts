@@ -1,0 +1,1349 @@
+/**
+ * IPC handlers for git operations (status / stage / commit / push / pull / diff).
+ *
+ * All operations are scoped to a `repoPath` that must resolve inside a known
+ * project root — the same path-containment guard the file handlers use. A
+ * single project folder may host MULTIPLE git repos (monorepo, submodules,
+ * nested projects); `git.discoverRepos` finds them all by recursive scan.
+ *
+ * Git access goes through `simple-git` (wraps the system `git` CLI), so auth
+ * (SSH keys, credential helpers, git credential manager) is handled by the
+ * user's existing system configuration — the app never touches credentials.
+ *
+ * Every handler degrades gracefully: errors return `{ ok: false, error }` (or
+ * empty results) rather than throwing into the renderer.
+ */
+import type { IpcMain } from "electron";
+import { readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { join, relative, resolve, sep } from "node:path";
+import type simpleGitFn from "simple-git";
+import {
+  IPC,
+  GitDiscoverReposSchema,
+  GitRepoPathSchema,
+  GitStageSchema,
+  GitUnstageSchema,
+  GitCommitSchema,
+  GitDiffSchema,
+  GitFileBlobSchema,
+  GitDiscardSchema,
+  GitGenerateCommitSchema,
+  GitCancelGenerateCommitSchema,
+  GitLogSchema,
+  GitShowCommitSchema,
+  GitShowFileSchema,
+  GitCheckoutSchema,
+  GitDeleteBranchSchema,
+  GitMergeSchema,
+  GitWorktreeListSchema,
+  GitWorktreeStatusSchema,
+  GitWorktreeMergeBackSchema,
+  GitWorktreeRemoveSchema,
+} from "@contracts/ipc";
+import {
+  listWorktrees,
+  worktreeStatus,
+  mergeBackWorktree,
+  removeWorktree,
+} from "@main/lib/worktreeOps.js";
+import type {
+  GitRepo,
+  GitStatusResult,
+  GitFileStatus,
+  GitStatusCode,
+  GitCommitInfo,
+  GitCommitFile,
+  GitCommitFileStatus,
+  GitCommitDetail,
+  GitBranchInfo,
+  GitBranchListResult,
+  GitMergePreviewResult,
+} from "@contracts/ipc";
+import { ProjectRepo, SettingRepo } from "@main/store/repositories.js";
+import { findContainingWorkspaceRoot, isKnownWorkspaceRoot } from "@main/lib/pathGuard.js";
+import { CustomModelStore } from "@main/lib/secretStore.js";
+import { buildCustomEnv, resolveActiveModel } from "@main/providers/claude-sdk/customEnv.js";
+import { resolveSdkBinaryPath } from "@main/providers/claude-sdk/sdkBinaryPath.js";
+import { BridgeRegistry } from "@main/providers/bridge/bridgeRegistry.js";
+import { resolveProtocol } from "@contracts/customModel";
+import type { ApiConfig } from "@contracts/customModel";
+import { broadcastGitChanged } from "@main/lib/sessionSync.js";
+import { log } from "@main/lib/logger.js";
+
+// Lazy-load simple-git so the CJS module stays out of the main-process startup
+// path. Git operations only happen when the user opens the git panel - well
+// after the window is visible. Mirrors the node-pty lazy-load pattern in
+// TerminalManager.ts.
+let simpleGitLoader: typeof simpleGitFn | null = null;
+/** Lazy simple-git loader. Exported so the mobile git RPC whitelist reuses the
+ *  exact same loader (and module cache) as the desktop IPC handlers. */
+export async function loadSimpleGit(): Promise<typeof simpleGitFn> {
+  if (!simpleGitLoader) {
+    const mod = await import("simple-git");
+    simpleGitLoader = mod.default;
+  }
+  return simpleGitLoader;
+}
+
+/** Grouped ref list for the branch picker (local / remote / tags + current).
+ *  Shared by the desktop `git:listBranches` IPC handler and the mobile git
+ *  RPC whitelist so both surfaces see identical data. Does NOT apply the
+ *  project-containment guard — callers do that themselves (their refusal
+ *  payloads differ). */
+export async function listBranchesForRepo(repoPath: string): Promise<GitBranchListResult> {
+  const git = (await loadSimpleGit())(repoPath);
+  // `for-each-ref` gives us refname / short hash / subject in one shot.
+  // NOTE: `for-each-ref` uses `%NN` (two hex digits) for byte escapes - NOT
+  // the `%xNN` form that `git log --format` uses. So `%1f` = unit sep
+  // (field), `%0a` = LF (record). `%x1f` would be emitted literally and
+  // break parsing. `*HEAD` symrefs under refs/remotes are excluded - they
+  // duplicate a real remote branch and would confuse checkout.
+  const fmt = "%(refname)%1f%(objectname:short)%1f%(contents:subject)%0a";
+  const rawRefs = await git.raw([
+    "for-each-ref",
+    `--format=${fmt}`,
+    "refs/heads",
+    "refs/remotes",
+    "refs/tags",
+  ]);
+
+  // Determine current ref (branch name, or empty under detached HEAD).
+  let current = "";
+  let detached = false;
+  const curBranch = await git.revparse(["--abbrev-ref", "HEAD"]).catch(() => "");
+  current = (curBranch || "").trim();
+  if (current === "HEAD" || current === "") {
+    detached = true;
+    current = "";
+  }
+
+  const local: GitBranchInfo[] = [];
+  const remote: GitBranchInfo[] = [];
+  const tags: GitBranchInfo[] = [];
+
+  for (const record of rawRefs.split("\n")) {
+    const line = record.trim();
+    if (!line) continue;
+    const [refname, commit, label] = line.split("\x1f");
+    if (!refname) continue;
+
+    // refs/heads/<name>
+    if (refname.startsWith("refs/heads/")) {
+      const name = refname.slice("refs/heads/".length);
+      local.push({
+        name,
+        current: name === current,
+        commit: commit || "",
+        label: label || "",
+        type: "local",
+      });
+      continue;
+    }
+    // refs/remotes/<remote>/<name> - skip <remote>/HEAD symrefs.
+    if (refname.startsWith("refs/remotes/")) {
+      const full = refname.slice("refs/remotes/".length);
+      if (full.endsWith("/HEAD")) continue;
+      remote.push({
+        name: full,
+        current: full === current,
+        commit: commit || "",
+        label: label || "",
+        type: "remote",
+      });
+      continue;
+    }
+    // refs/tags/<name>
+    if (refname.startsWith("refs/tags/")) {
+      const name = refname.slice("refs/tags/".length);
+      // Under detached HEAD, mark the tag matching the current commit.
+      tags.push({
+        name,
+        current: false,
+        commit: commit || "",
+        label: label || "",
+        type: "tag",
+      });
+    }
+  }
+
+  return { current, detached, local, remote, tags };
+}
+
+/** Switch the working tree to another ref. `newBranch` (when set) creates a
+ *  local branch from `branch` first (`git checkout -b`). Shared by the
+ *  desktop `git:checkout` IPC handler and the mobile git RPC whitelist.
+ *  Never throws — failures come back as `{ ok: false, error }`. */
+export async function checkoutRef(
+  repoPath: string,
+  branch: string,
+  newBranch?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const git = (await loadSimpleGit())(repoPath);
+    if (newBranch) {
+      // `git checkout -b <newBranch> <branch>` - create + switch.
+      await git.checkoutBranch(newBranch, branch);
+      log.info(`git.checkout created ${newBranch} from ${branch} in ${repoPath}`);
+    } else {
+      await git.checkout(branch);
+      log.info(`git.checkout switched to ${branch} in ${repoPath}`);
+    }
+    broadcastGitChanged(repoPath);
+    return { ok: true };
+  } catch (err) {
+    const msg = (err as Error).message;
+    log.warn(`git.checkout failed for ${repoPath}: ${msg}`);
+    return { ok: false, error: msg };
+  }
+}
+
+/** Delete a local branch (`git branch -d`; `-D` when `force`). Only local
+ *  branches are deletable from the picker — remote rows would require pushing
+ *  a ref deletion to the remote. Never throws — failures come back as
+ *  `{ ok: false, error }`. */
+export async function deleteLocalBranchForRepo(
+  repoPath: string,
+  branch: string,
+  force?: boolean,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const git = (await loadSimpleGit())(repoPath);
+    const flag = force ? "-D" : "-d";
+    // Capture git's own message (e.g. "not fully merged") for the dialog.
+    let rawOut = "";
+    try {
+      rawOut = await git.raw(["branch", flag, branch]);
+    } catch (err) {
+      rawOut = (err as Error).message;
+    }
+    // simple-git's raw() can swallow non-zero exits (same lesson as the
+    // merge-base probe) — verify the ref is really gone before claiming ok.
+    const local = await git.branchLocal();
+    if (local.all.includes(branch)) {
+      const msg = rawOut.trim() || `git branch ${flag} ${branch} failed`;
+      log.warn(`git.deleteBranch failed for ${repoPath}: ${msg}`);
+      return { ok: false, error: msg };
+    }
+    log.info(`git.deleteBranch removed ${branch} in ${repoPath}`);
+    broadcastGitChanged(repoPath);
+    return { ok: true };
+  } catch (err) {
+    const msg = (err as Error).message;
+    log.warn(`git.deleteBranch failed for ${repoPath}: ${msg}`);
+    return { ok: false, error: msg };
+  }
+}
+
+/** Max recursion depth for repo discovery. Keeps the scan fast on deep trees
+ *  while still finding nested monorepo packages. */
+export const MAX_SCAN_DEPTH = 3;
+
+/** Directory names to skip during repo discovery (never contain repos we care
+ *  about, and descending into them is slow). */
+const SCAN_IGNORE = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  ".next",
+  ".cache",
+  ".turbo",
+  "coverage",
+  "__pycache__",
+  ".venv",
+  "venv",
+  "target",
+  "out",
+]);
+
+/** Verify a repoPath is inside SOME persisted project root — or is/contains
+ *  a session worktree (the isolated checkouts live outside every project by
+ *  design, yet the worktree session's Git panel legitimately operates
+ *  there). Returns the matching root, or null if the path is outside all
+ *  legal roots (refuse). Exported so the mobile git RPC whitelist enforces
+ *  the same boundary. */
+export function findContainingProject(repoPath: string): string | null {
+  return findContainingWorkspaceRoot(repoPath);
+}
+
+/** Resolve a custom-model config for an LLM-driven git operation (commit
+ *  message / conflict resolution), activating the OpenAI→Anthropic bridge when
+ *  the config speaks the OpenAI wire protocol.
+ *
+ *  The live-turn pipeline (`RuntimeManager.sendTurn`) does this rewrite, but the
+ *  git IPC handlers bypass it — they call `buildCustomEnv(cfg)` directly. For an
+ *  `openai`-protocol config that meant `ANTHROPIC_BASE_URL` pointed at the raw
+ *  OpenAI endpoint, the Claude binary POSTed Anthropic-format `/v1/messages` at
+ *  it, the endpoint 404'd, and the binary reported "selected model may not
+ *  exist" — the exact failure seen with gateways like MiniMax-M3.
+ *
+ *  Mirrors RuntimeManager: acquire a bridge (shared & ref-counted via
+ *  BridgeRegistry) and rewrite `baseUrl` to its local URL so the rest of the
+ *  pipeline is protocol-blind. The caller MUST release the bridge when done
+ *  (returned as `releaseBridge`, a no-op for anthropic-protocol configs).
+ *
+ *  Returns `{ config, releaseBridge }` where `config` is the (possibly
+ *  rewritten) `ApiConfig` to feed into `buildCustomEnv`, and `releaseBridge`
+ *  drops the registry reference once the query has finished. */
+export async function resolveModelForGitOp(
+  customModelId: string,
+  role: string | undefined,
+): Promise<
+  | { ok: true; config: ApiConfig; releaseBridge: () => void }
+  | { ok: false; error: string }
+> {
+  const cfg = CustomModelStore.resolveApiConfig(customModelId, role);
+  if (!cfg) {
+    return { ok: false, error: "找不到指定的模型配置" };
+  }
+
+  if (resolveProtocol(cfg.protocol) === "openai") {
+    try {
+      const handle = await BridgeRegistry.acquire(customModelId, cfg);
+      return {
+        ok: true,
+        // Rewrite baseUrl to the local bridge so buildCustomEnv/the binary see
+        // an Anthropic-compatible endpoint on localhost — identical to what
+        // RuntimeManager does for a live turn. Everything downstream (auth env
+        // vars, ANTHROPIC_MODEL, the [1m] suffix) is unaffected by the rewrite.
+        config: { ...cfg, baseUrl: handle.localUrl },
+        releaseBridge: () => BridgeRegistry.release(customModelId),
+      };
+    } catch (err) {
+      const msg = (err as Error).message || String(err);
+      log.warn(`resolveModelForGitOp: bridge acquire failed for ${customModelId}: ${msg}`);
+      return { ok: false, error: `启动 OpenAI 协议桥接失败: ${msg}` };
+    }
+  }
+
+  // Anthropic-protocol config: pass through unchanged, nothing to release.
+  return { ok: true, config: cfg, releaseBridge: () => {} };
+}
+
+/* ───────────────────────── commit-message generation ───────────────────────── */
+
+/** In-flight commit-message generations, keyed by the requestId the renderer
+ *  supplied. Lets git:cancelGenerateCommitMessage abort a running SDK query. */
+const activeCommitGenerations = new Map<string, AbortController>();
+
+/** Abort an in-flight generation started with `requestId`. No-op if it already
+ *  finished (the entry is removed in the generate function's finally). */
+export function cancelCommitMessageGeneration(requestId: string): void {
+  activeCommitGenerations.get(requestId)?.abort();
+}
+
+/** Shared LLM commit-message core. Used by both the desktop IPC handler and
+ *  the mobile git RPC whitelist, so behavior is identical across transports.
+ *  The *system* prompt carries the fixed output-shape constraints
+ *  ({@link COMMIT_GEN_SYSTEM_PROMPT}) and is never overridden by user input;
+ *  the *user* message carries the (optional) format/language preference.
+ *  When `requestId` is given the query's AbortController is registered for the
+ *  lifetime of the call so it can be cancelled mid-flight. */
+export async function generateCommitMessageForRepo(input: {
+  repoPath: string;
+  prompt?: string;
+  customModelId?: string;
+  customModelRole?: string;
+  requestId?: string;
+  /** "staged" (default) = index vs HEAD; "worktree" = working tree vs HEAD
+   *  (staged AND unstaged) — used by the worktree merge-back dialog, whose
+   *  pre-merge auto-commit captures ALL uncommitted changes. */
+  scope?: "staged" | "worktree";
+}): Promise<{ ok: boolean; message?: string; error?: string; cancelled?: boolean }> {
+  try {
+    // 1. Collect the diff the generation is based on. The worktree scope
+    //    reads the whole working tree against HEAD — `git diff --cached`
+    //    alone would report "nothing staged" for agent edits that were never
+    //    staged, which is the COMMON case for a worktree session.
+    const git = (await loadSimpleGit())(input.repoPath);
+    const diff =
+      input.scope === "worktree"
+        ? await git.diff(["HEAD"])
+        : await git.diff(["--cached"]);
+    if (!diff.trim()) {
+      return {
+        ok: false,
+        error:
+          input.scope === "worktree"
+            ? "没有未提交的更改可生成提交信息"
+            : "没有已暂存的更改可生成提交信息",
+      };
+    }
+
+    // 2. Build the prompt (see header comment for the shape contract).
+    const formatPrompt = input.prompt?.trim() || DEFAULT_COMMIT_FORMAT_PROMPT;
+    const diffLabel = input.scope === "worktree" ? "git diff HEAD" : "git diff --cached";
+    const userPrompt =
+      `# 格式与语言偏好\n${formatPrompt}\n\n` +
+      `--- ${diffLabel} ---\n${diff}\n--- end diff ---`;
+
+    // 3. Resolve the model config. OpenAI-protocol configs get their bridge
+    //    activated here too (see resolveModelForGitOp).
+    const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    const ac = new AbortController();
+    if (input.requestId) activeCommitGenerations.set(input.requestId, ac);
+    const timer = setTimeout(() => ac.abort(), 60000); // 60s timeout
+
+    let releaseBridge: (() => void) | undefined;
+    try {
+      let model: string | undefined;
+      let env: import("@anthropic-ai/claude-agent-sdk").Options["env"];
+
+      if (input.customModelId) {
+        const resolved = await resolveModelForGitOp(
+          input.customModelId,
+          input.customModelRole,
+        );
+        if (!resolved.ok) {
+          return { ok: false, error: resolved.error };
+        }
+        releaseBridge = resolved.releaseBridge;
+        const cfg = resolved.config;
+        model = resolveActiveModel(cfg);
+        env = buildCustomEnv(cfg);
+      }
+
+      // Resolve the real on-disk binary path (unpacks from asar in a packaged
+      // app). See the resolveSdkBinaryPath.ts rationale.
+      const binaryPath = resolveSdkBinaryPath();
+
+      const q = query({
+        prompt: userPrompt,
+        options: {
+          abortController: ac,
+          maxTurns: 1,
+          model,
+          env,
+          systemPrompt: COMMIT_GEN_SYSTEM_PROMPT,
+          settingSources: ["project", "local"],
+          includePartialMessages: false,
+          ...(binaryPath ? { pathToClaudeCodeExecutable: binaryPath } : {}),
+        },
+      });
+
+      // 4. Collect the assistant's text response.
+      let message = "";
+      for await (const m of q) {
+        if (m.type === "assistant") {
+          const content = (m as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content;
+          if (Array.isArray(content)) {
+            message = content
+              .filter((b) => b.type === "text" && b.text)
+              .map((b) => b.text!)
+              .join("\n");
+          }
+        }
+        if (m.type === "result") {
+          break;
+        }
+      }
+
+      clearTimeout(timer);
+      if (!message.trim()) {
+        return { ok: false, error: "模型未返回有效内容" };
+      }
+      // Clean up: strip markdown code fences if the model wrapped the message.
+      message = message.trim().replace(/^```\w*\n?/, "").replace(/\n?```$/, "").trim();
+      log.info(`git.generateCommitMessage succeeded for ${input.repoPath} (${message.length} chars)`);
+      return { ok: true, message };
+    } finally {
+      if (input.requestId) activeCommitGenerations.delete(input.requestId);
+      clearTimeout(timer);
+      // Release the OpenAI bridge if one was acquired for this op (no-op for
+      // anthropic-protocol configs).
+      releaseBridge?.();
+    }
+  } catch (err) {
+    const msg = (err as Error).message || String(err);
+    log.warn(`git.generateCommitMessage failed for ${input.repoPath}: ${msg}`);
+    if (/401|unauthorized|invalid.*key/i.test(msg)) {
+      return { ok: false, error: "认证失败,请检查模型配置的 Token/Key" };
+    }
+    if (/503|no available channel/i.test(msg)) {
+      return { ok: false, error: "网关无此模型渠道,请检查模型名配置" };
+    }
+    return { ok: false, error: msg };
+  }
+}
+
+/* ───────────────────────── repo discovery ───────────────────────── */
+
+/** Recursively scan `dir` for directories containing a `.git` entry, up to
+ *  `maxDepth` levels deep. Returns absolute repo-root paths. Stops descending
+ *  into a directory once it's identified as a repo (nested repos inside a repo
+ *  are found via their own `.git` only if they're separate worktrees — the
+ *  common case is: the root is a repo OR some subdirs are repos). */
+/** Exported for the mobile git RPC whitelist (repo discovery under a project
+ *  root uses the same scan as the desktop IPC handler). */
+export async function findGitRepos(dir: string, maxDepth: number): Promise<string[]> {
+  const results: string[] = [];
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return results; // unreadable / gone — skip
+  }
+
+  // Check if THIS directory is a git repo (has a .git entry).
+  const hasGit = entries.some((e) => e.name === ".git");
+  if (hasGit) {
+    results.push(dir);
+    // Continue scanning subdirs — there may be nested independent repos
+    // (e.g. a meta-folder containing several cloned projects).
+  }
+
+  if (maxDepth <= 0) return results;
+
+  // Recurse into subdirectories (skip ignored dirs).
+  const subdirs = entries.filter(
+    (e) => e.isDirectory() && !SCAN_IGNORE.has(e.name),
+  );
+  await Promise.all(
+    subdirs.map(async (e) => {
+      const childResults = await findGitRepos(join(dir, e.name), maxDepth - 1);
+      results.push(...childResults);
+    }),
+  );
+  return results;
+}
+
+/* ───────────────────────── status mapping ───────────────────────── */
+
+/** Map a single porcelain status character to our GitStatusCode union. */
+function mapStatusCode(code: string): GitStatusCode {
+  switch (code) {
+    case "M":
+      return "modified";
+    case "A":
+      return "added";
+    case "D":
+      return "deleted";
+    case "R":
+      return "renamed";
+    case "C":
+      return "copied";
+    case "U":
+      return "unmerged";
+    case "?":
+      return "untracked";
+    case "!":
+      return "ignored";
+    default:
+      return "unmodified";
+  }
+}
+
+/** Map simple-git's StatusResult to our GitStatusResult contract type.
+ *  Exported for the mobile git RPC whitelist. */
+export function mapStatus(raw: import("simple-git").StatusResult): GitStatusResult {
+  // simple-git's `.files` array has { path, index, working_dir } where the
+  // status codes are single porcelain characters.
+  const files: GitFileStatus[] = raw.files.map((f) => ({
+    path: f.path,
+    index: mapStatusCode(f.index || " "),
+    workingTree: mapStatusCode(f.working_dir || " "),
+  }));
+  return {
+    branch: raw.current || "",
+    ahead: raw.ahead || 0,
+    behind: raw.behind || 0,
+    files,
+  };
+}
+
+/* ───────────────────────── merge helpers ───────────────────────── */
+
+/** True while a merge is in progress (MERGE_HEAD exists). simple-git's raw()
+ *  rejects on non-zero exit, and `rev-parse --verify -q` exits 1 when the ref
+ *  is missing — so the catch path IS the "no" answer. */
+async function mergeInProgress(git: import("simple-git").SimpleGit): Promise<boolean> {
+  // simple-git RESOLVES instead of rejecting on exit-1-with-empty-stderr —
+  // exactly the shape `--quiet` rev-parse of a missing MERGE_HEAD produces
+  // (same lesson as the merge-base isAncestor probe in worktreeOps). A
+  // throw-based check here read "merging" forever and refused every merge,
+  // so the verdict is the OUTPUT: non-empty = the ref exists.
+  try {
+    const out = await git.revparse(["--verify", "--quiet", "MERGE_HEAD"]);
+    return out.trim().length > 0;
+  } catch {
+    // Hard failure (not a repo, etc.) — not a merge state; let the merge
+    // itself surface git's real error.
+    return false;
+  }
+}
+
+/** Read-only preview of merging `source` into HEAD: one
+ *  `git rev-list --left-right --count HEAD...source` gives both sides.
+ *  left = commits only HEAD has, right = commits only `source` has. */
+async function mergePreview(
+  git: import("simple-git").SimpleGit,
+  source: string,
+): Promise<GitMergePreviewResult> {
+  const out = await git.raw(["rev-list", "--left-right", "--count", `HEAD...${source}`]);
+  const [leftRaw, rightRaw] = out.trim().split(/\s+/);
+  const left = Number.parseInt(leftRaw ?? "", 10);
+  const right = Number.parseInt(rightRaw ?? "", 10);
+  if (Number.isNaN(left) || Number.isNaN(right)) {
+    return { ok: false, upToDate: false, fastForward: false, incomingCommits: 0, error: "无法解析分支差异" };
+  }
+  return {
+    ok: true,
+    upToDate: right === 0,
+    fastForward: left === 0 && right > 0,
+    incomingCommits: right,
+  };
+}
+
+/* ───────────────────────── handler registration ───────────────────────── */
+
+export function registerGitHandlers(ipcMain: IpcMain): void {
+  /* ── git:discoverRepos — find all git repos under a project root ── */
+  ipcMain.handle(IPC.GIT_DISCOVER_REPOS, async (_evt, raw) => {
+    const input = GitDiscoverReposSchema.parse(raw);
+    // Verify the project path is a known persisted project.
+    // Project root OR a session worktree root (the worktree session's Git
+    // panel scans its own isolated checkout).
+    const known = isKnownWorkspaceRoot(input.projectPath);
+    if (!known) {
+      log.warn(`git.discoverRepos refused — unknown projectPath: ${input.projectPath}`);
+      return { repos: [] };
+    }
+    try {
+      // rootOnly → depth 0: findGitRepos returns [root] iff `.git` exists at
+      // the root level itself, skipping the recursive scan entirely.
+      const repoPaths = await findGitRepos(
+        input.projectPath,
+        input.rootOnly ? 0 : MAX_SCAN_DEPTH,
+      );
+      const repos: GitRepo[] = repoPaths.map((p) => {
+        const rel = relative(input.projectPath, p);
+        const name = rel === "" ? input.projectPath.split(/[/\\]/).pop() || p : rel;
+        return { path: p, name, isRepo: true as const };
+      });
+      // Sort by name for stable display order.
+      repos.sort((a, b) => a.name.localeCompare(b.name));
+      log.info(`git.discoverRepos found ${repos.length} repo(s) under ${input.projectPath}`);
+      return { repos };
+    } catch (err) {
+      log.error(`git.discoverRepos failed: ${(err as Error).message}`);
+      return { repos: [] };
+    }
+  });
+
+  /* ── git:status — status of a single repo ── */
+  ipcMain.handle(IPC.GIT_STATUS, async (_evt, raw) => {
+    const input = GitRepoPathSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      log.warn(`git.status refused — repoPath outside any project: ${input.repoPath}`);
+      return { status: { branch: "", ahead: 0, behind: 0, files: [] } };
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+      const status = await git.status();
+      return { status: mapStatus(status) };
+    } catch (err) {
+      log.warn(`git.status failed for ${input.repoPath}: ${(err as Error).message}`);
+      return { status: { branch: "", ahead: 0, behind: 0, files: [] } };
+    }
+  });
+
+  /* ── git:stage — git add specific files ── */
+  ipcMain.handle(IPC.GIT_STAGE, async (_evt, raw) => {
+    const input = GitStageSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+      await git.add(input.filePaths);
+      broadcastGitChanged(input.repoPath);
+      return { ok: true };
+    } catch (err) {
+      const msg = (err as Error).message;
+      log.warn(`git.stage failed for ${input.repoPath}: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  });
+
+  /* ── git:unstage — git reset specific files ── */
+  ipcMain.handle(IPC.GIT_UNSTAGE, async (_evt, raw) => {
+    const input = GitUnstageSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+      // `git reset HEAD -- <files>` unstages without touching working tree.
+      await git.reset(input.filePaths.length > 0 ? ["--", ...input.filePaths] : []);
+      broadcastGitChanged(input.repoPath);
+      return { ok: true };
+    } catch (err) {
+      const msg = (err as Error).message;
+      log.warn(`git.unstage failed for ${input.repoPath}: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  });
+
+  /* ── git:commit — commit staged changes ── */
+  ipcMain.handle(IPC.GIT_COMMIT, async (_evt, raw) => {
+    const input = GitCommitSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+      await git.commit(input.message);
+      log.info(`git.commit succeeded in ${input.repoPath}`);
+      broadcastGitChanged(input.repoPath);
+      return { ok: true };
+    } catch (err) {
+      const msg = (err as Error).message;
+      log.warn(`git.commit failed for ${input.repoPath}: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  });
+
+  /* ── git:push — push to upstream ── */
+  ipcMain.handle(IPC.GIT_PUSH, async (_evt, raw) => {
+    const input = GitRepoPathSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+      await git.push();
+      log.info(`git.push succeeded in ${input.repoPath}`);
+      broadcastGitChanged(input.repoPath);
+      return { ok: true };
+    } catch (err) {
+      const msg = (err as Error).message;
+      log.warn(`git.push failed for ${input.repoPath}: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  });
+
+  /* ── git:pull — pull from upstream ── */
+  ipcMain.handle(IPC.GIT_PULL, async (_evt, raw) => {
+    const input = GitRepoPathSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+      // `git.pull()` resolves a merge conflict by throwing, OR (for some merge
+      // strategies) returns with the working tree left in a conflicted state.
+      // We re-check `git.status().conflicted` so both paths are reported.
+      try {
+        await git.pull();
+      } catch (pullErr) {
+        // A conflict during merge surfaces as an error here. Inspect status to
+        // decide whether this is a conflict (ok:true + conflict flag, so the UI
+        // can offer AI resolution) vs. a genuine failure (ok:false).
+        const st = await git.status().catch(() => null);
+        const conflicted = st?.conflicted ?? [];
+        if (conflicted.length > 0) {
+          log.warn(`git.pull produced ${conflicted.length} conflict(s) in ${input.repoPath}`);
+          broadcastGitChanged(input.repoPath);
+          return { ok: true, conflict: true, conflictedFiles: conflicted };
+        }
+        throw pullErr;
+      }
+      // Pull succeeded without throwing — still verify there's no lingering
+      // conflicted state (some auto-merge strategies leave markers silently).
+      const st = await git.status().catch(() => null);
+      const conflicted = st?.conflicted ?? [];
+      if (conflicted.length > 0) {
+        log.warn(`git.pull left ${conflicted.length} conflict(s) in ${input.repoPath}`);
+        broadcastGitChanged(input.repoPath);
+        return { ok: true, conflict: true, conflictedFiles: conflicted };
+      }
+      log.info(`git.pull succeeded in ${input.repoPath}`);
+      broadcastGitChanged(input.repoPath);
+      return { ok: true };
+    } catch (err) {
+      const msg = (err as Error).message;
+      log.warn(`git.pull failed for ${input.repoPath}: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  });
+
+  /* ── git:diff — diff of a single file (staged or unstaged) ── */
+  ipcMain.handle(IPC.GIT_DIFF, async (_evt, raw) => {
+    const input = GitDiffSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { patch: "" };
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+      // --cached shows the staged diff (index vs HEAD); without it, the
+      // working-tree diff (index vs working tree) is shown.
+      const args = input.staged ? ["--cached", "--", input.filePath] : ["--", input.filePath];
+      const patch = await git.diff(args);
+      return { patch };
+    } catch (err) {
+      log.warn(`git.diff failed for ${input.repoPath}/${input.filePath}: ${(err as Error).message}`);
+      return { patch: "" };
+    }
+  });
+
+  /* ── git:fileBlob — full old-side content for the diff view ──
+     Unstaged diffs compare index ↔ working tree, staged diffs HEAD ↔ index;
+     the old side is therefore `:path` (index) vs `HEAD:path`. Missing blobs
+     (untracked / newly added / staged deletion) surface as "". */
+  ipcMain.handle(IPC.GIT_FILE_BLOB, async (_evt, raw) => {
+    const input = GitFileBlobSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { content: "" };
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+      const rev = input.side === "HEAD" ? "HEAD" : "";
+      const content = await showBlob(git, rev, input.filePath);
+      // Index blobs are LF-normalized; matching the disk side's CRLF would
+      // otherwise paint every line as changed in the diff view.
+      return { content: content.replace(/\r\n/g, "\n") };
+    } catch (err) {
+      log.warn(`git.fileBlob failed for ${input.repoPath}/${input.filePath}: ${(err as Error).message}`);
+      return { content: "" };
+    }
+  });
+
+  /* ── git:discard — discard local changes (checkout tracked / clean untracked) ── */
+  ipcMain.handle(IPC.GIT_DISCARD, async (_evt, raw) => {
+    const input = GitDiscardSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+      // Separate tracked (modified/staged/deleted) from untracked files:
+      // tracked → git checkout -- <file> (restore to index)
+      // untracked → git clean -f -- <file> (remove)
+      const status = await git.status();
+      const untrackedSet = new Set(
+        status.files.filter((f) => f.working_dir === "?" || f.index === "?").map((f) => f.path),
+      );
+      const tracked: string[] = [];
+      const untracked: string[] = [];
+      for (const fp of input.filePaths) {
+        if (untrackedSet.has(fp)) untracked.push(fp);
+        else tracked.push(fp);
+      }
+      if (tracked.length > 0) {
+        await git.checkout(["--", ...tracked]);
+      }
+      if (untracked.length > 0) {
+        await git.clean("f", ["-d", "--", ...untracked]);
+      }
+      log.info(`git.discard succeeded in ${input.repoPath} (${tracked.length} tracked, ${untracked.length} untracked)`);
+      broadcastGitChanged(input.repoPath);
+      return { ok: true };
+    } catch (err) {
+      const msg = (err as Error).message;
+      log.warn(`git.discard failed for ${input.repoPath}: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  });
+
+  /* ── git:log — paginated commit history ── */
+  ipcMain.handle(IPC.GIT_LOG, async (_evt, raw) => {
+    const input = GitLogSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      log.warn(`git.log refused — repoPath outside any project: ${input.repoPath}`);
+      return { commits: [], hasMore: false };
+    }
+    const limit = input.limit ?? 50;
+    const skip = input.skip ?? 0;
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+      // Custom format via raw so we control fields + --skip cleanly.
+      // Record separator \x1e, field separator \x1f.
+      // Request one extra row so we can tell whether another page exists.
+      const args = [
+        "log",
+        `--max-count=${limit + 1}`,
+        `--skip=${skip}`,
+        // Topo order keeps each branch's commits contiguous so the history
+        // view's graph gutter draws clean lanes; date order interleaves
+        // branches and makes lanes jump row to row.
+        "--topo-order",
+        "--format=%H%x1f%h%x1f%s%x1f%b%x1f%an%x1f%aI%x1f%P%x1e",
+      ];
+      if (input.ref) args.push(input.ref);
+      const rawLog = await git.raw(args);
+      const commits = parseLogOutput(rawLog);
+      const hasMore = commits.length > limit;
+      return {
+        commits: hasMore ? commits.slice(0, limit) : commits,
+        hasMore,
+      };
+    } catch (err) {
+      log.warn(`git.log failed for ${input.repoPath}: ${(err as Error).message}`);
+      return { commits: [], hasMore: false };
+    }
+  });
+
+  /* ── git:showCommit — meta + changed files for one commit ── */
+  ipcMain.handle(IPC.GIT_SHOW_COMMIT, async (_evt, raw) => {
+    const input = GitShowCommitSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      log.warn(`git.showCommit refused — repoPath outside any project: ${input.repoPath}`);
+      return null;
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+      const detail = await loadCommitDetail(git, input.commitHash);
+      return detail;
+    } catch (err) {
+      log.warn(
+        `git.showCommit failed for ${input.repoPath}@${input.commitHash}: ${(err as Error).message}`,
+      );
+      return null;
+    }
+  });
+
+  /* ── git:showFile — parent vs commit blob contents for one path ── */
+  ipcMain.handle(IPC.GIT_SHOW_FILE, async (_evt, raw) => {
+    const input = GitShowFileSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      log.warn(`git.showFile refused — repoPath outside any project: ${input.repoPath}`);
+      return { before: "", after: "" };
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+      const beforePath = input.oldPath || input.filePath;
+      const after = await showBlob(git, input.commitHash, input.filePath);
+      // Parent side: `${hash}^:path`. Root commits / added files yield "".
+      const before = await showBlob(git, `${input.commitHash}^`, beforePath);
+      return { before, after };
+    } catch (err) {
+      log.warn(
+        `git.showFile failed for ${input.repoPath}@${input.commitHash}:${input.filePath}: ${(err as Error).message}`,
+      );
+      return { before: "", after: "" };
+    }
+  });
+
+  /* ── git:generateCommitMessage — LLM-generated commit message from staged diff ── */
+  ipcMain.handle(IPC.GIT_GENERATE_COMMIT, async (_evt, raw) => {
+    const input = GitGenerateCommitSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    return generateCommitMessageForRepo({
+      repoPath: input.repoPath,
+      prompt: input.prompt,
+      customModelId: input.customModelId ?? undefined,
+      customModelRole: input.customModelRole ?? undefined,
+      requestId: input.requestId,
+      scope: input.scope,
+    });
+  });
+
+  /* ── git:cancelGenerateCommitMessage — abort an in-flight generation ── */
+  ipcMain.handle(IPC.GIT_CANCEL_GENERATE_COMMIT, (_evt, raw) => {
+    const input = GitCancelGenerateCommitSchema.parse(raw);
+    cancelCommitMessageGeneration(input.requestId);
+    return { ok: true };
+  });
+
+  /* ── git:listBranches - local / remote branches + tags (grouped) ── */
+  ipcMain.handle(IPC.GIT_LIST_BRANCHES, async (_evt, raw) => {
+    const input = GitRepoPathSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      log.warn(`git.listBranches refused - repoPath outside any project: ${input.repoPath}`);
+      return { branches: { current: "", detached: false, local: [], remote: [], tags: [] } };
+    }
+    try {
+      return { branches: await listBranchesForRepo(input.repoPath) };
+    } catch (err) {
+      log.warn(`git.listBranches failed for ${input.repoPath}: ${(err as Error).message}`);
+      return { branches: { current: "", detached: false, local: [], remote: [], tags: [] } };
+    }
+  });
+
+  /* ── git:checkout - switch branch / tag / ref (optionally create new) ── */
+  ipcMain.handle(IPC.GIT_CHECKOUT, async (_evt, raw) => {
+    const input = GitCheckoutSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    return checkoutRef(input.repoPath, input.branch, input.newBranch);
+  });
+
+  /* ── git:deleteBranch - delete a local branch (-d / -D with force) ── */
+  ipcMain.handle(IPC.GIT_DELETE_BRANCH, async (_evt, raw) => {
+    const input = GitDeleteBranchSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    return deleteLocalBranchForRepo(input.repoPath, input.branch, input.force);
+  });
+
+  /* ── git:mergePreview - read-only preview of merging `source` into HEAD ── */
+  ipcMain.handle(IPC.GIT_MERGE_PREVIEW, async (_evt, raw) => {
+    const input = GitMergeSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      log.warn(`git.mergePreview refused - repoPath outside any project: ${input.repoPath}`);
+      return { ok: false, upToDate: false, fastForward: false, incomingCommits: 0, error: "仓库路径不在任何已添加的项目内" };
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+      return await mergePreview(git, input.source);
+    } catch (err) {
+      const msg = (err as Error).message;
+      log.warn(`git.mergePreview failed for ${input.repoPath}: ${msg}`);
+      return { ok: false, upToDate: false, fastForward: false, incomingCommits: 0, error: msg };
+    }
+  });
+
+  /* ── git:merge - merge `source` into the current branch ── */
+  ipcMain.handle(IPC.GIT_MERGE, async (_evt, raw) => {
+    const input = GitMergeSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+
+      // Refuse when a merge is already in flight — a second `git merge` with
+      // MERGE_HEAD present would fail confusingly or nest state.
+      if (await mergeInProgress(git)) {
+        log.warn(`git.merge refused - merge already in progress in ${input.repoPath}`);
+        return { ok: false, error: "已有进行中的合并,请先解决冲突或放弃本次合并" };
+      }
+
+      // No-op guard: HEAD already contains everything `source` has. Skipped by
+      // the UI in the common path (it previews first), but the merge must stay
+      // side-effect-free if invoked directly.
+      const preview = await mergePreview(git, input.source);
+      if (!preview.ok) {
+        return { ok: false, error: preview.error };
+      }
+      if (preview.upToDate) {
+        log.info(`git.merge no-op (already up to date) in ${input.repoPath}`);
+        return { ok: true, upToDate: true };
+      }
+
+      const sourceTip = (await git.revparse([input.source])).trim();
+      try {
+        // --no-edit keeps git from trying to open an editor for the merge
+        // commit message (there is no TTY here); it uses the default
+        // "Merge branch 'x'" message.
+        await git.raw(["merge", "--no-edit", input.source]);
+      } catch (mergeErr) {
+        // A merge conflict surfaces as a non-zero exit. Inspect status to tell
+        // a conflict (ok:true + conflict flag, so the UI can offer AI
+        // resolution / abort) apart from a genuine failure (ok:false).
+        const st = await git.status().catch(() => null);
+        const conflicted = st?.conflicted ?? [];
+        if (conflicted.length > 0) {
+          log.warn(`git.merge produced ${conflicted.length} conflict(s) in ${input.repoPath}`);
+          broadcastGitChanged(input.repoPath);
+          return { ok: true, conflict: true, conflictedFiles: conflicted };
+        }
+        throw mergeErr;
+      }
+      // Merge exited cleanly — still verify no silent conflicted state remains
+      // (same double-check the pull handler does).
+      const st = await git.status().catch(() => null);
+      const conflicted = st?.conflicted ?? [];
+      if (conflicted.length > 0) {
+        log.warn(`git.merge left ${conflicted.length} conflict(s) in ${input.repoPath}`);
+        broadcastGitChanged(input.repoPath);
+        return { ok: true, conflict: true, conflictedFiles: conflicted };
+      }
+      // Fast-forward ⟺ HEAD now sits exactly on `source`'s tip (no merge
+      // commit was created). Comparing hashes is exact even when the tip
+      // itself is a merge commit.
+      const headAfter = (await git.revparse(["HEAD"])).trim();
+      const fastForward = headAfter === sourceTip;
+      log.info(`git.merge succeeded in ${input.repoPath} (${fastForward ? "fast-forward" : "merge commit"})`);
+      broadcastGitChanged(input.repoPath);
+      return { ok: true, fastForward };
+    } catch (err) {
+      const msg = (err as Error).message;
+      log.warn(`git.merge failed for ${input.repoPath}: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  });
+
+  /* ── git:mergeAbort - abort an in-progress merge, restoring the pre-merge state ── */
+  ipcMain.handle(IPC.GIT_MERGE_ABORT, async (_evt, raw) => {
+    const input = GitRepoPathSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+      if (!(await mergeInProgress(git))) {
+        return { ok: false, error: "当前没有进行中的合并" };
+      }
+      await git.raw(["merge", "--abort"]);
+      log.info(`git.mergeAbort succeeded in ${input.repoPath}`);
+      broadcastGitChanged(input.repoPath);
+      return { ok: true };
+    } catch (err) {
+      const msg = (err as Error).message;
+      log.warn(`git.mergeAbort failed for ${input.repoPath}: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  });
+
+  /* ── git:worktreeList / worktreeStatus / worktreeMergeBack / worktreeRemove ──
+   * Thin shells over lib/worktreeOps (isolated agent-session lifecycle).
+   * The repoPath guard stays the project-containment one — all four
+   * operations anchor on the user's LOCAL checkout inside a project; the
+   * worktree itself lives outside every project root by design. */
+  ipcMain.handle(IPC.GIT_WORKTREE_LIST, async (_evt, raw) => {
+    const input = GitWorktreeListSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      log.warn(`git.worktreeList refused — repoPath outside any project: ${input.repoPath}`);
+      return { worktrees: [] };
+    }
+    try {
+      return { worktrees: await listWorktrees(input.repoPath) };
+    } catch (err) {
+      log.warn(`git.worktreeList failed for ${input.repoPath}: ${(err as Error).message}`);
+      return { worktrees: [] };
+    }
+  });
+
+  ipcMain.handle(IPC.GIT_WORKTREE_STATUS, async (_evt, raw) => {
+    const input = GitWorktreeStatusSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      log.warn(`git.worktreeStatus refused — repoPath outside any project: ${input.repoPath}`);
+      return { status: null };
+    }
+    try {
+      return { status: await worktreeStatus(input.repoPath, input.worktreePath) };
+    } catch (err) {
+      log.warn(`git.worktreeStatus failed for ${input.repoPath}: ${(err as Error).message}`);
+      return { status: null };
+    }
+  });
+
+  ipcMain.handle(IPC.GIT_WORKTREE_MERGE_BACK, async (_evt, raw) => {
+    const input = GitWorktreeMergeBackSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    const res = await mergeBackWorktree(input.repoPath, input.worktreePath, {
+      message: input.message,
+    });
+    if (res.ok) broadcastGitChanged(input.repoPath);
+    return res;
+  });
+
+  ipcMain.handle(IPC.GIT_WORKTREE_REMOVE, async (_evt, raw) => {
+    const input = GitWorktreeRemoveSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    const res = await removeWorktree(input.repoPath, input.worktreePath, {
+      force: input.force,
+      exportPatch: input.exportPatch,
+    });
+    if (res.ok) broadcastGitChanged(input.repoPath);
+    return res;
+  });
+}
+
+/**
+ * Fixed system prompt for commit-message generation. NEVER overridden by user
+ * input — this is what guarantees clean, diff-only output regardless of the
+ * user's format/language prompt. The user's prompt (see
+ * {@link DEFAULT_COMMIT_FORMAT_PROMPT}) only steers formatting & language via
+ * the user message, not the system prompt.
+ */
+const COMMIT_GEN_SYSTEM_PROMPT = [
+  "你是一个 Git 提交信息生成器。你的唯一职责是根据给定的 `git diff --cached` 输出,生成一条与实际改动相关、可直接使用的提交信息。",
+  "",
+  "严格输出约束:",
+  "1. 只输出提交信息本身——不要任何前导语、问候、解释、分析、过程性文字(例如「这是你的提交信息:」「让我分析一下改动…」「根据以上 diff…」等一律禁止)。",
+  "2. 不要使用 Markdown 代码块标记(```...)或其他包裹符号。",
+  "3. 完全基于 diff 的实际内容生成;diff 中没有的改动不得臆造或补充。",
+  "4. 第一行是简短摘要(不超过 50 字符,祈使语气);若改动较复杂,空一行后再写详细说明正文。",
+  "5. 下方的「格式与语言偏好」仅影响提交信息的语言、措辞风格与规范格式(如 Conventional Commits、是否加 emoji 等),不得改变上述输出约束,也不得改变基于 diff 生成内容这一核心行为。",
+].join("\n");
+
+/**
+ * Default *format* prompt appended to the user message when the user hasn't
+ * configured a custom one. Only concerns language/convention — the fixed
+ * {@link COMMIT_GEN_SYSTEM_PROMPT} carries all output-shape constraints.
+ */
+const DEFAULT_COMMIT_FORMAT_PROMPT = "使用中文生成提交信息,默认遵循 Conventional Commits 规范。";
+
+/* ───────────────────────── history helpers ───────────────────────── */
+
+/** Parse `git log --format=...%x1e` output into GitCommitInfo[]. */
+function parseLogOutput(raw: string): GitCommitInfo[] {
+  const commits: GitCommitInfo[] = [];
+  for (const record of raw.split("\x1e")) {
+    const line = record.replace(/^\n+/, "").trimEnd();
+    if (!line.trim()) continue;
+    const [hash, shortHash, subject, body, author, authoredAt, parentsRaw] =
+      line.split("\x1f");
+    if (!hash) continue;
+    const parents = (parentsRaw || "")
+      .split(/\s+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    commits.push({
+      hash,
+      shortHash: shortHash || hash.slice(0, 7),
+      subject: subject || "",
+      body: body?.trim() || undefined,
+      author: author || "",
+      authoredAt: authoredAt || "",
+      parents: parents.length > 0 ? parents : undefined,
+    });
+  }
+  return commits;
+}
+
+/** Read a blob at `rev:path`. Missing path / root-parent → "". */
+async function showBlob(
+  git: import("simple-git").SimpleGit,
+  rev: string,
+  filePath: string,
+): Promise<string> {
+  try {
+    // `git show rev:path` — simple-git's show() returns stdout as string.
+    const content = await git.show([`${rev}:${filePath}`]);
+    return typeof content === "string" ? content : String(content ?? "");
+  } catch {
+    return "";
+  }
+}
+
+/** Load commit meta + name-status file list with optional numstat tallies. */
+async function loadCommitDetail(
+  git: import("simple-git").SimpleGit,
+  commitHash: string,
+): Promise<GitCommitDetail> {
+  // Custom pretty format so we don't depend on simple-git's log field set for
+  // a single-commit lookup. Fields separated by \x1f, record ends with \x1e.
+  const metaRaw = await git.raw([
+    "show",
+    "--no-patch",
+    "--format=%H%x1f%h%x1f%s%x1f%b%x1f%an%x1f%aI%x1f%P%x1e",
+    commitHash,
+  ]);
+  const metaLine = metaRaw.split("\x1e")[0]?.trim() ?? "";
+  const [hash, shortHash, subject, body, author, authoredAt, parentsRaw] =
+    metaLine.split("\x1f");
+  if (!hash) {
+    throw new Error(`commit not found: ${commitHash}`);
+  }
+  const parents = (parentsRaw || "")
+    .split(/\s+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  const commit: GitCommitInfo = {
+    hash,
+    shortHash: shortHash || hash.slice(0, 7),
+    subject: subject || "",
+    body: body?.trim() || undefined,
+    author: author || "",
+    authoredAt: authoredAt || "",
+    parents,
+  };
+
+  // name-status: status letter + path(s). --root handles the initial commit.
+  const nameStatusRaw = await git.raw([
+    "diff-tree",
+    "--no-commit-id",
+    "--name-status",
+    "-r",
+    "-M",
+    "--root",
+    commitHash,
+  ]);
+  const files = parseNameStatus(nameStatusRaw);
+
+  // numstat for +/- tallies (best-effort; binary files report "-" ).
+  try {
+    const numstatRaw = await git.raw([
+      "diff-tree",
+      "--no-commit-id",
+      "--numstat",
+      "-r",
+      "-M",
+      "--root",
+      commitHash,
+    ]);
+    applyNumstat(files, numstatRaw);
+  } catch {
+    // tallies are optional
+  }
+
+  return { commit, files };
+}
+
+/** Parse `git diff-tree --name-status` output into GitCommitFile[]. */
+function parseNameStatus(raw: string): GitCommitFile[] {
+  const files: GitCommitFile[] = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trimEnd();
+    if (!trimmed) continue;
+    // Formats:
+    //   M\tpath
+    //   A\tpath
+    //   D\tpath
+    //   R100\told\tnew
+    //   C100\told\tnew
+    const parts = trimmed.split("\t");
+    if (parts.length < 2) continue;
+    const code = parts[0] ?? "";
+    const letter = code.charAt(0).toUpperCase();
+    const status = mapCommitFileStatus(letter);
+    if (letter === "R" || letter === "C") {
+      const oldPath = parts[1] ?? "";
+      const path = parts[2] ?? oldPath;
+      files.push({ path, status, oldPath: oldPath || undefined });
+    } else {
+      files.push({ path: parts[1] ?? "", status });
+    }
+  }
+  return files.filter((f) => f.path.length > 0);
+}
+
+function mapCommitFileStatus(letter: string): GitCommitFileStatus {
+  switch (letter) {
+    case "A":
+      return "added";
+    case "D":
+      return "deleted";
+    case "R":
+      return "renamed";
+    case "C":
+      return "copied";
+    default:
+      return "modified";
+  }
+}
+
+/** Merge `git diff-tree --numstat` tallies into an existing file list. */
+function applyNumstat(files: GitCommitFile[], raw: string): void {
+  const byPath = new Map(files.map((f) => [f.path, f]));
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trimEnd();
+    if (!trimmed) continue;
+    // numstat: additions\tdeletions\tpath
+    // rename:  additions\tdeletions\told\tnew  OR path with => 
+    const parts = trimmed.split("\t");
+    if (parts.length < 3) continue;
+    const addStr = parts[0] ?? "0";
+    const delStr = parts[1] ?? "0";
+    const additions = addStr === "-" ? undefined : Number.parseInt(addStr, 10);
+    const deletions = delStr === "-" ? undefined : Number.parseInt(delStr, 10);
+    // For renames, last field is the new path.
+    const path = parts[parts.length - 1] ?? "";
+    const file = byPath.get(path);
+    if (!file) continue;
+    if (additions != null && !Number.isNaN(additions)) file.additions = additions;
+    if (deletions != null && !Number.isNaN(deletions)) file.deletions = deletions;
+  }
+}

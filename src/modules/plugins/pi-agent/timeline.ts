@@ -111,14 +111,21 @@ export function activityPreview(item: PiTranscriptItem): string {
   return `${item.streaming ? "思考中" : "已思考"}${preview ? ` · ${preview}` : " · 等待内容"}`;
 }
 
-/** 优先展示最新执行中的工具，否则展示最后一条真实记录。 */
+/** 按事件到达顺序展示最新可见活动，不让旧的并发工具压住新思考。 */
 export function currentActivity(
   items: PiTranscriptItem[],
 ): PiTranscriptItem | undefined {
-  const live = [...items]
-    .reverse()
-    .find((item) => item.kind === "tool" && item.status === "running");
-  return live ?? [...items].reverse().find(isVisibleTimelineItem);
+  let latest: PiTranscriptItem | undefined;
+  let latestOrder = -1;
+  for (const item of items) {
+    if (!isVisibleTimelineItem(item)) continue;
+    const order = item.activityOrder;
+    if (order !== undefined && order >= latestOrder) {
+      latest = item;
+      latestOrder = order;
+    } else if (order === undefined && latestOrder < 0) latest = item;
+  }
+  return latest;
 }
 
 /** 从当前记录生成外部摘要，与动画使用相同的记录来源。 */

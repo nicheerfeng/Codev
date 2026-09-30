@@ -1,0 +1,516 @@
+import { useCallback, useEffect, useRef, useState , useMemo } from "react";
+import {
+  DndContext,
+  PointerSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  horizontalListSortingStrategy,
+  rectSortingStrategy,
+} from "@dnd-kit/sortable";
+import { basename } from "@renderer/lib/path.js";
+import { cn } from "@renderer/lib/cn.js";
+import { IconClipboard, IconX, IconLayoutSidebarRight } from "@renderer/lib/icons.js";
+import { useSessionStore, orchRunningAnchors } from "@renderer/stores/sessionStore.js";
+import { TabBarChevronButton, TabBarOverflowMenu } from "./TabBarChrome.js";
+import { SortableSessionTab, findSession } from "./SessionTabs.js";
+import {
+  PLAN_TAB_KEY,
+  SortableFileTab,
+  FileTabContextMenu,
+  useDirtyFiles,
+} from "../ide/OpenTabsBar.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
+
+/** Stable empty array so the selector never returns a fresh [] (Zustand
+ *  Object.is rule — a new [] every render causes an infinite loop). */
+const EMPTY_OPEN_FILES: string[] = [];
+
+/** The unified center tab bar (`tabs` displayMode): ONE strip holding the
+ *  open session tabs AND the editor's file tabs (+ the per-session plan
+ *  pseudo-tab) side by side. Both kinds share the same chip style; a
+ *  vertical divider separates the session group from the editor group (plus
+ *  the provider icon vs file-type icon as a secondary cue). Clicking a
+ *  session tab
+ *  shows that session's chat full-width; clicking a file / plan tab shows
+ *  the editor full-width (the `centerTabFocus` store flag — see
+ *  UnifiedTabbedPane in App.tsx). This replaces the split
+ *  chat-column|editor-column layout used in `single` mode and gives
+ *  whichever view is active the whole center width.
+ *
+ *  Interaction model mirrors SessionTabs / OpenTabsBar (VS Code /
+ *  browser-style): drag to reorder (within the same kind — a session can't
+ *  be dropped among files and vice versa), chevrons + wheel scroll on
+ *  overflow, a `⋯` overflow menu listing every tab, middle-click close.
+ *  File tabs additionally keep their right-click context menu and dirty
+ *  dots; session tabs keep their running spinners and unread badges. */
+export function UnifiedTabsBar() {
+  const { t } = useI18n();
+  // ── Session tabs ──
+  const tabs = useSessionStore((s) => s.openTabs);
+  const activeId = useSessionStore((s) => s.activeSessionId);
+  const sessionsByProject = useSessionStore((s) => s.sessionsByProject);
+  const pinnedSessions = useSessionStore((s) => s.pinnedSessions);
+  const streamSessions = useSessionStore((s) => s.streamSessions);
+  const orchWorkersById = useSessionStore((s) => s.orchWorkersById);
+  const runningBySession = useSessionStore((s) => s.runningBySession);
+  const orchRunsBySession = useSessionStore((s) => s.orchRunsBySession);
+  const orchAnchors = useMemo(() => orchRunningAnchors(orchRunsBySession), [orchRunsBySession]);
+  const unreadBySession = useSessionStore((s) => s.unreadBySession);
+  const selectSession = useSessionStore((s) => s.selectSession);
+  const closeTab = useSessionStore((s) => s.closeTab);
+  const reorderTab = useSessionStore((s) => s.reorderTab);
+  // Multi-row wrapping (toggled from the ⋯ overflow menu) vs the classic
+  // single horizontally-scrolling row.
+  const multiRow = useSessionStore((s) => s.tabBarMultiRow);
+  const setTabBarMultiRow = useSessionStore((s) => s.setTabBarMultiRow);
+
+  // ── File tabs (scoped to the active project) ──
+  const tabsFilePreviewPlacement = useSessionStore((s) => s.tabsFilePreviewPlacement);
+  const toggleTabsFilePreviewPlacement = useSessionStore((s) => s.toggleTabsFilePreviewPlacement);
+  const pid = useSessionStore((s) => s.activeProjectId);
+  const openFiles = useSessionStore((s) => {
+    if (s.tabsFilePreviewPlacement === "sidebar") return EMPTY_OPEN_FILES;
+    const p = s.activeProjectId;
+    return p ? s.ideOpenFilesByProject[p] ?? EMPTY_OPEN_FILES : EMPTY_OPEN_FILES;
+  });
+  const activeFile = useSessionStore((s) =>
+    pid ? s.ideActiveFileByProject[pid] ?? null : null,
+  );
+  const setActiveFile = useSessionStore((s) => s.setIdeActiveFile);
+  const closeFile = useSessionStore((s) => s.closeFileInIde);
+  const closeOthers = useSessionStore((s) => s.closeOtherFilesInIde);
+  const closeAllFiles = useSessionStore((s) => s.closeAllFilesInIde);
+  const reorderIdeFile = useSessionStore((s) => s.reorderIdeFile);
+  const clearIdeActiveFile = useSessionStore((s) => s.clearIdeActiveFile);
+  const enqueueChatFile = useSessionStore((s) => s.enqueueChatFile);
+  const dirtySet = useDirtyFiles();
+
+  // ── Editor focus + plan pseudo-tab (scoped to the active session) ──
+  const centerTabFocus = useSessionStore((s) => s.centerTabFocus);
+  const planText = useSessionStore(
+    (s) => (activeId ? s.planDrawerPlanBySession[activeId] ?? null : null),
+  );
+  const planTabActive = useSessionStore(
+    (s) => (activeId ? s.planTabActiveBySession[activeId] ?? false : false),
+  );
+  const setPlanTabActive = useSessionStore((s) => s.setPlanTabActive);
+  const closePlanDrawer = useSessionStore((s) => s.closePlanDrawer);
+  const hasPlanTab = !!planText;
+
+  // The editor owns the content area only while focused AND it has content
+  // (an active file or an active plan tab) — matches UnifiedTabbedPane's
+  // visibility gate so the bar's active highlighting never disagrees with
+  // what's on screen.
+  const editorFocused =
+    centerTabFocus === "editor" &&
+    ((!!activeFile && tabsFilePreviewPlacement !== "sidebar") || planTabActive);
+
+  // Right-click context menu state for file tabs (lifted to the bar level,
+  // same pattern as OpenTabsBar).
+  const [ctxMenu, setCtxMenu] = useState<{ path: string; x: number; y: number } | null>(null);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Maps a tab key (session id | file path | PLAN_TAB_KEY) → its DOM node,
+  // used to scroll the active tab fully into view.
+  const tabNodes = useRef<Map<string, HTMLDivElement>>(new Map());
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const recomputeScrollState = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // 1px tolerance to avoid float-rounding flakiness at the right edge.
+    setCanScrollLeft(el.scrollLeft > 0);
+    setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 1);
+  }, []);
+
+  // Keep scroll-boundary state fresh on mount, on any tab add/remove, and on
+  // container resize. (Scroll position itself is tracked by onScroll.)
+  useEffect(() => {
+    recomputeScrollState();
+    const el = scrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => recomputeScrollState());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [tabs.length, openFiles.length, hasPlanTab, recomputeScrollState]);
+
+  // Scroll the active tab FULLY into view whenever it changes — works for
+  // all three tab kinds. Double-rAF so React's commit + the browser's layout
+  // both settle before measuring (the active-state classes change tab
+  // widths). See OpenTabsBar for the full rationale.
+  const activeTabKey = editorFocused ? (planTabActive ? PLAN_TAB_KEY : activeFile) : activeId;
+  useEffect(() => {
+    if (!activeTabKey) return;
+    let raf1 = 0;
+    let raf2 = 0;
+    let t = 0;
+    const scrollTabFullyIntoView = () => {
+      const node = tabNodes.current.get(activeTabKey);
+      const el = scrollRef.current;
+      if (!node || !el) return;
+      // Multi-row layout has no horizontal overflow — just reveal the tab's
+      // row vertically (the track scrolls vertically past the ~3-row cap).
+      if (multiRow) {
+        node.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+        return;
+      }
+      const nodeRect = node.getBoundingClientRect();
+      const viewRect = el.getBoundingClientRect();
+      const BUFFER = 10; // px - keep the close button clear of the edge fade
+      if (nodeRect.left < viewRect.left + 1) {
+        el.scrollBy({ left: nodeRect.left - viewRect.left - 2, behavior: "smooth" });
+      } else if (nodeRect.right > viewRect.right - BUFFER) {
+        el.scrollBy({ left: nodeRect.right - viewRect.right + BUFFER, behavior: "smooth" });
+      }
+    };
+    const doScroll = () => {
+      scrollTabFullyIntoView();
+      // Re-check after the smooth scroll settles in case the layout shifted.
+      t = window.setTimeout(() => {
+        scrollTabFullyIntoView();
+        recomputeScrollState();
+      }, 280);
+    };
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(doScroll);
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+      if (t) clearTimeout(t);
+    };
+  }, [activeTabKey, tabs.length, openFiles.length, hasPlanTab, multiRow, recomputeScrollState]);
+
+  const scrollByPage = useCallback((dir: 1 | -1) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: "smooth" });
+  }, []);
+
+  const onWheel = useCallback(
+    (e: React.WheelEvent) => {
+      // Translate vertical wheel into horizontal scroll so a plain mouse
+      // wheel can navigate the strip. Trackpad horizontal is already deltaX.
+      // In multi-row mode the wheel scrolls rows natively instead.
+      if (multiRow) return;
+      const el = scrollRef.current;
+      if (!el) return;
+      if (e.deltaY !== 0 && e.deltaX === 0) {
+        el.scrollLeft += e.deltaY;
+      }
+    },
+    [multiRow],
+  );
+
+  // ── Drag-and-drop (reorder, within the same tab kind) ─────────────────
+  // A 6px movement activates a drag; anything less is treated as a click.
+  // Both kinds live under ONE DndContext; onDragEnd dispatches by which
+  // list both ids belong to — cross-kind drops (session onto file or vice
+  // versa) are ignored since the two orders live in separate store lists.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 120, tolerance: 8 },
+    }),
+  );
+
+  const onDragEnd = useCallback(
+    (e: DragEndEvent) => {
+      const { active, over } = e;
+      if (!over || active.id === over.id) return;
+      const activeIdStr = String(active.id);
+      const overIdStr = String(over.id);
+      const sFrom = tabs.indexOf(activeIdStr);
+      const sTo = tabs.indexOf(overIdStr);
+      if (sFrom !== -1 && sTo !== -1) {
+        reorderTab(sFrom, sTo);
+        return;
+      }
+      const fFrom = openFiles.indexOf(activeIdStr);
+      const fTo = openFiles.indexOf(overIdStr);
+      if (fFrom !== -1 && fTo !== -1) reorderIdeFile(fFrom, fTo);
+    },
+    [tabs, openFiles, reorderTab, reorderIdeFile],
+  );
+
+  if (tabs.length === 0 && openFiles.length === 0 && !hasPlanTab) return null;
+  // The ⋯ overflow menu doubles as the multi-row toggle's home, so it stays
+  // mounted in multi-row mode even though nothing scrolls horizontally.
+  const showOverflowMenu = multiRow || canScrollLeft || canScrollRight;
+  // rectSortingStrategy understands wrapped 2-D layouts; the horizontal
+  // strategy would drag tabs along a single axis only.
+  const sortStrategy = multiRow ? rectSortingStrategy : horizontalListSortingStrategy;
+
+  return (
+    <div
+      role="tablist"
+      aria-label="Unified navigation and editor tabs"
+      className={cn(
+        "flex shrink-0 items-center gap-1 border-b border-edge/60 bg-surface-muted/40 dark:bg-surface/50 backdrop-blur-md px-1.5",
+        multiRow ? "min-h-8 py-0.5" : "h-8",
+      )}
+    >
+      {/* Left chevron — only when there's content scrolled off the left edge. */}
+      {canScrollLeft && (
+        <TabBarChevronButton
+          dir="left"
+          onClick={() => scrollByPage(-1)}
+          title={t("ide.editor.scrollTabsLeft")}
+        />
+      )}
+
+      {/* Scrollable tab track: sessions, then files, then the plan tab — one
+          seamless strip, no grouping divider. */}
+      <div className="relative min-w-0 flex-1">
+        <div
+          ref={scrollRef}
+          onScroll={recomputeScrollState}
+          onWheel={onWheel}
+          className={cn(
+            "no-scrollbar flex items-center gap-1 py-0.5",
+            multiRow
+              ? // Wrapped rows, capped at ~3 rows — beyond that the track
+                // scrolls vertically.
+                "max-h-[82px] flex-wrap content-start items-start overflow-y-auto"
+              : "overflow-x-auto",
+          )}
+        >
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={onDragEnd}
+          >
+            <SortableContext items={tabs} strategy={sortStrategy}>
+              {tabs.map((id) => {
+                const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id, orchWorkersById);
+                return (
+                  <SortableSessionTab
+                    key={id}
+                    session={sess}
+                    sessionId={id}
+                    isActive={id === activeId && !editorFocused}
+                    running={!!runningBySession[id] || orchAnchors[id] != null}
+                    unreadCount={unreadBySession[id] ?? 0}
+                    multiRow={multiRow}
+                    registerNode={(node) => {
+                      if (node) tabNodes.current.set(id, node);
+                      else tabNodes.current.delete(id);
+                    }}
+                    onActivate={() => void selectSession(id)}
+                    onClose={() => closeTab(id)}
+                  />
+                );
+              })}
+            </SortableContext>
+
+            {/* Group divider: session tabs on the left, editor tabs (files +
+                the plan pseudo-tab) on the right. Only rendered when both
+                groups have content. */}
+            {tabs.length > 0 && (openFiles.length > 0 || hasPlanTab) && (
+              <div aria-hidden className="mx-1 h-3.5 w-px shrink-0 self-center bg-edge/70" />
+            )}
+
+            <SortableContext items={openFiles} strategy={sortStrategy}>
+              {openFiles.map((path) => (
+                <SortableFileTab
+                  key={path}
+                  path={path}
+                  isActive={path === activeFile && editorFocused && !planTabActive}
+                  dirty={dirtySet.has(path)}
+                  multiRow={multiRow}
+                  registerNode={(node) => {
+                    if (node) tabNodes.current.set(path, node);
+                    else tabNodes.current.delete(path);
+                  }}
+                  onActivate={() => {
+                    setActiveFile(path);
+                    // Deactivate the plan tab so the file tab takes focus.
+                    if (activeId && planTabActive) {
+                      setPlanTabActive(activeId, false);
+                    }
+                  }}
+                  onClose={() => closeFile(path)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setCtxMenu({ path, x: e.clientX, y: e.clientY });
+                  }}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
+
+          {/* Plan tab - not draggable, sits after the file tabs. Clicking
+              activates the plan view (clears activeFile, sets planTabActive,
+              which flips the unified focus to the editor); the × closes the
+              plan tab entirely. */}
+          {hasPlanTab && (
+            <div
+              ref={(node) => {
+                if (node) tabNodes.current.set(PLAN_TAB_KEY, node);
+                else tabNodes.current.delete(PLAN_TAB_KEY);
+              }}
+              role="tab"
+              aria-selected={planTabActive && editorFocused}
+              title={t("ide.editor.viewPlan")}
+              onClick={() => {
+                if (activeId) {
+                  clearIdeActiveFile();
+                  setPlanTabActive(activeId, true);
+                }
+              }}
+              className={cn(
+                // Apple-style Compact Integrated Card Plan Tab (方案 1)
+                "group flex h-[27px] max-w-[160px] cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 text-[11px] transition-all duration-150",
+                // Same flexible/natural split as the file tabs above.
+                multiRow ? "min-w-[170px] flex-1" : "min-w-0 shrink-0",
+                planTabActive && editorFocused
+                  ? "bg-surface text-content font-medium shadow-xs border border-edge/60 dark:bg-surface-hover dark:border-white/10 dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]"
+                  : "text-content-muted hover:text-content hover:bg-surface-hover/50 border border-transparent",
+              )}
+            >
+              <IconClipboard size={12} className="shrink-0 text-emerald-500" />
+              <span className="min-w-0 flex-1 truncate">{t("ide.editor.planTab")}</span>
+              {/* Close button leaves the layout on inactive tabs (title fills
+                  the chip); appears on hover, always visible while active. */}
+              <button
+                type="button"
+                aria-label={t("ide.editor.closePlanTabAria")}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (activeId) closePlanDrawer(activeId);
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                className={cn(
+                  "ml-0.5 h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-black/10 dark:hover:bg-white/15 hover:text-content",
+                  planTabActive && editorFocused
+                    ? "inline-flex"
+                    : "hidden group-hover:inline-flex",
+                )}
+                title={t("common.close")}
+              >
+                <IconX size={10} />
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Edge fades — overlay only, pointer-events disabled so they never
+          intercept tab clicks. Shown per-direction based on scroll state. */}
+        {canScrollLeft && (
+          <div className="pointer-events-none absolute inset-y-0 left-0 w-6 bg-gradient-to-r from-surface to-transparent" />
+        )}
+        {canScrollRight && (
+          <div className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-surface to-transparent" />
+        )}
+      </div>
+
+      {/* Right chevron — only when there's content scrolled off the right edge. */}
+      {canScrollRight && (
+        <TabBarChevronButton
+          dir="right"
+          onClick={() => scrollByPage(1)}
+          title={t("ide.editor.scrollTabsRight")}
+        />
+      )}
+
+      {/* Placement toggle: switch between center tabs and sidebar preview */}
+      <button
+        type="button"
+        onClick={toggleTabsFilePreviewPlacement}
+        title={
+          tabsFilePreviewPlacement === "center"
+            ? t("ide.files.placementCenterHint")
+            : t("ide.files.placementSidebarHint")
+        }
+        aria-label={
+          tabsFilePreviewPlacement === "center"
+            ? t("ide.files.placementCenterHint")
+            : t("ide.files.placementSidebarHint")
+        }
+        className={cn(
+          "mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-black/5 dark:hover:bg-white/10 hover:text-content",
+          tabsFilePreviewPlacement === "sidebar" && "bg-accent/15 text-accent hover:bg-accent/20",
+        )}
+      >
+        <IconLayoutSidebarRight size={14} />
+      </button>
+
+      {/* Overflow menu — lists every tab (sessions first, then files, then
+          the plan tab) for quick jumping. Shown when the strip overflows,
+          and always in multi-row mode (it hosts the layout toggle). */}
+      {showOverflowMenu && (
+        <TabBarOverflowMenu
+          heading={t("ide.editor.openTabs")}
+          multiRow={multiRow}
+          onToggleMultiRow={setTabBarMultiRow}
+          items={[
+            ...tabs.map((id) => {
+              const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id, orchWorkersById);
+              return {
+                key: id,
+                label: sess?.title ?? "(unknown)",
+                active: id === activeId && !editorFocused,
+                dotClass: runningBySession[id] || orchAnchors[id] != null
+                  ? "bg-accent animate-pulse"
+                  : "bg-content-subtle/50",
+              };
+            }),
+            ...openFiles.map((path) => ({
+              key: path,
+              label: basename(path),
+              title: path,
+              active: path === activeFile && editorFocused && !planTabActive,
+              dotClass: dirtySet.has(path) ? "bg-accent animate-pulse" : undefined,
+            })),
+            ...(hasPlanTab
+              ? [{
+                  key: PLAN_TAB_KEY,
+                  label: t("ide.editor.planTab"),
+                  title: t("ide.editor.viewPlan"),
+                  active: planTabActive && editorFocused,
+                  dotClass: undefined as string | undefined,
+                }]
+              : []),
+          ]}
+          onSelect={(key) => {
+            if (key === PLAN_TAB_KEY) {
+              if (activeId) {
+                clearIdeActiveFile();
+                setPlanTabActive(activeId, true);
+              }
+              return;
+            }
+            if (tabs.includes(key)) {
+              void selectSession(key);
+              return;
+            }
+            setActiveFile(key);
+            if (activeId && planTabActive) {
+              setPlanTabActive(activeId, false);
+            }
+          }}
+        />
+      )}
+
+      {/* Right-click context menu for file tabs (same menu as OpenTabsBar). */}
+      <FileTabContextMenu
+        ctxMenu={ctxMenu}
+        onClose={() => setCtxMenu(null)}
+        actions={{
+          close: (p) => closeFile(p),
+          closeOthers: (p) => closeOthers(p),
+          closeAll: () => closeAllFiles(),
+          activate: (p) => setActiveFile(p),
+          addToChat: (p) => enqueueChatFile(p),
+        }}
+      />
+    </div>
+  );
+}

@@ -67,6 +67,7 @@ export type PiModel = {
 export type PiStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
 export type PiMessageItem = {
+  activityOrder?: number;
   timestamp?: number;
   id: string;
   kind: "message";
@@ -92,6 +93,7 @@ export type PiQueueState = {
 };
 
 export type PiThinkingItem = {
+  activityOrder?: number;
   id: string;
   kind: "thinking";
   text: string;
@@ -100,6 +102,7 @@ export type PiThinkingItem = {
 };
 
 export type PiToolItem = {
+  activityOrder?: number;
   id: string;
   kind: "tool";
   toolCallId: string;
@@ -122,6 +125,7 @@ export type PiViewStatus =
   | "failed";
 
 export type PiViewState = {
+  activityRevision?: number;
   compaction?: {
     status: "running" | "done" | "failed";
     startedAt: number;

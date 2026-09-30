@@ -1,0 +1,815 @@
+import { lazy, Suspense, useEffect, useMemo, useRef } from "react";
+import { cn } from "@renderer/lib/cn.js";
+import { ThreePaneLayout } from "./components/layout/ThreePaneLayout.js";
+import { Divider } from "./components/layout/Divider.js";
+import { Titlebar } from "./components/layout/Titlebar.js";
+import { LeftBar } from "./components/layout/LeftBar.js";
+import { StreamSidebar } from "./components/layout/StreamSidebar.js";
+import { ChatPane } from "./components/chat/ChatPane.js";
+import { SessionTabs } from "./components/layout/SessionTabs.js";
+import { UnifiedTabsBar } from "./components/layout/UnifiedTabsBar.js";
+import { RightPanel } from "./components/layout/RightPanel.js";
+import { SettingsPage } from "./components/settings/SettingsPage.js";
+import { SchedPage } from "./components/automation/SchedPage.js";
+import { CommandPalette } from "./components/layout/CommandPalette.js";
+import { SearchDialog } from "./components/ide/SearchDialog.js";
+import { ModelConfigPrompt } from "./components/chat/ModelConfigPrompt.js";
+import { BrowserPanel } from "./components/browser/BrowserPanel.js";
+import { Toaster } from "./components/layout/Toaster.js";
+import { UpdateNotification } from "./components/layout/UpdateNotification.js";
+import { VoiceListeningOverlay } from "./components/layout/VoiceListeningOverlay.js";
+import { useClaudeEvents } from "./hooks/useClaudeEvents.js";
+import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
+import { useMouseGestures } from "./hooks/useMouseGestures.js";
+import { useSuppressBrowserView } from "./hooks/useSuppressBrowserView.js";
+import { useSessionStore } from "./stores/sessionStore.js";
+import type { BrowserDevicePreset } from "@contracts/ipc";
+import { api } from "./lib/api.js";
+import { useTheme } from "./lib/theme.js";
+import { useChatAppearance, useRightPanelAppearance, useThemeStyle } from "./lib/appearance.js";
+import { useI18n } from "./lib/i18n/index.js";
+import { OpenTabsBar } from "./components/ide/OpenTabsBar.js";
+
+// Lazy-load the Monaco-backed editor, diff dialog and plan viewer so the large
+// monaco-editor library (and its web workers) stay out of the initial renderer
+// chunk. PlanViewer statically imports monacoSetup.ts (the worker bootstrap),
+// so an eager import here would pull all of Monaco into the first-paint
+// critical path — exactly the slowness lazy-loading FileEditor was meant to
+// avoid. All three are only needed once the user opens a file, a diff dialog
+// or the plan tab — well after first paint. Vite splits them into separate
+// chunks automatically.
+const FileEditor = lazy(() =>
+  import("./components/ide/FileEditor.js").then((m) => ({ default: m.FileEditor })),
+);
+const GitDiffDialog = lazy(() =>
+  import("./components/ide/GitDiffDialog.js").then((m) => ({ default: m.GitDiffDialog })),
+);
+const PlanViewer = lazy(() =>
+  import("./components/chat/PlanViewer.js").then((m) => ({ default: m.PlanViewer })),
+);
+
+export function App() {
+  // Subscribe to the claude event stream for the app's whole lifetime.
+  useClaudeEvents();
+  // When an agent browser tool opens/reuses a view, surface the browser panel
+  // so the user sees the agent browsing and BrowserPanel can sync bounds.
+  // Subscribed globally (not in BrowserPanel, which only mounts when the
+  // browser tab is already active) so the panel switch happens even if the
+  // right panel is currently on files/git. The view is adopted into the
+  // renderer's tab list so BrowserPanel's show/hide/bounds logic manages it.
+  //
+  // The agent opens in the right sidebar (scrollable column) by default — a
+  // desktop page renders at full width inside the sidebar; a phone page narrows
+  // to the emulated viewport. The fullscreen overlay is never triggered
+  // automatically: it's reserved for the user to open manually via the
+  // "展开为 PC 全屏" button when they want more room.
+  //
+  // Respect the user's manual view-mode choice: if they've switched to the
+  // fullscreen overlay, the agent must NOT yank them back to the sidebar. We
+  // still adopt the tab so the overlay surfaces the agent's view, but leave
+  // browserPanelOpen untouched. Only when the user is NOT in fullscreen do we
+  // force the sidebar to own the view (isActive = !browserPanelOpen) and open
+  // the right panel on the browser tab.
+  // The device toolbar is auto-opened so the requested emulation takes effect
+  // (collapsed = full-width desktop, ignoring the agent's device).
+  useEffect(() => {
+    const off = api.on.browserEvent((msg) => {
+      if (msg.type !== "agentOpened") return;
+      const p = (msg.payload as { url?: string; title?: string; device?: BrowserDevicePreset }) ?? {};
+      const st = useSessionStore.getState();
+      const createdNew = st.adoptAgentBrowserTab(msg.browserId, p);
+      if (!st.browserPanelOpen) {
+        // Not in fullscreen — bring up the sidebar to show the agent browsing.
+        // The sidebar browser is a session-scoped tab: open it on the ACTIVE
+        // session (the rail's "+" menu does the same).
+        st.openSessionRightTab("browser");
+        st.setRightOpen(true);
+      }
+      // Only auto-open the device toolbar for a brand-new agent tab, so the
+      // requested emulation is visible. For an existing tab, preserve the
+      // user's toolbar state — reopening it over their collapsed choice would
+      // be surprising, and the user's device/size selection is preserved by
+      // adoptAgentBrowserTab regardless.
+      if (createdNew) {
+        st.setBrowserDeviceToolbarOpen(true);
+      }
+    });
+    return off;
+  }, []);
+  // Global keyboard shortcuts (Cmd+K palette, Cmd+B sidebar, etc.). Mounts a
+  // single capture-phase window listener; rebinding in settings re-subscribes.
+  useGlobalShortcuts();
+  // Global mouse gestures (hold right button + drag). Same listener pattern;
+  // detached entirely while disabled in settings.
+  useMouseGestures();
+  // Apply + keep in sync the color scheme (.dark on <html>).
+  useTheme();
+  // Apply + keep in sync the chat appearance CSS vars (--chat-font-size,
+  // --user-bubble) from the user-configurable settings.
+  useChatAppearance();
+  // Apply + keep in sync the global side-panel + settings font-size CSS var
+  // (--right-panel-font-size) for the left bar, right files/git/terminal
+  // panels, and the settings page.
+  useRightPanelAppearance();
+  // Apply + keep in sync the theme STYLE (.sketch on <html>, orthogonal to
+  // the light/dark scheme above) from the ui.themeStyle setting.
+  useThemeStyle();
+
+  const init = useSessionStore((s) => s.init);
+  useEffect(() => {
+    void init();
+  }, [init]);
+
+  /** Settings page visibility — opened from the LeftBar ⚙ footer, the
+   *  CLI-missing CTA, or the model-dropdown "manage models" entry. Renders as
+   *  a sibling view (not a modal) sharing the same titlebar + pane shell. */
+  const settingsOpen = useSessionStore((s) => s.settingsOpen);
+  const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
+
+  /** 定时任务只读查看页 — same full-bleed overlay form as the settings page
+   *  (mutually exclusive with it; see setSchedPageOpen). */
+  const schedPageOpen = useSessionStore((s) => s.schedPageOpen);
+  const setSchedPageOpen = useSessionStore((s) => s.setSchedPageOpen);
+
+  /** Left / right sidebar + bottom terminal visibility. Lifted from local
+   *  useState into the store so the command palette (and any other consumer)
+   *  can toggle them. Workspace-only — the settings view pins leftOpen=true /
+   *  rightOpen=false. NOT persisted (matches original behavior). */
+  const leftOpen = useSessionStore((s) => s.leftOpen);
+  const leftBarMode = useSessionStore((s) => s.leftBarMode);
+  const setLeftOpen = useSessionStore((s) => s.setLeftOpen);
+  const rightOpen = useSessionStore((s) => s.rightOpen);
+  const setRightOpen = useSessionStore((s) => s.setRightOpen);
+  const rightPanelTab = useSessionStore((s) => s.rightPanelTab);
+  const setRightPanelTab = useSessionStore((s) => s.setRightPanelTab);
+  const widePanelOpen = useSessionStore((s) => s.widePanelOpen);
+  // Wide-panel (3:7) split share + its resize/reset actions. The wide mode
+  // reuses the layout's right aside (percentage width) instead of mounting a
+  // second RightPanel inside the center column, so toggling wide never
+  // unmounts the right panel (file tree, git scan, browser view ownership).
+  const widePanelPct = useSessionStore((s) => s.widePanelPct);
+  const adjustWidePanelPct = useSessionStore((s) => s.adjustWidePanelPct);
+  const resetWidePanelPct = useSessionStore((s) => s.resetWidePanelPct);
+
+  /** Draggable pane sizes + resize actions (from the store; persisted). */
+  const leftWidthPct = useSessionStore((s) => s.leftWidthPct);
+  const rightWidth = useSessionStore((s) => s.rightWidth);
+  const bottomTerminalHeight = useSessionStore((s) => s.bottomTerminalHeight);
+  const adjustLeftWidthPct = useSessionStore((s) => s.adjustLeftWidthPct);
+  const adjustRightWidth = useSessionStore((s) => s.adjustRightWidth);
+  const adjustBottomTerminalHeight = useSessionStore((s) => s.adjustBottomTerminalHeight);
+  const resetLeftWidthPct = useSessionStore((s) => s.resetLeftWidthPct);
+  const resetRightWidth = useSessionStore((s) => s.resetRightWidth);
+  const resetBottomTerminalHeight = useSessionStore((s) => s.resetBottomTerminalHeight);
+
+  /** Command palette + file search dialog visibility is driven by the
+   *  global shortcut listener (useGlobalShortcuts) via store actions, so we
+   *  no longer wire those keys here. */
+
+  // Auto-open the right panel when something requests its attention (plain
+  // openFileInIde calls; diff opens render in the center editor and
+  // deliberately don't bump). The store can't reach into this local state,
+  // so it bumps a nonce we watch here.
+  const ideFocusNonce = useSessionStore((s) => s.ideFocusNonce);
+  useEffect(() => {
+    if (ideFocusNonce > 0) setRightOpen(true);
+  }, [ideFocusNonce, setRightOpen]);
+
+  // Root row ref — measures the full window width so the left divider's px
+  // drag delta can be converted into percentage points of that width (the
+  // sidebar share is percentage-based so the 3:7 split scales on resize).
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Convert a px drag delta into a percentage-point delta of the window
+  // width. The divider sits to the RIGHT of the sidebar, so the sign flip
+  // (none needed here — dragging right widens) lives in adjustLeftWidthPct.
+  // No rounding: the store keeps fractional percentages so the pane tracks
+  // the cursor pixel-for-pixel (integer pcts ate sub-percent deltas).
+  const handleLeftResize = (deltaPx: number) => {
+    const el = rootRef.current;
+    if (!el) return;
+    const w = el.getBoundingClientRect().width;
+    if (w <= 0) return;
+    adjustLeftWidthPct((deltaPx / w) * 100);
+  };
+  // Wide mode: the layout's center|right divider drives the wide split. Same
+  // px→percentage-points conversion as handleLeftResize — wide mode forces
+  // the left sidebar closed (store guard), so the window width IS the layout
+  // row width that widePanelPct is a share of. The sign flip (dragging right
+  // shrinks the right panel) lives in adjustWidePanelPct.
+  const handleWidePanelResize = (deltaPx: number) => {
+    const el = rootRef.current;
+    if (!el) return;
+    const w = el.getBoundingClientRect().width;
+    if (w <= 0) return;
+    adjustWidePanelPct((deltaPx / w) * 100);
+  };
+
+  return (
+    // bg-surface-muted (matching the sidebar/toolbar/track) so the left
+    // divider's transparent 1px layout slot blends in — a bg-surface root
+    // showed through it as a stray light/dark hairline cutting the frame.
+    <div ref={rootRef} className="flex h-full w-full bg-surface-muted text-content">
+      {/* Command palette + file search dialog overlay both workspace and
+          settings views. The browser panel overlay mounts here too - it
+          covers the workspace with a fixed inset overlay (z-40, below the
+          z-50 dialogs so ConfirmDialog etc. still sit on top). */}
+      <CommandPalette />
+      <SearchDialog />
+      {/* Send-time "尚未配置模型" guard (sendPrompt opens it when the active
+          provider has no model configured). Root-mounted so it overlays both
+          workspace and settings views. */}
+      <ModelConfigPrompt />
+      <BrowserPanel mode="overlay" />
+      {/* Wide-mode plan dialog - mounts over the wide 3:7 workspace (fixed
+          overlay below the titlebar) when a plan tab is open. Mounted here
+          beside the browser overlay so it covers both the chat and right
+          columns. Renders null when not applicable. */}
+      <WidePlanDialog />
+      {/*
+        Left sidebar — spans the FULL window height. Its share of the width
+        is a persisted percentage (default 12 ≈ a compact ~259px sidebar on a
+        2160px window); the Divider below is draggable (invisible hairline —
+        the sidebar and the toolbar/track share the same muted surface, a
+        hairline would cut the continuous frame; the resize cursor is the
+        affordance) and double-click resets to the default. Wide-panel mode
+        forces leftOpen=false in the store — the aside responds by CSS-hiding
+        (below), NOT unmounting, so toggling wide never cold-rebuilds the
+        project tree / stream list (which would refetch sessions via IPC).
+        While the settings view is open the aside is hidden via CSS too
+        (stays mounted to preserve scroll) so settings renders FULL-WIDTH
+        below the toolbar instead of only over the right column.
+        bg-surface-muted matches the toolbar to the right and the panel track,
+        so all three read as one continuous frame — no right-edge rounding;
+        rounded-tl alone carries the window-corner arc on macOS.
+      */}
+      <aside
+        className={cn(
+          // min-w-0 kills the flex `min-width: auto` content floor —
+          // without it the widest nowrap row in LeftBar (e.g. a long
+          // session title, which contributes its full text width to
+          // min-content) propped the aside open no matter how small
+          // leftWidthPct got.
+          "flex h-full min-w-0 shrink-0 flex-col rounded-tl-3xl bg-surface-muted",
+          (!leftOpen || settingsOpen || schedPageOpen) && "hidden",
+        )}
+        style={{ flexGrow: 0, flexBasis: `${leftWidthPct}%` }}
+      >
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {/* Left-bar view preference: classic project tree or the
+              session-first stream. Both are pure renderers over the same
+              store; switching keeps running turns untouched. */}
+          {leftBarMode === "stream" ? <StreamSidebar /> : <LeftBar />}
+        </div>
+      </aside>
+      {leftOpen && !settingsOpen && !schedPageOpen && (
+        <Divider
+          orientation="vertical"
+          hideLine
+          // z-20 lifts the invisible ±5px hit area above the center pane's
+          // z-10 — without it the pane (later in DOM, same z) swallowed the
+          // right half of the grab zone, leaving only the sidebar-side 5px.
+          className="z-20"
+          onResize={handleLeftResize}
+          onDoubleClick={resetLeftWidthPct}
+        />
+      )}
+      {/*
+        Right column — the 7 of the 3:7 split: the toolbar (Titlebar) on top
+        and the main panel below (center chat/editor pane + right IDE panel,
+        plus the bottom terminal inside the center main).
+      */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/*
+          Workspace shell is ALWAYS mounted — the settings view renders as an
+          overlay on top of it, not as a mutually-exclusive sibling. This is
+          critical: BottomTerminalBar (→ TerminalPanel → every TerminalView)
+          lives inside ThreePaneLayout. A ternary swap `settingsOpen ?
+          <Settings> : <Workspace>` would unmount the whole workspace subtree
+          on every settings open, killing all live PTYs (TerminalView's
+          cleanup calls api.terminal.kill) and destroying scrollback — and
+          racing many concurrent pty.kill() calls on Windows occasionally
+          crashes the main process. Keeping the workspace mounted preserves
+          the carefully-built cross-project terminal keep-alive (see
+          TerminalPanel.tsx) exactly as designed. The Titlebar below switches
+          its mode + the settings overlay covers the main panel visually (the
+          left sidebar stays visible alongside it).
+        */}
+        <Titlebar
+          mode={settingsOpen ? "settings" : schedPageOpen ? "sched" : "workspace"}
+          leftOpen={leftOpen}
+          rightOpen={settingsOpen || schedPageOpen ? false : rightOpen}
+          onBack={() => (settingsOpen ? setSettingsOpen(false) : setSchedPageOpen(false))}
+          onToggleLeft={() => setLeftOpen(!leftOpen)}
+          onToggleRight={() => setRightOpen(!rightOpen)}
+        />
+        {/* Main panel row — bg-surface-muted as the contrasting track so the
+            center pane's rounded left-edge corners (in ThreePaneLayout)
+            reveal this muted color through the notches and read as clean
+            arcs. The left sidebar (bg-surface-muted) blends into the track
+            on its side; the center pane (bg-surface) separates from the
+            track by the flat color step alone (no shadow). */}
+        <div className="relative flex min-h-0 flex-1 bg-surface-muted">
+          {/*
+            Center is ONE stable tree across wide mode (CenterPane takes the
+            wide flag as a render variation) — the old ternary swap
+            `<WidePanelSplit/> : <CenterPane/>` remounted every ChatPane
+            (Tiptap, timeline) + the whole right panel on each toggle, which
+            read as a lag. Wide mode only re-shapes the layout: the right
+            aside switches to the percentage share (rightWidthPct) and stays
+            open (setWidePanelOpen forces rightOpen=true on enter and
+            restores the snapshot on exit), so RightPanel — file tree, git
+            scan, browser view ownership — is never torn down.
+          */}
+          <ThreePaneLayout
+            left={null}
+            center={<CenterPane wide={widePanelOpen} />}
+            right={<RightPanel />}
+            leftOpen={false}
+            rightOpen={rightOpen}
+            rightWidth={rightWidth}
+            rightWidthPct={widePanelOpen ? widePanelPct : undefined}
+            onResizeRight={widePanelOpen ? handleWidePanelResize : adjustRightWidth}
+            onResetRight={widePanelOpen ? resetWidePanelPct : resetRightWidth}
+          />
+          {/* Git diff dialog (the "dialog" open-mode). Portaled to <body>;
+              renders nothing when closed or empty. Mounted at the workspace
+              level so it overlays the editor while staying app-scoped.
+              Lazy-loaded with monaco since it reuses the Monaco DiffPane. */}
+          <Suspense fallback={null}>
+            <GitDiffDialog />
+          </Suspense>
+          {/*
+            Settings overlay — renders on top of the always-mounted workspace
+            shell, FULL-WIDTH: the left aside above is CSS-hidden while
+            settings is open, so this overlay (inset-0 of the panel row, which
+            now spans the whole window) covers everything below the toolbar.
+            The workspace still mounts underneath, keeping terminals alive,
+            just not visible. bg-surface-muted is opaque (no bleed-through)
+            and doubles as the settings "track": it shows through the content
+            pane's rounded-tl/bl notches so the settings arcs read exactly
+            like the workspace center pane against its frame.
+            `flex` is required: SettingsPage reuses
+            ThreePaneLayout, whose left <aside> + center <main> are sibling
+            nodes laid out horizontally by a flex parent. Without flex the
+            <main> collapses to height 0 and the settings content never
+            renders.
+          */}
+          {settingsOpen && (
+            <div className="settings-root absolute inset-0 z-30 flex bg-surface-muted">
+              <SettingsPage />
+            </div>
+          )}
+          {/* 定时任务查看页(只读) — same full-bleed overlay form as the
+              settings overlay above: covers the whole panel row (the left
+              aside is CSS-hidden while it's open), workspace stays mounted
+              underneath. Exclusivity with settings is enforced in the store
+              actions, so at most one of the two overlays is ever mounted. */}
+          {schedPageOpen && (
+            <div className="absolute inset-0 z-30 flex bg-surface-muted">
+              <SchedPage />
+            </div>
+          )}
+        </div>
+      </div>
+      {/* Global bottom-right corner: update notification card + toast stack
+          share one fixed column so they stack vertically and never overlap.
+          Both render null when they have nothing to show. */}
+      <div className="pointer-events-none fixed bottom-4 right-4 z-[9999] flex flex-col items-end gap-2">
+        <UpdateNotification />
+        <Toaster />
+      </div>
+      {/* Global voice-dictation indicator - floats top-center while any
+          composer is listening. Renders null when idle. */}
+      <VoiceListeningOverlay />
+    </div>
+  );
+}
+
+/** Center pane router. `tabs` displayMode renders the UNIFIED tab bar —
+ *  session tabs and editor file tabs share ONE strip, and whichever tab is
+ *  active (chat or editor) takes the full center width (no split). `single`
+ *  mode keeps the legacy layout: a horizontal split between the chat column
+ *  (left) and the file-editor column (right), where the editor column only
+ *  appears when a file or plan tab is open (see the design notes in
+ *  docs/tech-stack.md).
+ *
+ *  `wide` (wide-panel 3:7 mode) is a RENDER VARIATION, not a different tree:
+ *  the same components stay mounted and only the editor surface is hidden
+ *  (the plan opens as the WidePlanDialog overlay instead). Toggling wide is
+ *  a relayout, never a remount — the chat panes (Tiptap composers, scroll,
+ *  drafts) and everything else below this point survive the toggle. */
+function CenterPane({ wide }: { wide: boolean }) {
+  const displayMode = useSessionStore((s) => s.displayMode);
+  if (displayMode === "tabs") {
+    return <UnifiedTabbedPane wide={wide} />;
+  }
+  return <SplitCenterPane wide={wide} />;
+}
+
+/** `tabs` displayMode: ONE tab bar (UnifiedTabsBar) mixing session tabs and
+ *  file tabs, with the active tab's content filling the whole center width.
+ *  The chat|editor split is gone — that's the point (maximum reading space
+ *  for whichever view is active). All open tabs' ChatPanes stay mounted and
+ *  are backgrounded via CSS (`hidden`) so drafts / scroll / undo survive
+ *  focus flips (same keep-alive trick the old tabs-mode chat column used);
+ *  the editor column mounts only while an editor tab holds the focus.
+ *
+ *  In wide mode the editor has no surface (the plan opens as the
+ *  WidePlanDialog overlay instead), so the strip swaps to the session-only
+ *  SessionTabs (file tabs would be dead controls) and an editor tab holding
+ *  the focus keeps its host mounted but `hidden` — the editor host is a
+ *  SIBLING of the pane host, so the strip swap and the hide never remount
+ *  the ChatPanes below. Monaco therefore survives the wide toggle and
+ *  re-shows instantly on exit. */
+function UnifiedTabbedPane({ wide }: { wide: boolean }) {
+  // The active file is scoped to the active project - switching projects
+  // swaps to that project's open files (or hides the editor if none).
+  const activeProjectId = useSessionStore((s) => s.activeProjectId);
+  const activeFile = useSessionStore((s) =>
+    activeProjectId ? s.ideActiveFileByProject[activeProjectId] ?? null : null,
+  );
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const openTabs = useSessionStore((s) => s.openTabs);
+  const planTabActive = useSessionStore(
+    (s) => (activeSessionId ? s.planTabActiveBySession[activeSessionId] ?? false : false),
+  );
+  const centerTabFocus = useSessionStore((s) => s.centerTabFocus);
+  const tabsFilePreviewPlacement = useSessionStore((s) => s.tabsFilePreviewPlacement);
+  // The editor owns the content area only while focused AND it has content.
+  // In `tabs` displayMode with `sidebar` placement, file preview lives in the
+  // right sidebar's dual-column preview, so the center pane keeps the chat view.
+  const showEditor =
+    centerTabFocus === "editor" &&
+    ((!!activeFile && tabsFilePreviewPlacement !== "sidebar") || planTabActive);
+  // Wide mode: only a FILE editor stays mounted (hidden keep-alive). A plan
+  // tab's surface is owned by the WidePlanDialog overlay — keeping a second
+  // hidden PlanViewer here would double the markdown/Monaco work on every
+  // streamed plan update. Visible only when not wide; the chat pane is the
+  // wide-mode surface, matching isSessionChatOnScreen's wide semantics.
+  const editorMounted = showEditor && !(wide && !activeFile);
+  const editorVisible = showEditor && !wide;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {wide ? <SessionTabs /> : <UnifiedTabsBar />}
+      <div className="relative min-h-0 flex-1">
+        {openTabs.map((sid) => (
+          <div
+            key={sid}
+            className={cn(
+              "absolute inset-0",
+              sid === activeSessionId && !editorVisible ? "" : "hidden",
+            )}
+          >
+            <ChatPane sessionId={sid} isActive={sid === activeSessionId && !editorVisible} />
+          </div>
+        ))}
+        {editorMounted && (
+          <div
+            className={cn(
+              "absolute inset-0 flex min-h-0 flex-col",
+              !editorVisible && "hidden",
+            )}
+          >
+            {/* hideTabsBar: the unified bar above already shows the file
+                tabs — a second OpenTabsBar would duplicate them. In wide
+                mode the strip is SessionTabs, and the hidden host renders
+                no bar at all. */}
+            <EditorColumn filePath={activeFile} hideTabsBar />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** `single` displayMode: a horizontal split between the chat column (left)
+ *  and the file-editor column (right). When no file is open the editor
+ *  column is omitted and the chat column takes the full width — the layout
+ *  the user sees when they haven't clicked any files yet. The editor column
+ *  hosts the Monaco FileEditor + its own tab bar (OpenTabsBar), and is only
+ *  rendered when `ideActiveFile` is non-null.
+ *
+ *  Wide mode CSS-hides the editor column (keep-alive) and lets the chat fill
+ *  the center — the right panel lives in the layout's aside beside it. Both
+ *  columns are siblings of the same flex row, so the hide is a class flip,
+ *  never a remount. */
+function SplitCenterPane({ wide }: { wide: boolean }) {
+  // The active file is scoped to the active project - switching projects
+  // swaps to that project's open files (or hides the editor if none).
+  const activeProjectId = useSessionStore((s) => s.activeProjectId);
+  const activeFile = useSessionStore((s) =>
+    activeProjectId ? s.ideActiveFileByProject[activeProjectId] ?? null : null,
+  );
+  // Plan tab: the editor column is visible when a file tab is active OR the
+  // plan tab is active. EditorColumn decides whether to render PlanViewer
+  // (plan tab active) or FileEditor (file tab active) based on planTabActive.
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const planTabActive = useSessionStore(
+    (s) => (activeSessionId ? s.planTabActiveBySession[activeSessionId] ?? false : false),
+  );
+
+  // In `single` displayMode, normal file previews are rendered in the right panel's
+  // dual-column FilesPanel instead of splitting the center pane. The center pane only
+  // splits for the plan tab (PlanViewer) when active.
+  const editorMounted = planTabActive && !wide;
+  const editorVisible = editorMounted;
+
+
+  // Draggable chat|editor split. The editor column's share is a persisted
+  // percentage; the chat column gets the remainder. The Divider reports a px
+  // delta which we convert to a percentage delta using the container's
+  // measured width (captured via ref on the split row).
+  const editorWidthPct = useSessionStore((s) => s.editorWidthPct);
+  const adjustEditorWidthPct = useSessionStore((s) => s.adjustEditorWidthPct);
+  const resetEditorWidthPct = useSessionStore((s) => s.resetEditorWidthPct);
+  const splitRef = useRef<HTMLDivElement>(null);
+
+  // Convert a px drag delta into a percentage-point delta relative to the
+  // container width. The divider sits to the LEFT of the editor column, so the
+  // sign flip (growing the editor shrinks as the handle moves right) lives in
+  // adjustEditorWidthPct — here we just translate px to percentage points.
+  const handleEditorResize = (deltaPx: number) => {
+    const el = splitRef.current;
+    if (!el) return;
+    const w = el.getBoundingClientRect().width;
+    if (w <= 0) return;
+    adjustEditorWidthPct((deltaPx / w) * 100);
+  };
+
+  return (
+    <div ref={splitRef} className="flex h-full min-h-0">
+      {/* Chat column - flex-basis is the remainder of the editor share so the
+          two columns split the center pane proportionally. When no file is
+          open and no plan is viewed it takes the full width (flex-1). */}
+      <div
+        className="flex min-w-[450px] flex-col"
+        style={editorVisible ? { flexGrow: 0, flexBasis: `${100 - editorWidthPct}%` } : { flexGrow: 1, flexBasis: "0%" }}
+      >
+
+        <ChatColumn />
+      </div>
+      {/* Divider between chat and editor - only while the editor column is
+          actually visible (a hidden keep-alive column gets no handle). */}
+      {editorVisible && (
+        <Divider
+          orientation="vertical"
+          onResize={handleEditorResize}
+          onDoubleClick={resetEditorWidthPct}
+        />
+      )}
+      {/* Editor column - mounted while a file or plan tab is open; wide mode
+          keeps it mounted but `hidden` (flexBasis is inert under display:none,
+          the chat's flexGrow:1 above takes the full width). */}
+      {editorMounted && (
+        <div
+          className={cn(
+            "flex min-w-0 flex-col border-l border-edge-panel bg-surface",
+            !editorVisible && "hidden",
+          )}
+          style={{ flexGrow: 0, flexBasis: `${editorWidthPct}%` }}
+        >
+          <EditorColumn filePath={activeFile} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The chat half: SessionTabs strip (in tabs mode) + the active ChatPane.
+ *
+ *  Tabs mode keeps every OPEN tab's pane mounted, backgrounded via CSS
+ *  (display:none) — pane lifetime is the user's own tab strip, and closeTab
+ *  intentionally keeps the store buckets so re-opening shows the latest state.
+ *
+ *  Single mode mounts ONLY the active pane (单会话 = one live thread): the
+ *  previous pane unmounts on every switch, and the session that ages out of
+ *  the two-generation grace window (current + previous) gets its heavy store
+ *  buckets pruned via `pruneSessionHistory` — loaded messages (incl. base64
+ *  image blocks), turn-files cards, subagent transcripts, usage history. The
+ *  grace window keeps A↔B ping-pong refetch-free (the previous session's
+ *  store data survives; only the pane remounts), and anything older is fully
+ *  destroyed: the next activation re-fetches the first page because
+ *  selectSession/openTab gate on historyLoadedBySession. Sessions with a
+ *  running turn or a pending question are never pruned (their live event
+ *  stream, turn.done persistence, and the left-bar badge read those buckets)
+ *  — they're deferred and retried on the next switch. */
+
+/** Buckets kept alive in single mode: [previous, current], most recent last.
+ *  Module-level so it survives ChatColumn re-mounts (mode switches). */
+const singleModeGrace: string[] = [];
+const SINGLE_MODE_GRACE = 2;
+/** Eviction candidates deferred because the session was still live (running
+ *  turn / pending question) at prune time. Retried on every switch. */
+const singleModePruneRetry: string[] = [];
+let lastChatColumnMode: "single" | "tabs" | null = null;
+
+function ChatColumn() {
+  const displayMode = useSessionStore((s) => s.displayMode);
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const openTabs = useSessionStore((s) => s.openTabs);
+
+  // Single-mode memory policy driver (see the block comment above).
+  useEffect(() => {
+    if (displayMode !== "single") {
+      lastChatColumnMode = displayMode;
+      return;
+    }
+    if (lastChatColumnMode !== "single") {
+      // Entering single mode: baseline the grace window at the incoming
+      // session — its pane is the one being mounted right now.
+      lastChatColumnMode = "single";
+      singleModeGrace.length = 0;
+      if (activeSessionId != null) singleModeGrace.push(activeSessionId);
+      return;
+    }
+    if (activeSessionId == null) return;
+    if (singleModeGrace[singleModeGrace.length - 1] === activeSessionId) return;
+    singleModeGrace.push(activeSessionId);
+    const candidates: string[] = [];
+    while (singleModeGrace.length > SINGLE_MODE_GRACE) {
+      candidates.push(singleModeGrace.shift()!);
+    }
+    candidates.push(...singleModePruneRetry.splice(0));
+    if (candidates.length === 0) return;
+    const s = useSessionStore.getState();
+    for (const id of candidates) {
+      if (id === activeSessionId || singleModeGrace.includes(id)) continue;
+      // Live threads keep their buckets: a running turn's events and its
+      // turn.done persistence read messagesBySession, and a pending question
+      // drives the left-bar/activity badge. Retry on the next switch.
+      if (s.runningBySession[id] || s.pendingQuestionBySession[id]) {
+        singleModePruneRetry.push(id);
+        continue;
+      }
+      s.pruneSessionHistory(id);
+    }
+  }, [activeSessionId, displayMode]);
+
+  if (displayMode === "tabs") {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <SessionTabs />
+        <div className="relative min-h-0 flex-1">
+          {openTabs.map((sid) => (
+            <div
+              key={sid}
+              className={`absolute inset-0 ${sid === activeSessionId ? "" : "hidden"}`}
+            >
+              <ChatPane sessionId={sid} isActive={sid === activeSessionId} />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // single mode: mount ONLY the active pane. The keyed div forces a full
+  // remount on switch — that IS the destruction the mode promises. What the
+  // user loses vs. the old 8-pane keep-alive is instant back-switching
+  // (Tiptap re-init + timeline re-parse on return); the composer draft and
+  // capsule state live in the store and survive, and the immediately
+  // previous session's data stays in memory (grace window) so returning to
+  // it doesn't even refetch.
+  if (activeSessionId == null) {
+    return <ChatPane sessionId={null} />;
+  }
+  return (
+    <div className="relative min-h-0 flex-1">
+      <div key={activeSessionId} className="absolute inset-0">
+        <ChatPane sessionId={activeSessionId} isActive />
+      </div>
+    </div>
+  );
+}
+
+/** Wide-mode plan viewer: the PlanViewer as a fullscreen dialog overlay. The
+ *  wide 3:7 layout has no editor column, so a plan tab (set via openPlanDrawer)
+ *  would otherwise render nowhere. Mirrors the mobile shell's fullscreen plan
+ *  viewer, but reuses the desktop PlanViewer as-is (edit mode, 待审阅 badge,
+ *  approval-draft save). While open the embedded browser view is suppressed —
+ *  the OS-level WebContentsView would otherwise float above this DOM overlay. */
+function WidePlanDialog() {
+  const { t } = useI18n();
+  const widePanelOpen = useSessionStore((s) => s.widePanelOpen);
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const planTabActive = useSessionStore((s) =>
+    activeSessionId ? (s.planTabActiveBySession[activeSessionId] ?? false) : false,
+  );
+  const planText = useSessionStore((s) =>
+    activeSessionId ? (s.planDrawerPlanBySession[activeSessionId] ?? null) : null,
+  );
+  const planApprovalPending = useSessionStore((s) =>
+    activeSessionId ? !!s.pendingPlanApprovalBySession[activeSessionId] : false,
+  );
+  const closePlanDrawer = useSessionStore((s) => s.closePlanDrawer);
+
+  const open = widePanelOpen && planTabActive && !!planText;
+  // Full-window DOM overlay: the browser view must hide while it's up (no
+  // popup ref — the overlay always "overlaps").
+  useSuppressBrowserView(open);
+
+  if (!open) return null;
+  return (
+    <div className="fixed inset-x-0 top-10 bottom-0 z-50 flex flex-col bg-surface">
+      <Suspense
+        fallback={
+          <div className="flex h-full items-center justify-center text-[11px] text-content-subtle">
+            {t("layout.loadingPlan")}
+          </div>
+        }
+      >
+        <PlanViewer
+          plan={planText!}
+          sessionId={activeSessionId!}
+          isApprovalPending={planApprovalPending}
+          onClose={() => activeSessionId && closePlanDrawer(activeSessionId)}
+        />
+      </Suspense>
+    </div>
+  );
+}
+
+/** The editor half: OpenTabsBar (only in tabs editor-mode, and not when
+ *  `hideTabsBar` — the unified center bar passes that since it already
+ *  renders the file tabs) + the active tab's content. Resolves the project
+ *  path from the active project so FileEditor can show relative paths in
+ *  its toolbar. When the plan tab is active, renders PlanViewer instead of
+ *  FileEditor. */
+function EditorColumn({
+  filePath,
+  hideTabsBar = false,
+}: {
+  filePath: string | null;
+  hideTabsBar?: boolean;
+}) {
+  const { t } = useI18n();
+  const editorMode = useSessionStore((s) => s.ideEditorMode);
+  const activeProjectId = useSessionStore((s) => s.activeProjectId);
+  const projects = useSessionStore((s) => s.projects);
+
+  // Plan tab state: when planTabActive is true and there's plan text, render
+  // PlanViewer instead of FileEditor.
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const planText = useSessionStore(
+    (s) => (activeSessionId ? s.planDrawerPlanBySession[activeSessionId] ?? null : null),
+  );
+  const planTabActive = useSessionStore(
+    (s) => (activeSessionId ? s.planTabActiveBySession[activeSessionId] ?? false : false),
+  );
+  // Whether an ExitPlanMode approval is pending for this session - passed to
+  // PlanViewer so its save action knows to stage the draft for the approval
+  // sheet (vs. just updating the local view for a historical plan).
+  const planApprovalPending = useSessionStore(
+    (s) => (activeSessionId ? !!s.pendingPlanApprovalBySession[activeSessionId] : false),
+  );
+  const closePlanDrawer = useSessionStore((s) => s.closePlanDrawer);
+
+  const showPlan = planTabActive && !!planText;
+
+  const projectPath = useMemo(() => {
+    if (!activeProjectId) return null;
+    return projects.find((p) => p.id === activeProjectId)?.path ?? null;
+  }, [activeProjectId, projects]);
+
+  return (
+    <>
+      {!hideTabsBar && editorMode === "tabs" && <OpenTabsBar />}
+      <div className="min-h-0 flex-1">
+        {showPlan ? (
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center gap-1.5 text-[11px] text-content-subtle">
+                {t("layout.loadingEditor")}
+              </div>
+            }
+          >
+            <PlanViewer
+              plan={planText!}
+              sessionId={activeSessionId!}
+              isApprovalPending={planApprovalPending}
+              onClose={() => activeSessionId && closePlanDrawer(activeSessionId)}
+            />
+          </Suspense>
+        ) : filePath && projectPath ? (
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center gap-1.5 text-[11px] text-content-subtle">
+                {t("layout.loadingEditor")}
+              </div>
+            }
+          >
+            {/* NOT keyed by filePath: the editor is persistent and swaps
+                models on file switches (see EditPane / editorModelCache) —
+                a full remount per file would stutter. */}
+            <FileEditor filePath={filePath} projectPath={projectPath} />
+          </Suspense>
+        ) : (
+          <div className="flex h-full items-center justify-center text-[11px] text-content-subtle">
+            {t("layout.noProjectPath")}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}

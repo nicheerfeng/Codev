@@ -1,0 +1,208 @@
+# Release packaging - triggered by pushing a version tag (v*.*.*).
+# Builds macOS (arm64 + x64) and Windows (x64) installers via electron-builder,
+# then publishes them to a GitHub Release. The latest-mac.yml / latest.yml
+# metadata files are uploaded alongside the installers so electron-updater can
+# check for updates from within the app.
+#
+# macOS is split into two build jobs on matching runners (macos-latest=arm64,
+# macos-15-intel=x64) so the claude-agent-sdk platform subpackage and node-pty
+# native addon are installed + rebuilt for the correct arch. Building both archs
+# from a single arm64 runner produced x64 DMGs containing arm64 binaries, which
+# triggered a Rosetta prompt on Intel Macs.
+#
+# The two mac jobs each emit a single-arch latest-mac.yml; the publish job
+# merges them into one (x64 entry first, since electron-updater's findFile
+# falls back to files[0] when no url matches process.arch) before uploading.
+#
+# The app is NOT code-signed in this first pass (P6). macOS users must
+# right-click > Open on first launch; Windows shows a SmartScreen warning.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+# Only one release build per tag at a time.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-latest is Apple Silicon (arm64); macos-15-intel is GitHub's
+          # dedicated Intel (x86_64) runner (macos-13 was retired Dec 2025; the
+          # Intel image is the last one, supported until 2027-08). Each job
+          # builds ONLY its runner's native arch (electron-builder.yml omits
+          # mac.target.*.arch, so it defaults to process.arch), which ensures
+          # native bits match.
+          - os: macos-latest
+            platform: mac
+            arch: arm64
+          - os: macos-15-intel
+            platform: mac
+            arch: x64
+          # Pin to windows-2022 (not -latest): windows-latest has migrated to the
+          # 2025 image whose VS install layout breaks node-gyp@9's VisualStudio
+          # finder. 2022 reliably ships VS 2022 + the C++ workload.
+          - os: windows-2022
+            platform: win
+            arch: x64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          # pnpm 11 requires Node >= 22.13 (it uses the node:sqlite built-in).
+          # Node 20 is deprecated on GitHub Actions runners anyway.
+          node-version: 22
+          cache: pnpm
+
+      # node-pty 1.1.0 pulls node-gyp@9, which still does
+      # `from distutils.version import StrictVersion`. Both macOS and Windows
+      # runners now ship Python 3.12+, which removed `distutils` entirely ->
+      # ModuleNotFoundError during native rebuild. Installing setuptools
+      # restores the distutils shim on both platforms.
+      #   macOS:  --break-system-packages (Homebrew Python is PEP-668 managed)
+      #   Windows: plain pip (no PEP 668)
+      - name: Install setuptools (distutils shim for node-gyp)
+        if: runner.os == 'macOS'
+        run: python3 -m pip install --user --break-system-packages setuptools
+      - name: Install setuptools (distutils shim for node-gyp)
+        if: runner.os == 'Windows'
+        run: python -m pip install setuptools
+
+      # node-gyp@9 (used by node-pty) needs the MSVC toolchain to compile native
+      # addons on Windows. This step exports the vcvars environment so that
+      # node-gyp's VisualStudioFinder locates the compiler.
+      - name: Setup MSVC dev cmd (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # node-pty is a native addon - rebuild it for the runner's Electron ABI
+      # before packaging so the .node binary matches. MCODE_ARCH tells the
+      # rebuild script which arch to target (matches the runner's native arch
+      # here, so install-app-deps and fix-node-pty-conpty both resolve the
+      # correct arch-specific binaries).
+      - name: Rebuild native modules
+        shell: bash
+        env:
+          MCODE_ARCH: ${{ matrix.arch }}
+        run: pnpm --filter @mcode/desktop rebuild:native
+
+      # Derive the release version from the git tag (e.g. "v0.1.4" -> "0.1.4")
+      # and write it into the desktop package.json. electron-builder reads the
+      # version from there to name the installers + populate latest.yml, so the
+      # artifacts track the pushed tag instead of the hardcoded 0.1.0. Only CI
+      # does this; local `pnpm package` keeps the dev version in package.json.
+      #
+      # The version is passed via env (VERSION) rather than string-interpolated
+      # into the JS source, so a malformed tag can't inject code. Paths use
+      # path.resolve against cwd because require() in `node -e` resolves
+      # relative paths unreliably across Node versions/platforms (it failed
+      # with MODULE_NOT_FOUND for './apps/desktop/package.json' on windows-2022).
+      - name: Set version from tag
+        shell: bash
+        env:
+          VERSION: "${{ github.ref_name }}"
+        run: |
+          node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const v = process.env.VERSION.replace(/^v/, "");
+            const file = path.resolve("apps/desktop/package.json");
+            const pkg = JSON.parse(fs.readFileSync(file, "utf8"));
+            pkg.version = v;
+            fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
+            console.log("Release version: " + v);
+          '
+
+      - name: Build & package
+        # Use bash on Windows too (the runner ships Git Bash) so the env vars
+        # and any shell syntax in the package script work uniformly.
+        shell: bash
+        run: pnpm --filter @mcode/desktop package
+        env:
+          # The renderer build (shiki's ~100 language grammar chunks +
+          # monaco workers) peaks above Node's default 2GB heap on CI.
+          # Raise it to 4GB so electron-vite build doesn't OOM.
+          NODE_OPTIONS: --max-old-space-size=4096
+
+      # Upload per-arch artifacts for the publish job. Each matrix leg gets its
+      # own artifact name so they don't collide. The publish job merges the two
+      # mac latest-mac.yml files and uploads everything to the GitHub Release.
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.blockmap
+            apps/desktop/release/latest*.yml
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # The default GITHUB_TOKEN is read-only; grant write on contents so
+    # softprops/action-gh-release can create the release + upload assets.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Download every matrix leg's artifact into artifacts/<name>/. Keeping
+      # them separate (merge-multiple: false) lets the merge script find each
+      # arch's latest-mac.yml by directory.
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: false
+
+      # Merge the arm64 + x64 latest-mac.yml into one (x64 entry first) and
+      # stage all dmg/zip/exe/blockmap/latest.yml into release-staging/. The
+      # script is dependency-free (node: built-ins only) since this job doesn't
+      # run pnpm install.
+      - name: Merge latest-mac.yml and stage assets
+        shell: bash
+        run: node .github/scripts/merge-mac-update-yml.cjs artifacts release-staging
+
+      # Upload the artifacts to the GitHub Release that the tag created.
+      # latest*.yml are critical - electron-updater fetches them to discover
+      # new versions, so they MUST be published as release assets.
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          # Match installers + updater metadata. release-staging/ is the merged
+          # output from the previous step.
+          files: |
+            release-staging/*.dmg
+            release-staging/*.zip
+            release-staging/*.exe
+            release-staging/*.blockmap
+            release-staging/latest*.yml
+          # Don't generate a body - the tag message / auto-generated notes
+          # suffice; we only manage the binary assets.
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

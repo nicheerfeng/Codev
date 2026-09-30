@@ -69,26 +69,6 @@ fn keep_search_entry(dent: &ignore::DirEntry) -> bool {
         .unwrap_or(true)
 }
 
-#[tauri::command]
-pub fn fs_search(
-    roots: Vec<String>,
-    query: String,
-    limit: Option<usize>,
-    workspace: Option<WorkspaceEnv>,
-    show_hidden: Option<bool>,
-) -> Result<SearchResult, String> {
-    search_impl(
-        roots,
-        query,
-        limit,
-        workspace,
-        Some(show_hidden.unwrap_or(true)),
-        true,
-        MAX_SCANNED,
-        &AtomicBool::new(false),
-    )
-}
-
 /// 单根搜索请求的取消标志，仅在请求执行期间保留。
 #[derive(Default)]
 pub struct SearchState {
@@ -136,20 +116,6 @@ pub async fn fs_search_query(
     .map_err(|error| error.to_string());
     state.requests.lock().unwrap().remove(&request_id);
     result?
-}
-
-/// 有界扫描并保留最佳候选，明确区分扫描截断和展示截断。
-fn search_impl(
-    roots: Vec<String>,
-    query: String,
-    limit: Option<usize>,
-    workspace: Option<WorkspaceEnv>,
-    show_hidden: Option<bool>,
-    include_generated: bool,
-    scan_limit: usize,
-    cancel: &AtomicBool,
-) -> Result<SearchResult, String> {
-    search_walk(roots, query, limit, workspace, show_hidden, include_generated, scan_limit, cancel, None)
 }
 
 /// 分批推送命中，超过二十万个文件才停止扫描。
@@ -485,12 +451,16 @@ mod tests {
         std::fs::write(root.join("target/debug/app.rs"), "generated").unwrap();
         std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
         std::fs::write(root.join("node_modules/pkg/index.js"), "generated").unwrap();
-        let result = fs_search(
+        let result = search_walk(
             vec![root.to_string_lossy().into_owned()],
             "app".into(),
             Some(20),
             None,
             Some(false),
+            true,
+            MAX_SCANNED,
+            &AtomicBool::new(false),
+            None,
         )
         .expect("search");
         assert!(result
@@ -510,9 +480,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         for name in ["报一.txt", "报二.txt", ".报隐藏.txt"] { std::fs::write(directory.path().join(name), "").unwrap(); }
         let roots = vec![directory.path().to_string_lossy().into_owned()];
-        let result = search_impl(roots.clone(), "报".into(), Some(1), None, Some(true), true, 50_000, &AtomicBool::new(false)).unwrap();
+        let result = search_walk(roots.clone(), "报".into(), Some(1), None, Some(true), true, 50_000, &AtomicBool::new(false), None).unwrap();
         assert_eq!(result.matched, 3); assert!(result.truncated); assert!(!result.scan_incomplete);
-        assert!(search_impl(roots, "报".into(), Some(1), None, Some(true), true, 50_000, &AtomicBool::new(true)).is_err());
+        assert!(search_walk(roots, "报".into(), Some(1), None, Some(true), true, 50_000, &AtomicBool::new(true), None).is_err());
         assert_eq!(rank_direct(vec![hit("src/report/main.rs")], "src main", 10).len(), 1);
     }
 }

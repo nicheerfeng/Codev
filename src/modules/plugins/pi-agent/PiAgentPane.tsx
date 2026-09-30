@@ -54,6 +54,7 @@ import {
   deletePiSession,
   piAgentHomeDir,
 } from "./native";
+import type { PiSubagentRun } from "./native";
 import {
   collectProjects,
   nextDraftKey,
@@ -65,6 +66,47 @@ import {
 } from "./organization";
 import { notifyFinishedProjects } from "./piNotify";
 import { projectActivity, type ProjectActivity } from "./projectActivity";
+
+/** 规范化并去重 Pi 子任务快照，避免轮询结果反复替换同一行。 */
+function normalizeSubagentRuns(runs: PiSubagentRun[]): PiSubagentRun[] {
+  const unique = new Map<string, PiSubagentRun>();
+  for (const run of runs) {
+    const key = `${run.runId}\u0000${subagentPathKey(run.session?.path ?? "")}`;
+    const previous = unique.get(key);
+    if (!previous || run.updatedAt >= previous.updatedAt) unique.set(key, run);
+  }
+  return [...unique.values()].sort((left, right) =>
+    `${left.runId}\u0000${left.session?.path ?? ""}`.localeCompare(
+      `${right.runId}\u0000${right.session?.path ?? ""}`,
+    ),
+  );
+}
+
+/** 统一 Windows 会话路径，保证父线程与子线程使用同一关联键。 */
+function subagentPathKey(value: string): string {
+  return value
+    .replace(/\\/g, "/")
+    .replace(/^\/\/?\?\//, "")
+    .replace(/\/$/, "")
+    .toLowerCase();
+}
+
+/** 判断两次子任务快照是否真正发生变化。 */
+function sameSubagentRuns(
+  left: Record<string, PiSubagentRun[]>,
+  right: Record<string, PiSubagentRun[]>,
+): boolean {
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  if (
+    leftKeys.length !== rightKeys.length ||
+    leftKeys.some((key, index) => key !== rightKeys[index])
+  )
+    return false;
+  return leftKeys.every(
+    (key) => JSON.stringify(left[key]) === JSON.stringify(right[key]),
+  );
+}
 import { adoptOrderIds, prependOrderId } from "./sidebarOrder";
 import { PiSidebar, type SidebarThread } from "./PiSidebar";
 import { PiComposer, EMPTY_DRAFT, type PiDraft } from "./PiComposer";
@@ -108,9 +150,13 @@ function latestAssistantSummary(thread?: PiThread): string | null {
 export function PiAgentPane({
   active,
   onOpenFile,
+  workspaceRoots = [],
+  onAddWorkspaceRoot,
 }: {
   active: boolean;
   onOpenFile?: (path: string) => void;
+  workspaceRoots?: string[];
+  onAddWorkspaceRoot?: (path: string) => void;
 }) {
   const [initialized, setInitialized] = useState(false);
   const client = useRef<PiWorkspaceClient | null>(null);
@@ -253,11 +299,7 @@ export function PiAgentPane({
   selectedProjectRef.current = project;
   /** 统一 Windows 扩展路径格式，避免 mission 使用 \\?\\ 前缀时丢失子任务挂载。 */
   const subagentOwnerKey = (value: string) =>
-    value
-      .replace(/\\/g, "/")
-      .replace(/^\/\/?\?\//, "")
-      .replace(/\/$/, "")
-      .toLowerCase();
+    subagentPathKey(value);
   /** 仅读取用户选择的项目目录，合并到已访问项目缓存。 */
   const refreshSessions = useCallback(async (cwd?: string) => {
     const target = cwd ?? selectedProjectRef.current;
@@ -277,24 +319,35 @@ export function PiAgentPane({
   useEffect(() => {
     if (!initialized || !sessions.length) return;
     let disposed = false;
+    let refreshing = false;
+    let generation = 0;
     const paths = [
       ...new Set(sessions.map((session) => session.path).filter(Boolean)),
     ];
-    const refresh = () =>
-      void Promise.all(
-        paths.map(
-          async (path) =>
-            [subagentOwnerKey(path), await listPiSubagentRuns(path)] as const,
-        ),
-      )
-        .then((entries) => {
-          if (!disposed) setSubagentRuns(Object.fromEntries(entries));
-        })
-        .catch((error) => {
-          if (!disposed) setNotice(`读取 Pi 子代理状态失败：${String(error)}`);
-        });
+    const refresh = async () => {
+      if (disposed || refreshing) return;
+      refreshing = true;
+      const requestGeneration = ++generation;
+      try {
+        const entries = await Promise.all(
+          paths.map(async (path) => {
+            const runs = normalizeSubagentRuns(await listPiSubagentRuns(path));
+            return [subagentOwnerKey(path), runs] as const;
+          }),
+        );
+        if (disposed || requestGeneration !== generation) return;
+        const next = Object.fromEntries(entries);
+        setSubagentRuns((current) =>
+          sameSubagentRuns(current, next) ? current : next,
+        );
+      } catch (error) {
+        if (!disposed) setNotice(`读取 Pi 子代理状态失败：${String(error)}`);
+      } finally {
+        refreshing = false;
+      }
+    };
     refresh();
-    const timer = setInterval(refresh, 2500);
+    const timer = setInterval(() => void refresh(), 2500);
     return () => {
       disposed = true;
       clearInterval(timer);
@@ -1080,6 +1133,8 @@ export function PiAgentPane({
             onExport={(thread) => run(exportThread(thread), thread.key)}
             onClose={setDeleteTarget}
             onCopyPath={(path) => run(writeText(path))}
+            workspaceRoots={workspaceRoots}
+            onAddWorkspaceRoot={onAddWorkspaceRoot}
             projectOrder={projectOrder}
             sessionOrder={sessionOrder}
             onProjectOrder={(order) => run(setPiAgentProjectOrder(order))}
@@ -1394,6 +1449,10 @@ export function PiAgentPane({
                     }
                     onLocalQueueAction={(id, action) => {
                       if (!activeThread) return;
+                      if (action === "steer") {
+                        client.current!.setQueuedBehavior(activeThread, id, "steer");
+                        return;
+                      }
                       const item = client.current!.removeQueued(
                         activeThread,
                         id,

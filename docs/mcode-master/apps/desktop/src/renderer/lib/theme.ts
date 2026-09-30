@@ -1,0 +1,187 @@
+import { useEffect, useState } from "react";
+import { api } from "@renderer/lib/api.js";
+import type { ThemeName, EffectiveTheme, ThemeStyle } from "@contracts/theme";
+
+/**
+ * Toggle the `.dark` class on <html>, which (with `darkMode: 'class'` in the
+ * Tailwind config) is what actually re-themes the UI. Exposed for the FOUC
+ * guard below and for useTheme() to keep the class in sync.
+ *
+ * When the effective theme actually flips, the `theme-transition` flag is
+ * stamped on <html> for ~260ms so styles.css animates the whole chrome
+ * between palettes (backgrounds/borders/text fade instead of hard-cutting);
+ * the flag is removed afterwards so element-level hover transitions return
+ * to their normal timing. No-ops when the theme didn't change (e.g. the FOUC
+ * guard already applied the right class at startup) — that keeps the first
+ * paint transition-free.
+ */
+const THEME_TRANSITION_MS = 260;
+
+/** localStorage key mirroring the last applied theme style. Read
+ *  synchronously by initFoucGuard() before React mounts (SQLite/IPC aren't
+ *  up yet), written by applyThemeStyle() on every change. */
+const THEME_STYLE_CACHE_KEY = "mcode-theme-style";
+
+/** localStorage key mirroring the last applied custom UI font. Same FOUC
+ *  pattern as THEME_STYLE_CACHE_KEY: initFoucGuard() reads it synchronously,
+ *  applyUiFontFamily() writes it on every change. */
+const UI_FONT_CACHE_KEY = "mcode-ui-font";
+
+/** The stylesheet default UI font stack — MUST stay in sync with the
+ *  `var(--app-font, …)` fallback in styles.css's base font rule. When the
+ *  user picks a font we write the picked family PREPENDED to this stack, so
+ *  an uninstalled family degrades to the stock look, never the raw browser
+ *  default. */
+export const UI_FONT_FALLBACK_STACK =
+  '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif';
+
+/** Make a font family name safe to interpolate into a CSS font-family
+ *  string: strip quotes/backslashes, trim, cap length. Shared by the store
+ *  (hydration + persistence) and applyUiFontFamily. Returns "" for values
+ *  that are unsafe or empty. */
+export function sanitizeFontFamily(name: string): string {
+  const cleaned = name.replace(/["\\]/g, "").trim();
+  return cleaned.length > 0 && cleaned.length <= 64 ? cleaned : "";
+}
+
+/**
+ * Apply the custom UI font: write the picked family (composed with the
+ * default system stack as fallback) as the `--app-font` CSS variable on
+ * <html>. Pass "" to remove the override so the stylesheet default
+ * re-asserts. Only consumed by the classic style — sketch overrides the font
+ * with its own handwriting stack at a higher-specificity rule and never
+ * reads the var. Also mirrored into localStorage for the boot FOUC guard.
+ */
+export function applyUiFontFamily(family: string): void {
+  const clean = sanitizeFontFamily(family);
+  const root = document.documentElement;
+  if (!clean) {
+    root.style.removeProperty("--app-font");
+    root.removeAttribute("data-user-font");
+  } else {
+    root.style.setProperty("--app-font", `"${clean}", ${UI_FONT_FALLBACK_STACK}`);
+    // Gates the `.font-sans` override in styles.css: Tailwind's default sans
+    // utility only follows the user font when one is actually set, so the
+    // rule is a strict no-op for users on the default look.
+    root.setAttribute("data-user-font", "1");
+  }
+  try {
+    localStorage.setItem(UI_FONT_CACHE_KEY, clean);
+  } catch {
+    // Cache is best-effort only - a failed write just means the default
+    // stack on the first frame after restart before hydration re-applies.
+  }
+}
+
+export function applyThemeClass(effective: EffectiveTheme): void {
+  const root = document.documentElement;
+  const wasDark = root.classList.contains("dark");
+  const isDark = effective === "dark";
+  if (wasDark === isDark) return;
+  root.classList.add("theme-transition");
+  if (isDark) root.classList.add("dark");
+  else root.classList.remove("dark");
+  window.setTimeout(() => root.classList.remove("theme-transition"), THEME_TRANSITION_MS);
+}
+
+/**
+ * FOUC guard: apply the initial `.dark` class to <html> BEFORE React mounts,
+ * so the first painted frame matches the OS theme preference. Call this once
+ * at the top of main.tsx (synchronously, before createRoot).
+ *
+ * We can't read the persisted SQLite preference here (preload/IPC aren't ready
+ * yet), so we fall back to the OS `prefers-color-scheme` media query - which
+ * matches the default "system" theme. The main process has already set
+ * `nativeTheme.themeSource` from the persisted preference during `whenReady`,
+ * so under Electron this media query reflects the *resolved* theme, not just
+ * the raw OS setting. useTheme() corrects the class the moment it loads the
+ * real preference.
+ *
+ * Lives in an external ESM module (not an inline <script>) so it passes the
+ * production CSP `script-src 'self'`.
+ */
+export function initFoucGuard(): void {
+  try {
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    applyThemeClass(prefersDark ? "dark" : "light");
+  } catch {
+    // matchMedia unavailable - leave default (light); useTheme() will fix up.
+  }
+  // Sketch-style FOUC guard: unlike the color scheme there is no OS media
+  // query to guess from, so we keep a localStorage mirror of the last applied
+  // value (written by applyThemeStyle) and read it synchronously here. SQLite
+  // isn't reachable yet at this point; the first-paint hydration in
+  // sessionStore corrects the class the moment the real preference lands.
+  try {
+    const cached = localStorage.getItem(THEME_STYLE_CACHE_KEY);
+    if (cached === "sketch" || cached === "classic") applyThemeStyle(cached);
+  } catch {
+    // localStorage unavailable (or disabled) - stay classic; hydration fixes.
+  }
+  // Custom UI font: same localStorage-mirror pattern (no OS media query to
+  // guess from). applyUiFontFamily sanitizes, so a stale/corrupt cache value
+  // degrades to the default stack; first-paint hydration reconciles.
+  try {
+    applyUiFontFamily(localStorage.getItem(UI_FONT_CACHE_KEY) ?? "");
+  } catch {
+    // localStorage unavailable - default stack; hydration fixes.
+  }
+}
+
+/**
+ * Mirror the theme-style preference as a `.sketch` class on <html> (sibling
+ * of `.dark`; the two dimensions are independent). styles.css holds ONE
+ * centralized `html.sketch` section — token palette, hand-drawn shape
+ * recipes, the handwriting font stack and the icon wobble filter all live
+ * there. Also refreshed into the localStorage cache the FOUC guard reads.
+ */
+export function applyThemeStyle(style: ThemeStyle): void {
+  document.documentElement.classList.toggle("sketch", style === "sketch");
+  try {
+    localStorage.setItem(THEME_STYLE_CACHE_KEY, style);
+  } catch {
+    // Cache is best-effort only - a failed write just means one classic
+    // first frame after restart before hydration re-applies the class.
+  }
+}
+
+export interface ThemeState {
+  /** The user's persisted preference. */
+  theme: ThemeName;
+  /** What's actually rendering (system resolved). */
+  effective: EffectiveTheme;
+}
+
+/**
+ * Subscribe to the theme: load the current preference on mount, keep the
+ * `.dark` class in sync, and re-apply whenever the effective theme changes
+ * (user picked a new one in settings, or the OS switched in 'system' mode).
+ *
+ * Mount once at the app root (App.tsx). Returns the current state so the
+ * appearance panel can render its radio selection.
+ */
+export function useTheme(): ThemeState {
+  const [state, setState] = useState<ThemeState>({ theme: "system", effective: "dark" });
+
+  useEffect(() => {
+    let cancelled = false;
+    // Initial load: ask main for the persisted preference + effective value.
+    void api.theme.get().then((s) => {
+      if (cancelled) return;
+      setState(s);
+      applyThemeClass(s.effective);
+    });
+    // Live updates: main pushes theme.changed when the user picks a new theme
+    // OR when the OS theme changes while in 'system' mode.
+    const off = api.on.themeChanged((msg) => {
+      setState({ theme: msg.theme, effective: msg.effective });
+      applyThemeClass(msg.effective);
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, []);
+
+  return state;
+}

@@ -42,6 +42,8 @@ export type Snapshot = {
   modelCatalogError?: string;
 };
 type Pending = {
+  method: string;
+  threadId?: string;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -362,6 +364,13 @@ export class CodexClient {
       : undefined;
     if (id && method === "thread/deleted") {
       this.removeSessions([id]);
+      for (const [requestId, pending] of this.pending) {
+        if (pending.method !== "thread/delete" || pending.threadId !== protocolId) continue;
+        clearTimeout(pending.timer);
+        this.pending.delete(requestId);
+        pending.resolve({});
+      }
+      this.update({ pendingRequests: this.pending.size });
       return;
     }
     if (id && ["thread/archived", "thread/unarchived"].includes(method)) {
@@ -502,6 +511,8 @@ export class CodexClient {
         reject(new Error(`${method} 请求超时`));
       }, 60000);
       this.pending.set(id, {
+        method,
+        threadId: typeof params.threadId === "string" ? params.threadId : undefined,
         resolve: (value) => resolve(value as T),
         reject,
         timer,

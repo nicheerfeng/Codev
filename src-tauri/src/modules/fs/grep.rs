@@ -41,19 +41,6 @@ pub struct GrepResponse {
     pub files_scanned: usize,
 }
 
-fn build_globset(patterns: &[String]) -> Result<Option<GlobSet>, String> {
-    if patterns.is_empty() {
-        return Ok(None);
-    }
-    let mut b = GlobSetBuilder::new();
-    for p in patterns {
-        let g = Glob::new(p).map_err(|e| format!("bad glob {p:?}: {e}"))?;
-        b.add(g);
-    }
-    let set = b.build().map_err(|e| format!("globset build: {e}"))?;
-    Ok(Some(set))
-}
-
 fn escape_literal(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 8);
     for c in s.chars() {
@@ -169,46 +156,6 @@ fn search_tree(
         truncated: truncated.load(Ordering::Relaxed),
         files_scanned: scanned.load(Ordering::Relaxed),
     }
-}
-
-#[tauri::command]
-pub fn fs_grep(
-    pattern: String,
-    root: String,
-    glob: Option<Vec<String>>,
-    case_insensitive: Option<bool>,
-    max_results: Option<usize>,
-    workspace: Option<WorkspaceEnv>,
-) -> Result<GrepResponse, String> {
-    if pattern.is_empty() {
-        return Err("empty pattern".into());
-    }
-    let workspace = WorkspaceEnv::from_option(workspace);
-    let root_path = resolve_path(&root, &workspace);
-    if !root_path.is_dir() {
-        return Err(format!("not a directory: {root}"));
-    }
-    let cap = max_results
-        .unwrap_or(DEFAULT_MAX_RESULTS)
-        .clamp(1, HARD_MAX_RESULTS);
-
-    let matcher = RegexMatcherBuilder::new()
-        .case_insensitive(case_insensitive.unwrap_or(false))
-        .line_terminator(Some(b'\n'))
-        .build(&pattern)
-        .map_err(|e| format!("bad regex: {e}"))?;
-
-    let globs = build_globset(glob.as_deref().unwrap_or(&[]))?;
-
-    Ok(search_tree(
-        &root_path,
-        &root,
-        &workspace,
-        &matcher,
-        &globs,
-        cap,
-        &|| false,
-    ))
 }
 
 /// Interactive content search for the command palette. Treats the query as a

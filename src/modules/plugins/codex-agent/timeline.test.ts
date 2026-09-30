@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { activityLabel, elapsedText, isTool, processLabel } from "./timeline";
+import { activityLabel, displayCommand, displayItemDetails, elapsedText, isTool, processLabel } from "./timeline";
 import { reduceNotification, sessionFromThread, type Turn } from "./protocol";
 
 it("keeps process status distinct from the raw thinking summary", () => {
@@ -29,6 +29,20 @@ it("keeps process status distinct from the raw thinking summary", () => {
       999999,
     ),
   ).toBe("");
+});
+
+it("removes only recognized shell launch prefixes from command displays", () => {
+  const wrapped = String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -Command "rg -n 'useState' src"`;
+  expect(displayCommand(wrapped)).toBe(String.raw`rg -n 'useState' src`);
+  expect(
+    activityLabel({ id: "cmd", type: "commandExecution", command: wrapped }),
+  ).toContain("rg -n 'useState' src");
+  expect(displayItemDetails({ id: "cmd", type: "commandExecution", command: wrapped })).toContain(
+    String.raw`rg -n 'useState' src`,
+  );
+  expect(displayCommand("custom-runner --command do-work")).toBe(
+    "custom-runner --command do-work",
+  );
 });
 
 it("retains server turn timing through streaming item updates", () => {

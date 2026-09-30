@@ -471,34 +471,34 @@ export function PiSettings({
                   </p>
                 </div>
                 {prompts.map((prompt) => (
-                    <div key={prompt.path} className="space-y-2">
-                      <div className="flex items-center justify-end gap-2">
-                        <Button
-                          size="xs"
-                          variant="outline"
-                          disabled={promptBusy}
-                          onClick={() => void savePrompt(prompt)}
-                        >
-                          保存
-                        </Button>
-                      </div>
-                      <Textarea
-                        value={prompt.content}
-                        onChange={(event) =>
-                          setPrompts((items) =>
-                            items.map((item) =>
-                              item.path === prompt.path
-                                ? { ...item, content: event.target.value }
-                                : item,
-                            ),
-                          )
-                        }
-                        placeholder="在此输入自定义提示词内容，将追加到 Pi 的默认系统提示词之后..."
-                        className="min-h-60 rounded-lg font-mono text-xs"
+                  <div key={prompt.path} className="space-y-2">
+                    <div className="flex items-center justify-end gap-2">
+                      <Button
+                        size="xs"
+                        variant="outline"
                         disabled={promptBusy}
-                      />
+                        onClick={() => void savePrompt(prompt)}
+                      >
+                        保存
+                      </Button>
                     </div>
-                  ))}
+                    <Textarea
+                      value={prompt.content}
+                      onChange={(event) =>
+                        setPrompts((items) =>
+                          items.map((item) =>
+                            item.path === prompt.path
+                              ? { ...item, content: event.target.value }
+                              : item,
+                          ),
+                        )
+                      }
+                      placeholder="在此输入自定义提示词内容，将追加到 Pi 的默认系统提示词之后..."
+                      className="min-h-60 rounded-lg font-mono text-xs"
+                      disabled={promptBusy}
+                    />
+                  </div>
+                ))}
                 {promptMessage && (
                   <p className="text-xs text-muted-foreground">
                     {promptMessage}

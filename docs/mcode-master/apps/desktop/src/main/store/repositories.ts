@@ -1,0 +1,1470 @@
+/**
+ * Repository functions over the three SQLite tables. Each function does the
+ * camelCase (domain) ↔ snake_case (column) translation so callers stay in
+ * domain types. Synchronous (better-sqlite3 queries are sync); writes commit
+ * straight to the WAL, so the old sql.js-era `persist()` flush is a no-op.
+ *
+ * Replaces the P1 in-memory Maps (memoryStore.ts). The two call sites are
+ * ipc/projects.ts and ipc/claude.ts.
+ */
+import type {
+  Project,
+  Session,
+  MessageRecord,
+  SessionTodoItem,
+  SessionPlanDraft,
+  SessionBookmark,
+} from "@contracts/session";
+import type { Automation, AutomationSchedule } from "@contracts/automation";
+import { RUN_HEADER_PREFIX } from "@contracts/automation";
+import type { ContextSnapshot, SubagentSnapshot, TurnFileEntry, TurnUsageRecord } from "@contracts/runtime";
+import { normPathKey } from "@main/lib/pathNorm.js";
+import { getDb, persist } from "./db.js";
+
+/* better-sqlite3 binds `?` params positionally. Values must be
+ * string | number | bigint | Buffer | null — booleans/undefined aren't
+ * accepted, so we normalize values before binding. Nulls are passed through. */
+type BindValue = string | number | bigint | Buffer | null;
+function v(x: unknown): BindValue {
+  if (x === undefined || x === null) return null;
+  if (typeof x === "boolean") return x ? 1 : 0;
+  return x as BindValue;
+}
+
+function safeJson(x: unknown): unknown {
+  if (typeof x !== "string") return x;
+  try { return JSON.parse(x); } catch { return x; }
+}
+
+/** One-shot write: `getDb().prepare(sql).run(...params)`. better-sqlite3 has
+ *  no `Database#run` (that shape was sql.js's), and nearly every write in
+ *  this file runs once — the shorthand keeps the call sites flat. */
+function run(sql: string, ...params: BindValue[]): void {
+  getDb().prepare(sql).run(...params);
+}
+
+/* ─────────────────────────────── Projects ─────────────────────────────── */
+
+interface ProjectRow {
+  id: string;
+  name: string;
+  path: string;
+  archived: number;
+  group: string | null;
+  sort_order: number;
+  pinned_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+function rowToProject(r: ProjectRow): Project {
+  return {
+    id: r.id,
+    name: r.name,
+    path: r.path,
+    archived: !!r.archived,
+    // Normalize empty string / undefined (pre-migration rows) to null so the
+    // renderer only ever sees null | <non-empty group name>.
+    group: r.group && r.group.length > 0 ? r.group : null,
+    sortOrder: r.sort_order ?? 0,
+    pinnedAt: r.pinned_at ?? null,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+/* Root-path cache for the per-call guard checks. The files/git/lsp IPC
+ * handlers re-derive "is this a known project root" on every renderer call
+ * (file-tree expand, editor read, …), which used to mean a full projects-table
+ * scan each time. The path set only changes via create/delete, but every
+ * mutator drops the cache anyway — free, and future-proof against rows moving
+ * in through new code paths. */
+let rootPathsCache: string[] | null = null;
+
+export const ProjectRepo = {
+  create(p: Project): void {
+    const db = getDb();
+    // Append the new project at the end: MAX(sort_order)+1. COALESCE handles
+    // the empty-table case (MAX returns NULL → -1 → next is 0). Computed here
+    // (not passed in) so callers don't have to reason about ordering.
+    const nextOrder = (
+      db.prepare("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM projects").get() as unknown as {
+        next: number;
+      }
+    ).next;
+    run(
+      "INSERT INTO projects (id, name, path, archived, `group`, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      v(p.id),
+      v(p.name),
+      v(p.path),
+      v(p.archived ? 1 : 0),
+      v(p.group ?? null),
+      v(nextOrder),
+      v(p.createdAt),
+      v(p.updatedAt),
+    );
+    persist();
+    rootPathsCache = null;
+  },
+
+  list(): Project[] {
+    // Pinned projects float to the top (most recent pin first); unpinned rows
+    // keep their drag order. `(pinned_at IS NULL)` yields 0/1 so pinned rows
+    // (0) sort ahead — same trick as the sessions pinned_at ordering.
+    const rows = getDb()
+      .prepare("SELECT * FROM projects ORDER BY (pinned_at IS NULL) ASC, pinned_at DESC, sort_order ASC, created_at ASC")
+      .all() as unknown as ProjectRow[];
+    return rows.map(rowToProject);
+  },
+
+  /** Root paths of all persisted projects, served from an in-memory cache.
+   *  Use in guard checks that only need the path set (known-root match /
+   *  containment) instead of {@link list} — the file tree calls these on
+   *  every expand. Callers needing other fields (archived, group, …) must
+   *  use {@link list}; mutations re-populate the cache lazily. */
+  listPaths(): string[] {
+    if (!rootPathsCache) rootPathsCache = ProjectRepo.list().map((p) => p.path);
+    return rootPathsCache;
+  },
+
+  get(id: string): Project | undefined {
+    const row = getDb().prepare("SELECT * FROM projects WHERE id = ?").get(v(id)) as
+      | unknown
+      | ProjectRow;
+    return row ? rowToProject(row as ProjectRow) : undefined;
+  },
+
+  /** Hard-delete a project. Child sessions + messages cascade-delete via the
+   *  sessions.project_id / messages.session_id ON DELETE CASCADE constraints
+   *  (PRAGMA foreign_keys = ON is set in initDb). */
+  delete(id: string): void {
+    run("DELETE FROM projects WHERE id = ?", v(id));
+    persist();
+    rootPathsCache = null;
+  },
+
+  /** Set the archived (soft-delete) flag. */
+  setArchived(id: string, archived: boolean): void {
+    run("UPDATE projects SET archived = ?, updated_at = ? WHERE id = ?",
+      v(archived ? 1 : 0),
+      v(Date.now()),
+      v(id),
+    );
+    persist();
+    rootPathsCache = null;
+  },
+
+  /** Assign a project to a group. Pass null to remove it from any group.
+   *  `group` is a column name in SQLite so it must be backtick-quoted. */
+  setGroup(id: string, group: string | null): void {
+    run("UPDATE projects SET `group` = ?, updated_at = ? WHERE id = ?",
+      v(group ?? null),
+      v(Date.now()),
+      v(id),
+    );
+    persist();
+    rootPathsCache = null;
+  },
+
+  /** Rename a project (display-only; the path is never touched). */
+  rename(id: string, name: string): void {
+    run("UPDATE projects SET name = ?, updated_at = ? WHERE id = ?",
+      v(name),
+      v(Date.now()),
+      v(id),
+    );
+    persist();
+    rootPathsCache = null;
+  },
+
+  /** Pin/unpin a project: pinned rows write the current timestamp (most
+   *  recent pin sorts first), unpinned rows write NULL. Mirrors
+   *  SessionRepo.setPinned — sort_order is left alone so unpinning returns
+   *  the project to its drag-order position, and `updated_at` is not bumped
+   *  (pinning is metadata, not activity). */
+  setPinned(id: string, pinned: boolean): void {
+    run("UPDATE projects SET pinned_at = ? WHERE id = ?",
+      v(pinned ? Date.now() : null),
+      v(id),
+    );
+    persist();
+    rootPathsCache = null;
+  },
+
+  /** Rewrite sort_order for every id in `orderedIds` (index = position).
+   *  Accepts the full ordered list so the operation is idempotent and
+   *  self-healing — gaps from prior deletes collapse on the next reorder.
+   *  Unknown ids in the input are skipped (the UPDATE matches nothing); ids
+   *  absent from the input keep their old sort_order. Mirrors the
+   *  MessageRepo.replaceAll transaction pattern. */
+  reorder(orderedIds: string[]): void {
+    const db = getDb();
+    const stmt = db.prepare("UPDATE projects SET sort_order = ? WHERE id = ?");
+    db.exec("BEGIN");
+    try {
+      for (let i = 0; i < orderedIds.length; i++) {
+        stmt.run(v(i), v(orderedIds[i]));
+      }
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+    persist();
+    rootPathsCache = null;
+  },
+};
+
+/* ─────────────────────────────── Sessions ─────────────────────────────── */
+
+interface SessionRow {
+  id: string;
+  project_id: string;
+  provider_id: string;
+  claude_session_id: string | null;
+  kind: string;
+  parent_session_id: string | null;
+  title: string;
+  status: string;
+  model: string;
+  effort: string;
+  permission_mode: string;
+  custom_model_id: string | null;
+  archived: number;
+  pinned_at: number | null;
+  context_snapshot: string | null;
+  todos: string | null;
+  subagents: string | null;
+  plan_draft: string | null;
+  turn_files: string | null;
+  usage_history: string | null;
+  bookmarks: string | null;
+  subagent_transcripts: string | null;
+  orch_meta: string | null;
+  env_mode: string;
+  worktree_path: string | null;
+  wt_style: string | null;
+  automation_id: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+function rowToSession(r: SessionRow): Session {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    providerId: r.provider_id ?? "claude-sdk",
+    claudeSessionId: r.claude_session_id,
+    // kind is a TEXT column without a CHECK constraint; any value outside
+    // the known set normalizes to "chat" so legacy/garbage rows can never
+    // leak into the (chat-only) lists via a novel kind string.
+    kind: r.kind === "side"
+      ? "side"
+      : r.kind === "orch-worker"
+        ? "orch-worker"
+        : r.kind === "automation"
+          ? "automation"
+          : "chat",
+    parentSessionId: r.parent_session_id ?? null,
+    automationId: r.automation_id ?? null,
+    title: r.title,
+    status: r.status as Session["status"],
+    model: r.model,
+    effort: r.effort as Session["effort"],
+    permissionMode: r.permission_mode as Session["permissionMode"],
+    customModelId: r.custom_model_id ?? null,
+    archived: !!r.archived,
+    pinnedAt: r.pinned_at ?? null,
+    contextSnapshot: (r.context_snapshot ? safeJson(r.context_snapshot) : null) as ContextSnapshot | null,
+    todos: (r.todos ? safeJson(r.todos) : null) as SessionTodoItem[] | null,
+    subagents: (r.subagents ? safeJson(r.subagents) : null) as SubagentSnapshot[] | null,
+    planDraft: (r.plan_draft ? safeJson(r.plan_draft) : null) as SessionPlanDraft | null,
+    turnFiles: (r.turn_files ? safeJson(r.turn_files) : null) as TurnFileEntry[] | null,
+    usageHistory: (r.usage_history ? safeJson(r.usage_history) : null) as TurnUsageRecord[] | null,
+    bookmarks: (r.bookmarks ? safeJson(r.bookmarks) : null) as SessionBookmark[] | null,
+    subagentTranscripts: (r.subagent_transcripts
+      ? safeJson(r.subagent_transcripts)
+      : null) as Session["subagentTranscripts"],
+    orchMeta: (r.orch_meta ? safeJson(r.orch_meta) : null) as Session["orchMeta"],
+    envMode: r.env_mode === "worktree" ? "worktree" : "local",
+    worktreePath: r.worktree_path ?? null,
+    wtStyle: r.wt_style === "branch" ? "branch" : r.wt_style === "detached" ? "detached" : null,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+export const SessionRepo = {
+  create(s: Session): void {
+    run(
+      `INSERT INTO sessions
+       (id, project_id, provider_id, claude_session_id, kind, parent_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, pinned_at, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, bookmarks, subagent_transcripts, orch_meta, env_mode, worktree_path, wt_style, automation_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      v(s.id),
+      v(s.projectId),
+      v(s.providerId),
+      v(s.claudeSessionId),
+      v(s.kind),
+      v(s.parentSessionId),
+      v(s.title),
+      v(s.status),
+      v(s.model),
+      v(s.effort),
+      v(s.permissionMode),
+      v(s.customModelId),
+      v(s.archived ? 1 : 0),
+      v(s.pinnedAt),
+      v(s.contextSnapshot ? JSON.stringify(s.contextSnapshot) : null),
+      v(s.todos ? JSON.stringify(s.todos) : null),
+      v(s.subagents ? JSON.stringify(s.subagents) : null),
+      v(s.planDraft ? JSON.stringify(s.planDraft) : null),
+      v(s.turnFiles ? JSON.stringify(s.turnFiles) : null),
+      v(s.usageHistory ? JSON.stringify(s.usageHistory) : null),
+      v(s.bookmarks ? JSON.stringify(s.bookmarks) : null),
+      v(s.subagentTranscripts ? JSON.stringify(s.subagentTranscripts) : null),
+      v(s.orchMeta ? JSON.stringify(s.orchMeta) : null),
+      v(s.envMode ?? "local"),
+      v(s.worktreePath ?? null),
+      v(s.wtStyle ?? null),
+      v(s.automationId ?? null),
+      v(s.createdAt),
+      v(s.updatedAt),
+    );
+    persist();
+  },
+
+  /** List sessions for a project, most recently active first.
+   *
+   *  The active list (`opts.archived === false`) EXCLUDES pinned sessions —
+   *  they render in the left bar's global pinned section (see
+   *  {@link SessionRepo.listPinned}) instead of under their project. The
+   *  remaining rows sort by `updated_at DESC` — a session floats to the top
+   *  whenever it is touched (new message, title/status change, snapshot
+   *  save, …) — with ties falling back to `created_at DESC` for a stable
+   *  order. `opts.limit` / `opts.offset` paginate (used by the left-bar tree,
+   *  which loads the first page and appends on "load more"). `opts.archived`
+   *  filters by the soft-delete flag: omit for all (pinned included), `false`
+   *  for the active thread list (pinned excluded), `true` for the archived
+   *  bin (pinned included — a pinned-then-archived row stays visible there).
+   *  `opts.worktree` narrows by worktree binding ("exclude" = local threads
+   *  only, "only" = worktree-bound only) so the tree's paginated list and its
+   *  worktree groups can be fetched independently. */
+  listByProject(
+    projectId: string,
+    opts?: { limit?: number; offset?: number; archived?: boolean; worktree?: "exclude" | "only" },
+  ): Session[] {
+    // Side-chat sessions are managed by the right-panel ask tab keyed by
+    // parent session — never by the left-bar project list (any mode).
+    const where = ["project_id = ?", "kind IN ('chat', 'automation')"];
+    const params: BindValue[] = [v(projectId)];
+    if (opts?.archived !== undefined) {
+      where.push("archived = ?");
+      params.push(opts.archived ? 1 : 0);
+    }
+    if (opts?.worktree === "exclude") {
+      where.push("worktree_path IS NULL");
+    } else if (opts?.worktree === "only") {
+      where.push("worktree_path IS NOT NULL");
+    }
+    // Pinned sessions are EXCLUDED from the active list — they render in the
+    // left bar's global "pinned" section above the project tree instead of
+    // under their project. The archived bin (and the unfiltered "all" mode)
+    // still includes them so a pinned-then-archived row stays visible there.
+    if (opts?.archived === false) {
+      where.push("pinned_at IS NULL");
+    }
+    let sql = `SELECT * FROM sessions WHERE ${where.join(" AND ")} ORDER BY updated_at DESC, created_at DESC`;
+    if (opts?.limit !== undefined) {
+      sql += " LIMIT ?";
+      params.push(v(opts.limit));
+      if (opts?.offset !== undefined) {
+        sql += " OFFSET ?";
+        params.push(v(opts.offset));
+      }
+    }
+    const rows = getDb().prepare(sql).all(...params) as unknown as SessionRow[];
+    return rows.map(rowToSession);
+  },
+
+  /** Count sessions for a project, optionally filtered by archived flag and
+   *  worktree binding. Used to compute `hasMore` for pagination. Matches
+   *  {@link listByProject}'s filters: the active count (`archived === false`)
+   *  excludes pinned sessions so it lines up with what the paginated active
+   *  list returns, and the `worktree` filter must mirror the list's or the
+   *  pagination math counts rows the list will never return. */
+  countByProject(
+    projectId: string,
+    archived?: boolean,
+    worktree?: "exclude" | "only",
+  ): number {
+    const where = ["project_id = ?", "kind IN ('chat', 'automation')"];
+    const params: BindValue[] = [v(projectId)];
+    if (archived !== undefined) {
+      where.push("archived = ?");
+      params.push(archived ? 1 : 0);
+    }
+    if (archived === false) {
+      where.push("pinned_at IS NULL");
+    }
+    if (worktree === "exclude") {
+      where.push("worktree_path IS NULL");
+    } else if (worktree === "only") {
+      where.push("worktree_path IS NOT NULL");
+    }
+    const row = getDb()
+      .prepare(`SELECT COUNT(*) AS n FROM sessions WHERE ${where.join(" AND ")}`)
+      .get(...params) as unknown as { n: number };
+    return row.n;
+  },
+
+  /** All pinned non-archived sessions across every project, most recent pin
+   *  first. Powers the left bar's global pinned section, which hoists pinned
+   *  threads out of their project's list and shows them above the project
+   *  tree (the renderer resolves each row's owning project name locally). */
+  listPinned(): Session[] {
+    const rows = getDb()
+      .prepare("SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NOT NULL AND kind IN ('chat', 'automation') ORDER BY pinned_at DESC")
+      .all() as unknown as SessionRow[];
+    return rows.map(rowToSession);
+  },
+
+  /** Cross-project aggregate of non-archived chat sessions, newest-first —
+   *  the stream sidebar's flat "全部项目" list. Mirrors {@link listByProject}'s
+   *  active-list semantics (pinned EXCLUDED — pinned threads render in the
+   *  stream's pinned block, exactly as the tree hoists them into its global
+   *  pinned section), same updated_at DESC / created_at DESC order.
+   *
+   *  Optional scope filters (the sidebar's scope switch re-scopes pagination,
+   *  so `hasMore`/`total` must count the scoped set, not the aggregate):
+   *  `projectIds` narrows to those projects (SQL IN); `worktreeKey` narrows
+   *  to sessions bound to that checkout — matched in JS via normPathKey
+   *  (stored paths and the renderer's normalized key differ in separator /
+   *  casing surface), which rules out SQL LIMIT/OFFSET: the full match is
+   *  materialized first, then sliced. */
+  listAll(opts?: {
+    limit?: number;
+    offset?: number;
+    projectIds?: string[];
+    worktreeKey?: string;
+  }): Session[] {
+    if (opts?.projectIds && opts.projectIds.length === 0) return [];
+    const where = ["archived = 0", "pinned_at IS NULL", "kind IN ('chat', 'automation')"];
+    const params: BindValue[] = [];
+    if (opts?.projectIds) {
+      where.push(`project_id IN (${opts.projectIds.map(() => "?").join(", ")})`);
+      for (const id of opts.projectIds) params.push(v(id));
+    }
+    const wtKey = opts?.worktreeKey;
+    if (wtKey !== undefined) where.push("worktree_path IS NOT NULL");
+    let sql = `SELECT * FROM sessions WHERE ${where.join(" AND ")} ORDER BY updated_at DESC, created_at DESC`;
+    if (wtKey === undefined && opts?.limit !== undefined) {
+      sql += " LIMIT ?";
+      params.push(v(opts.limit));
+      if (opts?.offset !== undefined) {
+        sql += " OFFSET ?";
+        params.push(v(opts.offset));
+      }
+    }
+    const rows = getDb().prepare(sql).all(...params) as unknown as SessionRow[];
+    const out: Session[] = [];
+    for (const row of rows) {
+      const s = rowToSession(row);
+      if (wtKey !== undefined && (!s.worktreePath || normPathKey(s.worktreePath) !== wtKey)) continue;
+      out.push(s);
+    }
+    if (wtKey !== undefined) {
+      const offset = opts?.offset ?? 0;
+      return opts?.limit !== undefined ? out.slice(offset, offset + opts.limit) : out.slice(offset);
+    }
+    return out;
+  },
+
+  /** Count matching {@link listAll}'s filter — the aggregate `total` for
+   *  stream pagination. Takes the same scope filters so a scoped view's
+   *  "show more" counts its own set. */
+  countAll(opts?: { projectIds?: string[]; worktreeKey?: string }): number {
+    if (opts?.projectIds && opts.projectIds.length === 0) return 0;
+    const where = ["archived = 0", "pinned_at IS NULL", "kind IN ('chat', 'automation')"];
+    const params: BindValue[] = [];
+    if (opts?.projectIds) {
+      where.push(`project_id IN (${opts.projectIds.map(() => "?").join(", ")})`);
+      for (const id of opts.projectIds) params.push(v(id));
+    }
+    const wtKey = opts?.worktreeKey;
+    if (wtKey !== undefined) where.push("worktree_path IS NOT NULL");
+    const rows = getDb()
+      .prepare(`SELECT worktree_path FROM sessions WHERE ${where.join(" AND ")}`)
+      .all(...params) as unknown as Array<{ worktree_path: string | null }>;
+    let n = 0;
+    for (const row of rows) {
+      if (wtKey !== undefined && (!row.worktree_path || normPathKey(row.worktree_path) !== wtKey)) {
+        continue;
+      }
+      n++;
+    }
+    return n;
+  },
+
+  /** Cross-project title-substring search (Ctrl+K unified search). Scans all
+   *  non-archived sessions across every project, newest first. Desktop-scale
+   *  session counts make a full-table LIKE scan cheap; no FTS index needed. */
+  searchByTitle(query: string, opts?: { limit?: number }): Session[] {
+    const q = `%${query.trim()}%`;
+    const limit = opts?.limit ?? 30;
+    const rows = getDb()
+      .prepare(
+        `SELECT * FROM sessions WHERE archived = 0 AND kind IN ('chat', 'automation') AND title LIKE ? ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
+      )
+      .all(v(q), v(limit)) as unknown as SessionRow[];
+    return rows.map(rowToSession);
+  },
+
+  /** Cross-session bookmark search for the Ctrl+K palette: substring match
+   *  over each bookmark's title (user rename) + excerpt (the selected text at
+   *  add time). The bookmarks column is a small JSON array per session, so
+   *  pull the non-null rows (most-recently-active first) and filter in
+   *  memory — SQL LIKE over the raw JSON string would also match keys /
+   *  unrelated fields. */
+  searchBookmarks(
+    query: string,
+    opts?: { limit?: number },
+  ): Array<{ bookmark: SessionBookmark; sessionId: string; sessionTitle: string; projectId: string }> {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const limit = opts?.limit ?? 30;
+    const rows = getDb()
+      .prepare(
+        "SELECT id, project_id, title, bookmarks FROM sessions WHERE archived = 0 AND kind IN ('chat', 'automation') AND bookmarks IS NOT NULL ORDER BY updated_at DESC",
+      )
+      .all() as unknown as Array<{
+      id: string;
+      project_id: string;
+      title: string;
+      bookmarks: string;
+    }>;
+    const out: Array<{
+      bookmark: SessionBookmark;
+      sessionId: string;
+      sessionTitle: string;
+      projectId: string;
+    }> = [];
+    outer: for (const row of rows) {
+      const list = safeJson(row.bookmarks);
+      if (!Array.isArray(list)) continue;
+      for (const raw of list) {
+        if (!raw || typeof raw !== "object") continue;
+        const bm = raw as SessionBookmark;
+        const hay = `${bm.title ?? ""} ${bm.excerpt ?? ""}`.toLowerCase();
+        if (hay.includes(q)) {
+          out.push({ bookmark: bm, sessionId: row.id, sessionTitle: row.title, projectId: row.project_id });
+          if (out.length >= limit) break outer;
+        }
+      }
+    }
+    return out;
+  },
+
+  /** Non-archived, unpinned sessions across ALL projects whose `updated_at`
+   *  is older than `cutoffMs`. Candidate feed for the auto-archiver, which
+   *  applies the per-project thresholds on top; pinned sessions are excluded
+   *  here because they are never auto-archived regardless of staleness. */
+  listStale(cutoffMs: number): Session[] {
+    const rows = getDb()
+      .prepare(
+        "SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NULL AND kind = 'chat' AND updated_at < ?",
+      )
+      .all(v(cutoffMs)) as unknown as SessionRow[];
+    return rows.map(rowToSession);
+  },
+
+  get(id: string): Session | undefined {
+    const row = getDb().prepare("SELECT * FROM sessions WHERE id = ?").get(v(id)) as
+      | unknown
+      | SessionRow;
+    return row ? rowToSession(row as SessionRow) : undefined;
+  },
+
+  /** Newest still-fresh session of a project — the "new session" button
+   *  reuses this row instead of stacking empty ones (see
+   *  `createOrReuseSession` in lib/sessionStart.ts). "Fresh" = still on the
+   *  default title (the first sent message auto-renames the row, so a default
+   *  title means it was never used), idle, unarchived and unpinned (pinned
+   *  rows live in the left bar's global pinned section, not the project
+   *  list, so "move it to the top" wouldn't apply to them). */
+  findFreshByProject(projectId: string): Session | undefined {
+    const row = getDb()
+      .prepare(
+        `SELECT * FROM sessions
+         WHERE project_id = ? AND archived = 0 AND pinned_at IS NULL
+           AND kind = 'chat' AND status = 'idle' AND title = 'New session'
+         ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+      )
+      .get(v(projectId)) as unknown | SessionRow;
+    return row ? rowToSession(row as SessionRow) : undefined;
+  },
+
+  /** Newest still-fresh side chat of a parent — the ask tab's "new chat"
+   *  button reuses this row instead of stacking empty ones (same rule as
+   *  findFreshByProject: the "Quick ask" placeholder is rewritten by the
+   *  first sent question, so a placeholder title means never used). */
+  findFreshSideByParent(parentSessionId: string): Session | undefined {
+    const row = getDb()
+      .prepare(
+        `SELECT * FROM sessions
+         WHERE kind = 'side' AND parent_session_id = ?
+           AND status = 'idle' AND title = 'Quick ask'
+         ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+      )
+      .get(v(parentSessionId)) as unknown | SessionRow;
+    return row ? rowToSession(row as SessionRow) : undefined;
+  },
+
+  /** List a main session's side chats (kind='side', parent = the given id),
+   *  newest first. Powers the right-panel ask tab's list view. Unlike the
+   *  left-bar list this orders by `created_at` — side chats are immutable
+   *  Q&A threads, so creation order is the natural reading order (updated_at
+   *  would shuffle the list whenever an old thread's status flips). */
+  listSideByParent(parentSessionId: string): Session[] {
+    const rows = getDb()
+      .prepare("SELECT * FROM sessions WHERE kind = 'side' AND parent_session_id = ? ORDER BY created_at DESC")
+      .all(v(parentSessionId)) as unknown as SessionRow[];
+    return rows.map(rowToSession);
+  },
+
+  /** Orchestration worker sub-sessions of a coordinator session, newest
+   *  first. Like side chats, invisible to every list/search/reuse query —
+   *  only the orchestrator (DAG panel / reconcile) consumes this. */
+  listOrchWorkersByParent(parentSessionId: string): Session[] {
+    const rows = getDb()
+      .prepare(
+        "SELECT * FROM sessions WHERE kind = 'orch-worker' AND parent_session_id = ? ORDER BY created_at DESC",
+      )
+      .all(v(parentSessionId)) as unknown as SessionRow[];
+    return rows.map(rowToSession);
+  },
+
+  /** All orchestration workers of a run (by orch_meta.runId), across
+   *  coordinators. Used by the boot reconcile to rebuild worker maps. */
+  listOrchWorkersByRun(runId: string): Session[] {
+    const rows = getDb()
+      .prepare("SELECT * FROM sessions WHERE kind = 'orch-worker'")
+      .all() as unknown as SessionRow[];
+    return rows
+      .map(rowToSession)
+      .filter((s) => (s.orchMeta?.runId ?? null) === runId);
+  },
+
+  /** One automation task's run sessions (kind='automation'), newest first.
+   *  Invisible to every list/search query by kind — this paged accessor is
+   *  the automation page's run history. `offset` beyond the total returns
+   *  an empty page. */
+  listByAutomation(
+    automationId: string,
+    opts?: { limit?: number; offset?: number },
+  ): { sessions: Session[]; hasMore: boolean } {
+    const limit = opts?.limit ?? 50;
+    const offset = opts?.offset ?? 0;
+    const rows = getDb()
+      .prepare(
+        "SELECT * FROM sessions WHERE kind = 'automation' AND automation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
+      )
+      .all(v(automationId), v(limit + 1), v(offset)) as unknown as SessionRow[];
+    const hasMore = rows.length > limit;
+    return { sessions: rows.slice(0, limit).map(rowToSession), hasMore };
+  },
+
+  /** Total run count for one task (the history header's "已运行 N 次"). */
+  countByAutomation(automationId: string): number {
+    const row = getDb()
+      .prepare("SELECT COUNT(*) AS n FROM sessions WHERE kind = 'automation' AND automation_id = ?")
+      .get(v(automationId)) as unknown as { n: number };
+    return row?.n ?? 0;
+  },
+
+  /** Run sessions of a task beyond the newest `keep` — the retention
+   *  sweeper's eviction candidates (the caller disposes runtimes + deletes;
+   *  in-flight rows are filtered there where status is fresh). */
+  listExpiredAutomationRuns(automationId: string, keep: number): Session[] {
+    const rows = getDb()
+      .prepare(
+        "SELECT * FROM sessions WHERE kind = 'automation' AND automation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?",
+      )
+      .all(v(automationId), v(keep)) as unknown as SessionRow[];
+    return rows.map(rowToSession);
+  },
+
+  /** Every run session id of a task (deleting a task deletes its runs). */
+  idsByAutomation(automationId: string): string[] {
+    const rows = getDb()
+      .prepare("SELECT id FROM sessions WHERE kind = 'automation' AND automation_id = ?")
+      .all(v(automationId)) as unknown as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  },
+
+  /** Persist claude's own session id so future turns can --resume. */
+  updateClaudeSessionId(id: string, claudeSessionId: string): void {
+    run("UPDATE sessions SET claude_session_id = ?, updated_at = ? WHERE id = ?",
+      v(claudeSessionId),
+      v(Date.now()),
+      v(id),
+    );
+    persist();
+  },
+
+  /** Backfill the materialized worktree path (first-turn materialization).
+   *  Written BEFORE the turn is dispatched so a crash between creation and
+   *  turn-start still leaves the session pointing at its worktree. */
+  updateWorktreePath(id: string, worktreePath: string): void {
+    run("UPDATE sessions SET worktree_path = ?, updated_at = ? WHERE id = ?",
+      v(worktreePath),
+      v(Date.now()),
+      v(id),
+    );
+    persist();
+  },
+
+  /** Degenerate a session back to local (its worktree was removed): null
+   *  the worktreePath AND reset envMode to "local". Resetting the mode is
+   *  the load-bearing half — with envMode left at "worktree", the next turn
+   *  would hit resolveSessionCwd's un-materialized branch and silently
+   *  create a NEW worktree instead of running in the project root the user
+   *  was shown. History is kept. */
+  clearWorktreePath(id: string): void {
+    run(
+      "UPDATE sessions SET worktree_path = NULL, env_mode = 'local' WHERE id = ?",
+      v(id),
+    );
+    persist();
+  },
+
+  /** Session counts per worktree path (GROUP BY over the non-null rows) —
+   *  feeds the worktree manager's orphan detection ("no session references
+   *  this path anymore → safe to clean up"). */
+  worktreeReferenceCounts(): Record<string, number> {
+    const rows = getDb()
+      .prepare(
+        "SELECT worktree_path AS path, COUNT(*) AS n FROM sessions WHERE worktree_path IS NOT NULL GROUP BY worktree_path",
+      )
+      .all() as unknown as Array<{ path: string; n: number }>;
+    const out: Record<string, number> = {};
+    for (const row of rows) out[row.path] = row.n;
+    return out;
+  },
+
+  /** All distinct materialized worktree paths (the session-environment
+   *  roots). Feeds the path guards' "second legal root" — worktree sessions
+   *  may operate inside their isolated checkout even though it sits outside
+   *  every registered project. */
+  listWorktreeRoots(): string[] {
+    const rows = getDb()
+      .prepare("SELECT DISTINCT worktree_path FROM sessions WHERE worktree_path IS NOT NULL")
+      .all() as unknown as Array<{ worktree_path: string }>;
+    const out: string[] = [];
+    for (const row of rows) {
+      if (row.worktree_path) out.push(row.worktree_path);
+    }
+    return out;
+  },
+
+  /** All sessions (any kind/state) whose worktree_path points at the given
+   *  directory. Powers the removal guard ("a running turn blocks worktree
+   *  deletion"). Compared in JS with separator/case normalization — git's
+   *  porcelain may echo the path in a different surface form than the one
+   *  we stored at creation time. */
+  listByWorktreePath(worktreePath: string): Session[] {
+    const target = normPathKey(worktreePath);
+    const rows = getDb()
+      .prepare("SELECT * FROM sessions WHERE worktree_path IS NOT NULL")
+      .all() as unknown as SessionRow[];
+    const out: Session[] = [];
+    for (const row of rows) {
+      const s = rowToSession(row);
+      if (s.worktreePath && normPathKey(s.worktreePath) === target) out.push(s);
+    }
+    return out;
+  },
+
+  updateTitle(id: string, title: string): void {
+    run("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?", v(title), v(Date.now()), v(id));
+    persist();
+  },
+
+  updateStatus(id: string, status: Session["status"]): void {
+    run("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?", v(status), v(Date.now()), v(id));
+    persist();
+  },
+
+  /** Persist the latest context-usage snapshot for a session. */
+  updateSnapshot(id: string, snapshot: unknown): void {
+    run("UPDATE sessions SET context_snapshot = ?, updated_at = ? WHERE id = ?",
+      v(JSON.stringify(snapshot)),
+      v(Date.now()),
+      v(id),
+    );
+    persist();
+  },
+
+  /** Persist the latest todo list (claude's TodoWrite) for a session. */
+  updateTodos(id: string, todos: SessionTodoItem[]): void {
+    run("UPDATE sessions SET todos = ?, updated_at = ? WHERE id = ?",
+      v(JSON.stringify(todos)),
+      v(Date.now()),
+      v(id),
+    );
+    persist();
+  },
+
+  /** Persist the latest subagent roster for a session. */
+  updateSubagents(id: string, agents: SubagentSnapshot[]): void {
+    run("UPDATE sessions SET subagents = ?, updated_at = ? WHERE id = ?",
+      v(JSON.stringify(agents)),
+      v(Date.now()),
+      v(id),
+    );
+    persist();
+  },
+
+  /** Persist the latest plan-mode draft for a session. */
+  updatePlanDraft(id: string, plan: SessionPlanDraft): void {
+    run("UPDATE sessions SET plan_draft = ?, updated_at = ? WHERE id = ?",
+      v(JSON.stringify(plan)),
+      v(Date.now()),
+      v(id),
+    );
+    persist();
+  },
+
+  /** Persist the most recent turn's modified-files snapshot (the "本轮修改"
+   *  card). Pass null to clear it (e.g. after a rewind) so the card doesn't
+   *  reappear on session reopen. */
+  updateTurnFiles(id: string, files: TurnFileEntry[] | null): void {
+    run("UPDATE sessions SET turn_files = ?, updated_at = ? WHERE id = ?",
+      v(files ? JSON.stringify(files) : null),
+      v(Date.now()),
+      v(id),
+    );
+    persist();
+  },
+
+  /** Persist the per-turn token/cost history. Appended at each turn-end so
+   *  the context-stats history popover survives restart. */
+  updateUsageHistory(id: string, history: TurnUsageRecord[]): void {
+    run("UPDATE sessions SET usage_history = ?, updated_at = ? WHERE id = ?",
+      v(JSON.stringify(history)),
+      v(Date.now()),
+      v(id),
+    );
+    persist();
+  },
+
+  /** Replace the session's full bookmark list (renderer sends the complete
+   *  array on every add/remove — single-digit cardinality, no incremental
+   *  protocol needed). Empty array = "has bookmarks column but none left". */
+  updateBookmarks(id: string, bookmarks: SessionBookmark[]): void {
+    run("UPDATE sessions SET bookmarks = ?, updated_at = ? WHERE id = ?",
+      v(JSON.stringify(bookmarks)),
+      v(Date.now()),
+      v(id),
+    );
+    persist();
+  },
+
+  /** Persist the current turn's subagent transcripts (full map replace —
+   *  the adapter emits replace-semantics per-agent arrays, RuntimeManager
+   *  keeps the merged map). Pass null to clear (new turn starting). */
+  updateSubagentTranscripts(id: string, transcripts: Session["subagentTranscripts"]): void {
+    run("UPDATE sessions SET subagent_transcripts = ?, updated_at = ? WHERE id = ?",
+      v(transcripts ? JSON.stringify(transcripts) : null),
+      v(Date.now()),
+      v(id),
+    );
+    persist();
+  },
+
+  /** Light full-table scan for cross-session usage stats: fetches only the
+   *  provider id + custom-model binding + usage history of sessions that have
+   *  one. Rows with an unparseable history blob are skipped (safeJson returns
+   *  the raw string — the Array.isArray guard drops it). */
+  listUsageRows(): Array<{
+    id: string;
+    providerId: string;
+    customModelId: string | null;
+    usageHistory: TurnUsageRecord[];
+  }> {
+    const rows = getDb()
+      .prepare(
+        "SELECT id, provider_id, custom_model_id, usage_history FROM sessions WHERE usage_history IS NOT NULL",
+      )
+      .all() as unknown as Array<{
+      id: string;
+      provider_id: string | null;
+      custom_model_id: string | null;
+      usage_history: string | null;
+    }>;
+    const out: Array<{
+      id: string;
+      providerId: string;
+      customModelId: string | null;
+      usageHistory: TurnUsageRecord[];
+    }> = [];
+    for (const row of rows) {
+      const parsed = safeJson(row.usage_history);
+      if (!Array.isArray(parsed)) continue;
+      out.push({
+        id: row.id,
+        providerId: row.provider_id ?? "claude-sdk",
+        customModelId: row.custom_model_id ?? null,
+        usageHistory: parsed as TurnUsageRecord[],
+      });
+    }
+    return out;
+  },
+
+  /** Persist which custom-model config this session is bound to (null = built-in). */
+  updateCustomModelId(id: string, customModelId: string | null): void {
+    run("UPDATE sessions SET custom_model_id = ?, updated_at = ? WHERE id = ?",
+      v(customModelId),
+      v(Date.now()),
+      v(id),
+    );
+    persist();
+  },
+
+  /** Hard-delete a session. Child messages cascade-delete via
+   *  messages.session_id ON DELETE CASCADE. Deleting a MAIN session keeps its
+   *  side chats alive (their Q&A history has standalone value) — their
+   *  parent_session_id is nulled here so the UI shows「主会话已删除」instead of
+   *  a dangling pointer. */
+  delete(id: string): void {
+    const db = getDb();
+    run("UPDATE sessions SET parent_session_id = NULL, updated_at = ? WHERE parent_session_id = ?",
+      v(Date.now()),
+      v(id),
+    );
+    run("DELETE FROM sessions WHERE id = ?", v(id));
+    persist();
+  },
+
+  /** All session ids of a project (any kind/archived state) — the lookup list
+   *  for disposing every in-memory session runtime BEFORE a project
+   *  hard-delete's SQL cascade removes the rows. */
+  idsByProject(projectId: string): string[] {
+    const rows = getDb()
+      .prepare("SELECT id FROM sessions WHERE project_id = ?")
+      .all(v(projectId)) as unknown as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  },
+
+  /** Set the archived (soft-delete) flag. */
+  setArchived(id: string, archived: boolean): void {
+    run("UPDATE sessions SET archived = ?, updated_at = ? WHERE id = ?",
+      v(archived ? 1 : 0),
+      v(Date.now()),
+      v(id),
+    );
+    persist();
+  },
+
+  /** Pin/unpin a session within its project: pinned rows write the current
+   *  timestamp (most recent pin sorts first), unpinned rows write NULL.
+   *  Does NOT bump `updated_at` — pinning is metadata, not activity, so it
+   *  doesn't disturb the activity ordering of the unpinned group. */
+  setPinned(id: string, pinned: boolean): void {
+    run("UPDATE sessions SET pinned_at = ? WHERE id = ?",
+      v(pinned ? Date.now() : null),
+      v(id),
+    );
+    persist();
+  },
+
+  /** Update session-scoped settings (model, effort, permissionMode,
+   *  customModelId, providerId, project re-aim). */
+  updateSettings(
+    id: string,
+    patch: { model?: string; effort?: string; permissionMode?: string; customModelId?: string | null; providerId?: string; envMode?: string; wtStyle?: string | null; worktreePath?: string | null; projectId?: string },
+  ): void {
+    const sets: string[] = [];
+    const vals: BindValue[] = [];
+    if (patch.model !== undefined) { sets.push("model = ?"); vals.push(v(patch.model)); }
+    if (patch.effort !== undefined) { sets.push("effort = ?"); vals.push(v(patch.effort)); }
+    if (patch.permissionMode !== undefined) { sets.push("permission_mode = ?"); vals.push(v(patch.permissionMode)); }
+    if (patch.customModelId !== undefined) { sets.push("custom_model_id = ?"); vals.push(v(patch.customModelId)); }
+    if (patch.providerId !== undefined) { sets.push("provider_id = ?"); vals.push(v(patch.providerId)); }
+    // Directory re-aim (new-session panel's switcher). The FRESH-ONLY guard
+    // lives in the IPC handler; this is just the write.
+    if (patch.projectId !== undefined) { sets.push("project_id = ?"); vals.push(v(patch.projectId)); }
+    // Working-environment intent (fresh-row re-aim at "new session"). Only
+    // meaningful while the row is still un-materialized; later writes are
+    // ignored by the callers.
+    if (patch.envMode !== undefined) { sets.push("env_mode = ?"); vals.push(v(patch.envMode)); }
+    // Worktree-form intent, same un-materialized-only contract as envMode.
+    // null clears a stale intent (row flipped back to local).
+    if (patch.wtStyle !== undefined) { sets.push("wt_style = ?"); vals.push(v(patch.wtStyle)); }
+    // null clears a leftover bind (fresh row re-aimed back at local).
+    if (patch.worktreePath !== undefined) { sets.push("worktree_path = ?"); vals.push(v(patch.worktreePath)); }
+    if (sets.length === 0) return;
+    sets.push("updated_at = ?");
+    vals.push(v(Date.now()), v(id));
+    run(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`, ...vals);
+    persist();
+  },
+};
+
+/* ─────────────────────────────── Messages ─────────────────────────────── */
+
+interface MessageRow {
+  id: string;
+  session_id: string;
+  role: string;
+  content: string; // JSON string
+  created_at: number;
+}
+
+function rowToMessage(r: MessageRow): MessageRecord {
+  return {
+    id: r.id,
+    sessionId: r.session_id,
+    role: r.role as MessageRecord["role"],
+    content: JSON.parse(r.content),
+    createdAt: r.created_at,
+  };
+}
+
+export const MessageRepo = {
+  /**
+   * Cheap existence probe: does the session hold ANY persisted message?
+   * Backs the updateSettings freshness guard (the directory re-aim is only
+   * for threads that haven't started yet) without pulling message bodies.
+   */
+  hasAny(sessionId: string): boolean {
+    const row = getDb().prepare("SELECT 1 FROM messages WHERE session_id = ? LIMIT 1").get(v(sessionId));
+    return row !== undefined;
+  },
+
+  /**
+   * Replace all messages for a session with the given snapshot. The renderer
+   * sends the full ChatMessage[] at turn boundaries (turn.done / error); we
+   * wipe and re-insert in one transaction so the table always reflects the
+   * last-complete view. Simple and avoids per-delta write churn.
+   */
+  replaceAll(sessionId: string, messages: MessageRecord[]): void {
+    const db = getDb();
+    db.exec("BEGIN");
+    try {
+      run("DELETE FROM messages WHERE session_id = ?", v(sessionId));
+      const stmt = db.prepare(
+        "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+      );
+      for (const m of messages) {
+        stmt.run(v(m.id), v(m.sessionId), v(m.role), v(JSON.stringify(m.content)), v(m.createdAt));
+      }
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+    persist();
+  },
+
+  /**
+   * List messages for a session.
+   *
+   * - No opts: legacy full-list behavior (every row, ascending). Used by code
+   *   paths that still want the complete history (e.g. initial schema loads).
+   * - With opts: cursor-paginated. The most recent `limit` rows are returned
+   *   ascending; pass `beforeCreatedAt` + `beforeId` (the oldest already-loaded
+   *   row's timestamp + id) to fetch the page above it. The `(created_at, id)`
+   *   tiebreaker guards against ms-collisions when many messages share a
+   *   timestamp. `hasMore` is true when more older rows remain.
+   */
+  listBySession(
+    sessionId: string,
+    opts?: { limit?: number; beforeCreatedAt?: number; beforeId?: string },
+  ): { messages: MessageRecord[]; hasMore: boolean } {
+    const limit = opts?.limit;
+    const before = opts?.beforeCreatedAt;
+    const beforeId = opts?.beforeId;
+    const db = getDb();
+
+    // Unpaginated path — keep the historical shape for callers that haven't
+    // opted in (they get all rows and ignore `hasMore`).
+    if (limit == null) {
+      const rows = db
+        .prepare("SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC")
+        .all(v(sessionId)) as unknown as MessageRow[];
+      return { messages: rows.map(rowToMessage), hasMore: false };
+    }
+
+    // Paginated path: fetch `limit + 1` rows descending from the cursor, so
+    // the extra row (if any) signals `hasMore`. The extra is the OLDEST of
+    // the window — drop it and return the newest `limit` ascending. (This
+    // used to slice off rows[0] — the newest — which silently dropped one
+    // row at every page boundary and, on the first page, the newest row of
+    // the entire session; caught by the sqlite-migration smoke's paginated
+    // walk, 2026-09-14. The driver swap didn't introduce it: the original
+    // sql.js implementation had the same slice.)
+    const fetchN = limit + 1;
+    let rows: MessageRow[];
+    if (before == null || beforeId == null) {
+      rows = db
+        .prepare("SELECT * FROM messages WHERE session_id = ? ORDER BY created_at DESC, id DESC LIMIT ?")
+        .all(v(sessionId), v(fetchN)) as unknown as MessageRow[];
+    } else {
+      // Tiebreaker: (created_at, id) so rows with identical createdAt still
+      // page cleanly without skipping or duplicating.
+      rows = db
+        .prepare(
+          `SELECT * FROM messages WHERE session_id = ?
+           AND (created_at < ? OR (created_at = ? AND id < ?))
+           ORDER BY created_at DESC, id DESC LIMIT ?`,
+        )
+        .all(v(sessionId), v(before), v(before), v(beforeId), v(fetchN)) as unknown as MessageRow[];
+    }
+    const hasMore = rows.length === fetchN;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    page.reverse();
+    return { messages: page.map(rowToMessage), hasMore };
+  },
+
+  /** Incremental upsert: insert-or-update the given messages by primary key.
+   *  Unlike {@link replaceAll}, this leaves all other rows for the session
+   *  untouched, so callers that only changed a few messages don't pay the
+   *  O(N) DELETE+re-INSERT cost of a full snapshot write.
+   *
+   *  Use this when the change set is additive or a localized mutation (e.g.
+   *  a turn appended a few rows, or a turn-files card was attached to the
+   *  trailing assistant message). Use {@link replaceAll} when rows must be
+   *  truncated (edit-and-resend, rewind mutations that remove history). */
+  upsertMany(messages: MessageRecord[]): void {
+    if (messages.length === 0) return;
+    const db = getDb();
+    db.exec("BEGIN");
+    try {
+      const stmt = db.prepare(
+        `INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           session_id = excluded.session_id,
+           role = excluded.role,
+           content = excluded.content,
+           created_at = excluded.created_at`,
+      );
+      for (const m of messages) {
+        stmt.run(v(m.id), v(m.sessionId), v(m.role), v(JSON.stringify(m.content)), v(m.createdAt));
+      }
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+    persist();
+  },
+
+  /** Delete every message at or after a cursor (createdAt, id) and insert the
+   *  given replacement rows in one transaction. This is the paginated-history-
+   *  safe form of "edit and resend": it truncates the suffix the user is
+   *  branching from (including rows that may not be loaded in renderer memory
+   *  because they were never paginated in) and writes only the new messages,
+   *  so unloaded older history survives.
+   *
+   *  The (createdAt, id) tiebreaker matches the pagination cursor semantics in
+   *  {@link listBySession}: "at or after" means `created_at > cursor.createdAt`
+   *  OR (`created_at = cursor.createdAt` AND `id >= cursor.id`). */
+  truncateFromAndInsert(
+    sessionId: string,
+    cursor: { createdAt: number; id: string },
+    messages: MessageRecord[],
+  ): void {
+    const db = getDb();
+    db.exec("BEGIN");
+    try {
+      run(
+        `DELETE FROM messages WHERE session_id = ?
+         AND (created_at > ? OR (created_at = ? AND id >= ?))`,
+        v(sessionId),
+        v(cursor.createdAt),
+        v(cursor.createdAt),
+        v(cursor.id),
+      );
+      if (messages.length > 0) {
+        const stmt = db.prepare(
+          `INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             session_id = excluded.session_id,
+             role = excluded.role,
+             content = excluded.content,
+             created_at = excluded.created_at`,
+        );
+        for (const m of messages) {
+          stmt.run(v(m.id), v(m.sessionId), v(m.role), v(JSON.stringify(m.content)), v(m.createdAt));
+        }
+      }
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+    persist();
+  },
+  /**
+   * Automation turn retention (v2「任务即会话」): a task session accumulates
+   * one TURN per scheduled fire; when the turn count exceeds `keepTurns`,
+   * delete everything BEFORE the first kept turn's user message. A "turn" is
+   * anchored by its user-role message (each fire sends exactly one), so the
+   * cutoff is that anchor's created_at — all earlier rows (user + assistant +
+   * tool traffic) go in one statement. No-op while within budget.
+   */
+  trimTurns(sessionId: string, keepTurns: number): number {
+    if (keepTurns < 1) return 0;
+    const anchors = getDb()
+      .prepare(
+        "SELECT created_at FROM messages WHERE session_id = ? AND role = 'user' ORDER BY created_at ASC, rowid ASC",
+      )
+      .all(v(sessionId)) as unknown as Array<{ created_at: number }>;
+    if (anchors.length <= keepTurns) return 0;
+    const cutoff = anchors[anchors.length - keepTurns].created_at;
+    const info = getDb()
+      .prepare("DELETE FROM messages WHERE session_id = ? AND created_at < ?")
+      .run(v(sessionId), v(cutoff));
+    persist();
+    return info.changes;
+  },
+
+  /**
+   * created_at of every user message carrying the scheduler's dated run
+   * header (RUN_HEADER_PREFIX) — one per automated fire. Backfills a task's
+   * run ledger for rows created before the ledger existed; the filter is a
+   * plain substring match on the persisted JSON (text blocks keep Chinese
+   * literals unescaped, so no JSON-aware parse is needed).
+   */
+  listRunAnchors(sessionId: string): number[] {
+    const rows = getDb()
+      .prepare(
+        "SELECT content, created_at FROM messages WHERE session_id = ? AND role = 'user' ORDER BY created_at ASC, rowid ASC",
+      )
+      .all(v(sessionId)) as unknown as Array<{ content: string; created_at: number }>;
+    return rows
+      .filter((r) => typeof r.content === "string" && r.content.includes(RUN_HEADER_PREFIX))
+      .map((r) => r.created_at);
+  },
+};
+
+/* ─────────────────────────────── Settings ──────────────────────────────── */
+/* Generic key-value store for app preferences (e.g. the configured claude CLI
+ * path). Keeps us from adding a table per setting. */
+
+export const SettingRepo = {
+  get(key: string): string | null {
+    const row = getDb().prepare("SELECT value FROM settings WHERE key = ?").get(v(key)) as
+      | { value: BindValue }
+      | undefined;
+    return row ? String(row.value) : null;
+  },
+
+  /** Read multiple keys in one pass. The driver is synchronous so this is a
+   *  single tick — cheaper for the renderer than N parallel `setting.get`
+   *  round-trips (one IPC instead of N). Missing keys map to `null`. */
+  getMany(keys: string[]): Record<string, string | null> {
+    const db = getDb();
+    const out: Record<string, string | null> = {};
+    const stmt = db.prepare("SELECT value FROM settings WHERE key = ?");
+    for (const k of keys) {
+      const row = stmt.get(v(k)) as unknown as { value: BindValue } | undefined;
+      out[k] = row ? String(row.value) : null;
+    }
+    return out;
+  },
+
+  /** Upsert a setting value. */
+  set(key: string, value: string): void {
+    run(
+      "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      v(key),
+      v(value),
+    );
+    persist();
+  },
+};
+
+/* ─────────────────────────────── Automations ────────────────────────────── */
+/* Scheduled tasks (prompt + execution config + trigger rule) and their run
+ * history. Run sessions live in the sessions table (kind='automation' +
+ * automation_id) — see SessionRepo.listByAutomation — so the page's history
+ * rows are first-class sessions the user can open in the normal chat UI. */
+
+interface AutomationRow {
+  id: string;
+  project_id: string;
+  title: string;
+  task_session_id: string | null;
+  parent_session_id: string | null;
+  prompt: string;
+  skill_names: string | null;
+  file_paths: string | null;
+  provider_id: string;
+  model: string;
+  custom_model_id: string | null;
+  effort: string;
+  permission_mode: string;
+  schedule: string;
+  enabled: number;
+  keep_runs: number;
+  last_run_at: number | null;
+  next_run_at: number | null;
+  last_status: string | null;
+  last_session_id: string | null;
+  run_log: string | null;
+  deleted_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+function rowToAutomation(r: AutomationRow): Automation {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    title: r.title,
+    taskSessionId: r.task_session_id ?? "",
+    parentSessionId: r.parent_session_id ?? null,
+    prompt: r.prompt,
+    skillNames: (r.skill_names ? safeJson(r.skill_names) : null) as string[],
+    filePaths: (r.file_paths ? safeJson(r.file_paths) : null) as string[],
+    providerId: r.provider_id ?? "claude-sdk",
+    model: r.model ?? "default",
+    customModelId: r.custom_model_id ?? null,
+    effort: r.effort ?? "default",
+    permissionMode: r.permission_mode ?? "acceptEdits",
+    schedule: (r.schedule ? safeJson(r.schedule) : null) as AutomationSchedule,
+    enabled: !!r.enabled,
+    keepRuns: r.keep_runs ?? 20,
+    lastRunAt: r.last_run_at ?? null,
+    nextRunAt: r.next_run_at ?? null,
+    lastStatus: (r.last_status ?? null) as Automation["lastStatus"],
+    runLog: (r.run_log ? safeJson(r.run_log) : null) as Automation["runLog"],
+    lastSessionId: r.last_session_id ?? null,
+    deletedAt: r.deleted_at ?? null,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+export const AutomationRepo = {
+  get(id: string): Automation | null {
+    const row = getDb().prepare("SELECT * FROM automations WHERE id = ?").get(v(id)) as
+      | AutomationRow
+      | undefined;
+    return row ? rowToAutomation(row) : null;
+  },
+
+  /** All tasks, newest-created first. The list is small (dozens), so the
+   *  page re-reads it whole on every automation:event instead of diffing. */
+  list(): Automation[] {
+    const rows = getDb()
+      .prepare("SELECT * FROM automations ORDER BY created_at DESC, rowid DESC")
+      .all() as unknown as AutomationRow[];
+    return rows.map(rowToAutomation);
+  },
+
+  create(a: Automation): void {
+    run(
+      `INSERT INTO automations
+       (id, project_id, title, task_session_id, parent_session_id, prompt, skill_names, file_paths, provider_id, model, custom_model_id, effort, permission_mode, schedule, enabled, keep_runs, last_run_at, next_run_at, last_status, run_log, last_session_id, deleted_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      v(a.id),
+      v(a.projectId),
+      v(a.title),
+      v(a.taskSessionId),
+      v(a.parentSessionId),
+      v(a.prompt),
+      v(JSON.stringify(a.skillNames ?? [])),
+      v(JSON.stringify(a.filePaths ?? [])),
+      v(a.providerId),
+      v(a.model),
+      v(a.customModelId),
+      v(a.effort),
+      v(a.permissionMode),
+      v(JSON.stringify(a.schedule)),
+      v(a.enabled ? 1 : 0),
+      v(a.keepRuns),
+      v(a.lastRunAt),
+      v(a.nextRunAt),
+      v(a.lastStatus),
+      v(JSON.stringify(a.runLog ?? [])),
+      v(a.lastSessionId),
+      v(a.deletedAt ?? null),
+      v(a.createdAt),
+      v(a.updatedAt),
+    );
+    persist();
+  },
+
+  /** In-place patch. Only the provided keys are written (undefined = keep);
+   *  `updated_at` always bumps. Returns the fresh row (null = deleted). */
+  update(id: string, patch: Partial<Omit<Automation, "id">>): Automation | null {
+    const cols: string[] = ["updated_at"];
+    const params: BindValue[] = [v(Date.now())];
+    const set = (col: string, val: unknown, json = false): void => {
+      cols.push(col);
+      params.push(v(json ? JSON.stringify(val) : val));
+    };
+    if (patch.projectId !== undefined) set("project_id", patch.projectId);
+    if (patch.title !== undefined) set("title", patch.title);
+    if (patch.prompt !== undefined) set("prompt", patch.prompt);
+    if (patch.skillNames !== undefined) set("skill_names", patch.skillNames, true);
+    if (patch.filePaths !== undefined) set("file_paths", patch.filePaths, true);
+    if (patch.providerId !== undefined) set("provider_id", patch.providerId);
+    if (patch.model !== undefined) set("model", patch.model);
+    if (patch.customModelId !== undefined) set("custom_model_id", patch.customModelId);
+    if (patch.effort !== undefined) set("effort", patch.effort);
+    if (patch.permissionMode !== undefined) set("permission_mode", patch.permissionMode);
+    if (patch.schedule !== undefined) set("schedule", patch.schedule, true);
+    if (patch.enabled !== undefined) set("enabled", patch.enabled ? 1 : 0);
+    if (patch.keepRuns !== undefined) set("keep_runs", patch.keepRuns);
+    if (patch.lastRunAt !== undefined) set("last_run_at", patch.lastRunAt);
+    if (patch.nextRunAt !== undefined) set("next_run_at", patch.nextRunAt);
+    if (patch.lastStatus !== undefined) set("last_status", patch.lastStatus);
+    // runLog is scheduler-owned: the ipc save path never passes it, so this
+    // whitelist branch only fires from the scheduler's ledger updates.
+    if (patch.runLog !== undefined) set("run_log", patch.runLog, true);
+    if (patch.lastSessionId !== undefined) set("last_session_id", patch.lastSessionId);
+    if (patch.deletedAt !== undefined) set("deleted_at", patch.deletedAt);
+    params.push(v(id));
+    run(`UPDATE automations SET ${cols.map((c) => `${c} = ?`).join(", ")} WHERE id = ?`, ...params);
+    persist();
+    return AutomationRepo.get(id);
+  },
+
+  softDelete(id: string): Automation | null {
+    return this.update(id, {
+      deletedAt: Date.now(),
+      enabled: false,
+      nextRunAt: null,
+    });
+  },
+
+  restore(id: string, nextRunAt: number | null): Automation | null {
+    return this.update(id, {
+      deletedAt: null,
+      enabled: true,
+      nextRunAt,
+    });
+  },
+
+  /** Hard-delete the task row. Its RUN SESSIONS are NOT deleted here — the
+   *  caller (ipc/automation.ts) disposes their runtimes first and deletes
+   *  them via SessionRepo so messages cascade and in-memory state releases. */
+  delete(id: string): void {
+    run("DELETE FROM automations WHERE id = ?", v(id));
+    persist();
+  },
+
+  /** Enabled tasks whose precomputed next_run_at has passed — the
+   *  scheduler's tick query, driven by idx_automations_next_run. */
+  listDue(now: number): Automation[] {
+    const rows = getDb()
+      .prepare(
+        "SELECT * FROM automations WHERE enabled = 1 AND deleted_at IS NULL AND next_run_at IS NOT NULL AND next_run_at <= ? ORDER BY next_run_at ASC",
+      )
+      .all(v(now)) as unknown as AutomationRow[];
+    return rows.map(rowToAutomation);
+  },
+};

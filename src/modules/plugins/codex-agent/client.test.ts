@@ -250,11 +250,10 @@ describe("Codex native client", () => {
     expect(client.getSnapshot().sessions.two.archived).toBe(true);
     transport.hold = "thread/delete";
     const pending = client.deleteThread("one");
-    const request = transport.sent.find(m => m.method === "thread/delete")!;
     event({ method: "thread/deleted", params: { threadId: "one" } });
     event({ method: "thread/deleted", params: { threadId: "two" } });
-    event({ id: request.id, result: {} });
     await pending;
+    expect(client.getSnapshot().pendingRequests).toBe(0);
     expect(client.getSnapshot().order).not.toContain("one");
     expect(client.getSnapshot().sessions.two).toBeUndefined();
   });

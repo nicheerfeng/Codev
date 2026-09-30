@@ -1,0 +1,146 @@
+# electron-builder packaging config.
+# Run via `pnpm package` (electron-vite build && electron-builder).
+# Output goes to `apps/desktop/release/` (gitignored).
+
+appId: com.huangbh.mcode
+productName: Mcode
+copyright: MIT
+# Version is read from apps/desktop/package.json. In CI, the release workflow
+# overwrites that field with the pushed git tag (e.g. v0.1.4 -> 0.1.4) before
+# packaging, so artifact names track the tag. Local `pnpm package` keeps the
+# dev version (0.1.0).
+
+directories:
+  output: release
+  buildResources: build
+
+# Disable @electron/rebuild: with pnpm it stats cross-platform optional
+# dependencies at node_modules/.pnpm/node_modules/<pkg> and dies with ENOENT
+# when they aren't installed (claude-agent-sdk-darwin-arm64 on Windows — the
+# SDK lists every platform package as an optionalDependency). Nothing in the
+# dependency tree needs rebuilding anyway: node-pty ships N-API prebuilds for
+# all platforms (dev already loads them straight from prebuilds/ inside
+# Electron) and sherpa-onnx is prebuilt.
+npmRebuild: false
+
+# electron-vite emits to out/{main,preload,renderer}. We ship those plus the
+# package.json (electron-builder needs it to resolve the main entry + version).
+# node_modules are pruned by electron-builder automatically; the globs below
+# strip docs that bloat the asar.
+files:
+  - out/**/*
+  - package.json
+  - "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,readme,readme.txt}"
+  - "!**/node_modules/**/.bin"
+  - "!**/node_modules/**/test"
+  - "!**/node_modules/**/tests"
+  - "!**/node_modules/**/__tests__"
+  # Exclude turbo cache + any stray build logs - they can resolve outside the
+  # app dir via workspace symlinks and break the asar packager.
+  - "!**/.turbo/**"
+  - "!**/*.tsbuildinfo"
+  # The contracts workspace package is aliased to its src/ at build time and
+  # BUNDLED into the main chunk by electron-vite (see electron.vite.config.ts:
+  # "contracts is a workspace source package - bundle it into main"). So it's
+  # not needed in node_modules at runtime. Excluding it also avoids asar errors:
+  # the workspace symlink resolves outside the app dir, which the packager
+  # rejects ("path must be under appDir").
+  - "!**/node_modules/@mcode/**"
+  # The claude JS SDK (in dependencies, needed in-process) lists its platform
+  # binary packages (@anthropic-ai/claude-agent-sdk-<platform>-<arch>, 209MB
+  # of claude.exe on win32) as optionalDependencies — electron-builder's
+  # dependency collector would ship the matching-platform one even though the
+  # runtime binary is download-on-demand now (userData/runtimes, see
+  # main/runtimes/runtimeInstaller.ts). Exclude every platform variant; the
+  # dash in the pattern keeps the JS package (claude-agent-sdk) itself.
+  - "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**"
+
+# node-pty ships a native .node addon; sql.js loads a wasm/asm.js blob at
+# runtime. Unpack them from the asar so they can be require()'d from disk.
+#
+# The agent runtime binaries (claude / codex) are NO LONGER bundled: their
+# platform packages moved to devDependencies and are downloaded on demand
+# into userData/runtimes (see main/runtimes/runtimeInstaller.ts) — that keeps
+# ~600MB per platform out of the installer. The resolvers in
+# providers/claude-sdk/sdkBinaryPath.ts and providers/codex-sdk/
+# codexBinaryResolve.ts look there first.
+#
+# node-pty's conpty.node also needs sibling .exe files (conpty/OpenConsole.exe,
+# winpty-agent.exe) discoverable on disk - those are .exe so the {node,dll}
+# glob misses them. Unpack node-pty's whole build/Release + prebuilds so every
+# native helper ships as a real file.
+asarUnpack:
+  - "**/*.{node,dll}"
+  - "**/node_modules/better-sqlite3/**"
+  - "**/node_modules/node-pty/build/Release/**"
+  - "**/node_modules/node-pty/prebuilds/**"
+
+# Pin the main entry explicitly (matches package.json "main").
+extraMetadata:
+  main: out/main/index.js
+
+# ── macOS ──
+# dmg = distributable installer; zip = autoUpdater download payload.
+#
+# No paid Apple Developer ID cert yet, so no real signing / notarization.
+# electron-builder skips macOS signing entirely when it can't find a cert —
+# and on macOS 15+ a fully-unsigned app is blocked outright. `mac.sign` points
+# at build/adhoc-sign.cjs, which ad-hoc signs the bundle ("-" identity). The
+# remaining first-launch dialog for dmg downloads is then bypassable via
+# `xattr -dr com.apple.quarantine` or System Settings > Open Anyway (see the
+# script header). Real Developer ID signing + notarization (P6) would remove
+# the dialog entirely.
+#
+# No `arch` is specified: electron-builder builds process.arch (the runner's
+# native arch). CI runs separate jobs on macos-latest (arm64) and
+# macos-15-intel (x64) so each architecture's native bits (claude-agent-sdk
+# platform subpackage, node-pty .node) are installed + rebuilt on a matching
+# host.
+# Building both archs from one runner produced x64 DMGs containing arm64
+# claude/node-pty binaries -> Rosetta prompt on Intel Macs.
+# Single-arch builds also keep filenames distinct: arm64 artifacts get an
+# `-arm64` suffix (Mcode-x.y.z-arm64.dmg), x64 artifacts don't.
+mac:
+  target:
+    - target: dmg
+    - target: zip
+  category: public.app-category.developer-tools
+  # Custom ad-hoc signer (see build/adhoc-sign.cjs). Relative path is
+  # resolved from the electron-builder cwd (apps/desktop).
+  sign: ./build/adhoc-sign.cjs
+  hardenedRuntime: false
+  gatekeeperAssess: false
+
+# ── Windows ──
+# NSIS installer with a directory-pick step (non-one-click).
+#
+# Explicit artifactName (no spaces): without it electron-builder defaults to
+# "${productName} Setup ${version}.${ext}" (e.g. "Mcode Setup 0.1.19.exe"). It
+# then derives a GitHub-"safe" name by replacing spaces with "-" -> the url
+# written into latest.yml becomes "Mcode-Setup-0.1.19.exe". But the actual exe
+# written to disk keeps the spaces, and the GitHub Release upload step ends up
+# publishing it as "Mcode.Setup.0.1.19.exe" (spaces -> "."). The latest.yml url
+# and the real asset name therefore DIVERGE, so electron-updater's download
+# 404s. Pinning a space-free artifactName makes the disk filename, the
+# latest.yml url, and the GitHub asset name all identical, so the update
+# download resolves. Mirrors the mac artifact naming (Mcode-<ver>-<arch>.dmg).
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  deleteAppDataOnUninstall: false
+
+# ── Auto-update channel ──
+# electron-updater fetches latest-mac.yml / latest.yml from the GitHub Releases
+# "Assets" of this repo. The release workflow uploads these yml files alongside
+# the installers (see .github/workflows/release.yml).
+publish:
+  provider: github
+  owner: huangbh2020
+  repo: mcode

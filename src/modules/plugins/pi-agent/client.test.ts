@@ -92,6 +92,26 @@ import { PiWorkspaceClient } from "./client";
 import { piViewReducer } from "./reducer";
 
 describe("Pi RPC workspace", () => {
+  // 同一个 JSONL 的普通路径与 Windows 长路径必须复用同一内存线程。
+  it("reuses one thread across Windows session path spellings", async () => {
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const normal = await client.open(
+        "normal-key",
+        "D:/project",
+        "C:/Users/test/session.jsonl",
+      );
+      const longPath = await client.open(
+        "long-key",
+        "D:/project",
+        "\\\\?\\C:\\Users\\test\\session.jsonl",
+      );
+      expect(longPath).toBe(normal);
+      expect(client.threads.size).toBe(1);
+    } finally {
+      client.dispose();
+    }
+  });
   // 冷历史的展示片段 ID 不可作为原生游标；直接恢复并压缩，保留历史。
   it("compacts cold history without using display IDs as entry cursors", async () => {
     const native = await import("./native");
@@ -249,8 +269,11 @@ describe("Pi RPC workspace", () => {
       await rejected;
       expect(thread.view.compaction?.status).toBe("failed");
       expect(thread.view.localQueue).toHaveLength(1);
+      const queuedId = thread.view.localQueue![0].id;
+      client.setQueuedBehavior(thread, queuedId, "steer");
+      expect(thread.view.localQueue![0].behavior).toBe("steer");
       expect(
-        client.removeQueued(thread, thread.view.localQueue![0].id)?.images,
+        client.removeQueued(thread, queuedId)?.images,
       ).toHaveLength(1);
       expect(thread.view.localQueue).toEqual([]);
     } finally {
@@ -838,6 +861,51 @@ describe("Pi RPC workspace", () => {
     ).toBe(true);
     expect(two.view.status).toBe("idle");
     client.dispose();
+  });
+  it("keeps the runtime model after abort and adapts only when selection changed", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("abort-model", "D:/one");
+      await client.request(thread, { type: "get_state" });
+      const runtimeId = thread.runtimeId;
+      const originalModelKey = thread.runtimeModelKey;
+      thread.view.status = "running";
+      await client.stopAndRestore(thread, vi.fn());
+      expect(thread.runtimeId).toBe(runtimeId);
+      expect(thread.runtimeModelKey).toBe(originalModelKey);
+
+      // 模拟 abort 已收敛到 idle；未改模型时继续发送不得触发同步。
+      thread.view.status = "idle";
+      vi.mocked(native.sendPiCommand).mockClear();
+      await client.request(thread, { type: "prompt", message: "继续" });
+      expect(
+        vi.mocked(native.sendPiCommand).mock.calls.some(
+          ([, command]) => command.type === "set_model",
+        ),
+      ).toBe(false);
+      expect(thread.runtimeId).toBe(runtimeId);
+
+      thread.view.status = "running";
+      await client.setModel(thread, "openai", "gpt-after-abort", "After abort");
+      thread.view.status = "idle";
+      vi.mocked(native.sendPiCommand).mockClear();
+      await client.request(thread, {
+        type: "prompt",
+        message: "用新模型继续",
+      });
+      expect(
+        vi.mocked(native.sendPiCommand).mock.calls.some(
+          ([, command]) =>
+            command.type === "set_model" &&
+            command.provider === "openai" &&
+            command.modelId === "gpt-after-abort",
+        ),
+      ).toBe(true);
+      expect(thread.runtimeId).toBe(runtimeId);
+    } finally {
+      client.dispose();
+    }
   });
   it("forks by copying the session file without starting a runtime", async () => {
     const native = await import("./native");

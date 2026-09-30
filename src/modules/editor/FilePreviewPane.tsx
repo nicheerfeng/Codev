@@ -1,10 +1,10 @@
 import { bindFileScroll } from "@/modules/reader/fileScroll";
 import { ImageViewport } from "@/modules/reader/ImageViewport";
-import { PdfPreview } from "@/modules/reader/pdf/PdfPreview";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import type { ClipboardEvent, ReactNode } from "react";
 import {
   forwardRef,
   memo,
@@ -26,10 +26,10 @@ import type {
   TextSearchStatus,
 } from "./lib/textSearch";
 import { findLiteralMatches } from "./lib/textSearch";
-import type { ClipboardEvent, ReactNode } from "react";
 
 type Props = {
   path: string;
+  active?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
   textOnly?: boolean;
 };
@@ -233,6 +233,7 @@ const TextWindowPreview = forwardRef<
   const truncatedRef = useRef(false);
   const currentMatchRef = useRef(-1);
   const searchBusyRef = useRef(false);
+  const currentLocationRef = useRef<{ line: number; column: number } | null>(null);
   const searchGenerationRef = useRef(0);
   const searchListenersRef = useRef<Set<(status: TextSearchStatus) => void>>(
     new Set(),
@@ -353,7 +354,10 @@ const TextWindowPreview = forwardRef<
       const match = matchesRef.current[index];
       if (!match) return;
       currentMatchRef.current = index;
+      currentLocationRef.current = { line: match.line, column: match.column };
+      emitSearchStatus();
       void ensureLine(Math.max(0, match.line - 1)).then(() => {
+        if (currentMatchRef.current !== index) return;
         virtualizerRef.current?.scrollToIndex(Math.max(0, match.line - 1), {
           align: "center",
         });
@@ -374,6 +378,7 @@ const TextWindowPreview = forwardRef<
       totalMatchesRef.current = 0;
       truncatedRef.current = false;
       currentMatchRef.current = -1;
+      currentLocationRef.current = null;
       if (!query) {
         searchBusyRef.current = false;
         emitSearchStatus();
@@ -394,13 +399,15 @@ const TextWindowPreview = forwardRef<
           totalMatchesRef.current = result.total;
           truncatedRef.current = result.truncated;
           currentMatchRef.current = result.matches.length > 0 ? 0 : -1;
+          currentLocationRef.current = result.matches[0]
+            ? {
+                line: result.matches[0].line,
+                column: result.matches[0].column,
+              }
+            : null;
           searchBusyRef.current = false;
           if (result.matches[0]) {
-            await ensureLine(Math.max(0, result.matches[0].line - 1));
-            virtualizerRef.current?.scrollToIndex(
-              Math.max(0, result.matches[0].line - 1),
-              { align: "center" },
-            );
+            moveToMatch(0);
           }
           emitSearchStatus();
         })
@@ -410,7 +417,7 @@ const TextWindowPreview = forwardRef<
           emitSearchStatus();
         });
     },
-    [emitSearchStatus, ensureLine, path],
+    [emitSearchStatus, moveToMatch, path],
   );
 
   const reloadPreview = useCallback(() => {
@@ -441,6 +448,7 @@ const TextWindowPreview = forwardRef<
         matchesRef.current = [];
         totalMatchesRef.current = 0;
         currentMatchRef.current = -1;
+        currentLocationRef.current = null;
         searchBusyRef.current = false;
         emitSearchStatus();
       },
@@ -500,9 +508,14 @@ const TextWindowPreview = forwardRef<
 
   useEffect(() => {
     if (state.kind !== "ready" || !queryRef.current) return;
+    const match = matchesRef.current[currentMatchRef.current];
+    if (!match) return;
+    const lineIndex = Math.max(0, match.line - 1);
+    if (lineIndex >= state.lines.length) return;
+    virtualizerRef.current?.scrollToIndex(lineIndex, { align: "center" });
     const frame = requestAnimationFrame(() => {
       textScrollRef.current
-        ?.querySelector<HTMLElement>(".codev-search-active")
+        ?.querySelector<HTMLElement>('[data-search-current="true"]')
         ?.scrollIntoView({ block: "center", inline: "nearest" });
     });
     return () => cancelAnimationFrame(frame);
@@ -547,7 +560,12 @@ const TextWindowPreview = forwardRef<
       )}
       {state.kind === "ready" && (
         <>
-          <div className="flex h-8 shrink-0 items-center border-b border-border/60 px-2 text-[11px] text-muted-foreground">
+          <div className="flex h-8 shrink-0 items-center gap-3 border-b border-border/60 px-2 text-[11px] text-muted-foreground">
+            {currentLocationRef.current ? (
+              <span className="rounded-sm bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
+                当前命中：第 {currentLocationRef.current.line.toLocaleString()} 行 · 第 {currentLocationRef.current.column.toLocaleString()} 列
+              </span>
+            ) : null}
             <span className="ml-auto tabular-nums">
               {formatPreviewBytes(totalBytes)}
             </span>
@@ -568,7 +586,12 @@ const TextWindowPreview = forwardRef<
                   <div
                     key={item.key}
                     data-line-index={item.index}
-                    className="absolute top-0 left-0 min-w-[120ch] overflow-hidden whitespace-nowrap px-3 select-text"
+                    data-search-current={
+                      matchesRef.current[currentMatchRef.current]?.line === item.index + 1
+                        ? "true"
+                        : undefined
+                    }
+                    className={`absolute top-0 left-0 min-w-[120ch] overflow-hidden whitespace-nowrap px-3 select-text ${matchesRef.current[currentMatchRef.current]?.line === item.index + 1 ? "border-l-2 border-primary bg-primary/10" : ""}`}
                     style={{
                       height: `${item.size}px`,
                       transform: `translateY(${item.start}px)`,
@@ -598,8 +621,14 @@ const TextWindowPreview = forwardRef<
   );
 });
 
-/** 渲染图片、音频和视频；PDF 走独立的可搜索阅读组件。 */
-function AssetPreview({ path }: { path: string }) {
+/** 在视口内渲染媒体，并将 PDF 交由 WebView 自带阅读器处理。 */
+export function AssetPreview({
+  path,
+  active = true,
+}: {
+  path: string;
+  active?: boolean;
+}) {
   const extension = path.split(".").pop()?.toLowerCase() ?? "";
   const isImage = [
     "png",
@@ -614,10 +643,10 @@ function AssetPreview({ path }: { path: string }) {
   ].includes(extension);
   const isVideo = ["mp4", "webm", "ogg", "mov"].includes(extension);
   const isAudio = ["mp3", "wav", "flac", "aac", "m4a"].includes(extension);
+  const isPdf = extension === "pdf";
   const [source, setSource] = useState<string | null>(null);
   const [assetError, setAssetError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => bindFileScroll(scrollRef.current, path), [path, source]);
 
   useEffect(() => {
@@ -653,13 +682,14 @@ function AssetPreview({ path }: { path: string }) {
     };
   }, [extension, isImage, path]);
 
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <div
         ref={scrollRef}
         className={
-          isImage
-            ? "min-h-0 flex-1"
+          isImage || isPdf
+            ? "relative min-h-0 flex-1"
             : "reader-scrollbar min-h-0 flex-1 overflow-auto p-4"
         }
       >
@@ -689,24 +719,21 @@ function AssetPreview({ path }: { path: string }) {
             src={source}
           />
         )}
+        {source && isPdf && active && (
+          <iframe
+            src={source}
+            className="h-full min-h-0 w-full border-0 bg-background"
+            title={`PDF reader: ${filenameFromPath(path)}`}
+          />
+        )}
       </div>
     </div>
   );
 }
 
-/** 在媒体预览之前分派 PDF，直接向顶部搜索栏暴露完整搜索句柄。 */
+/** 提供只读文件预览，并保留普通文本预览的编辑器句柄。 */
 export const FilePreviewPane = memo(
   forwardRef<EditorPaneHandle, Props>(function FilePreviewPane(props, ref) {
-    if (!props.textOnly && props.path.toLowerCase().endsWith(".pdf")) {
-      return (
-        <PdfPreview
-          key={props.path}
-          ref={ref}
-          path={props.path}
-          onDirtyChange={props.onDirtyChange}
-        />
-      );
-    }
     return <MediaOrTextPreviewPane ref={ref} {...props} />;
   }),
 );
@@ -714,7 +741,7 @@ export const FilePreviewPane = memo(
 // 提供只读预览器的编辑器句柄，保持标签和刷新接口稳定。
 const MediaOrTextPreviewPane = memo(
   forwardRef<EditorPaneHandle, Props>(function MediaOrTextPreviewPane(
-    { path, onDirtyChange, textOnly = false },
+    { path, onDirtyChange, textOnly = false, active = true },
     ref,
   ) {
     const rootRef = useRef<HTMLDivElement>(null);
@@ -764,7 +791,7 @@ const MediaOrTextPreviewPane = memo(
     return (
       <div ref={rootRef} className="h-full outline-none" tabIndex={-1}>
         {previewKind === "asset" && (
-          <AssetPreview key={`${path}:${reloadKey}`} path={path} />
+          <AssetPreview key={`${path}:${reloadKey}`} path={path} active={active} />
         )}
         {previewKind === "text" && (
           <TextWindowPreview

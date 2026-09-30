@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-electron/
+out/
+*.tsbuildinfo
+
+# Electron
+release/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# SQLite
+*.db
+*.db-journal
+*.sqlite
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Turbo build cache — binary .tar.zst archives, machine-local, regenerated on
+# every run. Must never be versioned: git pull/checkout restoring stale cache
+# files crashes the turbo binary on startup (0xC0000409).
+.turbo/
+
+# ZCode session artifacts (local planning drafts, scratch)
+.zcode/
+
+# Pi runtime meta-package build output (22MB tarball + staging tree, produced
+# by apps/desktop/build/pack-pi-runtime.cjs; republish via npm, never commit)
+apps/desktop/build/pi-runtime-dist/

@@ -133,6 +133,7 @@ const TranscriptItem = memo(function TranscriptItem({
     item.kind === "message" && item.role === "user" ? item.text : "",
   );
   const [editSubmitting, setEditSubmitting] = useState(false);
+  const editInput = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (openForSearch) setExpanded(true);
   }, [openForSearch]);
@@ -140,6 +141,13 @@ const TranscriptItem = memo(function TranscriptItem({
     if (item.kind === "message" && item.role === "user" && !editing)
       setEditText(item.text);
   }, [item, editing]);
+  useLayoutEffect(() => {
+    const element = editInput.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(180, Math.max(40, element.scrollHeight))}px`;
+    element.style.overflowY = element.scrollHeight > 180 ? "auto" : "hidden";
+  }, [editText, editing]);
   if (item.kind === "tool")
     return (
       <details
@@ -192,7 +200,9 @@ const TranscriptItem = memo(function TranscriptItem({
     <article
       className={
         isUser
-          ? "pi-user-turn ml-auto w-fit max-w-[80%]"
+          ? editing
+            ? "pi-user-turn ml-auto w-full max-w-[80%]"
+            : "pi-user-turn ml-auto w-fit max-w-[80%]"
           : isAssistant
             ? "pi-assistant-message min-w-0 py-2"
             : "min-w-0 py-2"
@@ -209,11 +219,12 @@ const TranscriptItem = memo(function TranscriptItem({
         >
           {item.kind === "message" && item.role === "user" && editing ? (
             <Textarea
+              ref={editInput}
               autoFocus
               aria-label="编辑最后一条输入"
               value={editText}
               disabled={editSubmitting}
-              className="pi-user-edit-input min-h-[2.5rem] resize-y rounded-lg border-0 bg-transparent px-0 py-0 text-[13px] shadow-none focus-visible:ring-0"
+              className="pi-user-edit-input min-h-10 w-full resize-none overflow-hidden rounded-lg border-0 bg-transparent px-0 py-0 text-[13px] shadow-none focus-visible:ring-0"
               onChange={(event) => setEditText(event.target.value)}
             />
           ) : item.kind === "message" && item.role === "user" ? (

@@ -1,0 +1,30 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# pnpm 11 用 allowBuilds map 批准带 postinstall 的依赖(值必须是 boolean)。
+# 旧的 onlyBuiltDependencies 列表在 v11 已废弃,改用此字段。
+# electron 需下载二进制(.npmrc 已配国内镜像);esbuild 需安装原生可执行。
+# (P2 用 sql.js 纯 WASM,无需 native 编译,任何机器 clone 即用。)
+# @google/genai / protobufjs 是 pi SDK 的传递依赖,dist 已随包发布,
+# 其 build scripts(prepare/postinstall)与运行时无关,设为 false 忽略。
+allowBuilds:
+  '@google/genai': false
+  better-sqlite3: true
+  cpu-features: true
+  electron: true
+  esbuild: true
+  node-pty: true
+  protobufjs: false
+  ssh2: true
+
+minimumReleaseAgeExclude:
+  - '@openai/codex@0.153.4-darwin-arm64 || 0.153.4-darwin-x64 || 0.153.4-linux-arm64 || 0.153.4-linux-x64 || 0.153.4-win32-arm64 || 0.153.4-win32-x64 || 0.153.4'
+
+# pnpm 11 moved settings from package.json's `pnpm` field into this file.
+# Override app-builder-lib to ^25.1.0: electron-builder@25.1.0's CLI requires
+# `app-builder-lib/out/util/config/load`, which doesn't exist in the 25.0.0
+# that ^25 otherwise resolves to. Without this, `electron-builder` fails with
+# "Cannot find module 'app-builder-lib/out/util/config/load'".
+overrides:
+  app-builder-lib: ^25.1.0

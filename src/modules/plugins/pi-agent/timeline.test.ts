@@ -209,20 +209,20 @@ describe("Pi turn grouping", () => {
       args: { payload: "actual data" },
       output: "",
       status: "running",
+      activityOrder: 1,
     };
     const thought = {
       id: "thought",
       kind: "thinking" as const,
       text: `${"旧内容".repeat(100)}\n正在检查最新结果`,
       streaming: true,
+      activityOrder: 2,
     };
-    expect(activitySummary([tool, thought])).toBe(
-      '正在运行 · custom.Run · {"payload":"actual data"}',
-    );
+    expect(activitySummary([tool, thought])).toMatch(/^思考中 · 旧内容/);
     expect(activitySummary([{ ...tool, status: "done" }, thought])).toMatch(
       /^思考中 · 旧内容/,
     );
-    expect(activitySummary([thought])).toBe(
+    expect(activitySummary([{ ...thought, activityOrder: undefined }])).toBe(
       `思考中 · ${thought.text.slice(0, 160)}…`,
     );
     expect(activitySummary([thought])).not.toContain("\n");

@@ -1,20 +1,9 @@
 import type { ShortcutId } from "@/modules/shortcuts/shortcuts";
 
-function isPaneSwapShortcut(id: ShortcutId): boolean {
-  return (
-    id === "pane.swapLeft" ||
-    id === "pane.swapRight" ||
-    id === "pane.swapUp" ||
-    id === "pane.swapDown"
-  );
-}
-
+/** 保留快捷键作用域接口，当前没有需要按窗格数量禁用的全局快捷键。 */
 export function shouldDisablePaneSwapShortcut(
-  id: ShortcutId,
-  terminalPaneCount: number | null,
+  _id: ShortcutId,
+  _terminalPaneCount: number | null,
 ): boolean {
-  return (
-    isPaneSwapShortcut(id) &&
-    (terminalPaneCount === null || terminalPaneCount < 2)
-  );
+  return false;
 }

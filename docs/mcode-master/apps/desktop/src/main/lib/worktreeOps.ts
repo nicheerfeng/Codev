@@ -1,0 +1,680 @@
+/**
+ * Git worktree lifecycle for isolated agent sessions.
+ *
+ * Two worktree FORMS (sessions record the intent in sessions.wt_style; the
+ * form is chosen in the composer's environment picker and consumed exactly
+ * once, at materialization):
+ *
+ *  - "detached" (the original, default) — a DETACHED checkout for
+ *    experimental verification: no branch, agent edits stay uncommitted,
+ *    merge-back auto-commits and merges by SHA, nothing survives removal.
+ *    Detached because git forbids the same branch in two worktrees, and a
+ *    branch name is a user-level decision this flow deliberately defers.
+ *
+ *  - "branch" — checked out on a GENERATED `mcode/<dirname>` ref (directory
+ *    and branch share the name) for real feature work: commits inside are
+ *    named and durable, visible in `git log --all`, and recoverable after a
+ *    forced removal via the retained branch (remove only ever uses
+ *    `git branch -d`, which refuses unmerged refs by design).
+ *
+ * Both share the identical single-direction flow: work in isolation (the
+ * per-turn cwd drives every path guard), then merge the worktree's HEAD back
+ * into the local checkout (SHA-based — the form is transparent to merging)
+ * and remove the worktree.
+ *
+ * Managed root: <userData>/worktrees/<repo>/<branch>-<n> — OUTSIDE every
+ * registered project root, so the project-scoped IPC guards never see these
+ * paths and no "second legal root" plumbing is needed for the MVP.
+ *
+ * Safety rails kept from the full design: dirty worktrees are never silently
+ * destroyed (remove refuses unless force; merge-back auto-commits first), a
+ * running turn blocks removal, and remove can export the uncommitted diff as
+ * a patch before deleting (last-resort recovery).
+ */
+import { app } from "electron";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
+import type simpleGitFn from "simple-git";
+import type { GitWorktreeInfo, GitWorktreeMergeBackResult, GitWorktreeRemoveResult } from "@contracts/ipc";
+import { WORKTREE_ROOT_SETTING_KEY } from "@contracts/ipc";
+import { SessionRepo, SettingRepo } from "@main/store/repositories.js";
+import { runtimeManager } from "@main/claude/RuntimeManager.js";
+import { broadcastSessionChanged } from "@main/lib/sessionSync.js";
+import { log } from "@main/lib/logger.js";
+import { normPathKey } from "@main/lib/pathNorm.js";
+
+// Own lazy loader (mirrors git.ts's) — importing it from ipc/git.ts would
+// create a cycle once the handlers there pull this module in.
+let simpleGitLoader: typeof simpleGitFn | null = null;
+async function loadSimpleGit(): Promise<typeof simpleGitFn> {
+  if (!simpleGitLoader) {
+    const mod = await import("simple-git");
+    simpleGitLoader = mod.default;
+  }
+  return simpleGitLoader;
+}
+
+/** Dirty probe with conservative semantics. `--no-optional-locks` keeps the
+ *  read from touching the index lock (the agent may be mid-turn in this very
+ *  worktree — a plain `git status` refreshes the index and can die on
+ *  index.lock contention). On ANY failure the answer is `known: false` and
+ *  callers must err on the safe side: a failed status must never read as
+ *  "clean", or the remove guard would delete a dirty tree without force and
+ *  without the patch export. Output-based (porcelain line count), never
+ *  exit-code-based — simple-git's raw() silently resolves some non-zero
+ *  exits (see isAncestor's comment). */
+async function worktreeDirty(
+  wtGit: import("simple-git").SimpleGit,
+): Promise<{ count: number; known: boolean }> {
+  try {
+    const out = await wtGit.raw(["--no-optional-locks", "status", "--porcelain"]);
+    return { count: out.split("\n").filter((l) => l.trim()).length, known: true };
+  } catch {
+    return { count: 0, known: false };
+  }
+}
+
+/** The managed root all worktrees live under: the configured directory
+ *  (settings key `worktree.root`, read fresh each call so a change only
+ *  affects future creations) or <userData>/worktrees by default. */
+function managedWorktreeRoot(): string {
+  const configured = SettingRepo.get(WORKTREE_ROOT_SETTING_KEY);
+  if (configured && configured.trim()) return resolve(configured.trim());
+  return join(app.getPath("userData"), "worktrees");
+}
+
+/** The managed directory a session's worktree lives in. Derived from the
+ *  session id → replaying the materialization for the same session always
+ *  derives the same path (idempotent by construction, for a given root).
+ *  Now only the FALLBACK shape (detached HEAD / unresolvable branch). */
+export function worktreeDirFor(repoPath: string, sessionId: string): string {
+  const repoName = basename(repoPath).replace(/[^A-Za-z0-9._-]+/g, "-") || "repo";
+  return join(managedWorktreeRoot(), repoName, sessionId.slice(-12));
+}
+
+/** Prefix for generated worktree branches (`mcode/<dirname>`). Doubles as the
+ *  ownership marker for remove-time branch cleanup: only refs under this
+ *  prefix are ever auto-deleted, and only with `git branch -d` (merged-only,
+ *  by git's own design). */
+export const MCODE_BRANCH_PREFIX = "mcode";
+
+/** Extra refname hardening beyond nextWorktreeDir's filesystem sanitize: git
+ *  refnames additionally forbid trailing dots, dot-dot sequences and a leading
+ *  dot-dot/"@{" (the charset filter already replaced `@`/`{`/`/`, and the
+ *  caller strips leading dashes — trailing dots and `..` survive it because
+ *  `.` is a legal filename character). */
+function sanitizeBranchName(name: string): string {
+  const n = name.replace(/\.\.+/g, ".").replace(/\.+$/g, "");
+  return n || "wt";
+}
+
+/** Next managed worktree directory: `<managedRoot>/<repoName>/<branch>-<n>`
+ *  — the repo's CURRENT checkout branch plus the lowest free sequence
+ *  number, so a worktree's name says which branch it grew from ("用户可读
+ *  目录名"). The branch is sanitized for filesystem use (Unicode letters
+ *  and digits kept, everything else → `-`, matching the repoName rule);
+ *  `n` starts at 1 and skips names already taken on disk (removal frees the
+ *  number for reuse). Falls back to the legacy session-id tail when the
+ *  branch can't be resolved (detached HEAD, not a repo). Async because the
+ *  name must probe the filesystem for uniqueness — the old id-derived path
+ *  was sync-idempotent, but a session materializes exactly once, so the
+ *  loss of that property costs nothing.
+ *
+ *  With `branchStyle: true` the SAME probe loop must also find a free
+ *  `mcode/<dirname>` BRANCH (directory and branch share the name). Directory
+ *  and branch lifetimes diverge: a forced removal of an unmerged tree KEEPS
+ *  its branch (git branch -d refuses), so a later directory number can be
+ *  free while its branch name is still taken — `worktree add -b` would then
+ *  die on "branch already exists" and retries would too (same number
+ *  reprobes to the same free directory). Probing the ref alongside the
+ *  directory closes that dead end. */
+export async function nextWorktreeDir(
+  repoPath: string,
+  sessionId: string,
+  opts: { branchStyle?: boolean } = {},
+): Promise<string> {
+  const root = join(
+    managedWorktreeRoot(),
+    basename(repoPath).replace(/[^A-Za-z0-9._-]+/g, "-") || "repo",
+  );
+  let branch = "";
+  let git: import("simple-git").SimpleGit | null = null;
+  try {
+    git = (await loadSimpleGit())(repoPath);
+    branch = (await git.raw(["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+  } catch {
+    // detached HEAD reads fine here too; only a broken repo throws — the
+    // legacy fallback below still yields a valid directory.
+  }
+  if (!branch || branch === "HEAD") {
+    return worktreeDirFor(repoPath, sessionId);
+  }
+  const safe =
+    branch
+      .replace(/[^\p{L}\p{N}._-]+/gu, "-")
+      .replace(/^-+|-+$/g, "") || "wt";
+  for (let n = 1; ; n++) {
+    const candidate = join(root, `${safe}-${n}`);
+    const taken = await stat(candidate)
+      .then(() => true)
+      .catch(() => false);
+    if (taken) continue;
+    if (opts.branchStyle && git) {
+      // Free directory AND a free mcode/<dirname> ref (rev-parse rejects a
+      // missing ref, so resolve == exists here).
+      const ref = `${MCODE_BRANCH_PREFIX}/${sanitizeBranchName(`${safe}-${n}`)}`;
+      const refTaken = await git
+        .revparse(["--verify", "--end-of-options", `refs/heads/${ref}`])
+        .then(() => true)
+        .catch(() => false);
+      if (refTaken) continue;
+    }
+    return candidate;
+  }
+}
+
+/** Directory for pre-removal patch exports. */
+function snapshotDir(): string {
+  return join(app.getPath("userData"), "worktree-snapshots");
+}
+
+/** exit-code probe: is `commit` an ancestor of (or equal to) `ref`?
+ *
+ *  Deliberately NOT `merge-base --is-ancestor`: simple-git 3.36's `raw()`
+ *  does NOT reject on a non-zero exit when stderr is empty (or even with
+ *  merge-conflict stderr) — the probe's "no" answer (exit 1, no output)
+ *  resolves silently, so a try/catch probe ALWAYS read as "ancestor". That
+ *  made merge-back's already-merged guard fire on every call: ok without
+ *  merging, no log line, dialog claiming success. Instead compare
+ *  merge-base output: `commit` is an ancestor iff their best common
+ *  ancestor IS `commit` itself (callers pass full SHAs; an abbreviated
+ *  input would just compare unequal → false → merge proceeds → benign
+ *  "Already up to date" no-op). */
+async function isAncestor(
+  git: import("simple-git").SimpleGit,
+  commit: string,
+  ref: string,
+): Promise<boolean> {
+  try {
+    const base = (await git.raw(["merge-base", commit, ref])).trim();
+    return !!base && base.toLowerCase() === commit.trim().toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+/* ───────────────────────────── create ───────────────────────────── */
+
+/** Create a detached worktree at `targetPath` based on `baseRef` (default:
+ *  HEAD as seen from `repoPath` — the caller passes the USER's checkout, so
+ *  the base is what the user was looking at, not some other worktree's HEAD).
+ *  Returns the full HEAD commit of the new worktree. */
+export async function createDetachedWorktree(
+  repoPath: string,
+  targetPath: string,
+  baseRef = "HEAD",
+): Promise<{ ok: true; head: string; path: string } | { ok: false; error: string }> {
+  try {
+    const git = (await loadSimpleGit())(repoPath);
+    // Resolve the base to a concrete commit first — makes the checkout
+    // immune to ref movement between resolve and add, and rejects bad refs
+    // with a clean error instead of a half-created worktree.
+    const base = (await git.revparse(["--verify", "--end-of-options", `${baseRef}^{commit}`])).trim();
+    await mkdir(dirname(targetPath), { recursive: true });
+    await git.raw(["worktree", "add", "--detach", targetPath, base]);
+    const wtGit = (await loadSimpleGit())(targetPath);
+    const head = (await wtGit.revparse(["HEAD"])).trim();
+    log.info(`worktree created: ${targetPath} (base ${base.slice(0, 7)} from ${repoPath})`);
+    return { ok: true, head, path: targetPath };
+  } catch (err) {
+    const msg = (err as Error).message || String(err);
+    log.warn(`worktree create failed for ${repoPath} -> ${targetPath}: ${msg}`);
+    return { ok: false, error: msg };
+  }
+}
+
+/** Create a worktree checked out on a GENERATED branch `mcode/<dirname>`
+ *  (directory and branch share the name — nextWorktreeDir's branchStyle
+ *  probe already guaranteed the ref is free, closing the "directory free /
+ *  branch leftover from a forced removal" dead end). Same contract as
+ *  createDetachedWorktree otherwise: base resolved to a concrete commit
+ *  first, full HEAD returned. Commits made inside are durable and named —
+ *  visible in `git log --all`, recoverable after forced removal via the
+ *  retained branch, and merge-back still merges the HEAD SHA directly. */
+export async function createBranchedWorktree(
+  repoPath: string,
+  targetPath: string,
+  baseRef = "HEAD",
+): Promise<{ ok: true; head: string; path: string; branch: string } | { ok: false; error: string }> {
+  try {
+    const git = (await loadSimpleGit())(repoPath);
+    const base = (await git.revparse(["--verify", "--end-of-options", `${baseRef}^{commit}`])).trim();
+    const branch = `${MCODE_BRANCH_PREFIX}/${sanitizeBranchName(basename(targetPath))}`;
+    await mkdir(dirname(targetPath), { recursive: true });
+    await git.raw(["worktree", "add", "-b", branch, targetPath, base]);
+    const wtGit = (await loadSimpleGit())(targetPath);
+    const head = (await wtGit.revparse(["HEAD"])).trim();
+    log.info(`worktree created: ${targetPath} on ${branch} (base ${base.slice(0, 7)} from ${repoPath})`);
+    return { ok: true, head, path: targetPath, branch };
+  } catch (err) {
+    const msg = (err as Error).message || String(err);
+    log.warn(`branched worktree create failed for ${repoPath} -> ${targetPath}: ${msg}`);
+    return { ok: false, error: msg };
+  }
+}
+
+/* ───────────────────────────── list ───────────────────────────── */
+
+/** Parse `git worktree list --porcelain` blocks. */
+function parsePorcelain(raw: string): Array<{ path: string; head: string; branch: string }> {
+  const out: Array<{ path: string; head: string; branch: string }> = [];
+  for (const block of raw.split(/\n\s*\n/)) {
+    let path = "";
+    let head = "";
+    let branch = "";
+    for (const line of block.split("\n")) {
+      if (line.startsWith("worktree ")) path = line.slice("worktree ".length).trim();
+      else if (line.startsWith("HEAD ")) head = line.slice("HEAD ".length).trim();
+      else if (line.startsWith("branch ")) branch = line.slice("branch ".length).replace(/^refs\/heads\//, "").trim();
+    }
+    if (path) out.push({ path, head, branch });
+  }
+  return out;
+}
+
+/** List the repo's worktrees (main first) enriched with lifecycle state:
+ *  dirty / missing / session-reference count / already-merged. */
+export async function listWorktrees(repoPath: string): Promise<GitWorktreeInfo[]> {
+  const git = (await loadSimpleGit())(repoPath);
+  const raw = await git.raw(["worktree", "list", "--porcelain"]);
+  const entries = parsePorcelain(raw);
+  const mainHead = entries[0]?.head ?? "";
+  const refCounts = SessionRepo.worktreeReferenceCounts();
+  const refCountMap = new Map(Object.entries(refCounts).map(([p, n]) => [normPathKey(p), n]));
+  const gitFn = await loadSimpleGit();
+
+  const enriched = await Promise.all(
+    entries.map(async (e, idx) => {
+      const missing = !(await stat(e.path).then(() => true).catch(() => false));
+      // Unknown status reads as DIRTY (conservative): the ancestor probe
+      // below would otherwise badge an unreadable tree as "merged" — a
+      // green safe-to-delete signal for a tree we couldn't even read.
+      const probe = missing
+        ? { count: 0, known: true }
+        : await worktreeDirty(gitFn(e.path));
+      const dirty = probe.known ? probe.count > 0 : true;
+      // "Merged" = NOTHING left to merge: HEAD contained in the MAIN
+      // worktree's HEAD AND the tree clean. The ancestor probe alone is
+      // trivially true in the dominant flow (worktrees detach at the main
+      // HEAD and the agent edits WITHOUT committing, so HEADs stay equal
+      // until merge-back's auto-commit) — it would badge a tree full of
+      // unmerged uncommitted work as "merged", and the panel renders merged
+      // INSTEAD of dirty, i.e. a green "safe to delete" signal. Skipped for
+      // the main entry itself (idx 0).
+      const merged =
+        idx > 0 && !missing && e.head && !dirty
+          ? await isAncestor(git, e.head, mainHead).catch(() => false)
+          : false;
+      return {
+        path: e.path,
+        head: e.head.slice(0, 7),
+        branch: e.branch,
+        main: idx === 0,
+        dirty,
+        missing,
+        referencedBy: refCountMap.get(normPathKey(e.path)) ?? 0,
+        merged,
+      } satisfies GitWorktreeInfo;
+    }),
+  );
+  return enriched;
+}
+
+/** Single-worktree lifecycle probe — the cheap endpoint the Titlebar merge
+ *  button polls (12s). `listWorktrees` enriches EVERY linked tree (one git
+ *  status child process each) just to answer "is THIS one dirty / merged";
+ *  this variant resolves exactly one entry: same porcelain parse, same
+ *  enrichment semantics, but a single status probe and a single merge-base.
+ *  Returns null when the path isn't a registered worktree of the repo. */
+export async function worktreeStatus(
+  repoPath: string,
+  worktreePath: string,
+): Promise<GitWorktreeInfo | null> {
+  const git = (await loadSimpleGit())(repoPath);
+  const raw = await git.raw(["worktree", "list", "--porcelain"]);
+  const entries = parsePorcelain(raw);
+  const idx = entries.findIndex((e) => normPathKey(e.path) === normPathKey(worktreePath));
+  if (idx < 0) return null;
+  const e = entries[idx];
+  const mainHead = entries[0]?.head ?? "";
+  const missing = !(await stat(e.path).then(() => true).catch(() => false));
+  const probe = missing
+    ? { count: 0, known: true }
+    : await worktreeDirty((await loadSimpleGit())(e.path));
+  const dirty = probe.known ? probe.count > 0 : true;
+  const merged =
+    idx > 0 && !missing && e.head && !dirty
+      ? await isAncestor(git, e.head, mainHead).catch(() => false)
+      : false;
+  return {
+    path: e.path,
+    head: e.head.slice(0, 7),
+    branch: e.branch,
+    main: idx === 0,
+    dirty,
+    missing,
+    referencedBy: SessionRepo.listByWorktreePath(e.path).length,
+    merged,
+  } satisfies GitWorktreeInfo;
+}
+
+/* ─────────────────────────── merge back ─────────────────────────── */
+
+/** Commit-on-detached-HEAD helper. Falls back to inline identity config
+ *  when the repo has no user.name/email configured (fresh clones often
+ *  don't) — without this the auto-commit would fail and block the merge. */
+async function commitAll(
+  wtGit: import("simple-git").SimpleGit,
+  message: string,
+): Promise<void> {
+  try {
+    await wtGit.raw(["add", "-A"]);
+    await wtGit.commit(message);
+  } catch (err) {
+    const msg = (err as Error).message || "";
+    if (/author identity|user\.name|user\.email/i.test(msg)) {
+      await wtGit.raw([
+        "-c", "user.name=Mcode",
+        "-c", "user.email=mcode@local",
+        "commit", "-m", message,
+      ]);
+    } else {
+      throw err;
+    }
+  }
+}
+
+/** Default commit message for the pre-merge auto-commit (used when the user
+ *  left the dialog's message input blank). */
+function autoCommitMessage(worktreePath: string): string {
+  return `worktree: auto-commit before merge back (${basename(worktreePath)})`;
+}
+
+/** Merge a worktree's work back into the local checkout's CURRENT branch:
+ *  auto-commit uncommitted changes on the detached HEAD, then
+ *  `git merge --no-edit <worktree HEAD>` in the local repo. Conflicts are
+ *  reported (the repo is left merging; the existing conflict-resolution UI
+ *  applies) and do NOT remove the worktree — the user resolves and retries
+ *  or aborts. */
+export async function mergeBackWorktree(
+  repoPath: string,
+  worktreePath: string,
+  opts: { message?: string } = {},
+): Promise<GitWorktreeMergeBackResult> {
+  try {
+    const wtGit = (await loadSimpleGit())(worktreePath);
+    // Unknown status REFUSES the merge (rather than silently skipping the
+    // auto-commit): proceeding dirty-but-unreadable would merge only the
+    // committed part while the dialog reports full success.
+    const probe = await worktreeDirty(wtGit);
+    if (!probe.known) {
+      return {
+        ok: false,
+        error: "无法读取工作树的 git 状态(可能被其他进程占用),请稍后重试",
+      };
+    }
+    let committedChanges = false;
+    if (probe.count > 0) {
+      const message = opts.message?.trim() || autoCommitMessage(worktreePath);
+      await commitAll(wtGit, message);
+      committedChanges = true;
+    }
+    const head = (await wtGit.revparse(["HEAD"])).trim();
+
+    const git = (await loadSimpleGit())(repoPath);
+    const targetBranch = (await git.revparse(["--abbrev-ref", "HEAD"])).trim();
+    const targetLabel = targetBranch === "HEAD" || !targetBranch ? "(detached)" : targetBranch;
+
+    // Already-merged guard: merge would be a no-op.
+    if (await isAncestor(git, head, "HEAD")) {
+      log.info(`worktree merge-back no-op (already merged): ${worktreePath}`);
+      return { ok: true, committedChanges, targetBranch: targetLabel, fastForward: false };
+    }
+
+    const headBefore = (await git.revparse(["HEAD"])).trim();
+    // simple-git 3.36's raw() does NOT reject `git merge` on a non-zero
+    // exit — a conflicted merge (and other aborts) RESOLVE silently — so the
+    // old try/catch around the merge never fired and conflicts were
+    // reported as success. Run it, then interrogate the repo state instead
+    // of trusting the promise.
+    let mergeThrew: unknown = null;
+    try {
+      await git.raw(["merge", "--no-edit", head]);
+    } catch (err) {
+      mergeThrew = err;
+    }
+    const st2 = await git.status().catch(() => null);
+    const conflicted = st2?.conflicted ?? [];
+    if (conflicted.length > 0) {
+      log.warn(`worktree merge-back produced ${conflicted.length} conflict(s) in ${repoPath}`);
+      return {
+        ok: true,
+        committedChanges,
+        targetBranch: targetLabel,
+        conflict: true,
+        conflictedFiles: conflicted,
+      };
+    }
+    if (mergeThrew) throw mergeThrew;
+    // Swallowed non-conflict failures (e.g. "local changes would be
+    // overwritten" abort) leave HEAD unchanged with no exception — verify
+    // the merge actually landed via the (throw-independent) ancestor probe
+    // instead of reporting a fake success.
+    const headAfter = (await git.revparse(["HEAD"])).trim();
+    if (headAfter === headBefore && !(await isAncestor(git, head, "HEAD"))) {
+      throw new Error(
+        "合并未生效:主仓库当前分支的未提交改动可能与待合并文件冲突,请先提交或暂存(stash)后重试",
+      );
+    }
+    const fastForward = headAfter === head;
+    log.info(
+      `worktree merged back: ${worktreePath} -> ${repoPath}@${targetLabel} ` +
+        `(${fastForward ? "fast-forward" : "merge commit"}${committedChanges ? ", auto-committed" : ""})`,
+    );
+    return { ok: true, committedChanges, targetBranch: targetLabel, fastForward };
+  } catch (err) {
+    const msg = (err as Error).message || String(err);
+    log.warn(`worktree merge-back failed for ${worktreePath}: ${msg}`);
+    return { ok: false, error: msg };
+  }
+}
+
+/* ───────────────────────────── remove ───────────────────────────── */
+
+/** Remove a linked worktree. Guards: (1) sessions referencing the path with
+ *  running turns block removal; (2) a dirty worktree refuses unless `force`;
+ *  (2b) an unreadable git status blocks removal (never treated as clean);
+ *  (3) `exportPatch` persists the FULL unmerged work (commits since the
+ *  merge-base PLUS uncommitted edits) under userData/worktree-snapshots/
+ *  before deleting. A missing directory is self-healed via `git worktree
+ *  prune`. A generated `mcode/*` branch is deleted alongside (`git branch
+ *  -d` — unmerged refs are refused and RETAINED, surfacing as
+ *  `retainedBranch`). */
+export async function removeWorktree(
+  repoPath: string,
+  worktreePath: string,
+  opts: { force?: boolean; exportPatch?: boolean } = {},
+): Promise<GitWorktreeRemoveResult> {
+  try {
+    // (1) Never yank the directory out from under a running agent turn.
+    const refs = SessionRepo.listByWorktreePath(worktreePath);
+    if (refs.length > 0) {
+      const running = new Set(runtimeManager.runningSessionIds());
+      if (refs.some((s) => running.has(s.id))) {
+        return { ok: false, error: "该工作树下有正在运行的会话回合,请先停止后再删除" };
+      }
+    }
+
+    const dirExists = await stat(worktreePath).then(() => true).catch(() => false);
+    let patchPath: string | undefined;
+
+    // Is the path still a REGISTERED worktree? A previously FAILED remove
+    // can leave a half-torn state behind on Windows (file locks): git drops
+    // the .git/worktrees registration, then dies mid-directory-delete with
+    // "Permission denied". Re-running `git worktree remove` then aborts with
+    // "is not a working tree" even though only stale junk remains — detect
+    // that case and fall through to plain directory cleanup instead of
+    // surfacing the fatal to the user. The parsed entry (branch + HEAD) is
+    // kept for the post-remove branch cleanup below.
+    const git = (await loadSimpleGit())(repoPath);
+    const normTarget = normPathKey(worktreePath);
+    let entry: { path: string; head: string; branch: string } | null = null;
+    let registered = true;
+    try {
+      const raw = await git.raw(["worktree", "list", "--porcelain"]);
+      entry = parsePorcelain(raw).find((w) => normPathKey(w.path) === normTarget) ?? null;
+      registered = entry !== null;
+    } catch {
+      registered = true; // probe failure → assume registered, try the git way
+    }
+
+    if (registered && dirExists) {
+      const wtGit = (await loadSimpleGit())(worktreePath);
+      const probe = await worktreeDirty(wtGit);
+      // Unknown status blocks removal outright: the dirty guard below is the
+      // data-safety rail, and an unreadable tree must not slip through it as
+      // "clean" (no force required, no patch exported).
+      if (!probe.known) {
+        return {
+          ok: false,
+          error: "无法读取工作树的 git 状态(可能被其他进程占用),请稍后重试",
+        };
+      }
+      const dirty = probe.count > 0;
+      // Committed-but-unmerged work is just as unrecoverable as uncommitted
+      // edits when the tree goes away (detached HEADs leave no ref behind) —
+      // the export option must fire for it too, not only for a dirty tree.
+      const mainHead = await git
+        .revparse(["HEAD"])
+        .then((s) => s.trim())
+        .catch(() => "");
+      const unmerged =
+        !!entry?.head && !!mainHead
+          ? !(await isAncestor(git, entry.head, mainHead).catch(() => false))
+          : false;
+      if (dirty && !opts.force) {
+        return {
+          ok: false,
+          error: `工作树有 ${probe.count} 个未提交的更改,请先合并回、或勾选强制删除/导出补丁`,
+        };
+      }
+      if ((dirty || unmerged) && opts.exportPatch) {
+        try {
+          // Full-work patch, not just the uncommitted tail: `git diff <base>`
+          // with no end ref compares base → WORKING TREE, capturing commits
+          // AND uncommitted edits in one patch. base = merge-base with the
+          // main HEAD (all work since the fork point); probe failure or
+          // unrelated histories degrade to HEAD (the old uncommitted-only
+          // behavior) rather than blocking the removal.
+          let base = "HEAD";
+          if (mainHead) {
+            const mb = await wtGit
+              .raw(["merge-base", "HEAD", mainHead])
+              .then((s) => s.trim())
+              .catch(() => "");
+            if (mb) base = mb;
+          }
+          const patch = await wtGit.raw(["--no-optional-locks", "diff", "--binary", "--full-index", base]);
+          if (patch.trim()) {
+            await mkdir(snapshotDir(), { recursive: true });
+            const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+            patchPath = join(snapshotDir(), `${basename(worktreePath)}-${stamp}.patch`);
+            await writeFile(patchPath, patch, "utf8");
+            log.info(`worktree patch exported: ${patchPath}`);
+          }
+        } catch (patchErr) {
+          // Patch export is a safety net, not a blocker — log and continue.
+          log.warn(`worktree patch export failed: ${(patchErr as Error).message}`);
+          patchPath = undefined;
+        }
+      }
+    }
+
+    if (registered) {
+      try {
+        await git.raw([
+          "worktree",
+          "remove",
+          ...(opts.force ? ["--force"] : []),
+          worktreePath,
+        ]);
+      } catch (removeErr) {
+        // Directory already gone (deleted outside git) → prune self-heals.
+        if (dirExists) throw removeErr;
+        log.info(`worktree remove: dir missing for ${worktreePath}, pruning stale entry`);
+      }
+    } else {
+      log.info(
+        `worktree remove: ${worktreePath} is no longer a registered worktree — cleaning stale directory`,
+      );
+    }
+    await git.raw(["worktree", "prune"]).catch(() => {});
+
+    // Stale leftover directory (interrupted earlier remove, or an already-
+    // unregistered path): git no longer owns it — delete it directly so the
+    // second attempt actually finishes the first one's job.
+    if (await stat(worktreePath).then(() => true).catch(() => false)) {
+      try {
+        await rm(worktreePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 });
+      } catch (rmErr) {
+        throw new Error(
+          `清理残留目录失败:${(rmErr as Error).message}(目录可能仍被编辑器/终端占用,请关闭占用它的程序后重试)`,
+        );
+      }
+    }
+
+    // Degenerate referencing sessions back to local (worktreePath = NULL) so
+    // their next turn doesn't hit the "directory missing" wall — the
+    // conversation history stays intact and reusable. Broadcast each patched
+    // row so the renderers drop their worktree badges.
+    for (const s of refs) {
+      SessionRepo.clearWorktreePath(s.id);
+      const patched = SessionRepo.get(s.id);
+      if (patched) broadcastSessionChanged(patched);
+    }
+
+    // Branch-style cleanup: a generated mcode/* ref dies with its worktree —
+    // but ONLY via `git branch -d` (git itself refuses when the branch holds
+    // unmerged commits), and only while the ref still points at THIS
+    // worktree's HEAD (a user `git switch` away means it's no longer ours to
+    // take). A refused -d is the recovery path for forced removals: the
+    // discarded commits live on the retained branch — reported so the UI can
+    // tell the user where to find them.
+    let retainedBranch: string | undefined;
+    if (entry?.branch.startsWith(`${MCODE_BRANCH_PREFIX}/`) && entry.head) {
+      const refBranch = entry.branch;
+      try {
+        const tip = await git
+          .revparse(["refs/heads/" + refBranch])
+          .then((s) => s.trim().toLowerCase())
+          .catch(() => "");
+        if (tip && tip === entry.head.toLowerCase()) {
+          await git.raw(["branch", "-d", refBranch]);
+          log.info(`worktree branch deleted: ${refBranch}`);
+        }
+      } catch (err) {
+        retainedBranch = refBranch;
+        log.info(
+          `worktree branch retained (${((err as Error).message || "unmerged").slice(0, 120)}): ${refBranch}`,
+        );
+      }
+    }
+
+    log.info(`worktree removed: ${worktreePath} (from ${repoPath})`);
+    return { ok: true, patchPath, retainedBranch };
+  } catch (err) {
+    const msg = (err as Error).message || String(err);
+    log.warn(`worktree remove failed for ${worktreePath}: ${msg}`);
+    return { ok: false, error: msg };
+  }
+}

@@ -93,22 +93,45 @@ function basename(path: string): string {
 }
 
 const ROOT_COLORS = [
-  "#3b82f6",
-  "#22c55e",
-  "#f59e0b",
-  "#ef4444",
-  "#8b5cf6",
-  "#06b6d4",
+  "#31b8d8",
+  "#d89b31",
+  "#bf31d8",
+  "#4cd831",
+  "#313ad8",
+  "#b1d831",
+  "#31d894",
+  "#7431d8",
+  "#3186d8",
+  "#d8cd31",
+  "#7ed831",
+  "#31d849",
+  "#31d8c6",
+  "#65d831",
+  "#31d862",
+  "#31d8ad",
+  "#319fd8",
+  "#3153d8",
+  "#4131d8",
+  "#8d31d8",
+  "#a631d8",
+  "#d831d8",
+  "#d8b431",
+  "#cad831",
+  "#98d831",
+  "#33d831",
+  "#31d87b",
+  "#31d1d8",
+  "#316cd8",
+  "#5b31d8",
 ] as const;
 
-/** 将根目录绝对路径稳定映射到高饱和项目色。 */
-function rootColor(path: string): string {
-  let hash = 2166136261;
-  for (const char of path.replace(/\\/g, "/").toLowerCase()) {
-    hash ^= char.charCodeAt(0);
-    hash = Math.imul(hash, 16777619);
-  }
-  return ROOT_COLORS[(hash >>> 0) % ROOT_COLORS.length];
+/** 按根目录顺序分配鲜明的 30 色色谱，避免相邻目录拿到近似颜色。 */
+function rootColor(path: string, roots: string[]): string {
+  const normalizedPath = path.replace(/\\/g, "/").toLowerCase();
+  const index = roots.findIndex(
+    (root) => root.replace(/\\/g, "/").toLowerCase() === normalizedPath,
+  );
+  return ROOT_COLORS[Math.max(0, index) % ROOT_COLORS.length];
 }
 
 /** 为文件树空白区域提供稳定的添加工作区目录菜单。 */
@@ -144,6 +167,7 @@ function RootSection({
   reorderHeaderProps,
   insertBefore,
   root,
+  roots,
   selected,
   revealRequest,
   onRevealPath,
@@ -165,6 +189,7 @@ function RootSection({
   reorderHeaderProps: React.HTMLAttributes<HTMLDivElement>;
   insertBefore: boolean;
   root: string;
+  roots: string[];
   selected: boolean;
   revealRequest: { nonce: number; path: string } | null;
   onRevealPath: (root: string, path: string) => void;
@@ -186,7 +211,7 @@ function RootSection({
   const t = useT();
   const [renaming, setRenaming] = useState(false);
   const [rootHeaderHovered, setRootHeaderHovered] = useState(false);
-  const color = rootColor(root);
+  const color = rootColor(root, roots);
   const canRename = root !== "/" && !/^[A-Za-z]:\/$/.test(root);
   const rootDnd = useExplorerDnd({
     rootPath: root,
@@ -1062,6 +1087,7 @@ export const FileExplorer = memo(
                       reorderHeaderProps={rootReorder.headerProps(root)}
                       insertBefore={showRootGap(index)}
                       root={root}
+                      roots={roots}
                       selected={selectedPaths.includes(root)}
                       revealRequest={
                         rootRevealRequest?.root === root

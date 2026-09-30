@@ -1,0 +1,20 @@
+{
+  "name": "pi-manager",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Independent Pi session and subagent manager.",
+  "license": "MIT",
+  "engines": { "node": ">=22.19" },
+  "files": ["index.ts", "src", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md"],
+  "pi": { "extensions": ["./index.ts"] },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.mjs",
+    "check": "tsc --noEmit",
+    "verify": "npm run check && npm test",
+    "pack:verify": "node test/package-check.mjs"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.85.0 <0.86.0"
+  },
+  "devDependencies": { "@types/node": "^22.0.0", "typescript": "^6.0.0" }
+}

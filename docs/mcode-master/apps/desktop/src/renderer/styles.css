@@ -1,0 +1,2740 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ───────────── base-ui popup enter-animation fix ─────────────
+ * base-ui (Menu / Tooltip / ContextMenu / ...) drives its popup enter
+ * animation through a `data-starting-style` attribute: the popup mounts WITH
+ * the attribute (the `data-[starting-style]:opacity-0` / `:scale-95` Tailwind
+ * classes paint it at opacity:0 + scale .95), then base-ui removes the
+ * attribute on the next frame so the `transition-[transform,opacity]` animates
+ * it into view.
+ *
+ * That removal isn't happening here (React 19 + <StrictMode> dev double-mount
+ * confuses base-ui's lifecycle), so popups freeze at the starting state —
+ * opacity:0 — and render invisible. The composer's model / effort / permission
+ * dropdowns open and work (keyboard nav changes the value) but can't be seen.
+ * Select popups are unaffected because they don't use the starting-style
+ * classes (their <Select.Popup> has no animation className).
+ *
+ * Force the visible end-state while the attribute is present. This drops the
+ * fade-in but makes every affected popup usable. The rule is UNLAYERED, so it
+ * wins over Tailwind's layered `data-[starting-style]:opacity-0` utility
+ * without needing !important. If base-ui clears the attribute correctly (e.g.
+ * a future base-ui upgrade or non-StrictMode build), the selector simply stops
+ * matching and the normal styles take over. */
+[data-starting-style] {
+  opacity: 1 !important;
+  transform: none !important;
+}
+
+/* base-ui renders Menu popups ([role="menu"]) as position:static inside
+ * Menu.Positioner (position:absolute + transform → its own stacking context
+ * at z-index:auto). That auto context was painting below the app content,
+ * hiding the popup entirely — the popup's own z-50 is ineffective because
+ * z-index is ignored on static elements. Force the Positioner's stacking
+ * context to the top so the popup shows above the chrome. Scoped to a
+ * Positioner that directly wraps a menu popup; other surfaces are unaffected. */
+div:has(> [role="menu"]) {
+  z-index: 9999 !important;
+}
+
+/* ───────────── Monaco workbench-hover fix (find-widget buttons) ─────────────
+ * monaco-editor 0.5x renders its find-widget button tooltips (关闭 / 上一个
+ * 匹配项 / 切换替换…) through the platform hover service as real DOM — a
+ * .workbench-hover-container inside a .context-view wrapper appended to the
+ * editor — not native title attributes (upstream bugs
+ * microsoft/monaco-editor#5208 / #5296; verified reproducible in this app).
+ *
+ * In THIS app the tooltip box ends up ON TOP of its trigger button: the app's
+ * global font-weight ladder (body 500/600) makes the tooltip ~47px tall
+ * instead of monaco's stock ~28px, and the pointer-style positioning math
+ * then overlaps the button's box (measured: tooltip [1558,86 → 1633,133]
+ * fully covering the close button [1594,111 → 1616,133]). The tooltip and
+ * its wrapper intercept pointer events, so: hover the button → tooltip pops
+ * over the cursor → button gets mouseleave → tooltip disposes after its
+ * 200ms debounce → mouseover refires (0ms delay — standalone monaco has no
+ * default for workbench.hover.delay, and same-group hovers skip the delay
+ * entirely; all find-widget buttons share groupId "find-widget") → loop.
+ * Symptom: the close button flickers under the cursor and clicks land on the
+ * tooltip instead of the button (Esc still works). Most visible with the
+ * right sidebar open (narrower editor → widget hugging the pane edge).
+ *
+ * Fix: make the hover tooltip transparent to the mouse. The rule MUST
+ * target the .context-view wrapper — putting pointer-events:none on
+ * .workbench-hover-container alone is NOT enough, because the parent
+ * .context-view still hit-tests over the same area (this is why the
+ * workaround reported in #5208 "did not work"). :has() scopes it to exactly
+ * the wrappers that contain an UNLOCKED hover tooltip, so monaco's other
+ * context-view users (context menu, select/suggest dropdowns) stay
+ * clickable, and locked (alt-pinned) hovers remain interactive. With the
+ * rule in place the tooltip still renders but can never become the
+ * hit-test target: no synthesized mouseleave, no show/hide loop, and
+ * clicks pass through to the button underneath. */
+.context-view:has(> .workbench-hover-container:not(.locked)),
+.workbench-hover-container:not(.locked) {
+  pointer-events: none;
+}
+
+/* ───────────── Theme variables ─────────────
+ * Each value is a space-separated "R G B" triplet (no commas, no #) so
+ * Tailwind's <alpha-value> placeholder can compose alpha variants like
+ * bg-surface/50. The light set is the :root default; .dark overrides.
+ * Driven by nativeTheme.themeSource → <html>.dark toggle (see lib/theme.ts).
+ *
+ * If these are missing, every `bg-surface` / `text-content` / … class
+ * resolves to an invalid rgb() and the browser falls back to defaults
+ * (black text on dark bg) — which is exactly the "can't read anything"
+ * symptom. So: keep these in sync with tailwind.config.js token names.
+ */
+:root {
+  /* Base font weight lifted for perceived contrast. On a light background
+   * weight-400 gray text can read as low-contrast (anti-aliasing softens
+   * thin strokes), so the inherited base is set to 500. The matching
+   * .font-* ladder shift below keeps relative hierarchy intact. The dark
+   * scope (.dark) overrides this with its own heavier 600 base. */
+  font-weight: 500;
+
+  /* surfaces (backgrounds). Muted/hover carry a slight cool bias (B channel
+   * above R/G — the light counterpart of the dark ramp's slate tint) so all
+   * three panes share one color temperature across themes. Muted sits one
+   * stop deeper than zinc-100: at zinc-100 the sidebar track resolved to
+   * ~1.10:1 against the white main surface — visually one continuous sheet;
+   * the deeper step (~1.16:1) plus the darker --edge below restores the
+   * track/recess layering without touching the white "paper" work area. */
+  --surface: 255 255 255; /* white — center pane, right panel, popups */
+  --surface-muted: 240 242 246; /* cool zinc-100/150 — sidebar track, inset wells */
+  --surface-hover: 226 229 235; /* cool zinc-200 — hover/active fills */
+  /* content (text) — deepened one stop for stronger contrast on white.
+   * Body stays at near-black zinc-950; muted/subtle drop one shade each
+   * (zinc-700 / zinc-500) so secondary text doesn't wash out. */
+  --content: 9 9 11; /* zinc-950 — near-black, max contrast on white */
+  --content-muted: 63 63 70; /* zinc-700 — one stop darker than before */
+  --content-subtle: 113 113 122; /* zinc-500 — one stop darker than before */
+  /* borders. --edge is a cool zinc-300, one stop DEEPER than --surface-hover:
+   * borders must read as separators on white (~1.46:1) — the old zinc-200
+   * equaled the hover fill, so panel dividers / card outlines washed out and
+   * hover feedback had the same value as the border it sat next to. */
+  --edge: 213 216 222; /* cool zinc-300 */
+  /* Structural pane dividers (three-pane shell borders, the draggable
+   * splitter hairlines, the tab-strip underline) — one stop LIGHTER than
+   * --edge: these lines run the full window height, and at the card-border
+   * value they read as heavy rules across the whole UI. Cards and in-panel
+   * separators keep --edge. */
+  --panel-edge: 222 225 231; /* cool zinc-250 (~1.35:1 on white) */
+  /* Composer input box outline — one stop deeper than --edge so the box
+   * reads clearly at a glance in both themes (dark needs the brighter-than-
+   * edge direction, light the deeper-than-edge direction). Only the composer
+   * container uses it — panel dividers / cards keep --edge. */
+  --input-edge: 202 205 212;
+  /* accent + status. Light text-bearing tokens sit at the 700 stop: the 600
+   * shades resolved to ~3.2:1 (amber) / ~3.8:1 (emerald) on white — below
+   * the 4.5:1 AA bar for the small colored text they feed (approval prompts,
+   * diff tallies, status labels). Dark keeps its 400/500 shades, which pass
+   * from the other side on near-black. Icons/dots only need the 3:1
+   * non-text bar, but sharing the darker token keeps light chrome coherent. */
+  --accent: 5 150 105; /* emerald-600 — brand: buttons, icons, focus rings */
+  --accent-strong: 4 120 87; /* emerald-700 — small accent TEXT (≥4.5:1) */
+  /* Inline code span foreground — plain body color on BOTH themes (GitHub
+   * convention): the recess background already marks the span as code, so the
+   * text itself stays neutral. Light dropped the accent tint after emerald-600
+   * only hit ~3.5:1 on the muted recess; dark follows the same call — the
+   * 60/40 accent mix read as a brand-tinted tint rather than text, and
+   * repainted whenever the user changed the brand color. Consumed via
+   * [color:var(--code-fg)] in Markdown.tsx. */
+  --code-fg: rgb(var(--content));
+  --danger: 220 38 38; /* red-600 — already 4.8:1 on white, no change needed */
+  --warning: 180 83 9; /* amber-700 (was 600 / 3.2:1) */
+  --info: 124 58 237; /* violet-600 — 5.7:1 on white */
+  /* Fixed git "additions" green — intentionally NOT the brand accent. Diff
+   * +/- tallies are semantic (added/removed lines), like --danger red, so
+   * they must not repaint when the user changes the brand color. Light uses
+   * emerald-700 (5.5:1 on white — the tallies are small text; emerald-600
+   * resolved to 3.8:1), dark emerald-500; together they bracket the DEFAULT
+   * accent, so a custom brand color simply stops bleeding into diff stats.
+   * Consumed via text-success in MessageBlocks / TurnFilesCard / git panels. */
+  --success: 4 120 87; /* emerald-700 */
+
+  /* Git history graph lane colors (GitHistoryView commit gutter). Fixed
+   * palette on purpose — NOT the semantic tokens: lane rails are identity
+   * colors ("which branch is this"), so borrowing --danger/--success would
+   * repaint meaning. Lane 0 is the trunk (first-parent rail). Consumed via
+   * rgb(var(--git-lane-N)) in commitGraph rendering; cycles past lane 4. */
+  --git-lane-0: 2 132 199; /* sky-600 */
+  --git-lane-1: 124 58 237; /* violet-600 */
+  --git-lane-2: 217 119 6; /* amber-600 */
+  --git-lane-3: 225 29 72; /* rose-600 */
+  --git-lane-4: 5 150 105; /* emerald-600 */
+
+  /* Chat appearance — user-configurable. Overridden at runtime by
+   * lib/appearance.ts (setProperty on <html>) when the user changes them
+   * in Settings. These are the theme defaults (= current hardcoded look):
+   *   --chat-font-size mirrors the old `text-sm` (14px);
+   *   --user-bubble is a neutral gray (zinc-500) so user prompts read as a
+   *     calm, non-distracting bubble; presets in Settings offer color picks. */
+  --chat-font-size: 14px; /* default = text-sm */
+  /* Chat prose base weight. A weight lifted toward the global base (450 vs
+   * the 400 of the original design) gives comfortable, airy reading on both
+   * themes — 400 read as visibly thinner than the app chrome (base 500 light
+   * / 600 dark), which washed out on dark backgrounds. The dark scope below
+   * raises the weight one more step (500) since white-on-dark thins
+   * optically. Prose line-height is density-driven (--chat-md-leading in the
+   * chat-density section below). Consumed by the Markdown container in
+   * Markdown.tsx. */
+  --chat-font-weight: 450;
+  --user-bubble: 82 82 91; /* default = zinc-500 (neutral gray), R G B triplet */
+  /* Bubble tint strength is theme-scoped (consumed via .user-bubble-fill):
+   * one alpha can't serve both themes. 15% of the default over white lands
+   * ~1.26:1 — a visible soft bubble; over the near-black dark surface the
+   * SAME 15% resolved to ~1.1:1 (the "bubble you can't see" report).
+   * .dark raises it — see there. */
+  --user-bubble-alpha: 0.15;
+
+  /* Global side-panel + settings base font size - user-configurable via
+   * Settings -> 外观 -> 全局字体大小. Despite the var's legacy name it drives
+   * the whole app chrome (left bar, right files/git/terminal, settings page).
+   * Overridden at runtime by lib/appearance.ts. The derived --rp-fs-* variants
+   * (below) track this via calc. */
+  --right-panel-font-size: 14px;
+
+  color-scheme: light;
+}
+
+.dark {
+  /* Dark-mode base font weight. White text on a dark background undergoes
+   * optical thinning, so the default 400 reads as low-contrast. The base is
+   * lifted to 600 for crisp, readable UI text. The matching .dark .font-*
+   * ladder shift (in the font-weight ladder section below) keeps relative
+   * hierarchy intact. Light mode uses a 500 base via :root (lighter than
+   * dark because black-on-white needs less help), with its own ladder shift
+   * in the same section. */
+  font-weight: 600;
+
+  /* Slate-tinted dark ramp (VS Code Dark+ / GitHub Dark style). The whole
+   * ramp carries a slight cool bias — the B channel runs a few units above
+   * R/G — so the base surface, recesses, hovers and borders all share ONE
+   * color temperature. The previous neutral-zinc ground (#18181b) read as a
+   * flat void next to the blue-gray wells once --surface-muted was moved to
+   * slate, which made the center pane look harshly black against the left
+   * sidebar. The base stays dark (≈#1a1d24) for immersion; muted/hover step
+   * up from there keeping the same cool proportion so the three panes (left
+   * = muted track, center/right = surface) read as one cool palette with
+   * brightness hierarchy, not a warm/cold split. Text stays neutral
+   * white/gray — it doesn't follow the tint, keeping contrast clean. */
+  --surface: 26 29 36; /* #1a1d24 — slate-tinted near-black; the base app
+                        * background (center pane, right sidebar, popups,
+                        * titlebar). B channel sits ~10 above R so the cool
+                        * bias matches --surface-muted. */
+  --surface-muted: 44 49 60; /* #2c313c — slate-tinted recess: inset panels /
+                              * track / left sidebar / code-block & tool-result
+                              * wells in the data stream. Tinted cool (B channel
+                              * runs higher than R/G) so recesses read as a calm
+                              * blue-gray instead of flat neutral — the VS Code
+                              * Dark+ look. The gap to --surface is ~20, enough
+                              * that /40 /60 alpha variants still resolve as a
+                              * visible layer. */
+  --surface-hover: 58 64 78; /* #3a404e — hover/active states, lifted in step
+                              * and keeping the same slate tint so the three
+                              * layers (surface → muted → hover) stay on one
+                              * cool ramp. */
+  --content: 231 232 236; /* soft off-white (#e7e8ec) — ~14.5:1 on the new
+                           * surface, still well above WCAG AAA (7:1) */
+  /* Secondary/tertiary text — brightened one step from the old
+   * #aaadb4 / #848891. On a near-black surface a mid-gray at a "passing"
+   * ratio still reads perceptually dimmer than the same ratio on white
+   * (white-on-dark loses apparent contrast to the eye), and model replies
+   * are dominated by bullet lists / tables / tool cards rendered at muted —
+   * the whole reply body read one tier dimmer than its intro paragraph.
+   * New values: muted ≈9.2:1, subtle ≈6.6:1 on the base surface (both clear
+   * WCAG AA for body text). Tier gaps stay wide (content 231 → muted 188 →
+   * subtle 158) so the three levels still resolve as distinct. */
+  --content-muted: 188 191 198; /* #bcbfc6 — lists / tables / thinking body /
+                                 * tool-card labels */
+  --content-subtle: 158 162 171; /* #9ea2ab — metadata: paths / summaries /
+                                  * timestamps / markers / hints */
+  --edge: 45 51 64; /* #2d3340 — slate-tinted to match the muted/hover ramp;
+                     * one notch below hover so borders read as separators,
+                     * not highlights. */
+  --panel-edge: 45 51 64; /* mirrors dark --edge — the lighter structural
+                           * divider is a light-mode-only concern */
+  --input-edge: 95 99 110; /* cool gray — brighter than --edge so the
+                            * composer box outline stays visible on the
+                            * background. Tuned to read clearly without
+                            * being as bright as the muted-text color. */
+  --accent: 16 185 129; /* emerald-500 */
+  --accent-strong: 16 185 129; /* emerald-500 — dark accent is already ~6.6:1
+                                 * on the slate surface, so the small-text
+                                 * variant can simply mirror it */
+  --danger: 248 113 113; /* red-400 */
+  --warning: 251 191 36; /* amber-400 */
+  --info: 167 139 250; /* violet-400 */
+  /* Fixed git "additions" green — dark counterpart of :root's --success
+   * (mirrors the default dark accent, emerald-500). See :root for rationale. */
+  --success: 16 185 129; /* emerald-500 */
+
+  /* Git graph lanes — dark counterparts of :root's palette (400 shades for
+   * contrast on the slate surface). See :root for rationale. */
+  --git-lane-0: 56 189 248; /* sky-400 */
+  --git-lane-1: 167 139 250; /* violet-400 */
+  --git-lane-2: 251 191 36; /* amber-400 */
+  --git-lane-3: 251 113 133; /* rose-400 */
+  --git-lane-4: 52 211 153; /* emerald-400 */
+
+  /* Chat appearance defaults for dark mode (neutral gray, one shade
+   * brighter than the light default for readable contrast on zinc-900).
+   * Overridden at runtime by lib/appearance.ts when the user sets a custom
+   * value. */
+  --chat-font-size: 14px;
+  /* Chat prose base weight — dark mode raises the prose weight to 500 (one
+   * step above light's 450) because white strokes thin optically on the deep
+   * background. Line height is density-driven (--chat-md-leading) and shared
+   * across themes. */
+  --chat-font-weight: 500;
+  --user-bubble: 113 113 122; /* default = zinc-500 (\#71717a) */
+  /* Low-alpha gray over #1a1d24 barely moves: 15% ≈ 1.1:1, indistinguishable
+   * from the chat surface. 25% lands the bubble at ~1.30:1 — the same
+   * layering step as --surface-muted vs --surface (sidebar track vs main),
+   * which reads as a clear-but-calm layer in the dark ramp. Applies to ANY
+   * user-picked bubble color, not just the default (the tint strength is the
+   * problem, not the default hue). */
+  --user-bubble-alpha: 0.25;
+
+  /* Global side-panel + settings base font size - user-configurable via
+   * Settings -> 外观 -> 全局字体大小. Despite the var's legacy name it drives
+   * the whole app chrome (left bar, right files/git/terminal, settings page).
+   * Overridden at runtime by lib/appearance.ts. The derived --rp-fs-* variants
+   * (below) track this via calc. */
+  --right-panel-font-size: 14px;
+
+  /* Must be `dark` (was mistakenly `light`): besides native widgets, Chromium
+   * also uses the document's color-scheme when picking light/dark variants of
+   * built-in cursors — declaring light here makes dark-mode UI get the black
+   * cursor variant, invisible against the dark surfaces. Scrollbars are safe:
+   * they're custom-styled (*::-webkit-scrollbar below), not native. */
+  color-scheme: dark;
+}
+
+/* ───────────── Settings overlay text lift (dark only) ─────────────
+ * The global dark grays above are tuned for the chat stream; the settings
+ * page renders far more small muted/subtle text (labels / descs / hints,
+ * often on muted recesses), where the global values read as
+ * near-background. Brightening is scoped to the settings overlay wrapper
+ * (.settings-root on the App.tsx overlay div) so chat / IDE chrome keeps
+ * the global ramp. Values lift both tiers while staying below --content
+ * (231 232 236) so the three-level hierarchy still resolves:
+ *   muted  #bcbfc6 → #d0d3d9  ≈9.2:1 → ≈11.2:1 on --surface
+ *   subtle #9ea2ab → #b8bcc4  ≈6.6:1 → ≈8.9:1  on --surface
+ * Custom properties cascade — Tailwind's text-content-* utilities read
+ * them at the element, so all settings panels pick this up at once.
+ * (Portaled dialogs/tooltips outside this subtree keep global tokens.) */
+/* :not(.sketch) — kraft(html.sketch.dark)是暖棕底,这套冷灰提亮值落上去
+ * 会冷暖打架;kraft 自己的 muted 对比度(≈7.2:1)不需要提亮。见文件末
+ * 「Sketch theme」区块的牛皮纸配色。 */
+.dark:not(.sketch) .settings-root {
+  --content-muted: 208 211 217; /* #d0d3d9 */
+  --content-subtle: 184 188 196; /* #b8bcc4 */
+}
+
+/* ───────────── Chat markdown list lift (dark only) ─────────────
+ * Model replies are dominated by bullet/numbered lists, which render at
+ * --content-muted — one full tier below paragraph text. Objectively that is
+ * ~9.2:1 (well past AA), but perceptually the whole reply body reads dimmer
+ * than its intro sentences, and the full-bright `strong` labels inside
+ * bullets (Markdown.tsx renders strong at --content) make the regular list
+ * text look dimmer still by simultaneous contrast. Scoped to .chat-md (the
+ * Markdown root) so only the chat stream shifts while chrome/settings keep
+ * the global ramp; light mode is unaffected (the text-content-muted
+ * utilities stay in place as the light fallback).
+ *   list body  #bcbfc6 → 60% muted + 40% content ≈ #cfcfd5  ≈9.2:1 → ≈10.8:1
+ *   li strong  #e7e8ec → 70% content + 30% muted ≈ #dcdce1 — narrows the
+ *              in-line white/gray jump; the weight bump still marks emphasis
+ * Nested lists recompute the mix from the static RGB vars, not from the
+ * inherited color, so it doesn't compound at depth. Markers stay at
+ * --content-subtle (decorative, no lift needed). */
+/* :not(.sketch) — 同 .dark .settings-root 的排除:冷灰 mix 落在 kraft 暖棕
+ * 底上打架,kraft 的对比度也不需要这层提亮(见「Sketch theme」区块)。 */
+.dark:not(.sketch) .chat-md ul,
+.dark:not(.sketch) .chat-md ol {
+  color: color-mix(in srgb, rgb(var(--content-muted)) 60%, rgb(var(--content)));
+}
+.dark:not(.sketch) .chat-md li strong {
+  color: color-mix(in srgb, rgb(var(--content)) 70%, rgb(var(--content-muted)));
+}
+
+/* ───────────── Font-weight ladder shifts ─────────────
+ * Pairs with the base font-weight set on :root (500, light) and .dark (600,
+ * dark). Because the inherited base is lifted, the raw Tailwind utilities
+ * (which set weight directly on the element) would otherwise sit AT or BELOW
+ * body weight — .font-medium (500) would render thinner than body text,
+ * inverting the hierarchy. Both blocks add one ancestor to win specificity
+ * over the utility classes and shift the whole ladder up one stop.
+ *
+ * ORDER MATTERS: the light block is declared first, the dark block second.
+ * .dark and html have equal specificity (0,1,1) when .dark is on <html>, so
+ * source order decides — the dark block wins only because it comes last.
+ * Keep the dark block below the light block.
+ *
+ * Resulting ladders:
+ *   light: body 500  ←  font-normal 500  ←  font-medium 600  ←  font-semibold 700  ←  font-bold 800
+ *   dark:  body 600  ←  font-normal 500  ←  font-medium 600  ←  font-semibold 700  ←  font-bold 800
+ * font-normal is lifted only to 500 in both so the few "explicitly thin" spots
+ * (TerminalPanel / MessageBlocks / ContentTagChip) stay a notch lighter than
+ * body without dropping below comfortable legibility. */
+
+/* Light-mode ladder (:root base = 500). */
+html .font-normal {
+  font-weight: 500;
+}
+html .font-medium {
+  font-weight: 600;
+}
+html .font-semibold {
+  font-weight: 700;
+}
+html .font-bold {
+  font-weight: 800;
+}
+
+/* Dark-mode ladder (.dark base = 600). Must come AFTER the light block so it
+ * wins the equal-specificity tie when <html> carries .dark. */
+.dark .font-normal {
+  font-weight: 500;
+}
+.dark .font-medium {
+  font-weight: 600;
+}
+.dark .font-semibold {
+  font-weight: 700;
+}
+.dark .font-bold {
+  font-weight: 800;
+}
+
+/* ───────────── Derived chat font sizes ─────────────
+ * Scaled variants of --chat-font-size so the whole chat surface — prose,
+ * tool cards, thinking, tables, code, headings — scales together when the
+ * user picks a different font size in Settings. Computed via calc() so
+ * they track the base automatically; no per-theme definition needed. The
+ * ratios preserve the existing visual hierarchy at the default 14px:
+ *   lg≈16 (×1.143, h1), base=14, sm≈13 (×0.929, table), xs≈12 (×0.857,
+ *   code block), xxs≈11 (×0.786, code header). */
+:root {
+  --chat-fs-lg: calc(var(--chat-font-size) * 1.1429);
+  --chat-fs-sm: calc(var(--chat-font-size) * 0.9286);
+  --chat-fs-xs: calc(var(--chat-font-size) * 0.8571);
+  --chat-fs-xxs: calc(var(--chat-font-size) * 0.7857);
+}
+
+/* ───────────── Derived right-panel font sizes ─────────────
+ * Scaled variants of --right-panel-font-size so the side panels - left
+ * (LeftBar: projects / sessions) and right (files / git / terminal) -
+ * scale together when the user picks a different font size in Settings.
+ * Computed via calc() so they track the base automatically; no per-theme
+ * definition needed. The ratios preserve the existing visual hierarchy at
+ * the default 14px:
+ *   base=14, md≈13 (×0.929, left-bar section headers / load-more),
+ *   sm≈12 (×0.857, tab labels / section labels / left-bar sub text),
+ *   xs≈11 (×0.786, loading / empty hints), xxs≈10 (×0.714, metadata:
+ *   hashes / counts / status icons / section headers). */
+:root {
+  --rp-fs-md: calc(var(--right-panel-font-size) * 0.9286);
+  --rp-fs-sm: calc(var(--right-panel-font-size) * 0.8571);
+  --rp-fs-xs: calc(var(--right-panel-font-size) * 0.7857);
+  --rp-fs-xxs: calc(var(--right-panel-font-size) * 0.7143);
+}
+
+/* Thin scrollbars that follow the theme. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--surface-hover)) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgb(var(--surface-hover));
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--content-subtle));
+}
+
+/* Hide the scrollbar on a specific element while keeping it scrollable.
+   Used by the center-pane tab strip, which navigates via chevron buttons +
+   wheel instead of a visible scrollbar (matches VS Code / browser tab bars). */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ───────────── Markdown code blocks (shiki) ─────────────
+ * Markdown.tsx renders each fenced block as
+ * <pre card> → <div.overflow-x-auto> → <pre.shiki style="background-color:…">.
+ * The inner shiki <pre> is block-level, so its box — and with it the theme
+ * background it carries inline — is only as wide as the scroll container's
+ * viewport. Overflowing lines widen the scrollable area but not the box, so
+ * the region revealed by horizontal scrolling showed the lighter card
+ * background instead of the code well (visible in dark mode, where shiki's
+ * #0d1117 differs from surface-muted). Sizing the box to its widest line
+ * (flooring at 100%) makes the background span the full scroll width. */
+pre.shiki {
+  width: max-content;
+  min-width: 100%;
+}
+
+/* ───────────── Theme-switch transition ─────────────
+ * lib/theme.ts applyThemeClass() stamps `theme-transition` on <html> for the
+ * ~250ms around a light↔dark flip, then removes it. While present, every
+ * element inherits a short transition on the color-carrying properties, so
+ * the whole chrome fades smoothly between palettes instead of hard-cutting.
+ * Scoped to the flag class so the always-on cost is zero outside the flip
+ * window, and existing hover transitions (which set their own transition
+ * shorthand on the element) are temporarily overridden by !important. Monaco
+ * and xterm can't transition their internal canvases; they swap ~150ms in via
+ * their own observers, landing as the CSS fade finishes. */
+html.theme-transition,
+html.theme-transition *,
+html.theme-transition *::before,
+html.theme-transition *::after {
+  transition:
+    background-color 180ms ease-out,
+    border-color 180ms ease-out,
+    color 180ms ease-out,
+    fill 180ms ease-out,
+    stroke 180ms ease-out,
+    box-shadow 180ms ease-out,
+    outline-color 180ms ease-out !important;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  /* --app-font carries the user's custom UI font (settings ui.uiFontFamily,
+   * written by lib/theme.ts applyUiFontFamily as `"Picked", <this same
+   * stack>` so an uninstalled family degrades to the stock look). The
+   * fallback here IS the default stack — keep the two in sync. */
+  font-family: var(--app-font,
+    -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC",
+    "Microsoft YaHei UI", "Microsoft YaHei", sans-serif);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom UI font (classic style only) follows into the `.font-sans` utility
+ * (Tailwind's default sans stack — a few inputs pin it explicitly). Gated on
+ * `data-user-font` so the rule is a strict no-op until the user actually
+ * picks a font; `:not(.sketch)` keeps sketch's own `.font-sans` mapping
+ * (handwriting stack) authoritative. Specificity (0,2,1) beats the utility. */
+html[data-user-font]:not(.sketch) .font-sans {
+  font-family: var(--app-font);
+}
+
+/* ───────────── Document scroll lock (fullscreen shell) ─────────────
+ * The app shell is a fixed-viewport layout: html/body/#root at height 100%
+ * with every scrollable surface an inner overflow container. On touch
+ * browsers, though, the DOCUMENT itself stayed scrollable/bounceable:
+ *  - iOS Safari resolves html's 100% against the *large* viewport (URL bar
+ *    hidden), so with the URL bar showing the document is scrollable by
+ *    that delta — and Safari also pans it to reveal a focused composer.
+ *  - A touch scroll starting at an inner scroller's boundary (message list
+ *    pinned at its top) chains up to the document.
+ * Either way the whole UI gets dragged down and stays shifted, and while
+ * the document is mid-scroll/rubber-band it eats subsequent touch
+ * gestures — the message list seems dead until a tap resets gesture
+ * targeting (the "sometimes can't scroll, whole interface moves" bug).
+ * Locking the document (no scroll, no overscroll chaining, no Android
+ * pull-to-refresh) keeps every gesture inside the inner scrollers. Safe
+ * everywhere this stylesheet loads: the Electron window is fixed-size and
+ * never relied on document scroll, and the pairing page (pair.html) has
+ * its own inline styles and doesn't import this file. */
+html,
+body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Dark-mode font rendering: switch from gray-scale antialiasing to the
+ * platform default (subpixel on macOS). Gray AA thins light-on-dark strokes,
+ * which is the "still not enough contrast" symptom on white text. Letting
+ * the browser use subpixel rendering restores edge crispness so the heavier
+ * font weights read as intended. Scoped to .dark so light mode keeps its
+ * smoother antialiased look (black-on-white doesn't need the help). */
+.dark {
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+}
+
+/* Dark-mode monospace crispness for code / terminal / diff / tool cards.
+ * The subpixel rendering above helps sans-serif UI text, but on monospace
+ * data-stream regions (small 11-13px JetBrains Mono) subpixel artifacts
+ * build up at glyph edges and the text reads as soft / unfocused — exactly
+ * the "data stream looks unclear" symptom. Forcing gray-scale AA here
+ * trades the subpixel color fringing for sharper edge definition, which is
+ * what code editors (VS Code) do for their monospace areas. JetBrains Mono
+ * is hand-hinted for gray AA so it stays crisp without thinning. Scoped to
+ * .dark .font-mono so light mode and dark sans-serif UI are untouched. */
+.dark .font-mono {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* AskUserQuestion bottom-sheet slide-up. Tailwind's arbitrary-animation
+   syntax `animate-[qa-sheet-in_140ms_ease-out]` references this name. */
+@keyframes qa-sheet-in {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Plan drawer right-side slide-in. Tailwind's arbitrary-animation syntax
+   `animate-[plan-drawer-in_160ms_ease-out]` references this name. */
+@keyframes plan-drawer-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+/* Empty-thread (home) welcome fade-up. Plays once on mount so the home
+   screen doesn't hard-cut in. Tailwind's arbitrary-animation syntax
+   `animate-[home-fade-up_160ms_ease-out]` references this name. Kept tiny
+   (6px) so it reads as polish, not a flourish. */
+@keyframes home-fade-up {
+  from {
+    transform: translateY(6px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Respect the OS reduced-motion preference: skip the home fade-up entirely.
+   Existing arbitrary-animation calls still apply the name, but the keyframes
+   are flattened to a no-op so the content shows instantly. */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes home-fade-up {
+    from {
+      transform: none;
+      opacity: 1;
+    }
+    to {
+      transform: none;
+      opacity: 1;
+    }
+  }
+}
+
+/* ───────────── Message bookmark animations ─────────────
+ * Selection toolbar pop-in and the jump-target row flash. Referenced via
+ * Tailwind arbitrary-animation classes (animate-[bookmark-bar-in_…]) and the
+ * imperative .bookmark-flash class ChatPane toggles on the row after
+ * scrollToIndex. The activity cluster's motion lives in its own block below. */
+
+/* Floating [copy | add bookmark] toolbar — small fade-up so it doesn't
+   hard-cut over the selection. */
+@keyframes bookmark-bar-in {
+  from {
+    transform: translateX(-50%) translateY(2px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Jump-target flash: the message row glows gold for ~1.2s after a bookmark
+   jump (class toggled imperatively — the row is inside the virtual list, a
+   re-render just for the flash would fight LegendList recycling). */
+.bookmark-flash {
+  animation: bookmark-flash-fade 1.2s ease-out;
+}
+
+/* Exact selection highlight for bookmark jumps (CSS Custom Highlight API —
+   paints over the Range the locator re-found, without touching the
+   React-managed DOM). Registered/removed from lib/textFind.ts. */
+::highlight(bookmark-target) {
+  background-color: rgb(var(--warning) / 0.35);
+  color: inherit;
+}
+
+@keyframes bookmark-flash-fade {
+  0% {
+    background-color: rgb(var(--warning) / 0.18);
+    box-shadow: inset 2px 0 0 rgb(var(--warning) / 0.8);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 2px 0 0 rgb(var(--warning) / 0);
+  }
+}
+
+/* Reduced motion: the bar animation flattens to a no-op; the flash still
+   signals the target but as a static tint for its full duration (an
+   instantly-disappearing signal would be easy to miss without motion). */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes bookmark-bar-in {
+    from {
+      transform: translateX(-50%);
+      opacity: 1;
+    }
+    to {
+      transform: translateX(-50%);
+      opacity: 1;
+    }
+  }
+
+  .bookmark-flash {
+    animation: none;
+    background-color: rgb(var(--warning) / 0.14);
+    box-shadow: inset 2px 0 0 rgb(var(--warning) / 0.6);
+  }
+}
+
+/* ───────────── Stream live-activity animations ─────────────
+ * While a turn runs, the turn pills in the message stream (TurnStatRow in
+ * ChatPane.tsx, TurnPanel in MessageBlocks.tsx) show an equalizer glyph, and
+ * the jump-to-bottom button pops in a new-activity count. These live here
+ * instead of Tailwind arbitrary values because they need staggered per-child
+ * delays. */
+
+/* Equalizer glyph — three staggered bars. data-tempo swaps the perceived
+   energy: slow while no tool is executing (waiting for the model /
+   thinking / streaming), brisk while a tool runs. */
+.live-eq {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+}
+
+.live-eq > span {
+  width: 2.5px;
+  height: 100%;
+  border-radius: 1px;
+  background: rgb(var(--accent));
+  transform-origin: bottom;
+  animation: live-eq-bounce 1s ease-in-out infinite;
+}
+
+.live-eq > span:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.live-eq > span:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+.live-eq[data-tempo="slow"] > span {
+  animation-duration: 2.2s;
+}
+
+@keyframes live-eq-bounce {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+/* "N 条新动态" count pop-in on the floating jump-to-bottom button
+   (ChatPane). Referenced via the arbitrary-animation class
+   animate-[live-badge-in_220ms_ease-out]. */
+@keyframes live-badge-in {
+  from {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.08);
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Reduced motion: the bars hold fixed heights, the badge pops no more —
+   the strip stays informative, just calm. */
+@media (prefers-reduced-motion: reduce) {
+  .live-eq > span {
+    animation: none;
+    transform: scaleY(0.6);
+  }
+
+  .live-eq > span:nth-child(2) {
+    transform: scaleY(1);
+  }
+
+  .live-eq > span:nth-child(3) {
+    transform: scaleY(0.4);
+  }
+
+  @keyframes live-badge-in {
+    from {
+      transform: none;
+      opacity: 1;
+    }
+    to {
+      transform: none;
+      opacity: 1;
+    }
+  }
+}
+
+/* ───────────── User message bubble fill ─────────────
+ * The bubble color (--user-bubble) is user-configurable, so the fill must
+ * stay an alpha tint of that color — but the tint STRENGTH is a theme
+ * property (dark needs much more over a near-black surface). Consumed via
+ * .user-bubble-fill in ChatPane instead of bg-userBubble/<alpha>, whose
+ * alpha is baked into the class name and can't vary by theme. */
+
+.user-bubble-fill {
+  background-color: rgb(var(--user-bubble) / var(--user-bubble-alpha));
+}
+
+/* ───────────── Chat stream redesign · 方案A「脉络」 ─────────────
+ * prototypes/chat-stream-redesign.html 方案 A。核心语义:
+ *  - 完成回合 = 左对齐过程摘要行（时钟 · 用时 · N 步 · 改 N 个文件 +a −d），
+ *    过程细节在摘要行后折叠展开（grid-rows 0fr↔1fr，见 .chat-fold）。
+ *  - 运行中 = 摘要行挂均衡器走时 + 实时操作 ticker，流式尾部一枚闪烁光标
+ *    （.chat-caret）替代转圈图标。
+ *  按产品反馈陆续移除的装饰：左脊生命线（spine / 节点刻度）与过程-回复之间
+ *  的分界横线 —— 过程进度改由摘要行的实时操作 ticker 与各工具卡的状态图标
+ *  承载，层级本身已说明哪段是回复。运动令牌见下方 :root。 */
+/* 动效令牌挂在 :root 而不是 [data-chat-root]：这些曲线被 .chat-fold 等
+ * 规则用在 transition/animation 简写里，而 CSS 变量在作用域外解析失败会让
+ * 整条简写失效（动画静默不播放，且不报任何错）。放在 :root 保证任何宿主
+ * 下都可用，也避免"组件搬到 chat root 之外就丢动画"这类隐形回归。 */
+:root {
+  --chat-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --chat-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* 回合根节点：结构标记（运行段包裹与完成态共用同一根），无布局语义。 */
+.chat-turn {
+  position: relative;
+}
+
+/* 过程摘要行（TurnPanel 头）：左对齐，取代旧的居中药丸。等宽 padding 让
+ * hover 底色在文字两侧对称探出；负 margin 曾用于抵消脊柱列的 7px 内缩，
+ * 脊线移除后归零 —— 文字直接与正文左缘对齐。 */
+.chat-proc-sum {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 3px 7px;
+  margin-left: 0;
+  border-radius: 8px;
+  font-size: var(--chat-fs-xs);
+  color: rgb(var(--content-subtle));
+  cursor: pointer;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+.chat-proc-sum:hover {
+  background: rgb(var(--surface-hover) / 0.6);
+  color: rgb(var(--content-muted));
+}
+
+/* ── 运行台账（2026-09-11 起为无框形态）──────────────────────────────────
+ * 「过程」卡不再是一张有边框的盒子：整个面就是一行安静的元信息台头
+ * （模型 · 状态/时钟 · 用时 · 回执统计），右侧一枚可展开箭头，无边框无底色、
+ * 与下方回复正文同缘对齐、紧贴回复内容。明细展开后台头下方浮现一条分隔发丝线，
+ * 收起时隐藏。运行中台头随计时走字、底部一条扫描光带表示"还在继续"；
+ * 回合后台头翻成回执、光带收掉。data-phase 是回合阶段，data-open 是折叠状态；
+ * data-empty = 无过程明细（纯文本回合）——展开体不渲染、分隔线永藏。 */
+.chat-ledger {
+  position: relative;
+  margin-top: var(--chat-block-gap);
+}
+
+/* 台头 / 回执：同一行槽位，两态切换内容。负 margin + 对称 padding 让 hover
+ * 底色向两侧各探出 7px，而文字仍与正文左缘对齐（同 TurnStatRow 的
+ * -ml-[7px] px-[7px] py-1 形态）。 */
+.chat-ledger-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: calc(100% + 14px);
+  margin: 0 -7px;
+  padding: 4px 7px;
+  border: none;
+  border-bottom: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  text-align: left;
+  font-size: var(--chat-fs-xs);
+  color: rgb(var(--content-subtle));
+  transition: border-color 260ms var(--chat-ease-out), background 0.16s ease, color 0.16s ease;
+}
+
+button.chat-ledger-head:hover {
+  background: rgb(var(--surface-hover) / 0.6);
+  color: rgb(var(--content-muted));
+}
+
+/* 展开时分隔台头与明细；收起 / 无明细时保持透明。 */
+.chat-ledger[data-open="true"] .chat-ledger-head {
+  border-bottom-color: rgb(var(--edge) / 0.6);
+}
+
+.chat-ledger[data-empty="true"] .chat-ledger-head {
+  border-bottom-color: transparent;
+}
+
+/* 运行中的呼吸圆点。 */
+.chat-ledger-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: rgb(var(--accent));
+  animation: chat-ledger-dot 1.9s ease-in-out infinite;
+}
+
+@keyframes chat-ledger-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+.chat-ledger-live {
+  font-weight: 600;
+  color: rgb(var(--accent-strong));
+}
+
+/* 底部扫描光带：运行中表示"还在继续"，结清后收掉。光带固定在台账宽度内，
+ * 靠 background-position 滑动渐变图（背景绘制天然裁剪在元素内）——台账已是
+ * 无框形态、没有 overflow:hidden 可依赖，transform 平移会让光带溢出正文列。 */
+.chat-ledger-scan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1.5px;
+  background: linear-gradient(90deg, transparent, rgb(var(--accent) / 0.85), transparent) no-repeat;
+  background-size: 45% 100%;
+  animation: chat-ledger-scan 1.9s ease-in-out infinite;
+  transition: opacity 0.35s ease;
+  pointer-events: none;
+}
+
+.chat-ledger[data-phase="done"] .chat-ledger-scan {
+  opacity: 0;
+  animation: none;
+}
+
+@keyframes chat-ledger-scan {
+  0% { background-position: -30% 0; opacity: 0; }
+  40% { opacity: 1; }
+  100% { background-position: 130% 0; opacity: 0; }
+}
+
+/* 台头是一行摘要（模型 · 状态 · 时钟 · 用时 · 步数 · 文件 ± · tokens）。条目
+ * 多了它会在窄处折成两行，读起来像"两条摘要"——所以按信息价值依次让位，而不
+ * 是让它换行。
+ *
+ * 查询容器就是台头自身（container-type: inline-size），量的是卡片的真实宽度，
+ * 而不是面板宽度：卡片宽度 = 面板宽 − 两侧 gutter（gutter 最多 128px），用面板
+ * 宽度做阈值会在 gutter 宽时误判"放得下"。台头自己就是被约束的那一行，拿它做
+ * 容器得到的判断永远和实际排版一致（侧栏子会话、宽屏 3:7 等宿主同样成立）。
+ *
+ * 让位顺序（阈值按实测所需宽度定，留 ~20px 余量）：
+ *   全量 ≈620px 卡片宽 → 收时钟（时间线位置本身已提供上下文，价值最低）
+ *                       → 收模型名（保留首字母头像，身份不丢）
+ *                       → 压缩"改 N 个文件"的措辞
+ *                       → 最后收耗时。 */
+.chat-ledger-head {
+  container-type: inline-size;
+}
+
+/* 时钟槽的布局归这里管（组件侧不给 Tailwind 的 display 工具类）：否则同一
+ * 优先级下 .flex 与下面的 display:none 谁生效取决于产物顺序，降级会时灵时不灵。 */
+.chat-ledger-clock {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-ledger-files-short {
+  display: none;
+}
+
+@container (width < 37.5rem) {
+  /* ≈600px：先省掉时钟。 */
+  .chat-ledger-clock {
+    display: none;
+  }
+}
+
+@container (width < 33.75rem) {
+  /* ≈540px：模型名收起，只留首字母头像。 */
+  .chat-model-name {
+    display: none;
+  }
+}
+
+@container (width < 29.5rem) {
+  /* ≈470px：措辞压缩。 */
+  .chat-ledger-files-long {
+    display: none;
+  }
+  .chat-ledger-files-short {
+    display: inline;
+  }
+}
+
+@container (width < 25rem) {
+  /* ≈400px（手机壳 / 子会话面板）：最后让位的是耗时。信息优先级
+   * 状态 > 步数/文件± > tokens > 耗时 > 时钟，到这里前两项和时钟都已处理过。 */
+  .chat-ledger-duration {
+    display: none;
+  }
+}
+
+/* 明细区：行与行之间的层次由内容自己给（工具卡自带 hover 行/缩进），这里只
+ * 负责内边距。无框后台头与明细同回复正文对齐，只留上下呼吸空间。 */
+.chat-ledger-body {
+  padding: 2px 0 6px;
+}
+
+/* 运行中的明细区（ChatPane 的行支架）：行间距统一由每行内容自己给（见
+ * ChatPane.wrapLiveSpine），首行与台头的距离 = 它自己的块间距。这里上内边距
+ * 必须是 0 —— 只要容器有 padding，首行的上边距就折叠不出去，会在台头下多出
+ * 这几像素，首行与其余行差一档（"间隔不一致"）。完成态面板仍用上面那份
+ * padding：它的首块不带上边距，靠这 2px 呼吸。 */
+.chat-ledger[data-phase="running"] .chat-ledger-body {
+  padding-top: 0;
+}
+
+/* 过程面的折叠动画（TurnPanel 的展开体）。
+ *   - 外层用 grid-template-rows 0fr↔1fr 做高度收束（内容保持挂载，只被裁剪，
+ *     所以中途重挂载不会闪）；
+ *   - 内层额外做一次 opacity + translateY 的渐隐上移 —— 高度动画被裁剪的内容
+ *     只有一个"硬边"，看上去像被切掉；渐隐让收束读作"内容退场"而不是"被剪断"。
+ *     opacity/transform 走合成器，不额外触发布局，纯粹是观感增益。
+ *   - 时长令牌与 ChatPane 的滚动锚定预算(TURN_FOLD_MS)必须一致：JS 侧用同一个
+ *     常量推导挂起窗口，改这里要同步改常量。 */
+.chat-fold {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 260ms var(--chat-ease-out);
+}
+
+.chat-fold[data-open="false"] {
+  grid-template-rows: 0fr;
+}
+
+.chat-fold-inner {
+  overflow: hidden;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 200ms ease, transform 260ms var(--chat-ease-out);
+}
+
+/* 收起初段让内容先行淡出/上移，避免"硬边"先行；展开时同时淡入。 */
+.chat-fold[data-open="false"] .chat-fold-inner {
+  opacity: 0;
+  transform: translateY(-5px);
+}
+
+/* 流式光标：正文末尾的闪烁块，替代转圈 loader。 */
+.chat-caret {
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  vertical-align: -0.16em;
+  margin-left: 2px;
+  border-radius: 1.5px;
+  background: rgb(var(--accent));
+  box-shadow: 0 0 8px rgb(var(--accent) / 0.7);
+  animation: chat-caret-blink 1.06s ease-in-out infinite;
+}
+
+@keyframes chat-caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.12;
+  }
+}
+
+/* 入场动效。chat-bubble-in 只在「刚发出」的用户气泡上由组件层打上（新鲜度
+ * 窗口判定，历史水合/滚动重挂载不重放）；chat-enter 只打在运行中回合的流式
+ * 行上 —— 新块随流到达时上浮入场，历史行保持静态。 */
+.chat-bubble-in {
+  animation: chat-bubble-in 0.32s var(--chat-ease-out) both;
+}
+
+@keyframes chat-bubble-in {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.chat-enter {
+  animation: chat-enter 0.32s var(--chat-ease-out) both;
+}
+
+@keyframes chat-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 工具行状态图标：运行中圆弧 ↔ 完成对勾在同一格内交叉淡换（error 仍是红
+ * 叉，由组件层直接渲染）。两态 glyph 常驻 DOM，靠 data-status 切换透明度，
+ * transition 保证 running→done 是一次交叉淡换 + 轻微回弹。 */
+.chat-st {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+.chat-st > span {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.24s ease, transform 0.32s var(--chat-spring);
+}
+
+.chat-st-run {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.6px solid rgb(var(--accent) / 0.26);
+  border-top-color: rgb(var(--accent));
+  animation: chat-st-spin 0.72s linear infinite;
+}
+
+.chat-st-done {
+  opacity: 0;
+  transform: scale(0.5);
+  color: rgb(var(--accent));
+}
+
+.chat-st[data-status="done"] .chat-st-run {
+  opacity: 0;
+  animation: none;
+}
+
+.chat-st[data-status="done"] .chat-st-done {
+  opacity: 1;
+  transform: none;
+}
+
+@keyframes chat-st-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Reduced motion：光标常亮、入场/生长动画关停、状态圆弧定格为实线扇形、
+ * 全部色彩 transition 即时。信息不丢，只是安静。 */
+@media (prefers-reduced-motion: reduce) {
+  .chat-caret {
+    animation: none;
+    opacity: 1;
+  }
+
+  .chat-bubble-in,
+  .chat-enter {
+    animation: none;
+  }
+
+  .chat-st-run {
+    animation: none;
+    border-top-color: rgb(var(--accent));
+  }
+
+  .chat-st > span,
+  .chat-fold,
+  .chat-fold-inner,
+  .chat-ledger,
+  .chat-ledger-head,
+  .chat-ledger-scan {
+    transition: none;
+  }
+
+  .chat-ledger-dot,
+  .chat-ledger-scan {
+    animation: none;
+  }
+}
+
+/* ───────────── Activity cluster + console (chat top-right) ─────────────
+ * 方案 B「收放」的动效面:控件体积跟着紧急度走,所以这里只有两件事 ——
+ *   · 聚簇里那条文字横条的展开/收起(max-width + opacity);
+ *   · 活动台面板的入场,以及子代理运行行的扫光。
+ * 圆钮的进度环是 conic-gradient + mask,不需要关键帧;三种状态(空闲/运行/
+ * 告警)的切换只改边框与背景色,过渡写在组件里。 */
+
+/* 文字横条:max-width 0 → 280px。整簇右缘钉在角落,所以只有它自己变宽,
+   圆钮被推着向左让位(文档里「圆钮变成横条的头」就是这个方向)。 */
+.activity-cluster-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: 0;
+  opacity: 0;
+  padding-right: 0;
+  transition:
+    max-width 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 220ms ease-out,
+    padding-right 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.activity-cluster-bar.open {
+  max-width: 280px;
+  opacity: 1;
+  padding-right: 11px;
+}
+
+/* 横条里的 34px 迷你进度条(任务占比),与圆钮的环同源。 */
+.activity-cluster-miniprog {
+  display: block;
+  width: 34px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgb(var(--edge));
+  overflow: hidden;
+  flex: none;
+}
+
+.activity-cluster-miniprog > i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: rgb(var(--accent));
+  transition: width 300ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Console drop-in — Apple spring curve with soft scaling */
+@keyframes capsule-pop-in {
+  from {
+    transform: scale(0.96) translateY(-6px);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Apple HIG live indicator pulse */
+@keyframes apple-live-pulse {
+  0% { transform: scale(0.85); opacity: 0.7; }
+  50% { transform: scale(1.65); opacity: 0; }
+  100% { transform: scale(0.85); opacity: 0.7; }
+}
+
+.apple-live-dot {
+  position: relative;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.apple-live-dot::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 999px;
+  background-color: inherit;
+  opacity: 0.45;
+  animation: apple-live-pulse 2.2s cubic-bezier(0.32, 0.72, 0, 1) infinite;
+}
+
+/* Dynamic Island live soundwave bars */
+@keyframes dynamic-wave-bar {
+  0% { transform: scaleY(0.35); }
+  100% { transform: scaleY(1.15); }
+}
+
+.dynamic-island-wave {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 11px;
+}
+
+.dynamic-island-wave > span {
+  width: 2px;
+  border-radius: 1px;
+  background-color: currentColor;
+  transform-origin: bottom;
+  animation: dynamic-wave-bar 1.1s ease-in-out infinite alternate;
+}
+
+.dynamic-island-wave > span:nth-child(1) { height: 7px; animation-delay: 0.1s; }
+.dynamic-island-wave > span:nth-child(2) { height: 11px; animation-delay: 0.25s; }
+.dynamic-island-wave > span:nth-child(3) { height: 8px; animation-delay: 0.4s; }
+
+/* Subagent running stripe — a 2px track whose ::before light blob sweeps
+   downward (starts translated -100%, animates to +100%). */
+.capsule-shimmer-track {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  width: 2px;
+  overflow: hidden;
+  border-radius: 1px;
+  background-color: rgb(var(--warning) / 0.25);
+}
+
+.capsule-shimmer-track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(180deg, transparent, rgb(var(--warning)), transparent);
+  transform: translateY(-100%);
+  animation: capsule-shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes capsule-shimmer {
+  to {
+    transform: translateY(100%);
+  }
+}
+
+/* Reduced motion: the panel entrance flattens to a no-op, the bar snaps
+   instead of sliding, and the running stripe holds a static tint so "still
+   running" stays readable without movement. */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes capsule-pop-in {
+    from {
+      transform: none;
+      opacity: 1;
+    }
+    to {
+      transform: none;
+      opacity: 1;
+    }
+  }
+
+  .activity-cluster-bar {
+    transition: none;
+  }
+
+  .capsule-shimmer-track::before {
+    animation: none;
+    transform: none;
+  }
+}
+
+/* ───────────── Chat side gutter (responsive) ─────────────
+ * The message stream + composer share a horizontal gutter that scales with
+ * the chat pane's own width (NOT the viewport - the pane shrinks when the
+ * sidebars are open). The pane's root (`data-chat-root`) is declared a query
+ * container, and its descendants read --chat-gutter via `px-[var(...)]`.
+ *
+ * IMPORTANT: a container cannot query ITSELF - @container rules match
+ * elements whose ANCESTOR container satisfies the condition, so setting the
+ * variable on [data-chat-root] inside @container would never apply. Instead
+ * the default (floor) value lives on [data-chat-root] directly, and each
+ * @container block overrides --chat-gutter on [data-chat-root]'s descendants
+ * (which inherit it). Narrow panes get a tight gutter so text isn't squeezed;
+ * wide panes breathe. Stepped (not clamp()) so each breakpoint is a clean,
+ * predictable padding. */
+[data-chat-root] {
+  container-type: inline-size;
+  --chat-gutter: 1.25rem; /* 20px floor - always keep >=20px so content never
+                              touches the pane edges, even at the narrowest
+                              width (both sidebars open). */
+}
+
+@container (width < 28rem) {
+  [data-chat-root] * {
+    --chat-gutter: 1.25rem; /* 20px */
+  }
+}
+@container (28rem <= width < 44rem) {
+  [data-chat-root] * {
+    --chat-gutter: 3rem; /* 48px */
+  }
+}
+@container (44rem <= width < 64rem) {
+  [data-chat-root] * {
+    --chat-gutter: 5rem; /* 80px */
+  }
+}
+@container (width >= 64rem) {
+  [data-chat-root] * {
+    --chat-gutter: 8rem; /* 128px - wide, max breathing room */
+  }
+}
+
+/* ───────────── Turn-files card: compact title on narrow panes ─────────────
+ * The "本轮修改了 N 个文件 (创建 X · 修改 Y) · 撤销本轮" header is too wide for
+ * a phone, where the row wraps and pushes the +/- badge + button off-line.
+ * [data-chat-root] is already an inline-size query container, so we shorten
+ * the title text and hide the kind-breakdown subtitle below 28rem (covers all
+ * phone widths; tablets/desktop keep the full wording). Tracked on the PANE
+ * width, not the viewport, so a narrow center column on desktop also benefits. */
+[data-chat-root] .tfc-short {
+  display: none;
+}
+
+@container (width < 28rem) {
+  [data-chat-root] .tfc-long {
+    display: none;
+  }
+  [data-chat-root] .tfc-short {
+    display: inline;
+  }
+  [data-chat-root] .tfc-sub {
+    display: none;
+  }
+}
+
+/* ───────────── Chat message-stream density ─────────────
+ * The message stream's vertical rhythm is user-configurable (Settings →
+ * 常规 → 对话紧凑度). Three density presets, each setting two groups of vars:
+ *
+ * Stream rhythm (row/block gaps):
+ *   --chat-row-gap-assistant : top margin of each assistant MessageRow
+ *   --chat-row-gap-user      : top margin of each user MessageRow (kept larger
+ *                              than assistant so a new user prompt still reads
+ *                              as a distinct input even in compact mode)
+ *   --chat-block-gap         : gap between blocks inside one message
+ *                              (MessageBlocks `space-y-[...]`)
+ *
+ * Markdown typography (the final reply's own layout — Markdown.tsx). Without
+ * these, the density setting only moved row gaps while the reply body (which
+ * dominates a long turn's visual footprint) stayed identical in every mode.
+ * The four gap tiers mirror the old hardcoded Tailwind margins:
+ *   --chat-md-gap-xs : list-item gaps, h3 bottom   (was space-y-1 / mb-1)
+ *   --chat-md-gap-sm : paragraphs, lists, h2 bottom (was my-1.5 / mb-1.5)
+ *   --chat-md-gap-md : code blocks, blockquotes, tables, h1 bottom / h3 top
+ *                      (was my-2)
+ *   --chat-md-gap-lg : heading tops                 (was mt-3)
+ *   --chat-md-leading: prose line-height            (was --chat-line-height)
+ *
+ * The active preset is selected by the `data-chat-density` attribute on <html>,
+ * written by lib/appearance.ts from the persisted `ui.chatDensity` setting.
+ * The :root block below is the "comfortable" default (= the old hardcoded
+ * `mt-3` / `mt-5` / `space-y-2` / `my-1.5`), so the uncustomized state and any
+ * consumer outside [data-chat-density] resolve unchanged. The explicit
+ * selectors cover all three modes for clarity.
+ *
+ * The three presets are spread wide enough that switching is immediately
+ * perceptible: compact packs messages tightly, comfortable is the balanced
+ * default, cozy gives generous breathing room between turns. */
+:root,
+[data-chat-density="comfortable"] {
+  --chat-row-gap-assistant: 0.75rem; /* 12px (was mt-3) */
+  --chat-row-gap-user: 1.25rem;      /* 20px (was mt-5) */
+  --chat-block-gap: 0.5rem;          /* 8px  (was space-y-2) */
+  --chat-md-gap-xs: 0.25rem;         /* 4px  */
+  --chat-md-gap-sm: 0.375rem;        /* 6px  */
+  --chat-md-gap-md: 0.5rem;          /* 8px  */
+  --chat-md-gap-lg: 0.75rem;         /* 12px */
+  --chat-md-leading: 1.6;            /* = --chat-line-height default */
+}
+[data-chat-density="compact"] {
+  --chat-row-gap-assistant: 0.25rem; /* 4px */
+  --chat-row-gap-user: 0.5rem;       /* 8px */
+  --chat-block-gap: 0.1875rem;       /* 3px */
+  --chat-md-gap-xs: 0.125rem;        /* 2px */
+  --chat-md-gap-sm: 0.25rem;         /* 4px */
+  --chat-md-gap-md: 0.375rem;        /* 6px */
+  --chat-md-gap-lg: 0.5rem;          /* 8px */
+  --chat-md-leading: 1.5;
+}
+[data-chat-density="cozy"] {
+  --chat-row-gap-assistant: 1.75rem; /* 28px */
+  --chat-row-gap-user: 2.75rem;      /* 44px */
+  --chat-block-gap: 1rem;            /* 16px */
+  --chat-md-gap-xs: 0.4375rem;       /* 7px */
+  --chat-md-gap-sm: 0.625rem;        /* 10px */
+  --chat-md-gap-md: 0.875rem;        /* 14px */
+  --chat-md-gap-lg: 1.25rem;         /* 20px */
+  --chat-md-leading: 1.75;
+}
+
+/* ───────────── Composer action row · mini pill (方案 B, single-pill) ─────────────
+ * The session-config controls live in ONE segmented mini pill at every
+ * composer width (prototypes/composer-redesign.html 方案 B, single-pill
+ * revision): attach "+" → model → effort → permission → context ring.
+ * Nothing folds away — as the card narrows the pill only compacts
+ * (labels → icons + level bars + color dot; ring % collapses, the ring and
+ * the + stay), driven by useComposerRowFit's tier (card < 560px, measured
+ * overflow above it, 24px hysteresis).
+ *   .composer-action-row   → bottom button row (pill + right cluster)
+ *   .composer-chips        → the left cluster wrapping the pill
+ *   .composer-minipill     → the segmented mini pill (ComposerToolbar)
+ *   .composer-minipill-seg → one clickable segment of the pill
+ *   .composer-lblwrap      → 1fr↔0fr grid shell collapsing a label
+ * These rules only style/animate; the tier decision lives in the hook.
+ * Unlayered selectors beat Tailwind's layered utilities, so they win over
+ * inline px/gap utilities. */
+
+/* Motion vocabulary shared by every composer transition below. */
+:root {
+  --composer-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --composer-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --composer-dur-collapse: 360ms;
+  --composer-dur-fade: 220ms;
+}
+
+/* ── Mini pill ──────────────────────────────────────────────────────────
+ * One bordered container; every segment is an independent trigger opening
+ * its own menu/popover — no behaviour change vs the old chip row, just a
+ * tighter container that persists through every width. */
+[data-chat-root] .composer-minipill {
+  display: inline-flex;
+  align-items: center;
+  height: 1.75rem;            /* 28px — matches the chip row's visual height */
+  padding: 0 0.1875rem;
+  border: 1px solid rgb(var(--edge));
+  border-radius: 0.5625rem;   /* 9px */
+  background: rgb(var(--surface-muted) / 0.6);
+  flex: none;
+  min-width: 0;
+}
+[data-chat-root] .composer-minipill-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  height: 1.375rem;           /* 22px segment — comfortable hit target */
+  padding: 0 0.4375rem;
+  border: none;
+  background: none;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: rgb(var(--content-muted));
+  min-width: 0;
+  flex: none;
+  transition: background 0.15s, color 0.15s, gap var(--composer-dur-collapse) var(--composer-ease-out);
+}
+[data-chat-root] .composer-minipill-seg:hover {
+  background: rgb(var(--accent) / 0.11);
+  color: rgb(var(--accent-strong));
+}
+[data-chat-root] .composer-minipill-seg[data-popup-open] {
+  background: rgb(var(--accent) / 0.12);
+}
+/* Disabled segment (the attach "+" while an approval owns the composer):
+ * no hover play, just the dim. */
+[data-chat-root] .composer-minipill-seg:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+  background: none;
+  color: rgb(var(--content-muted));
+}
+[data-chat-root] .composer-minipill-mid {
+  width: 1px;
+  height: 0.875rem;
+  background: rgb(var(--edge));
+  flex: none;
+  transition: opacity 0.3s var(--composer-ease-out);
+}
+[data-chat-root] .composer-minipill[data-compact="1"] .composer-minipill-mid {
+  opacity: 0.5;
+}
+/* Compact: labels collapse to icons, so the icon↔label gap collapses with
+ * them (the lblwrap shells shrink the width; the gap must follow to zero or
+ * it keeps a phantom notch next to every icon). */
+[data-chat-root] .composer-minipill[data-compact="1"] .composer-minipill-seg {
+  gap: 0;
+}
+/* Context-ring segment: not a trigger of its own (the ring button inside
+ * carries the hover/tooltip), just spacing that matches the other
+ * segments. The ring itself never collapses — only its % label does (via
+ * the lblwrap shell below). */
+[data-chat-root] .composer-minipill-ringseg {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.4375rem;
+  flex: none;
+}
+
+/* Label collapse shell: the same 1fr ↔ 0fr grid trick at label granularity,
+ * driven by the pill's / provider chip's data-compact — segments and the
+ * provider chip shrink to their icons smoothly, no width bookkeeping. */
+[data-chat-root] .composer-lblwrap {
+  display: grid;
+  grid-template-columns: 1fr;
+  min-width: 0;
+  transition: grid-template-columns var(--composer-dur-collapse) var(--composer-ease-out);
+}
+[data-chat-root] .composer-lblwrap > span {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+[data-chat-root] .composer-minipill[data-compact="1"] .composer-lblwrap,
+[data-chat-root] .composer-provider-chip[data-compact="1"] .composer-lblwrap {
+  grid-template-columns: 0fr;
+}
+
+/* Effort level bars: the pill's compact-friendly value indicator (one bar
+ * per level, lit up to the active rank). Heights are inline; this styles the
+ * ramp + the lit state. */
+[data-chat-root] .composer-lvlbars {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  flex: none;
+}
+[data-chat-root] .composer-lvlbars > span {
+  width: 3px;
+  border-radius: 1.5px;
+  background: rgb(var(--content-subtle));
+  opacity: 0.45;
+  transition: height 0.3s var(--composer-spring), opacity 0.3s, background 0.3s;
+}
+[data-chat-root] .composer-lvlbars > span.on {
+  opacity: 1;
+  background: rgb(var(--accent));
+}
+
+/* ── Card polish (方案 B 质感 baseline) ──────────────────────────────── */
+/* Focus: an accent hairline lights up along the card's top edge (the border
+ * + halo come from the Tailwind focus-within utilities on the card). */
+[data-chat-root] .composer-card::after {
+  content: "";
+  position: absolute;
+  left: 1rem;
+  right: 1rem;
+  top: 0;
+  height: 1px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, rgb(var(--accent) / 0.65), transparent);
+  opacity: 0;
+  transition: opacity 0.34s var(--composer-ease-out);
+  pointer-events: none;
+}
+[data-chat-root] .composer-card:focus-within::after {
+  opacity: 1;
+}
+/* Busy: a light sweep runs along the top edge while a turn is in flight —
+ * carries the "working" signal into the card itself. */
+[data-chat-root] .composer-card[data-busy="1"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  border-radius: 16px 16px 0 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgb(var(--accent) / 0.15) 20%,
+    rgb(var(--accent)) 50%,
+    rgb(var(--accent) / 0.15) 80%,
+    transparent
+  );
+  background-size: 220% 100%;
+  animation: composer-sweep 1.6s linear infinite;
+}
+@keyframes composer-sweep {
+  from { background-position: 130% 0; }
+  to { background-position: -130% 0; }
+}
+
+/* ── Send / stop feedback ─────────────────────────────────────────────── */
+/* Ready (has content): a resident soft glow says "可以发了" without touching
+ * transform (the button's Tailwind hover/active scales own that). */
+[data-chat-root] .composer-send[data-ready="1"] {
+  box-shadow: 0 4px 16px -5px rgb(var(--accent) / 0.55);
+}
+/* Launch: one-shot after a send/enqueue — the icon flies out and re-enters
+ * from the opposite corner while a halo pulse expands around the button.
+ * Toggled via the composer-send-launch class; onAnimationEnd clears it. */
+[data-chat-root] .composer-send-launch {
+  animation: composer-send-pulse 0.5s var(--composer-ease-out);
+}
+[data-chat-root] .composer-send-launch > svg {
+  animation: composer-send-launch-icon 0.5s ease-in-out;
+}
+@keyframes composer-send-launch-icon {
+  0% { transform: translate(0, 0) scale(1); opacity: 1; }
+  42% { transform: translate(13px, -13px) scale(0.55); opacity: 0; }
+  43% { transform: translate(-11px, 11px) scale(0.55); opacity: 0; }
+  100% { transform: translate(0, 0) scale(1); opacity: 1; }
+}
+@keyframes composer-send-pulse {
+  0% { box-shadow: 0 0 0 0 rgb(var(--accent) / 0.45); }
+  100% { box-shadow: 0 0 0 12px rgb(var(--accent) / 0); }
+}
+/* Stop: a conic-progress ring spins around the button while generation
+ * runs — masked to a 2.5px annulus so it reads as a halo, not a disc. */
+[data-chat-root] .composer-stop {
+  position: relative;
+}
+[data-chat-root] .composer-stop::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 16px;
+  pointer-events: none;
+  background: conic-gradient(
+    from 0deg,
+    rgb(var(--accent) / 0) 0 62%,
+    rgb(var(--accent) / 0.9) 86%,
+    rgb(var(--accent) / 0) 100%
+  );
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
+  animation: composer-spin 1.35s linear infinite;
+}
+@keyframes composer-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Entrance animations (tags / queued prompts) ──────────────────────── */
+@keyframes composer-tag-in {
+  from { opacity: 0; transform: translateY(7px) scale(0.93); }
+  to { opacity: 1; transform: none; }
+}
+/* fill "backwards" (not "both"): after the entrance completes the element
+ * returns to its natural styles, so later state classes (e.g. the queue
+ * item's drag dimming opacity-40) aren't held hostage by a filled animation. */
+[data-chat-root] .composer-tag-in {
+  animation: composer-tag-in 0.36s var(--composer-spring) backwards;
+}
+@keyframes composer-q-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: none; }
+}
+[data-chat-root] .composer-q-in {
+  animation: composer-q-in 0.34s var(--composer-ease-out) backwards;
+}
+
+/* Reduced motion: label shells snap instead of animating, and the
+ * decorative loops (sweep / spin / launch) flatten away; entrance animations
+ * degrade to instant appearance so arrival is still perceivable. */
+@media (prefers-reduced-motion: reduce) {
+  [data-chat-root] .composer-lblwrap,
+  [data-chat-root] .composer-minipill-seg {
+    transition: none;
+  }
+  [data-chat-root] .composer-card[data-busy="1"]::before,
+  [data-chat-root] .composer-stop::before {
+    animation: none;
+  }
+  [data-chat-root] .composer-send-launch,
+  [data-chat-root] .composer-send-launch > svg {
+    animation: none;
+  }
+  [data-chat-root] .composer-tag-in,
+  [data-chat-root] .composer-q-in {
+    animation-duration: 0.01s;
+  }
+}
+
+/* Narrow-pane cosmetics only (gaps/paddings) — the tier decision itself
+ * lives in useComposerRowFit. */
+@container (width < 30rem) {
+  [data-chat-root] .composer-action-row {
+    gap: 0.25rem;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+  [data-chat-root] .composer-chips {
+    gap: 0.25rem;
+  }
+  [data-chat-root] .composer-chip {
+    padding-left: 0.375rem;
+    padding-right: 0.375rem;
+  }
+}
+
+/* ───────────── Model pick guard nudge ─────────────
+ * Sending with no model picked is blocked at the store. Instead of a global
+ * toast, the model chip itself answers: a short horizontal shake draws the
+ * eye to the exact control to act on, and a small floating hint (rendered in
+ * a portal just above the chip, fixed-positioned from its rect) names what
+ * to do. Classes are toggled imperatively by ModelDropdown's pulse effect —
+ * .model-chip-nudge on the trigger for ~420ms, .model-pick-hint mounted for
+ * ~2.4s. The hint animates a 4px rise-in; position comes from inline
+ * left/top, the translate(-50%,-100%-6px) centering lives here so the JSX
+ * stays layout-free. */
+.model-chip-nudge {
+  animation: model-chip-shake 0.4s ease-in-out;
+}
+
+@keyframes model-chip-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-3px);
+  }
+  50% {
+    transform: translateX(3px);
+  }
+  75% {
+    transform: translateX(-2px);
+  }
+}
+
+.model-pick-hint {
+  position: fixed;
+  z-index: 60;
+  transform: translate(-50%, calc(-100% - 6px));
+  animation: model-hint-in 0.16s ease-out;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+@keyframes model-hint-in {
+  from {
+    transform: translate(-50%, calc(-100% - 2px));
+    opacity: 0;
+  }
+  to {
+    transform: translate(-50%, calc(-100% - 6px));
+    opacity: 1;
+  }
+}
+
+/* Reduced motion: the shake flattens away (the accent-colored "选择模型" text
+   already reads as "act here"); the hint stays but as a static bubble. */
+@media (prefers-reduced-motion: reduce) {
+  .model-chip-nudge {
+    animation: none;
+  }
+  .model-pick-hint {
+    animation: none;
+  }
+}
+
+/* ───────────── Composer rich-text editor (Tiptap) ─────────────
+ * The composer's contenteditable replaces a plain <textarea>. These rules give
+ * it the same look as the old textarea (font, padding) and add the two things a
+ * textarea had for free: a placeholder when empty, and a max-height beyond
+ * which the box scrolls internally. Tiptap renders a .ProseMirror inside the
+ * EditorContent host. */
+
+.composer-host .ProseMirror {
+  /* The host provides the bounding box (border/padding live on the parent in
+     the JSX); here we only constrain the editable area's height + scrolling.
+     min-height reserves ~2 lines of space by default so the empty composer
+     doesn't read as a cramped single line and short prompts don't cause the
+     box to jump on the first keystroke. Content grows freely up to max-height,
+     then scrolls internally. */
+  min-height: 3rem; /* ~2 lines at text-sm leading-relaxed */
+  max-height: 18rem; /* 288px — mirrors the textarea's max-h-72 */
+  overflow-y: auto;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* Placeholder: shown whenever the doc is empty, focused or not — the
+   home-screen composer starts unfocused and the hint text must be visible
+   immediately. `is-empty` is toggled by ComposerEditor (syncEmptyClass);
+   Tiptap v3 doesn't add it and no Placeholder extension is installed, so
+   the class is the single source of truth for emptiness. */
+.composer-host .ProseMirror.is-empty::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  color: var(--color-content-subtle, rgb(var(--content-subtle)));
+  pointer-events: none;
+  float: left;
+  height: 0;
+}
+
+/* Skill pills rendered by the editor. The class is applied via the node's
+   HTMLAttributes; this adds the leading sparkles glyph that marks the text
+   as a skill/command reference. Atom nodes are non-editable by nature, so
+   no extra contenteditable suppression is needed. */
+.composer-host .skill-pill::before {
+  content: "✦ ";
+  font-size: 0.8em;
+  opacity: 0.8;
+}
+
+/* Inline skill pills in the message stream (rendered by the Markdown
+   preprocessor). Mirrors the composer's lightweight mark — accent-colored
+   text + sparkles glyph, no fill/border/shadow — so a skill reads the same
+   in both the input and the transcript. The glyph is a real DOM child (not a
+   ::before pseudo-element) so the icon + text are one cohesive inline unit
+   that won't split or fragment. Keep this in sync with the `skill-pill`
+   Tailwind classes in ComposerEditor.tsx. */
+.skill-pill-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.0625rem;
+  vertical-align: baseline;
+  font-size: 0.85em;
+  font-weight: 600;
+  color: rgb(var(--accent));
+  white-space: nowrap;
+  transition: opacity 0.15s;
+}
+
+.skill-pill-inline:hover {
+  opacity: 0.7;
+}
+
+.skill-pill-inline-glyph {
+  font-size: 0.8em;
+  opacity: 0.8;
+}
+
+/* ───────────── Mobile focus-zoom guard ─────────────
+ * iOS Safari auto-zooms the page to ~2x when an <input>/<textarea>/
+ * contenteditable whose computed font-size is under 16px gains focus — the
+ * zoomed frame centers the field, pushing the rest of the page (and part of
+ * the field itself) off-screen. Every focusable control in the shared bundle
+ * is sized for the desktop (text-sm/text-xs), so on real phones/tablets
+ * (data-shell="mobile", stamped by main.tsx from isMobileDevice) we force
+ * each focusable surface to 16px. Pinch zoom stays enabled — the font bump is
+ * the accessible fix (maximum-scale=1 would break WCAG 1.4.4, and iOS ignores
+ * it for accessibility users anyway). Specificity (0,1,1)/(0,2,0) beats the
+ * Tailwind text-sm/text-xs utilities, and direct targeting beats the
+ * composer-host's inherited text-sm. */
+[data-shell="mobile"] input,
+[data-shell="mobile"] textarea,
+[data-shell="mobile"] [contenteditable="true"] {
+  font-size: 16px;
+}
+
+/* ───────────── Image lightbox ─────────────
+ * Fullscreen image viewer opened by ImageWithPreview. Three parts: a scrim, the
+ * picture, and ONE control bar docked below the picture (see image-preview.tsx
+ * for the layout contract). Motion vocabulary mirrors the composer curves —
+ * ease-out for entries, nothing bouncy, since chrome that wobbles over a
+ * photograph reads as sloppy.
+ *
+ * Fill mode is `backwards` everywhere, never `both`/`forwards`: a forwards fill
+ * would keep the last keyframe applied after the animation ends and thus
+ * override the idle-hide opacity below (the same trap documented for the
+ * composer's entrance animations).
+ */
+.lightbox-scrim {
+  /* Deeper than the shared backdrop with a soft vignette, so the picture reads
+   * as the brightest surface on screen without a flat black plate behind it. */
+  background: radial-gradient(115% 85% at 50% 42%, rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0.93));
+  animation: lightbox-scrim-in 180ms ease-out backwards;
+}
+@keyframes lightbox-scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.lightbox-figure {
+  animation: lightbox-figure-in 240ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+@keyframes lightbox-figure-in {
+  from {
+    opacity: 0;
+    transform: scale(0.975);
+  }
+}
+
+/* The bar's glass: translucent zinc + blur so it reads as a layer above the
+ * photo rather than a slab cut out of it, with a 1px inner hairline instead of
+ * a border (a real border would double up under the blur). */
+.lightbox-bar {
+  background: rgba(24, 24, 27, 0.72);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  box-shadow:
+    0 12px 32px -10px rgba(0, 0, 0, 0.65),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.09);
+}
+
+/* Copy receipt: the button's glyph flips to a check — a one-shot pop makes the
+ * swap register at 17px without adding a second floating element over the
+ * picture. */
+.lightbox-check {
+  animation: lightbox-check-in 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes lightbox-check-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+.lightbox-chrome {
+  transition:
+    opacity 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: lightbox-chrome-in 260ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+@keyframes lightbox-chrome-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* Idle: chrome retracts and the cursor goes with it — the image is left alone
+ * on screen. Any pointer move / keypress brings both back (component side).
+ *
+ * Both rules land on DESCENDANTS, not on `.lightbox-root`: the popup is
+ * click-through (the image and the bar re-enable themselves), so it never
+ * becomes the hit-test target itself and a cursor declared on it would never
+ * apply. The two elements that CAN be under the pointer while idle are the
+ * image and the scrim. */
+body:has(.lightbox-root[data-chrome="hidden"]) .lightbox-figure,
+body:has(.lightbox-root[data-chrome="hidden"]) .lightbox-scrim {
+  cursor: none;
+}
+.lightbox-root[data-chrome="hidden"] .lightbox-chrome {
+  opacity: 0;
+  transform: translateY(6px);
+}
+/* `pointer-events: none` has to be repeated on the children: an explicit
+ * `pointer-events: auto` (the bar carries one, so it can sit inside a
+ * click-through popup) re-enables hit-testing under a `none` ancestor, which
+ * would leave an invisible click-blocking bar behind. */
+.lightbox-root[data-chrome="hidden"] .lightbox-chrome,
+.lightbox-root[data-chrome="hidden"] .lightbox-chrome * {
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightbox-scrim,
+  .lightbox-figure,
+  .lightbox-chrome,
+  .lightbox-check {
+    animation: none;
+  }
+  .lightbox-chrome {
+    transition: none;
+  }
+}
+
+/* ───────────── Sketch theme · 手绘 (ui.themeStyle="sketch") ─────────────
+ * prototypes/theme-sketch-redesign.html 的落地(一期纸面 + 二期牛皮纸)。
+ * 立场:手绘是「风格」维度,与明暗(ui.theme → html.dark)正交 —— 本区块
+ * 所有规则都挂在 html.sketch 上,由 lib/theme.ts applyThemeStyle 写入
+ * (settings key ui.themeStyle,renderer 的 useThemeStyle 挂在 App 根)。
+ * 四形态:sketch×light = 纸面手绘(暖纸+墨线);sketch×dark = 牛皮纸
+ * (暖深底+粉笔线,同一套形状语言的深色版);classic 两档 = 现状。
+ *
+ * 红线(改这里前先读原型「规格速查」节):
+ *  · 代码/终端/diff 保持等宽字体:font-mono 工具类在元素级自带等宽栈,body
+ *    的手写栈 cascade 不进去;Monaco/xterm 各管各的字体,天然不受影响。
+ *  · 位移滤镜只挂 svg 图标(svg.tabler-icon),绝不挂根节点/滚动容器/动画
+ *    元素 —— feDisplacementMap 挂大子树会整树重栅格化,滚动掉帧。
+ *  · 上下文环/头像/状态点保持正形:rounded-full 刻意不进手抖圆角映射
+ *    (仪表与身份标识不手绘,避免读数歧义)。
+ *  · 本区块集中管理 sketch 规则,禁止把 html.sketch 选择器散落到文件其它
+ *    段落(与 .dark 的组织方式对齐:颜色差异靠 token,形状差异靠工具类映射)。
+ *  · 本区块的规则一律不进 @layer,且带 html.sketch 前缀——层叠序与特异性
+ *    双保险压过 Tailwind 的 rounded-* / shadow-* / border 工具类(文件头
+ *    base-ui 修正同款的既有手法)。
+ */
+
+/* ── 纸面配色(sketch × light)──────────────────────────────────────────
+ * 暖纸底 + 墨线:色相整体偏暖,铅笔灰描边,品牌绿微降饱和保墨感。
+ * token 名与 :root/.dark 完全同集,rgb(var()) 消费端零改动。 */
+html.sketch:not(.dark) {
+  --surface: 252 250 243; /* #fcfaf3 暖纸 — 主面 */
+  --surface-muted: 246 242 231; /* #f6f2e7 内衬/侧栏轨道/代码井 */
+  --surface-hover: 238 233 219; /* #eee9db hover 填充 */
+  --content: 58 52 44; /* #3a342c 墨色 */
+  --content-muted: 109 100 86; /* #6d6456 */
+  --content-subtle: 141 131 113; /* #8d8371 */
+  --edge: 199 189 168; /* #c7bda8 铅笔灰 */
+  --panel-edge: 214 205 186; /* #d6cdba 结构分隔线(比 edge 浅一档) */
+  --input-edge: 178 167 144; /* #b2a790 输入框描边(比 edge 深一档) */
+  --accent: 8 140 105; /* #088c69 微降饱和的墨绿 */
+  --accent-strong: 6 118 88; /* #067658 */
+  --danger: 199 62 52;
+  --warning: 173 108 16;
+  --info: 112 78 196;
+  --success: 22 132 100;
+  --user-bubble: 130 120 100; /* 暖灰气泡,纸面上的墨水感 */
+  --user-bubble-alpha: 0.14;
+  color-scheme: light;
+}
+
+/* ── 牛皮纸配色(sketch × dark,2026-09-11 二期)────────────────────────
+ * 手绘形状语言的深色版:暖深底 + 粉笔线。token 取自原型 kraft 表;硬阴影
+ * 配方不变(content 在深色下是粉笔白 → 偏移阴影读作粉笔灰,原型同款)。
+ * --git-lane-* 刻意不重定义(沿用 .dark 的经典车道色):lane 是身份色,
+ * 与主题风格无关。编辑器配色(Monaco/shiki)也继续走用户按明暗自选的
+ * 方案——手绘只接管 chrome,数据流保持自己的可读性调优。 */
+html.sketch.dark {
+  --surface: 59 49 38; /* #3b3126 暖深底 — 主面 */
+  --surface-muted: 51 42 32; /* #332a20 内衬/侧栏轨道/代码井 */
+  --surface-hover: 70 59 46; /* #463b2e hover 填充 */
+  --content: 240 231 213; /* #f0e7d5 粉笔白 */
+  --content-muted: 205 194 172; /* #cdc2ac */
+  --content-subtle: 172 160 137; /* #aca089 */
+  --edge: 105 90 70; /* #695a46 粉笔线 */
+  --panel-edge: 95 81 63; /* #5f513f 结构分隔线 */
+  --input-edge: 128 112 88; /* #807058 输入框描边(比 edge 亮一档) */
+  --accent: 64 190 142; /* #40be8e 粉笔绿 */
+  --accent-strong: 64 190 142; /* 深色底上已够对比,镜像 accent(同 .dark 惯例) */
+  --danger: 240 116 100;
+  --warning: 235 178 80;
+  --info: 168 142 245;
+  --success: 90 200 150;
+  --user-bubble: 205 194 172; /* 粉笔灰气泡 */
+  --user-bubble-alpha: 0.18; /* 深底上略加重,否则气泡不可见(同 .dark 的教训) */
+}
+
+/* ── 形状配方(明暗无关:纸面/牛皮纸共用)─────────────────────────────── */
+html.sketch {
+  /* 三档手抖圆角:大=卡片/面板,中=按钮/输入/气泡,小=chip/标签。
+   * 值刻意是「不可能的手绘圆角」——相邻角 225px/18px 的悬殊让浏览器按比例
+   * 收缩出歪扭的有机边缘。 */
+  --sk-r-lg: 255px 18px 225px 18px / 18px 225px 18px 255px;
+  --sk-r-md: 95px 9px 85px 10px / 10px 80px 9px 95px;
+  --sk-r-sm: 30px 7px 26px 8px / 8px 24px 7px 30px;
+  /* 硬阴影:实色偏移(贴纸/木刻感),替代柔光。 */
+  --sk-sh: 3px 4px 0 rgb(var(--content) / 0.06);
+  --sk-sh-btn: 2px 2px 0 rgb(var(--content) / 0.16);
+  --sk-sh-pop: 5px 6px 0 rgb(var(--content) / 0.12);
+  /* 手写字体基准上调一档(14→15px):楷体小字号发虚,纸面/牛皮纸同样适用
+   * (放形状基座而非纸面配色块,让深色形态也拿到)。用户在设置里显式改过
+   * 字号时 appearance.ts 的 inline 写入优先(默认值改为 removeProperty 正是
+   * 为了让这里的主题默认能生效)——设置页步进器显示的是「用户设定值」而非
+   * 主题生效值,这是原型规格明示的取舍。特异性:html.sketch (0,1,1) 压过
+   * .dark (0,1,0),dark+sketch 下同样是 15px。 */
+  --chat-font-size: 15px;
+  --right-panel-font-size: 15px;
+  /* 手写字体栈:捆绑的霞鹜文楷(main.tsx,regular+bold 两字重的 unicode-range
+   * 切片)→ 系统楷体 → 系统 sans。font-mono 面(代码/终端/diff)元素级自带
+   * 等宽栈,不受此 cascade。 */
+  --sk-font:
+    "LXGW WenKai", "LXGW WenKai Lite", "Kaiti SC", "STKaiti", "KaiTi", "DFKai-SB",
+    -apple-system, "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei UI",
+    "Microsoft YaHei", sans-serif;
+}
+
+/* 注意必须连 #root 一起覆盖:基础规则是 `html, body, #root { font-family }`
+ * 的分组选择器——#root 自己钉着系统 sans,而整个 React 树渲染在 #root 里、
+ * 从它继承字体;只覆盖 body 一层传不进去(模型回复/全部 chrome 都会漏)。
+ * pre/code 不受影响:浏览器 UA 样式表对它们有直选的 monospace 规则,
+ * 直选永远赢过继承——「代码不手绘」红线因此天然成立。 */
+html.sketch body,
+html.sketch #root {
+  font-family: var(--sk-font);
+  /* 楷体只有单一字重,正文保持 400 防糊;层级靠显式 font-* 工具类的合成
+   * 粗体(全局字重梯子在 html 上,这里在 body/#root 子树落 400)。 */
+  font-weight: 400;
+}
+
+/* font-sans 工具类(Tailwind 默认 sans 栈)语义上就是「UI 正文字体」——
+ * sketch 下映射到同一手写栈(个别输入框/选项列表用它显式钉住字体)。 */
+html.sketch .font-sans {
+  font-family: var(--sk-font);
+}
+
+/* 荧光笔:文本选区 = accent 22% 扫过。 */
+html.sketch ::selection {
+  background: rgb(var(--accent) / 0.22);
+}
+
+/* 焦点环 = 虚线铅笔描焦点(原型规格;覆盖组件的 outline-none——键盘可达性
+ * 信号在手绘形态下换成自己的语言)。排除 Monaco/xterm 的隐藏输入 textarea:
+ * 它们是真实焦点宿主但视觉上不应有框(:not() 只收复合选择器,按各自根
+ * class 逐一排除)。 */
+html.sketch :focus-visible:not(.inputarea):not(.xterm-helper-textarea) {
+  outline: 2px dashed rgb(var(--accent) / 0.6);
+  outline-offset: 2px;
+}
+
+/* ── 工具类映射:把 Tailwind 的规则几何翻译成手抖几何 ──────────────────────
+ * 只映射中大三档 + 基础 .rounded;rounded-full / rounded-sm 刻意不动(区块头
+ * 红线:仪表与身份标识保持正形)。小元素上超大圆角会被浏览器按比例收缩,
+ * 收缩保比例 → 边缘仍是歪扭的有机弧,不会爆形。 */
+html.sketch .rounded,
+html.sketch .rounded-md {
+  border-radius: var(--sk-r-sm);
+}
+html.sketch .rounded-lg {
+  border-radius: var(--sk-r-md);
+}
+html.sketch .rounded-xl,
+html.sketch .rounded-2xl {
+  border-radius: var(--sk-r-lg);
+}
+
+/* 硬阴影:柔光阴影全部换成实色偏移(贴纸感)。 */
+html.sketch .shadow-sm {
+  box-shadow: var(--sk-sh);
+}
+html.sketch .shadow-md,
+html.sketch .shadow-lg,
+html.sketch .shadow-xl,
+html.sketch .shadow-2xl {
+  box-shadow: var(--sk-sh-pop);
+}
+
+/* 墨线:整框描边加粗半像素(1px 铅笔 → 1.5px 墨线)。只影响 .border 全框;
+ * border-t 之类的单向发丝线不动(结构分隔线保持轻)。 */
+html.sketch .border {
+  border-width: 1.5px;
+}
+
+/* 铅笔虚线内衬框:「内衬数据区」的统一标记。聊天代码块(pre 自带 border);
+ * 终端见下一条规则。(思考块在 2026-09-11 无框台账重构后已是无边框行,
+ * 不再描框——强行加框会跟无框设计打架。) */
+html.sketch .chat-md pre {
+  border-style: dashed;
+}
+
+/* 终端 = 内衬数据区。`data-terminal-session` 是 TerminalView 宿主的稳定
+ * 标记(全应用唯一挂载点在 TerminalPanel,底部/右侧终端共用)。宿主原本
+ * h-full/w-full 填满 absolute inset-0 的包装层;sketch 下改绝对定位 + 内缩,
+ * 让虚线框读作「画在纸上的一块区域」,并垫一层浅内衬底色(xterm 自身透明,
+ * 底色由宿主给)。overflow-hidden(类自带)保证 xterm 画布裁进手抖圆角。 */
+html.sketch [data-terminal-session] {
+  position: absolute;
+  inset: 6px 8px 8px;
+  width: auto;
+  height: auto;
+  border: 1.5px dashed rgb(var(--edge));
+  border-radius: var(--sk-r-md);
+  background: rgb(var(--surface-muted) / 0.45);
+}
+
+/* 双笔描边(重描一圈):composer 是页面常驻的重点卡,用 outline 实现——
+ * composer-card 的 ::before/::after 已被 busy 扫光与聚焦发丝线占用。Chromium
+ * 的 outline 跟随 border-radius,正好描出手抖外圈的镜像。 */
+html.sketch [data-chat-root] .composer-card {
+  outline: 1px solid rgb(var(--edge) / 0.45);
+  outline-offset: 3px;
+  box-shadow: var(--sk-sh);
+}
+
+/* ── 图标抖动:一枚全局 feTurbulence 位移滤镜 ─────────────────────────────
+ * 滤镜本体挂在 index.html(首帧前静态存在——Chrome 对引用不存在滤镜的元素
+ * 会直接不渲染,绝不能等 React 挂载)。只挂 svg.tabler-icon(Tabler 的稳定
+ * 根 class);react-icons 的品牌/平台图标保持清晰——身份标识不手绘。
+ * 「换一支笔」(换 seed)二期再接设置项。 */
+html.sketch svg.tabler-icon {
+  filter: url(#sk-wobble);
+}
+
+/* ── 纸纹:整页一层 feTurbulence 噪声(fixed 伪元素,pointer-events 穿透)──
+ * 280px 平铺、5% 透明度的暖色噪声;z-index 与菜单弹层同顶但 pointer-events
+ * 为 none,视觉上「整张纸都有纹理」包括弹层之上,交互零影响。深色(牛皮纸)
+ * 下减淡到 55%:深底上同一噪声会读成污渍而非纸纹(原型 kraft 同款)。 */
+html.sketch body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='280' height='280'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.42 0 0 0 0 0.38 0 0 0 0 0.30 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='280' height='280' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+html.sketch.dark body::after {
+  opacity: 0.55;
+}
+
+
+/* ───────────── Orch canvas (自动编排画布,聊天流内) ─────────────
+   作用域 [data-chat-root];交互部件沿用中性 token,主操作用 accent。 */
+[data-chat-root] .orch-canvas {
+  border: 1px solid rgb(var(--panel-edge));
+  border-radius: 12px;
+  background: rgb(var(--surface));
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  max-width: 100%;
+}
+[data-chat-root] .oc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgb(var(--panel-edge));
+  min-height: 42px;
+}
+[data-chat-root] .oc-title {
+  font-weight: 600;
+  font-size: var(--chat-fs-sm, 12.5px);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+[data-chat-root] .oc-status {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid rgb(var(--edge));
+  color: rgb(var(--content-subtle));
+  white-space: nowrap;
+}
+[data-chat-root] .oc-status.planning { color: rgb(var(--warning)); border-color: rgb(var(--warning) / 0.4); background: rgb(var(--warning) / 0.1); }
+[data-chat-root] .oc-status.running { color: rgb(var(--sky, 56 189 248)); border-color: rgb(var(--sky, 56 189 248) / 0.45); background: rgb(var(--sky, 56 189 248) / 0.1); }
+[data-chat-root] .oc-status.paused { color: rgb(var(--warning)); border-color: rgb(var(--warning) / 0.45); background: rgb(var(--warning) / 0.1); }
+[data-chat-root] .oc-status.done { color: rgb(var(--accent)); border-color: rgb(var(--accent) / 0.45); background: rgb(var(--accent) / 0.1); }
+[data-chat-root] .oc-status.failed { color: rgb(var(--danger)); border-color: rgb(var(--danger) / 0.45); background: rgb(var(--danger) / 0.1); }
+[data-chat-root] .oc-status.canceled { color: rgb(var(--content-subtle)); }
+[data-chat-root] .oc-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor;
+  animation: oc-pulse 1s ease-in-out infinite;
+}
+@keyframes oc-pulse { 50% { opacity: 0.25; } }
+[data-chat-root] .oc-stats {
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+  color: rgb(var(--content-subtle));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+[data-chat-root] .oc-actions { display: flex; gap: 5px; flex: none; }
+[data-chat-root] .oc-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 26px; padding: 0 9px; border-radius: 7px;
+  font-size: 12px; font-weight: 500;
+  border: 1px solid rgb(var(--edge));
+  color: rgb(var(--content-muted));
+  white-space: nowrap;
+}
+[data-chat-root] .oc-btn:hover { background: rgb(var(--surface-hover)); }
+[data-chat-root] .oc-btn.primary {
+  background: rgb(var(--accent)); border-color: rgb(var(--accent)); color: #fff;
+}
+[data-chat-root] .oc-btn.primary:hover { background: rgb(var(--accent-strong, var(--accent))); }
+[data-chat-root] .oc-btn.warn { color: rgb(var(--warning)); border-color: rgb(var(--warning) / 0.5); }
+[data-chat-root] .oc-btn.danger { color: rgb(var(--danger)); border-color: rgb(var(--danger) / 0.5); }
+[data-chat-root] .oc-progress {
+  height: 3px;
+  background: rgb(var(--surface-muted));
+  position: relative;
+  overflow: hidden;
+}
+[data-chat-root] .oc-progress i {
+  position: absolute; inset: 0 auto 0 0;
+  background: linear-gradient(90deg, rgb(var(--sky, 56 189 248)), rgb(var(--accent)));
+  transition: width 0.5s ease;
+}
+[data-chat-root] .oc-body {
+  position: relative;
+  overflow: auto;
+  max-height: 300px;
+  background-image: radial-gradient(rgb(var(--content-subtle) / 0.12) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+[data-chat-root] .oc-inner { position: relative; }
+[data-chat-root] .oc-edges {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  color: rgb(var(--content-subtle) / 0.55);
+}
+[data-chat-root] .oc-edges path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+}
+[data-chat-root] .oc-edges path.flow {
+  stroke: rgb(var(--sky, 56 189 248));
+  stroke-dasharray: 6 5;
+  animation: oc-dash 1s linear infinite;
+}
+[data-chat-root] .oc-edges path.done { stroke: rgb(var(--accent) / 0.85); }
+@keyframes oc-dash { to { stroke-dashoffset: -11; } }
+
+/* ── 拖线编辑:热区 / 手柄 / 橡皮筋 / 端口 / 落点反馈 ──
+ * SVG 整体 pointer-events:none,热区路径单独 auto —— 细线(1.6px)拖不中,
+ * 命中靠 14px 透明描边。 */
+[data-chat-root] .oc-edge-hit {
+  pointer-events: auto;
+  cursor: grab;
+  stroke: transparent;
+  stroke-width: 14;
+}
+[data-chat-root] .oc-edge-hit.locked { cursor: not-allowed; }
+[data-chat-root] .oc-edge-g.hovered .oc-edge,
+[data-chat-root] .oc-edge:hover {
+  stroke: rgb(var(--accent));
+  stroke-width: 2;
+}
+/* 选中连线(点边 → 右栏连线详情):accent 常亮,hover 不再重复加粗。 */
+[data-chat-root] .oc-edge.selected {
+  stroke: rgb(var(--accent));
+  stroke-width: 2.2;
+}
+[data-chat-root] .oc-edge-g.hovered .oc-edge.selected { stroke-width: 2.2; }
+[data-chat-root] .oc-edge.locked { opacity: 0.5; }
+[data-chat-root] .oc-edge.ghost { opacity: 0.22; }
+/* 被拖边的残影不再吃指针(橡皮筋是唯一权威)。 */
+[data-chat-root] .oc-body[data-dragging] .oc-edge-hit { pointer-events: none; }
+[data-chat-root] .oc-body[data-dragging] { cursor: grabbing; }
+/* 端点手柄:悬停边时浮现。 */
+[data-chat-root] .oc-edge-handle {
+  fill: rgb(var(--surface));
+  stroke: rgb(var(--accent));
+  stroke-width: 1.6;
+  pointer-events: auto;
+  cursor: grab;
+  transition: r 0.12s;
+}
+[data-chat-root] .oc-edge-handle:hover { r: 6.5; }
+/* 线中点 ✕ 删除钮。 */
+[data-chat-root] .oc-edge-del {
+  pointer-events: auto;
+  cursor: pointer;
+}
+[data-chat-root] .oc-edge-del circle {
+  fill: rgb(var(--surface));
+  stroke: rgb(var(--edge));
+  stroke-width: 1;
+  transition: stroke-color 0.15s;
+}
+[data-chat-root] .oc-edge-del path {
+  stroke: rgb(var(--content-muted));
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+[data-chat-root] .oc-edge-del:hover circle {
+  stroke: rgb(var(--danger, 239 68 68));
+}
+[data-chat-root] .oc-edge-del:hover path {
+  stroke: rgb(var(--danger, 239 68 68));
+}
+/* 橡皮筋:虚线跟随;吸附到合法目标变实感 accent,悬空/非法保持中性。 */
+[data-chat-root] .oc-edge-rubber {
+  fill: none;
+  stroke: rgb(var(--content-subtle) / 0.7);
+  stroke-width: 1.8;
+  stroke-dasharray: 5 4;
+  pointer-events: none;
+}
+[data-chat-root] .oc-edge-rubber.ok {
+  stroke: rgb(var(--accent));
+  stroke-dasharray: none;
+}
+/* 节点端口:右缘输出口 / 左缘输入口(悬停节点/边或拖拽中,且任务可编辑)。
+ * 8px 可见圆点 + ::after 扩展到 16px 的透明命中区,细目标点拖不中。 */
+[data-chat-root] .oc-port {
+  position: absolute;
+  top: 50%;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: rgb(var(--surface));
+  border: 1.6px solid rgb(var(--content-subtle));
+  transform: translateY(-50%);
+  pointer-events: auto;
+  cursor: crosshair;
+  z-index: 2;
+}
+[data-chat-root] .oc-port::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+}
+[data-chat-root] .oc-port:hover {
+  border-color: rgb(var(--accent));
+  box-shadow: 0 0 0 3px rgb(var(--accent) / 0.25);
+}
+[data-chat-root] .oc-port-out { right: -5px; }
+[data-chat-root] .oc-port-in { left: -5px; }
+[data-chat-root] .oc-node.oc-drop-hover .oc-port { border-color: rgb(var(--accent)); }
+/* 落点反馈:合法 = accent 光圈;非法 = 压暗;拖动端自身 = 原样。 */
+[data-chat-root] .oc-node.oc-drop-ok {
+  box-shadow: 0 0 0 3px rgb(var(--accent) / 0.22);
+}
+[data-chat-root] .oc-node.oc-drop-hover.oc-drop-ok {
+  border-color: rgb(var(--accent));
+  box-shadow: 0 0 0 3px rgb(var(--accent) / 0.35);
+}
+[data-chat-root] .oc-node.oc-drop-dim {
+  opacity: 0.4;
+}
+/* 依赖变化后的节点重排滑动(仅非拖拽期;依赖变了层级就会变,滑过去
+ * 比瞬移更能表达"发生了什么")。 */
+[data-chat-root] .oc-node-anim {
+  transition: left 0.35s cubic-bezier(0.22, 1, 0.36, 1), top 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.2s, box-shadow 0.2s, opacity 0.15s;
+}
+[data-chat-root] .oc-node {
+  position: absolute;
+  border: 1.5px solid rgb(var(--edge));
+  border-radius: 10px;
+  padding: 7px 9px 8px;
+  background: rgb(var(--surface));
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+[data-chat-root] .oc-node:hover { border-color: rgb(var(--content-subtle) / 0.6); }
+[data-chat-root] .oc-node.selected { border-color: rgb(var(--accent)); box-shadow: 0 0 0 3px rgb(var(--accent) / 0.16); }
+[data-chat-root] .oc-node.running { border-color: rgb(var(--sky, 56 189 248)); }
+[data-chat-root] .oc-node.done { border-color: rgb(var(--accent) / 0.55); }
+[data-chat-root] .oc-node.failed, [data-chat-root] .oc-node.canceled { opacity: 0.55; }
+[data-chat-root] .oc-node-top {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 10px; color: rgb(var(--content-subtle));
+}
+[data-chat-root] .oc-node-id { font-family: var(--font-mono, ui-monospace, monospace); font-weight: 700; color: rgb(var(--content-muted)); }
+[data-chat-root] .oc-node-variant {
+  font-size: 9px; padding: 0 4px; border-radius: 999px;
+  border: 1px solid rgb(var(--info, 124 58 237) / 0.4); color: rgb(var(--info, 124 58 237));
+}
+[data-chat-root] .oc-node-st { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+[data-chat-root] .oc-spin {
+  width: 10px; height: 10px; border-radius: 50%;
+  border: 1.5px solid rgb(var(--sky, 56 189 248) / 0.3);
+  border-top-color: rgb(var(--sky, 56 189 248));
+  animation: oc-rot 0.8s linear infinite;
+}
+@keyframes oc-rot { to { transform: rotate(360deg); } }
+[data-chat-root] .oc-node-title {
+  margin-top: 3px;
+  font-size: var(--chat-fs-sm, 12px);
+  font-weight: 600;
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+[data-chat-root] .oc-node-sub {
+  margin-top: 3px;
+  font-size: 10.5px;
+  color: rgb(var(--content-subtle));
+  display: flex; align-items: center; gap: 3px;
+  overflow: hidden; white-space: nowrap;
+}
+[data-chat-root] .oc-node-sub > span { overflow: hidden; text-overflow: ellipsis; }
+[data-chat-root] .oc-node-unassigned { color: rgb(var(--warning)); }
+[data-chat-root] .oc-node-foot { margin-top: 6px; display: flex; align-items: center; gap: 6px; font-size: 10px; color: rgb(var(--content-subtle)); }
+[data-chat-root] .oc-node-bar {
+  flex: 1; height: 3px; border-radius: 2px;
+  background: rgb(var(--surface-muted));
+  overflow: hidden;
+}
+[data-chat-root] .oc-node-bar i { display: block; height: 100%; width: 0; background: rgb(var(--sky, 56 189 248)); transition: width 0.4s; }
+[data-chat-root] .oc-node-bar i.indeterminate {
+  width: 40%;
+  animation: oc-indet 1.4s ease-in-out infinite;
+}
+@keyframes oc-indet { 0% { transform: translateX(-100%); } 100% { transform: translateX(260%); } }
+[data-chat-root] .oc-node.done .oc-node-bar i { background: rgb(var(--accent)); }
+/* ── 画布内联 worker 控制台(运行中任务的实时过程输出)── */
+[data-chat-root] .oc-consoles {
+  border-top: 1px solid rgb(var(--panel-edge));
+  padding: 7px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+[data-chat-root] .oc-consoles-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgb(var(--content-subtle));
+}
+[data-chat-root] .oc-console {
+  border: 1px solid rgb(var(--edge));
+  border-radius: 8px;
+  background: rgb(var(--surface-muted) / 0.45);
+  overflow: hidden;
+}
+[data-chat-root] .oc-console-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 11px;
+  color: rgb(var(--content-muted));
+  text-align: left;
+  transition: background-color 0.15s;
+}
+[data-chat-root] .oc-console-head:hover { background: rgb(var(--surface-hover, 0 0 0 / 0.04)); color: rgb(var(--content)); }
+[data-chat-root] .oc-console-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: rgb(var(--content));
+}
+[data-chat-root] .oc-console-meta {
+  margin-left: auto;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  color: rgb(var(--content-subtle));
+}
+[data-chat-root] .oc-console-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: rgb(var(--content-subtle));
+  flex: none;
+}
+[data-chat-root] .oc-console-body {
+  max-height: 220px;
+  overflow-y: auto;
+  border-top: 1px dashed rgb(var(--edge));
+  padding: 4px 6px 6px;
+  font-size: calc(var(--chat-font-size, 14px) * 0.86);
+}
+[data-chat-root] .oc-foot {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px;
+  border-top: 1px solid rgb(var(--panel-edge));
+  font-size: 10.5px; color: rgb(var(--content-subtle));
+}
+[data-chat-root] .oc-lg { display: inline-flex; align-items: center; gap: 4px; }
+[data-chat-root] .oc-lg i { width: 8px; height: 8px; border-radius: 3px; display: block; background: rgb(var(--edge)); }
+[data-chat-root] .oc-lg i.running { background: rgb(var(--sky, 56 189 248)); }
+[data-chat-root] .oc-lg i.done { background: rgb(var(--accent)); }
+[data-chat-root] .oc-hint { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 末层右侧「＋ 任务」占位卡 */
+[data-chat-root] .oc-add-node {
+  position: absolute;
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  border: 1.5px dashed rgb(var(--edge));
+  border-radius: 10px;
+  color: rgb(var(--content-subtle));
+  font-size: 12px;
+  background: transparent;
+  transition: border-color 0.2s, color 0.2s;
+}
+[data-chat-root] .oc-add-node:hover { border-color: rgb(var(--accent) / 0.6); color: rgb(var(--accent)); }
+/* 「回到画布」定位后的闪光提示 */
+[data-chat-root] .oc-flash {
+  animation: oc-flash 0.9s ease-out;
+}
+@keyframes oc-flash {
+  0%, 60% { box-shadow: 0 0 0 3px rgb(var(--accent) / 0.35); }
+  100% { box-shadow: 0 0 0 3px rgb(var(--accent) / 0); }
+}
+/* ── 结果整理卡(run 完成时自动追加)── */
+[data-chat-root] .oc-synth {
+  border: 1px solid rgb(var(--accent) / 0.4);
+  border-radius: 12px;
+  background: rgb(var(--surface));
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  max-width: 100%;
+}
+[data-chat-root] .oc-synth-head {
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 12px;
+  background: rgb(var(--accent) / 0.1);
+  color: rgb(var(--accent));
+  font-weight: 600;
+  font-size: var(--chat-fs-sm, 12.5px);
+}
+[data-chat-root] .oc-synth-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-chat-root] .oc-synth-chip {
+  margin-left: auto; flex: none;
+  font-weight: 500; font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--content-subtle));
+  background: rgb(var(--surface) / 0.6);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+[data-chat-root] .oc-synth-body { padding: 10px 12px 12px; background: rgb(var(--surface)); }
+[data-chat-root] .oc-synth-sec + .oc-synth-sec { margin-top: 10px; }
+[data-chat-root] .oc-synth-h {
+  margin-bottom: 5px;
+  font-size: 11px; font-weight: 600;
+  color: rgb(var(--content-muted));
+}
+[data-chat-root] .oc-synth-goal { font-size: var(--chat-fs-sm, 12.5px); line-height: 1.6; color: rgb(var(--content-muted)); }
+[data-chat-root] .oc-synth-list { list-style: none; display: flex; flex-direction: column; gap: 5px; }
+[data-chat-root] .oc-synth-list li {
+  position: relative; padding-left: 14px;
+  font-size: var(--chat-fs-sm, 12.5px); line-height: 1.6;
+  color: rgb(var(--content-muted));
+}
+[data-chat-root] .oc-synth-list li::before {
+  content: ""; position: absolute; left: 2px; top: 0.62em;
+  width: 5px; height: 5px; border-radius: 50%;
+  background: rgb(var(--accent) / 0.7);
+}
+[data-chat-root] .oc-synth-task { display: inline; }
+[data-chat-root] .oc-synth-task b { color: rgb(var(--content)); }
+[data-chat-root] .oc-synth-task-meta { color: rgb(var(--content-subtle)); font-size: 11px; }
+[data-chat-root] .oc-synth-task-result { color: rgb(var(--content-muted)); }
+[data-chat-root] .oc-synth-files { display: flex; flex-wrap: wrap; gap: 5px; }
+[data-chat-root] .oc-synth-files span {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgb(var(--surface-muted));
+  border: 1px solid rgb(var(--edge));
+  color: rgb(var(--content-muted));
+  max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+[data-chat-root] .oc-synth-foot { display: flex; gap: 6px; }
+[data-chat-root] .oc-synth-foot .oc-btn { height: 26px; font-size: 11.5px; }
+/* 归档占位卡 */
+[data-chat-root] .oc-archived {
+  border: 1px dashed rgb(var(--edge));
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgb(var(--surface-muted) / 0.5);
+}
+[data-chat-root] .oc-archived-title { font-size: var(--chat-fs-sm, 12.5px); font-weight: 600; color: rgb(var(--content-subtle)); }
+[data-chat-root] .oc-archived-desc { margin-top: 3px; font-size: 11px; color: rgb(var(--content-subtle)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) {
+  [data-chat-root] .oc-dot, [data-chat-root] .oc-spin, [data-chat-root] .oc-node-bar i.indeterminate { animation: none; }
+  [data-chat-root] .oc-edges path.flow { animation: none; }
+  [data-chat-root] .oc-progress i { transition: none; }
+  [data-chat-root] .oc-flash { animation: none; box-shadow: 0 0 0 3px rgb(var(--accent) / 0.3); }
+  [data-chat-root] .oc-node-anim { transition: none; }
+  [data-chat-root] .oc-edge-handle { transition: none; }
+}
