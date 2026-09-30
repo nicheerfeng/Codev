@@ -596,7 +596,10 @@ pub(super) fn project_sessions_dir(cwd: &str) -> Option<PathBuf> {
     let normalized = cwd.replace('\\', "/");
     let normalized = normalized.strip_prefix("//?/").unwrap_or(&normalized);
     let normalized = normalized.strip_prefix('/').unwrap_or(normalized);
-    let safe: String = normalized.chars().map(|c| if c == '/' || c == ':' { '-' } else { c }).collect();
+    let safe: String = normalized
+        .chars()
+        .map(|c| if c == '/' || c == ':' { '-' } else { c })
+        .collect();
     Some(pi_sessions_dir()?.join(format!("--{safe}--")))
 }
 
@@ -616,7 +619,8 @@ pub(super) fn list_sessions(cwd: &str, limit: usize) -> Vec<PiSessionSummary> {
             if path.is_dir() {
                 // pi-subagents 的子会话由 mission 观测器挂到父线程下，不能作为平级 Pi 线程扫描。
                 if path.file_name().and_then(|value| value.to_str()) == Some("subagent")
-                    || path.with_extension("jsonl").is_file() {
+                    || path.with_extension("jsonl").is_file()
+                {
                     continue;
                 }
                 pending.push(path);

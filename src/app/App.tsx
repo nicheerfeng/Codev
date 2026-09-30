@@ -1143,7 +1143,6 @@ export default function App() {
     );
 
   const searchTarget = useMemo<SearchTarget>(() => {
-    if (activePdfTab) return null;
     if (isTerminalTab && activeLeafId !== null && activeSearchAddon)
       return {
         kind: "terminal",
@@ -1160,7 +1159,6 @@ export default function App() {
     return null;
   }, [
     isTerminalTab,
-    activePdfTab,
     isSearchableDocumentTab,
     activeLeafId,
     activeSearchAddon,

@@ -2,8 +2,8 @@
 
 use std::path::PathBuf;
 
-use tempfile::TempDir;
 use codev_lib::modules::fs::to_canon;
+use tempfile::TempDir;
 
 pub struct FsFixture {
     pub root: PathBuf,

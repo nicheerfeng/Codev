@@ -109,7 +109,9 @@ pub async fn fs_search_query(
             true,
             MAX_SCANNED,
             &cancel,
-            Some(&|batch| { let _ = on_batch.send(batch); }),
+            Some(&|batch| {
+                let _ = on_batch.send(batch);
+            }),
         )
     })
     .await
@@ -119,7 +121,17 @@ pub async fn fs_search_query(
 }
 
 /// 分批推送命中，超过二十万个文件才停止扫描。
-fn search_walk(roots: Vec<String>, query: String, limit: Option<usize>, workspace: Option<WorkspaceEnv>, show_hidden: Option<bool>, include_generated: bool, scan_limit: usize, cancel: &AtomicBool, progress: Option<&dyn Fn(Vec<SearchHit>)>) -> Result<SearchResult, String> {
+fn search_walk(
+    roots: Vec<String>,
+    query: String,
+    limit: Option<usize>,
+    workspace: Option<WorkspaceEnv>,
+    show_hidden: Option<bool>,
+    include_generated: bool,
+    scan_limit: usize,
+    cancel: &AtomicBool,
+    progress: Option<&dyn Fn(Vec<SearchHit>)>,
+) -> Result<SearchResult, String> {
     let q = query.trim();
     if q.is_empty() {
         return Ok(SearchResult {
@@ -131,7 +143,11 @@ fn search_walk(roots: Vec<String>, query: String, limit: Option<usize>, workspac
             matched: 0,
         });
     }
-    let cap = if progress.is_some() { usize::MAX } else { limit.unwrap_or(200).min(200_001) };
+    let cap = if progress.is_some() {
+        usize::MAX
+    } else {
+        limit.unwrap_or(200).min(200_001)
+    };
     let show_hidden = show_hidden.unwrap_or(false);
     let workspace = WorkspaceEnv::from_option(workspace);
     let root_inputs: Vec<String> = roots
@@ -193,7 +209,9 @@ fn search_walk(roots: Vec<String>, query: String, limit: Option<usize>, workspac
                     continue;
                 }
             };
-            if dent.file_type().is_some_and(|kind| kind.is_file()) { scanned += 1; }
+            if dent.file_type().is_some_and(|kind| kind.is_file()) {
+                scanned += 1;
+            }
             if scanned > scan_limit {
                 truncated = true;
                 break;
@@ -228,10 +246,17 @@ fn search_walk(roots: Vec<String>, query: String, limit: Option<usize>, workspac
             };
             if match_rank(&candidate, q).is_some() {
                 matched += 1;
-                if progress.is_some() { batch.push(candidate.clone()); }
+                if progress.is_some() {
+                    batch.push(candidate.clone());
+                }
                 cands.push(candidate);
             }
-            if published.elapsed() >= std::time::Duration::from_millis(200) && !batch.is_empty() { if let Some(publish) = progress { publish(std::mem::take(&mut batch)); } published = std::time::Instant::now(); }
+            if published.elapsed() >= std::time::Duration::from_millis(200) && !batch.is_empty() {
+                if let Some(publish) = progress {
+                    publish(std::mem::take(&mut batch));
+                }
+                published = std::time::Instant::now();
+            }
             if cands.len() > cap.saturating_mul(2) {
                 cands = rank_direct(cands, q, cap);
             }
@@ -241,7 +266,11 @@ fn search_walk(roots: Vec<String>, query: String, limit: Option<usize>, workspac
         }
     }
 
-    if let Some(publish) = progress { if !batch.is_empty() { publish(batch); } }
+    if let Some(publish) = progress {
+        if !batch.is_empty() {
+            publish(batch);
+        }
+    }
     let hits = rank_direct(cands, q, cap);
     Ok(SearchResult {
         hits,
@@ -401,13 +430,36 @@ mod tests {
     #[test]
     fn file_budget_and_progress_are_exact() {
         let root = tempfile::tempdir().unwrap();
-        for name in ["folder/a", "folder/b"] { let path = root.path().join(name); std::fs::create_dir_all(path.parent().unwrap()).unwrap(); std::fs::write(path, "").unwrap(); }
+        for name in ["folder/a", "folder/b"] {
+            let path = root.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
         let batches = std::cell::RefCell::new(Vec::new());
         let publish = |hits: Vec<SearchHit>| batches.borrow_mut().extend(hits);
-        let run = || search_walk(vec![root.path().to_string_lossy().into_owned()], "folder".into(), Some(1), None, Some(true), true, 2, &AtomicBool::new(false), Some(&publish)).unwrap();
-        let exact = run(); assert_eq!(exact.scanned, 2); assert!(!exact.scan_incomplete); assert_eq!(exact.hits.len(), 3); assert_eq!(batches.borrow().len(), 3);
+        let run = || {
+            search_walk(
+                vec![root.path().to_string_lossy().into_owned()],
+                "folder".into(),
+                Some(1),
+                None,
+                Some(true),
+                true,
+                2,
+                &AtomicBool::new(false),
+                Some(&publish),
+            )
+            .unwrap()
+        };
+        let exact = run();
+        assert_eq!(exact.scanned, 2);
+        assert!(!exact.scan_incomplete);
+        assert_eq!(exact.hits.len(), 3);
+        assert_eq!(batches.borrow().len(), 3);
         std::fs::write(root.path().join("folder/c"), "").unwrap();
-        let overflow = run(); assert_eq!(overflow.scanned, 3); assert!(overflow.scan_incomplete);
+        let overflow = run();
+        assert_eq!(overflow.scanned, 3);
+        assert!(overflow.scan_incomplete);
     }
 
     fn hit(rel: &str) -> SearchHit {
@@ -478,11 +530,40 @@ mod tests {
     #[test]
     fn search_reports_limits_and_cancellation() {
         let directory = tempfile::tempdir().unwrap();
-        for name in ["报一.txt", "报二.txt", ".报隐藏.txt"] { std::fs::write(directory.path().join(name), "").unwrap(); }
+        for name in ["报一.txt", "报二.txt", ".报隐藏.txt"] {
+            std::fs::write(directory.path().join(name), "").unwrap();
+        }
         let roots = vec![directory.path().to_string_lossy().into_owned()];
-        let result = search_walk(roots.clone(), "报".into(), Some(1), None, Some(true), true, 50_000, &AtomicBool::new(false), None).unwrap();
-        assert_eq!(result.matched, 3); assert!(result.truncated); assert!(!result.scan_incomplete);
-        assert!(search_walk(roots, "报".into(), Some(1), None, Some(true), true, 50_000, &AtomicBool::new(true), None).is_err());
-        assert_eq!(rank_direct(vec![hit("src/report/main.rs")], "src main", 10).len(), 1);
+        let result = search_walk(
+            roots.clone(),
+            "报".into(),
+            Some(1),
+            None,
+            Some(true),
+            true,
+            50_000,
+            &AtomicBool::new(false),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.matched, 3);
+        assert!(result.truncated);
+        assert!(!result.scan_incomplete);
+        assert!(search_walk(
+            roots,
+            "报".into(),
+            Some(1),
+            None,
+            Some(true),
+            true,
+            50_000,
+            &AtomicBool::new(true),
+            None
+        )
+        .is_err());
+        assert_eq!(
+            rank_direct(vec![hit("src/report/main.rs")], "src main", 10).len(),
+            1
+        );
     }
 }
