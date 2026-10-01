@@ -197,11 +197,34 @@ describe("piViewReducer", () => {
         followUp: [{ text: "完成后总结" }, { text: "完成后测试" }],
       }),
     });
-    expect(state.queue).toEqual({
-      steering: [{ text: "先修复这个" }],
-      followUp: [{ text: "完成后总结" }, { text: "完成后测试" }],
-      pendingCount: 3,
+    expect(state.queue.steering.map((item) => item.text)).toEqual(["先修复这个"]);
+    expect(state.queue.followUp.map((item) => item.text)).toEqual([
+      "完成后总结",
+      "完成后测试",
+    ]);
+    expect(state.queue.pendingCount).toBe(3);
+  });
+
+  it("normalizes string queues and image payloads from older Pi runtimes", () => {
+    const state = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "event",
+      payload: rpc({
+        type: "queue_update",
+        steering: ["文字排队"],
+        follow_up: [
+          {
+            message: "图片排队",
+            images: [{ data: "AA==", mime_type: "image/png" }],
+          },
+        ],
+      }),
     });
+    expect(state.queue.steering.map((item) => item.text)).toEqual(["文字排队"]);
+    expect(state.queue.followUp[0]).toMatchObject({
+      text: "图片排队",
+      images: [{ type: "image", data: "AA==", mimeType: "image/png" }],
+    });
+    expect(state.queue.pendingCount).toBe(2);
   });
 
   it("keeps the displayed queue after native clear_queue until queue_update arrives", () => {
@@ -466,5 +489,23 @@ describe("piViewReducer", () => {
       queued: true,
     });
     expect(next.compaction?.status).toBe("running");
+  });
+
+  it("keeps a finished compaction notice when draining a queued prompt", () => {
+    const compacted = {
+      ...INITIAL_PI_VIEW_STATE,
+      compaction: {
+        status: "done" as const,
+        startedAt: 1,
+        finishedAt: 2,
+      },
+    };
+    const next = piViewReducer(compacted, {
+      type: "prompt",
+      text: "压缩后排队",
+      keepCompaction: true,
+    });
+    expect(next.compaction?.status).toBe("done");
+    expect(next.status).toBe("running");
   });
 });

@@ -48,12 +48,8 @@ type Props = {
   view: PiViewState;
   onSend: (behavior: "steer" | "followUp") => void;
   onStop: () => void;
-  onLocalQueueAction?: (id: string, action: "edit" | "delete" | "steer") => void;
-  onRetryQueue?: () => void;
-  onQueueAction: (
-    kind: "steering" | "followUp",
-    index: number,
-    text: string,
+  onLocalQueueAction?: (
+    id: string,
     action: "edit" | "delete" | "steer",
   ) => void;
   onModel: (provider: string, id: string) => void;
@@ -313,75 +309,78 @@ export function PiComposer(props: Props) {
       {!!props.view.localQueue?.length && (
         <div
           data-testid="pi-local-queue"
-          className="reader-scrollbar mx-auto mb-2 max-h-32 max-w-3xl overflow-auto rounded-lg border border-border/70 px-2 py-1.5 text-xs"
+          className="reader-scrollbar mx-auto mb-2 max-h-32 max-w-3xl overflow-auto rounded-lg border border-border/70 bg-muted/20 px-2 py-1.5 text-xs"
+          aria-label="待发送队列"
+          role="region"
         >
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span>待发送 · {props.view.localQueue.length}</span>
-            {!compacting && (
-              <Button
-                size="xs"
-                variant="ghost"
-                disabled={!!props.view.queueSendingId}
-                onClick={props.onRetryQueue}
-              >
-                继续发送
-              </Button>
-            )}
+          <div className="text-[10px] text-muted-foreground">
+            待发送 · {props.view.localQueue.length}
           </div>
           {props.view.localQueue.map((item) => (
-            <div key={item.id} className="flex items-center gap-2 py-1">
-              <div className="flex min-w-0 flex-1 items-center gap-2">
-                {item.images.length > 0 && (
-                  <div className="flex shrink-0 gap-1">
-                    {item.images.slice(0, 3).map((image, index) => (
-                      <ZoomableImage
-                        key={`${item.id}-${image.mimeType}-${image.data.length}-${image.data.slice(0, 12)}-${image.data.slice(-12)}`}
-                        src={`data:${image.mimeType};base64,${image.data}`}
-                        alt={`排队图片 ${index + 1}`}
-                        className="size-8 rounded-md object-cover"
-                        onClick={(event) => event.stopPropagation()}
-                      />
-                    ))}
-                  </div>
-                )}
-                <button
-                  type="button"
-                  className="line-clamp-2 min-w-0 flex-1 text-left [overflow-wrap:anywhere]"
-                  title={item.text}
-                  disabled={props.disabled}
+            <div
+              key={item.id}
+              className={`flex items-center gap-2 py-1${props.view.queueSendingId === item.id ? " opacity-60" : ""}`}
+            >
+              {item.images.length > 0 && (
+                <div className="flex shrink-0 gap-1">
+                  {item.images.slice(0, 3).map((image, index) => (
+                    <ZoomableImage
+                      key={`${item.id}-${index}-${image.data.slice(-16)}`}
+                      src={
+                        image.data.startsWith("data:")
+                          ? image.data
+                          : `data:${image.mimeType};base64,${image.data}`
+                      }
+                      alt={`排队图片 ${index + 1}`}
+                      className="size-[21px] rounded-md object-cover"
+                      onClick={(event) => event.stopPropagation()}
+                    />
+                  ))}
+                  {item.images.length > 3 && (
+                    <span className="self-center text-[10px] text-muted-foreground">
+                      +{item.images.length - 3}
+                    </span>
+                  )}
+                </div>
+              )}
+              <span
+                className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]"
+                title={item.text || "图片消息"}
+              >
+                {item.text || "图片消息"}
+              </span>
+              <div className="flex shrink-0 items-center gap-0.5">
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  title="安排到当前步骤之后"
+                  aria-label="安排到当前步骤之后"
+                  disabled={props.view.queueSendingId === item.id}
+                  onClick={() => props.onLocalQueueAction?.(item.id, "steer")}
+                >
+                  <HugeiconsIcon icon={ArrowUp01Icon} size={13} />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  title="退回输入框编辑"
+                  aria-label="退回编辑待发送消息"
+                  disabled={props.view.queueSendingId === item.id}
                   onClick={() => props.onLocalQueueAction?.(item.id, "edit")}
                 >
-                  {item.text || "图片消息"}
-                </button>
+                  <HugeiconsIcon icon={PencilEdit01Icon} size={13} />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  title="删除待发送消息"
+                  aria-label="删除待发送消息"
+                  disabled={props.view.queueSendingId === item.id}
+                  onClick={() => props.onLocalQueueAction?.(item.id, "delete")}
+                >
+                  <HugeiconsIcon icon={Delete02Icon} size={13} />
+                </Button>
               </div>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                title="安排到当前步骤之后"
-                aria-label="安排到当前步骤之后"
-                disabled={props.view.queueSendingId === item.id || item.behavior === "steer"}
-                onClick={() => props.onLocalQueueAction?.(item.id, "steer")}
-              >
-                <HugeiconsIcon icon={ArrowUp01Icon} size={13} />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label="退回编辑待发送消息"
-                disabled={props.view.queueSendingId === item.id}
-                onClick={() => props.onLocalQueueAction?.(item.id, "edit")}
-              >
-                <HugeiconsIcon icon={PencilEdit01Icon} size={13} />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label="删除待发送消息"
-                disabled={props.view.queueSendingId === item.id}
-                onClick={() => props.onLocalQueueAction?.(item.id, "delete")}
-              >
-                <HugeiconsIcon icon={Delete02Icon} size={13} />
-              </Button>
             </div>
           ))}
         </div>
@@ -392,84 +391,6 @@ export function PiComposer(props: Props) {
           className="reader-scrollbar mx-auto mb-2 max-h-20 w-full max-w-3xl overflow-y-auto text-center text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]"
         >
           {props.status}
-        </div>
-      )}
-      {props.view.queue.pendingCount > 0 && (
-        <div
-          data-testid="pi-queue"
-          className="pi-queue reader-scrollbar mx-auto mb-2 max-h-28 w-full max-w-3xl overflow-y-auto rounded-lg border border-border/70 bg-muted/20 px-2 py-1.5 text-xs"
-        >
-          <div className="mb-1 text-[10px] text-muted-foreground">
-            待处理消息 · {props.view.queue.pendingCount}
-          </div>
-          {(["steering", "followUp"] as const).flatMap((kind) =>
-            props.view.queue[kind].map((item, index) => (
-              <div
-                className="pi-queue-item"
-                key={`${kind}-${index}-${item.text.slice(0, 30)}`}
-              >
-                <span className="pi-queue-mode">
-                  {kind === "steering" ? "下一步" : "随后"}
-                </span>
-                <div className="flex min-w-0 flex-1 items-center gap-2">
-                  {item.images && item.images.length > 0 && (
-                    <div className="flex shrink-0 gap-1">
-                      {item.images.slice(0, 3).map((img, imgIdx) => {
-                        const stableKey = `${item.text.length}-${img.mimeType}-${img.data.slice(0, 8)}-${img.data.slice(-8)}`;
-                        return (
-                          <ZoomableImage
-                            key={stableKey}
-                            src={img.data}
-                            alt={`队列图片 ${imgIdx + 1}`}
-                            className="size-8 rounded object-cover"
-                          />
-                        );
-                      })}
-                    </div>
-                  )}
-                  <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]" title={item.text}>
-                    {item.text || "图片消息"}
-                  </span>
-                </div>
-                <div className="flex shrink-0 items-center gap-0.5">
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    title={kind === "followUp" ? "安排到当前步骤之后" : "已安排为下一步"}
-                    aria-label="安排到当前步骤之后"
-                    disabled={props.disabled || kind === "steering"}
-                    onClick={() => props.onQueueAction(kind, index, item.text, "steer")}
-                  >
-                    <HugeiconsIcon icon={ArrowUp01Icon} size={13} />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    title="退回输入框编辑"
-                    aria-label="退回编辑"
-                    disabled={props.disabled}
-                    onClick={() =>
-                      props.onQueueAction(kind, index, item.text, "edit")
-                    }
-                  >
-                    <HugeiconsIcon icon={PencilEdit01Icon} size={13} />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    title="删除排队消息"
-                    aria-label="删除排队消息"
-                    disabled={props.disabled}
-                    onClick={() =>
-                      props.onQueueAction(kind, index, item.text, "delete")
-                    }
-                  >
-                    <HugeiconsIcon icon={Delete02Icon} size={13} />
-                  </Button>
-                </div>
-              </div>
-            )),
-          )}
         </div>
       )}
       <div

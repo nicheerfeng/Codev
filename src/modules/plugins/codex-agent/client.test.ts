@@ -43,7 +43,11 @@ vi.mock("@tauri-apps/api/core", () => ({
       return ++transport.connection;
     }
     if (command === "codex_agent_ready")
-      return { resourceId: transport.resource, provider: "test", lastModel: { model: "selected-model", effort: "" } };
+      return {
+        resourceId: transport.resource,
+        provider: "test",
+        lastModel: { model: "selected-model", effort: "" },
+      };
     if (command === "codex_resources_models") return [{ id: "selected-model" }];
     if (command === "codex_agent_prepare_switch") {
       if (transport.switchError) throw new Error(transport.switchError);
@@ -77,7 +81,10 @@ vi.mock("@tauri-apps/api/core", () => ({
       result = {
         thread: { ...thread, id: "new", model: message.params?.model ?? null },
       };
-      event({ method: "thread/started", params: result as Record<string, unknown> });
+      event({
+        method: "thread/started",
+        params: result as Record<string, unknown>,
+      });
     }
     if (["thread/read", "thread/resume"].includes(message.method))
       result = { thread: { ...thread, id: message.params?.threadId } };
@@ -195,6 +202,33 @@ describe("Codex native client", () => {
     expect(session.queue).toHaveLength(0);
     expect(session.focusRevision).toBeGreaterThan(0);
   });
+  it("keeps a steered queue item visible until the user message appears", async () => {
+    client.patch("one", { draft: "first" });
+    await client.submit("one");
+    client.patch("one", { draft: "插入这句" });
+    await client.submit("one");
+    const queuedId = client.getSnapshot().sessions.one.queue[0].id;
+    await client.queueAction("one", queuedId, "steer");
+    expect(transport.sent.some((m) => m.method === "turn/steer")).toBe(true);
+    expect(
+      client.getSnapshot().sessions.one.queue.map((item) => item.draft),
+    ).toEqual(["插入这句"]);
+    expect(client.getSnapshot().sessions.one.queueSendingId).toBe(queuedId);
+    event({
+      method: "item/started",
+      params: {
+        threadId: "one",
+        turnId: "turn",
+        item: {
+          id: "user-inserted",
+          type: "userMessage",
+          content: [{ type: "text", text: "插入这句" }],
+        },
+      },
+    });
+    expect(client.getSnapshot().sessions.one.queue).toHaveLength(0);
+    expect(client.getSnapshot().sessions.one.queueSendingId).toBeUndefined();
+  });
   it("forks before the last turn for edit and keeps the original history", async () => {
     const turns = [
       {
@@ -238,12 +272,16 @@ describe("Codex native client", () => {
     event({ method: "thread/unarchived", params: { threadId: "native-one" } });
     expect(client.getSnapshot().sessions.one.archived).toBe(false);
     await client.deleteThread("native-one");
-    expect(transport.sent.find(m => m.method === "thread/delete")?.params).toEqual({ threadId: "native-one" });
+    expect(
+      transport.sent.find((m) => m.method === "thread/delete")?.params,
+    ).toEqual({ threadId: "native-one" });
     expect(client.getSnapshot().sessions.one).toBeUndefined();
     expect(client.getSnapshot().sessions.two).toBeDefined();
   });
   it("applies descendant archive notifications individually and removes deleted descendants", async () => {
-    client.patch("two", { thread: { ...thread, id: "two", parentThreadId: "one" } });
+    client.patch("two", {
+      thread: { ...thread, id: "two", parentThreadId: "one" },
+    });
     await client.archive("one", true);
     expect(client.getSnapshot().sessions.two.archived).toBe(false);
     event({ method: "thread/archived", params: { threadId: "two" } });
@@ -346,54 +384,130 @@ describe("Codex native client", () => {
     const key = await client.create("D:/project");
     client.patch(key, { draft: "hello" });
     await client.send(key);
-    expect(Object.values(client.getSnapshot().sessions).filter(session => session.thread.id === "new")).toHaveLength(1);
-    event({ method: "turn/completed", params: { threadId: "new", turn: { id: "turn", status: "completed", items: [] } } });
-    expect(client.getSnapshot().sessions[key]).toMatchObject({ busy: false, turnId: null, sending: false });
+    expect(
+      Object.values(client.getSnapshot().sessions).filter(
+        (session) => session.thread.id === "new",
+      ),
+    ).toHaveLength(1);
+    event({
+      method: "turn/completed",
+      params: {
+        threadId: "new",
+        turn: { id: "turn", status: "completed", items: [] },
+      },
+    });
+    expect(client.getSnapshot().sessions[key]).toMatchObject({
+      busy: false,
+      turnId: null,
+      sending: false,
+    });
     expect(client.sessionKey("new")).toBe(key);
     expect(client.taskBusy(key)).toBe(false);
     client.patch(client.sessionKey("new"), { draft: "second 第二轮输入" });
     expect(client.getSnapshot().sessions[key].draft).toBe("second 第二轮输入");
     await client.send(client.sessionKey("new"));
-    expect(transport.sent.filter(message => message.method === "turn/start")).toHaveLength(2);
+    expect(
+      transport.sent.filter((message) => message.method === "turn/start"),
+    ).toHaveLength(2);
     expect(client.getSnapshot().sessions[key].draft).toBe("");
   });
   // 子代理自己携带的活动消息不能再挂载一个自身子节点。
   it("does not turn a subagent activity echo into a self child", () => {
-    event({ method: "item/started", params: { threadId: "one", turnId: "t", item: {
-      id: "echo", type: "subAgentActivity", kind: "started", agentThreadId: "one", agentPath: "/root/hello",
-    } } });
-    expect(client.getSnapshot().sessions.one.thread.parentThreadId).toBeUndefined();
+    event({
+      method: "item/started",
+      params: {
+        threadId: "one",
+        turnId: "t",
+        item: {
+          id: "echo",
+          type: "subAgentActivity",
+          kind: "started",
+          agentThreadId: "one",
+          agentPath: "/root/hello",
+        },
+      },
+    });
+    expect(
+      client.getSnapshot().sessions.one.thread.parentThreadId,
+    ).toBeUndefined();
     expect(client.getSnapshot().sessions.one.busy).toBe(false);
   });
   // 子代理活动仅用于展示，运行态由实际线程和轮次事件提供。
   it("reads native metadata instead of inferring parents from activity", async () => {
-    event({ method: "item/started", params: { threadId: "one", turnId: "t", item: {
-      id: "spawn", type: "subAgentActivity", kind: "started", agentThreadId: "child", agentPath: "/root/check",
-    } } });
-    await vi.waitFor(() => expect(client.getSnapshot().sessions.child).toBeDefined());
-    expect(client.getSnapshot().sessions.child.thread.parentThreadId).toBeUndefined();
+    event({
+      method: "item/started",
+      params: {
+        threadId: "one",
+        turnId: "t",
+        item: {
+          id: "spawn",
+          type: "subAgentActivity",
+          kind: "started",
+          agentThreadId: "child",
+          agentPath: "/root/check",
+        },
+      },
+    });
+    await vi.waitFor(() =>
+      expect(client.getSnapshot().sessions.child).toBeDefined(),
+    );
+    expect(
+      client.getSnapshot().sessions.child.thread.parentThreadId,
+    ).toBeUndefined();
     expect(client.taskBusy("one")).toBe(false);
-    event({ method: "item/completed", params: { threadId: "one", turnId: "t", item: {
-      id: "done", type: "subAgentActivity", kind: "completed", agentThreadId: "child",
-    } } });
+    event({
+      method: "item/completed",
+      params: {
+        threadId: "one",
+        turnId: "t",
+        item: {
+          id: "done",
+          type: "subAgentActivity",
+          kind: "completed",
+          agentThreadId: "child",
+        },
+      },
+    });
     expect(client.taskBusy("one")).toBe(false);
     expect(client.getSnapshot().sessions.child.turnId).toBeNull();
   });
   // 已结束主线程仍可以停止活动子线程，不能把 interrupt 发给父线程旧轮次。
   it("stops active children when the parent is already idle", async () => {
-    event({ method: "thread/started", params: { thread: { ...thread, id: "child",
-      source: { subagent: { thread_spawn: { parent_thread_id: "one" } } },
-    } } });
-    event({ method: "turn/started", params: { threadId: "child", turn: { id: "child-turn", items: [], status: "inProgress" } } });
+    event({
+      method: "thread/started",
+      params: {
+        thread: {
+          ...thread,
+          id: "child",
+          source: { subagent: { thread_spawn: { parent_thread_id: "one" } } },
+        },
+      },
+    });
+    event({
+      method: "turn/started",
+      params: {
+        threadId: "child",
+        turn: { id: "child-turn", items: [], status: "inProgress" },
+      },
+    });
     await client.stopAndRestore("one");
-    expect(transport.sent.find(message => message.method === "turn/interrupt")?.params)
-      .toEqual({ threadId: "child", turnId: "child-turn" });
+    expect(
+      transport.sent.find((message) => message.method === "turn/interrupt")
+        ?.params,
+    ).toEqual({ threadId: "child", turnId: "child-turn" });
   });
   // 空闲通知修复漏掉轮次结束事件时的本地运行态。
   it("settles a session from the authoritative idle notification", () => {
     client.patch("one", { busy: true, turnId: "stale", compacting: true });
-    event({ method: "thread/status/changed", params: { threadId: "one", status: { type: "idle" } } });
-    expect(client.getSnapshot().sessions.one).toMatchObject({ busy: false, turnId: null, compacting: false });
+    event({
+      method: "thread/status/changed",
+      params: { threadId: "one", status: { type: "idle" } },
+    });
+    expect(client.getSnapshot().sessions.one).toMatchObject({
+      busy: false,
+      turnId: null,
+      compacting: false,
+    });
   });
   it("preserves runtime and drafts when native background verification rejects switching", async () => {
     const connection = transport.connection;
@@ -535,7 +649,10 @@ it("loads catalog pages with one session-cache publication", async () => {
   let publications = 0;
   const unsubscribe = client.subscribe(() => {
     const next = client.getSnapshot().sessions;
-    if (next !== cache) { publications++; cache = next; }
+    if (next !== cache) {
+      publications++;
+      cache = next;
+    }
   });
   await client.refresh();
   unsubscribe();
@@ -550,26 +667,38 @@ it("refreshes a changed session once without enumerating the catalog", async () 
   await client.load(id);
   transport.sent = [];
   await client.refreshChanged([path, path]);
-  expect(transport.sent.filter(m => m.method === "thread/list")).toHaveLength(0);
-  expect(transport.sent.filter(m => m.method === "thread/read")).toHaveLength(1);
+  expect(transport.sent.filter((m) => m.method === "thread/list")).toHaveLength(
+    0,
+  );
+  expect(transport.sent.filter((m) => m.method === "thread/read")).toHaveLength(
+    1,
+  );
   expect(client.getSnapshot().sessions[id]).toBeDefined();
   const cache = client.getSnapshot().sessions;
   await client.refreshChanged([path]);
   expect(client.getSnapshot().sessions).toBe(cache);
 });
 
-
 it("connects without listing or loading any history", async () => {
   await client.dispose();
   client = new CodexClient();
   transport.sent = [];
   await client.connect();
-  expect(transport.sent.some(m => ["thread/list", "thread/read", "thread/turns/list"].includes(m.method ?? ""))).toBe(false);
+  expect(
+    transport.sent.some((m) =>
+      ["thread/list", "thread/read", "thread/turns/list"].includes(
+        m.method ?? "",
+      ),
+    ),
+  ).toBe(false);
   expect(client.getSnapshot().order).toEqual([]);
   await client.refreshProject("D:/chosen");
-  const calls = transport.sent.filter(m => m.method === "thread/list");
+  const calls = transport.sent.filter((m) => m.method === "thread/list");
   expect(calls).toHaveLength(1);
-  expect(calls[0].params).toMatchObject({ cwd: "D:/chosen", useStateDbOnly: true });
+  expect(calls[0].params).toMatchObject({
+    cwd: "D:/chosen",
+    useStateDbOnly: true,
+  });
 });
 
 it("uses medium for history without effort metadata instead of another thread's effort", async () => {

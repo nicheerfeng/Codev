@@ -1,5 +1,13 @@
 import { expect, it } from "vitest";
-import { activityLabel, displayCommand, displayItemDetails, elapsedText, isTool, processLabel } from "./timeline";
+import {
+  activityLabel,
+  displayCommand,
+  displayItemDetails,
+  elapsedText,
+  isTool,
+  processLabel,
+  turnBlocks,
+} from "./timeline";
 import { reduceNotification, sessionFromThread, type Turn } from "./protocol";
 
 it("keeps process status distinct from the raw thinking summary", () => {
@@ -37,9 +45,13 @@ it("removes only recognized shell launch prefixes from command displays", () => 
   expect(
     activityLabel({ id: "cmd", type: "commandExecution", command: wrapped }),
   ).toContain("rg -n 'useState' src");
-  expect(displayItemDetails({ id: "cmd", type: "commandExecution", command: wrapped })).toContain(
-    String.raw`rg -n 'useState' src`,
-  );
+  expect(
+    displayItemDetails({
+      id: "cmd",
+      type: "commandExecution",
+      command: wrapped,
+    }),
+  ).toContain(String.raw`rg -n 'useState' src`);
   expect(displayCommand("custom-runner --command do-work")).toBe(
     "custom-runner --command do-work",
   );
@@ -76,26 +88,136 @@ it("retains server turn timing through streaming item updates", () => {
 });
 
 it("preserves streamed process items when completion contains only the final answer", () => {
-  let session = sessionFromThread({ id: "s", name: null, cwd: "D:/qa", preview: "", updatedAt: 0, turns: [{ id: "t", status: "inProgress", items: [
-    { id: "tool", type: "commandExecution", command: "pwd", status: "completed" },
-    { id: "answer", type: "agentMessage", text: "partial" },
-  ] }] });
-  session = reduceNotification(session, "turn/completed", { turn: { id: "t", status: "completed", items: [{ id: "answer", type: "agentMessage", text: "final" }] } });
-  expect(session.thread.turns[0].items.map(item => item.id)).toEqual(["tool", "answer"]);
+  let session = sessionFromThread({
+    id: "s",
+    name: null,
+    cwd: "D:/qa",
+    preview: "",
+    updatedAt: 0,
+    turns: [
+      {
+        id: "t",
+        status: "inProgress",
+        items: [
+          {
+            id: "tool",
+            type: "commandExecution",
+            command: "pwd",
+            status: "completed",
+          },
+          { id: "answer", type: "agentMessage", text: "partial" },
+        ],
+      },
+    ],
+  });
+  session = reduceNotification(session, "turn/completed", {
+    turn: {
+      id: "t",
+      status: "completed",
+      items: [{ id: "answer", type: "agentMessage", text: "final" }],
+    },
+  });
+  expect(session.thread.turns[0].items.map((item) => item.id)).toEqual([
+    "tool",
+    "answer",
+  ]);
   expect(session.thread.turns[0].items[1].text).toBe("final");
 });
 
 it("accepts token usage fields from snake-case notifications", () => {
-  const session = sessionFromThread({ id: "s", name: null, cwd: "D:/qa", preview: "", updatedAt: 0, turns: [] });
-  const next = reduceNotification(session, "thread/tokenUsage/updated", { token_usage: { last: { total_tokens: 4000 }, total: { total_tokens: 8000 }, model_context_window: 100000 } });
-  expect(next.tokenUsage).toEqual({ last: { totalTokens: 4000 }, total: { totalTokens: 8000 }, modelContextWindow: 100000 });
+  const session = sessionFromThread({
+    id: "s",
+    name: null,
+    cwd: "D:/qa",
+    preview: "",
+    updatedAt: 0,
+    turns: [],
+  });
+  const next = reduceNotification(session, "thread/tokenUsage/updated", {
+    token_usage: {
+      last: { total_tokens: 4000 },
+      total: { total_tokens: 8000 },
+      model_context_window: 100000,
+    },
+  });
+  expect(next.tokenUsage).toEqual({
+    last: { totalTokens: 4000 },
+    total: { totalTokens: 8000 },
+    modelContextWindow: 100000,
+  });
+});
+
+it("places a running process bar after the user message instead of above it", () => {
+  const turn: Turn = {
+    id: "t",
+    status: "inProgress",
+    startedAt: 100,
+    items: [
+      {
+        id: "user",
+        type: "userMessage",
+        content: [{ type: "text", text: "hello" }],
+      },
+    ],
+  };
+  expect(
+    turnBlocks(turn, true).map((block) => [
+      block.process,
+      block.items[0]?.type ?? "placeholder",
+    ]),
+  ).toEqual([
+    [false, "userMessage"],
+    [true, "placeholder"],
+  ]);
+  const withReasoning: Turn = {
+    ...turn,
+    items: [
+      ...turn.items,
+      {
+        id: "think",
+        type: "reasoning",
+        summary: ["plan"],
+        status: "inProgress",
+      },
+    ],
+  };
+  expect(
+    turnBlocks(withReasoning, true).map((block) => [
+      block.process,
+      block.items[0]?.type,
+    ]),
+  ).toEqual([
+    [false, "userMessage"],
+    [true, "reasoning"],
+  ]);
+  expect(turnBlocks(turn, false).map((block) => block.process)).toEqual([
+    false,
+  ]);
 });
 
 it("retains text deltas arriving before item start and accumulates subsequent chunks", () => {
-  let session = sessionFromThread({ id: "s", name: null, cwd: "D:/qa", preview: "", updatedAt: 0, turns: [] });
-  session = reduceNotification(session, "item/agentMessage/delta", { turnId: "t", itemId: "m", delta: "first" });
+  let session = sessionFromThread({
+    id: "s",
+    name: null,
+    cwd: "D:/qa",
+    preview: "",
+    updatedAt: 0,
+    turns: [],
+  });
+  session = reduceNotification(session, "item/agentMessage/delta", {
+    turnId: "t",
+    itemId: "m",
+    delta: "first",
+  });
   expect(session.thread.turns[0].items[0].text).toBe("first");
-  session = reduceNotification(session, "item/started", { turnId: "t", item: { id: "m", type: "agentMessage", text: "" } });
-  session = reduceNotification(session, "item/agentMessage/delta", { turnId: "t", itemId: "m", delta: " second" });
+  session = reduceNotification(session, "item/started", {
+    turnId: "t",
+    item: { id: "m", type: "agentMessage", text: "" },
+  });
+  session = reduceNotification(session, "item/agentMessage/delta", {
+    turnId: "t",
+    itemId: "m",
+    delta: " second",
+  });
   expect(session.thread.turns[0].items[0].text).toBe("first second");
 });

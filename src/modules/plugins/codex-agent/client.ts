@@ -7,6 +7,7 @@ import { prependPrompt } from "./promptHistory";
 import { parentThread, taskFamily } from "./subagents";
 import { editableLastUser, originalInputs } from "./editLastUser";
 import {
+  itemText,
   reduceNotification,
   sessionFromThread,
   type Input,
@@ -102,6 +103,10 @@ export class CodexClient {
   private owner = crypto.randomUUID();
   private requestedResource: string | undefined;
   private draining = new Set<string>();
+  private inserting = new Map<
+    string,
+    { id: string; text: string; userCount: number }
+  >();
   private compactionWaiters = new Map<
     string,
     {
@@ -365,7 +370,11 @@ export class CodexClient {
     if (id && method === "thread/deleted") {
       this.removeSessions([id]);
       for (const [requestId, pending] of this.pending) {
-        if (pending.method !== "thread/delete" || pending.threadId !== protocolId) continue;
+        if (
+          pending.method !== "thread/delete" ||
+          pending.threadId !== protocolId
+        )
+          continue;
         clearTimeout(pending.timer);
         this.pending.delete(requestId);
         pending.resolve({});
@@ -450,11 +459,13 @@ export class CodexClient {
       const next = reduceNotification(session, method, params);
       if (next !== session) this.patch(id, next);
       this.streaming = false;
-      if (method === "item/completed") {
+      if (method === "item/started" || method === "item/completed") {
         const item = params.item as import("./protocol").Item | undefined;
+        if (item?.type === "userMessage") this.finishInserted(id, false);
         if (
-          item?.type === "contextCompaction" ||
-          item?.type === "context_compaction"
+          method === "item/completed" &&
+          (item?.type === "contextCompaction" ||
+            item?.type === "context_compaction")
         ) {
           const waiter = this.compactionWaiters.get(id);
           if (waiter) {
@@ -465,6 +476,7 @@ export class CodexClient {
         }
       }
       if (method === "turn/completed") {
+        this.finishInserted(id, true);
         void this.readAgentMetadata(this.threadId(id));
         const turn = params.turn as Turn;
         if (
@@ -512,7 +524,8 @@ export class CodexClient {
       }, 60000);
       this.pending.set(id, {
         method,
-        threadId: typeof params.threadId === "string" ? params.threadId : undefined,
+        threadId:
+          typeof params.threadId === "string" ? params.threadId : undefined,
         resolve: (value) => resolve(value as T),
         reject,
         timer,
@@ -1154,9 +1167,46 @@ export class CodexClient {
       void this.drain(id);
     } else await this.send(id);
   }
+  private userMessageCount(session: Session, draft: string) {
+    const cleaned = draft.replace(/\s+$/u, "");
+    return session.thread.turns
+      .flatMap((turn) => turn.items)
+      .filter((item) => {
+        if (item.type !== "userMessage") return false;
+        const text = itemText(item).replace(/\s+$/u, "");
+        return text === cleaned || text.startsWith(`${cleaned}\n`);
+      }).length;
+  }
+
+  /** 插入中的条目留在队列里，直到用户消息进时间线或本轮结束。 */
+  private finishInserted(id: string, force: boolean) {
+    const pending = this.inserting.get(id);
+    if (!pending) return;
+    const session = this.snapshot.sessions[id];
+    if (!session) {
+      this.inserting.delete(id);
+      return;
+    }
+    const appeared =
+      this.userMessageCount(session, pending.text) > pending.userCount;
+    if (!force && !appeared) return;
+    this.inserting.delete(id);
+    this.patch(id, {
+      queueSendingId:
+        session.queueSendingId === pending.id
+          ? undefined
+          : session.queueSendingId,
+      queue: session.queue.filter((item) => item.id !== pending.id),
+    });
+  }
+
   /** 上一轮完成后串行发送一条；失败保留原队列，避免重复提交。 */
   private async drain(id: string) {
     const session = this.snapshot.sessions[id];
+    const insertingId = this.inserting.get(id)?.id;
+    const queue = (session?.queue ?? []).filter(
+      (item) => item.id !== insertingId,
+    );
     if (
       !session ||
       session.compacting ||
@@ -1164,14 +1214,14 @@ export class CodexClient {
       session.sending ||
       session.stopping ||
       session.queueError ||
-      !session.queue.length ||
+      !queue.length ||
       this.draining.has(id) ||
       !this.snapshot.connected ||
       this.snapshot.switching
     )
       return;
     this.draining.add(id);
-    const entry = session.queue[0];
+    const entry = queue[0];
     try {
       if (await this.send(id, entry))
         this.patch(id, {
@@ -1228,13 +1278,38 @@ export class CodexClient {
     entryId: string,
     action: "edit" | "delete" | "steer",
   ) {
-    if (this.draining.has(id) || this.snapshot.sessions[id].sending)
+    const session = this.snapshot.sessions[id];
+    if (this.draining.has(id) || session.sending)
       throw new Error("队列正在提交，请稍后操作");
-    const entry = this.snapshot.sessions[id].queue.find(
-      (item) => item.id === entryId,
-    );
+    if (session.queueSendingId === entryId) return;
+    const entry = session.queue.find((item) => item.id === entryId);
     if (!entry) return;
-    if (action === "steer" && !(await this.send(id, entry))) return;
+    if (action === "steer") {
+      const live = session.busy || !!session.turnId;
+      if (!live) {
+        this.patch(id, {
+          queue: [
+            entry,
+            ...session.queue.filter((item) => item.id !== entryId),
+          ],
+        });
+        await this.drain(id);
+        return;
+      }
+      this.patch(id, { queueSendingId: entryId, queueError: null });
+      this.inserting.set(id, {
+        id: entryId,
+        text: entry.draft,
+        userCount: this.userMessageCount(session, entry.draft),
+      });
+      if (!(await this.send(id, entry))) {
+        this.inserting.delete(id);
+        this.patch(id, { queueSendingId: undefined });
+        return;
+      }
+      this.finishInserted(id, false);
+      return;
+    }
     if (action === "edit") this.restoreDraft(id, [entry]);
     this.patch(id, {
       queue: this.snapshot.sessions[id].queue.filter(
@@ -1266,8 +1341,13 @@ export class CodexClient {
       );
       const failure = results.find((result) => result.status === "rejected");
       if (failure?.status === "rejected") throw failure.reason;
+      this.inserting.delete(id);
       this.restoreDraft(id, this.snapshot.sessions[id].queue);
-      this.patch(id, { queue: [], queueError: null });
+      this.patch(id, {
+        queue: [],
+        queueError: null,
+        queueSendingId: undefined,
+      });
     } finally {
       this.patch(id, { stopping: false });
     }
@@ -1517,6 +1597,7 @@ export class CodexClient {
   /** 卸载插件时取消监听与本插件进程。 */
   async dispose() {
     this.disposed = true;
+    this.inserting.clear();
     clearTimeout(this.streamTimer);
     for (const [id, waiter] of this.compactionWaiters) {
       clearTimeout(waiter.timer);
