@@ -16,7 +16,11 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { ZoomableImage } from "@/modules/reader/ZoomableImage";
 import { MarkdownTable } from "@/modules/markdown/MarkdownTable";
-import { CodexFileLink, FileLinkContext, localFileLinks } from "./CodexFileLink";
+import {
+  CodexFileLink,
+  FileLinkContext,
+  localFileLinks,
+} from "./CodexFileLink";
 import { Button } from "@/components/ui/button";
 import { itemText, type Item, type Session, type Turn } from "./protocol";
 import type { CodexClient } from "./client";
@@ -31,11 +35,16 @@ import {
   isTool,
   processLabel,
   toolOutput,
+  turnBlocks,
 } from "./timeline";
 
 const remarkPlugins = [...Object.values(defaultRemarkPlugins), localFileLinks];
 
-const components = { a: CodexFileLink, img: ZoomableImage, table: MarkdownTable };
+const components = {
+  a: CodexFileLink,
+  img: ZoomableImage,
+  table: MarkdownTable,
+};
 
 /** 删除记录定位原目录，其余文件交给主阅读器打开。 */
 function openChangedFile(
@@ -269,11 +278,20 @@ function Activity({
       <summary>
         <HugeiconsIcon icon={ArrowDown01Icon} size={12} />
         <span>{activityLabel(item)}</span>
-
       </summary>
       <div className="codex-activity-body">
         {item.type === "subAgentActivity" ? (
-          <p>{String(item.agentPath ?? "子代理")} · {({ started: "已启动", interacted: "已交互", completed: "已完成", interrupted: "已停止" } as Record<string, string>)[String(item.kind)] ?? "状态更新"}</p>
+          <p>
+            {String(item.agentPath ?? "子代理")} ·{" "}
+            {(
+              {
+                started: "已启动",
+                interacted: "已交互",
+                completed: "已完成",
+                interrupted: "已停止",
+              } as Record<string, string>
+            )[String(item.kind)] ?? "状态更新"}
+          </p>
         ) : item.type === "reasoning" ? (
           <Markdown text={text} />
         ) : item.type === "webSearch" ? (
@@ -504,23 +522,7 @@ function TurnView({
   onEdit?: (text: string) => Promise<void>;
   editableId?: string;
 }) {
-  const last = [...turn.items]
-    .reverse()
-    .find((item) => item.type === "agentMessage");
-  const blocks: Array<{ id: string; process: boolean; items: Item[] }> = [];
-  for (const item of turn.items) {
-    if (isCompaction(item)) continue;
-    const message =
-      item.type === "userMessage" ||
-      (item.type === "agentMessage" &&
-        (item.phase === "final_answer" ||
-          (!running && item.phase == null && item.id === last?.id)));
-    const previous = blocks[blocks.length - 1];
-    if (!message && previous?.process) previous.items.push(item);
-    else blocks.push({ id: item.id, process: !message, items: [item] });
-  }
-  if (!blocks.some((block) => block.process))
-    blocks.unshift({ id: `process-${turn.id}`, process: true, items: [] });
+  const blocks = turnBlocks(turn, running);
   return (
     <>
       {blocks.map((block) =>
@@ -553,9 +555,6 @@ function TurnView({
             forkDisabled={forkDisabled || running}
           />
         ),
-      )}
-      {running && !blocks.some((block) => block.process) && (
-        <Process items={[]} turn={turn} running query={query} />
       )}
     </>
   );
@@ -757,159 +756,166 @@ export function CodexTranscript({
   };
   return (
     <FileLinkContext.Provider value={{ cwd: session.thread.cwd, onOpenFile }}>
-    <div className="codex-transcript-wrap">
-      {query && (
-        <div className="flex items-center gap-2 px-3 text-xs">
-          <span>
-            {matches.length ? (hit % matches.length) + 1 : 0}/{matches.length}{" "}
-            处 · 已加载记录
-          </span>
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            aria-label="上一处"
-            onClick={() => navigate(-1)}
-          >
-            ↑
-          </Button>
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            aria-label="下一处"
-            onClick={() => navigate(1)}
-          >
-            ↓
-          </Button>
-        </div>
-      )}
-      <div
-        className="codex-transcript reader-scrollbar select-text"
-        tabIndex={0}
-        ref={root}
-        onWheel={(event) => {
-          if (event.deltaY < 0) {
-            pause();
-            if ((root.current?.scrollTop ?? 0) < 80) older();
-          }
-        }}
-        onPointerDown={pause}
-        onKeyDown={(event) => {
-          if (["PageUp", "ArrowUp", "Home"].includes(event.key)) pause();
-        }}
-        onScroll={() => {
-          const el = root.current;
-          if (!el?.clientHeight) return;
-          if (
-            el.scrollTop > 0 &&
-            el.scrollHeight - el.scrollTop - el.clientHeight < 32 &&
-            !query
-          ) {
-            follow.current = true;
-            setAtBottom(true);
-          }
-          client.scrollPositions.set(session.thread.id, {
-            top: el.scrollTop,
-            follow: follow.current,
-          });
-        }}
-      >
-        {session.historyCursor && (
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={session.historyLoading}
-            onClick={older}
-          >
-            {session.historyLoading ? "正在加载更早记录…" : "加载更早记录"}
-          </Button>
-        )}
-        {!session.loaded && <p>正在加载会话...</p>}
-        {session.loaded && !turns.length && (
-          <div className="py-12 text-center text-muted-foreground">
-            从一个任务开始
-            <br />
-            在下方输入任务或恢复已有线程。
+      <div className="codex-transcript-wrap">
+        {query && (
+          <div className="flex items-center gap-2 px-3 text-xs">
+            <span>
+              {matches.length ? (hit % matches.length) + 1 : 0}/{matches.length}{" "}
+              处 · 已加载记录
+            </span>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="上一处"
+              onClick={() => navigate(-1)}
+            >
+              ↑
+            </Button>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="下一处"
+              onClick={() => navigate(1)}
+            >
+              ↓
+            </Button>
           </div>
         )}
         <div
-          className="codex-transcript-content"
-          style={{ height: size, position: "relative" }}
+          className="codex-transcript reader-scrollbar select-text"
+          tabIndex={0}
+          ref={root}
+          onWheel={(event) => {
+            if (event.deltaY < 0) {
+              pause();
+              if ((root.current?.scrollTop ?? 0) < 80) older();
+            }
+          }}
+          onPointerDown={pause}
+          onKeyDown={(event) => {
+            if (["PageUp", "ArrowUp", "Home"].includes(event.key)) pause();
+          }}
+          onScroll={() => {
+            const el = root.current;
+            if (!el?.clientHeight) return;
+            if (
+              el.scrollTop > 0 &&
+              el.scrollHeight - el.scrollTop - el.clientHeight < 32 &&
+              !query
+            ) {
+              follow.current = true;
+              setAtBottom(true);
+            }
+            client.scrollPositions.set(session.thread.id, {
+              top: el.scrollTop,
+              follow: follow.current,
+            });
+          }}
         >
-          {virtual.getVirtualItems().map((row) => {
-            const turn = turns[row.index];
-            return (
-              <div
-                key={row.key}
-                data-index={row.index}
-                data-codex-turn={turn.id}
-                ref={virtual.measureElement}
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  width: "100%",
-                  transform: `translateY(${row.start}px)`,
-                }}
-              >
-                <TurnView
-                  editableId={
-                    editable?.turn.id === turn.id ? editable.item.id : undefined
-                  }
-                  turn={turn}
-                  running={session.turnId === turn.id}
-                  query={query}
-                  onOpenFile={onOpenFile}
-                  forkDisabled={
-                    !client.getSnapshot().connected ||
-                    session.busy ||
-                    session.sending
-                  }
-                  onFork={() =>
-                    void client
-                      .fork(session.thread.id, turn.id)
-                      .then(onFork)
-                      .catch((error) => toast.error(String(error)))
-                  }
-                  onEdit={
-                    editable?.turn.id === turn.id
-                      ? async (text) => {
-                          onFork(
-                            await client.editLast(
-                              session.thread.id,
-                              text,
-                              editable.item.id,
-                            ),
-                          );
-                        }
-                      : undefined
-                  }
-                />
-              </div>
-            );
-          })}
+          {session.historyCursor && (
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={session.historyLoading}
+              onClick={older}
+            >
+              {session.historyLoading ? "正在加载更早记录…" : "加载更早记录"}
+            </Button>
+          )}
+          {!session.loaded && <p>正在加载会话...</p>}
+          {session.loaded && !turns.length && (
+            <div className="py-12 text-center text-muted-foreground">
+              从一个任务开始
+              <br />
+              在下方输入任务或恢复已有线程。
+            </div>
+          )}
+          <div
+            className="codex-transcript-content"
+            style={{ height: size, position: "relative" }}
+          >
+            {virtual.getVirtualItems().map((row) => {
+              const turn = turns[row.index];
+              return (
+                <div
+                  key={row.key}
+                  data-index={row.index}
+                  data-codex-turn={turn.id}
+                  ref={virtual.measureElement}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${row.start}px)`,
+                  }}
+                >
+                  <TurnView
+                    editableId={
+                      editable?.turn.id === turn.id
+                        ? editable.item.id
+                        : undefined
+                    }
+                    turn={turn}
+                    running={session.turnId === turn.id}
+                    query={query}
+                    onOpenFile={onOpenFile}
+                    forkDisabled={
+                      !client.getSnapshot().connected ||
+                      session.busy ||
+                      session.sending
+                    }
+                    onFork={() =>
+                      void client
+                        .fork(session.thread.id, turn.id)
+                        .then(onFork)
+                        .catch((error) => toast.error(String(error)))
+                    }
+                    onEdit={
+                      editable?.turn.id === turn.id
+                        ? async (text) => {
+                            onFork(
+                              await client.editLast(
+                                session.thread.id,
+                                text,
+                                editable.item.id,
+                              ),
+                            );
+                          }
+                        : undefined
+                    }
+                  />
+                </div>
+              );
+            })}
+          </div>
+          {session.busy && !session.turnId && !session.compacting && (
+            <p className="codex-transcript-content codex-live">
+              {session.sending ? "正在提交任务…" : "正在同步任务状态…"}
+            </p>
+          )}
+          {session.error && (
+            <p
+              role="alert"
+              className="codex-transcript-content text-destructive whitespace-pre-wrap"
+            >
+              {session.error}
+            </p>
+          )}
         </div>
-        {session.busy && !session.turnId && !session.compacting && (
-          <p className="codex-transcript-content codex-live">{session.sending ? "正在提交任务…" : "正在同步任务状态…"}</p>
-        )}
-        {session.error && (
-          <p role="alert" className="codex-transcript-content text-destructive whitespace-pre-wrap">
-            {session.error}
-          </p>
+        {!atBottom && !!turns.length && (
+          <Button
+            className="absolute bottom-2 left-1/2 rounded-full shadow-sm"
+            size="icon-sm"
+            variant="secondary"
+            title="回到底部"
+            aria-label="回到底部"
+            onClick={bottom}
+          >
+            <HugeiconsIcon icon={ArrowDown01Icon} size={14} />
+          </Button>
         )}
       </div>
-      {!atBottom && !!turns.length && (
-        <Button
-          className="absolute bottom-2 left-1/2 rounded-full shadow-sm"
-          size="icon-sm"
-          variant="secondary"
-          title="回到底部"
-          aria-label="回到底部"
-          onClick={bottom}
-        >
-          <HugeiconsIcon icon={ArrowDown01Icon} size={14} />
-        </Button>
-      )}
-    </div>
     </FileLinkContext.Provider>
   );
 }

@@ -183,7 +183,6 @@ describe("Pi RPC workspace", () => {
       const thread = await client.open("compact", "D:/one", "history.jsonl");
       await client.hydrateFromDisk(thread);
       await client.request(thread, { type: "get_state" });
-      const items = thread.view.items;
       vi.mocked(native.sendPiCommand).mockClear();
       vi.mocked(native.sendPiCommand).mockImplementation(
         async (id, command) => {
@@ -215,14 +214,15 @@ describe("Pi RPC workspace", () => {
           ["prompt", "steer", "follow_up"].includes(String(cmd.type)),
         );
       expect(flushed.map(([, cmd]) => [cmd.type, cmd.message])).toEqual([
-        ["prompt", "one"],
         ["prompt", "two"],
       ]);
-      expect(flushed[0][1].images).toEqual(images);
-      expect(flushed[1][1].streamingBehavior).toBe("steer");
-      expect(thread.view.localQueue).toEqual([]);
+      expect(flushed[0][1].images).toBeUndefined();
+      expect(thread.view.localQueue?.map((item) => item.text)).toEqual(["one"]);
       expect(thread.view.compaction?.status).toBe("done");
-      expect(thread.view.items).toBe(items);
+      expect(thread.view.items[thread.view.items.length - 1]).toMatchObject({
+        role: "user",
+        text: "two",
+      });
       client.beginPrompt(thread, "下一轮");
       await client.request(thread, { type: "prompt", message: "下一轮" });
       expect(thread.view.compaction).toBeUndefined();
@@ -272,12 +272,103 @@ describe("Pi RPC workspace", () => {
       const queuedId = thread.view.localQueue![0].id;
       client.setQueuedBehavior(thread, queuedId, "steer");
       expect(thread.view.localQueue![0].behavior).toBe("steer");
-      expect(
-        client.removeQueued(thread, queuedId)?.images,
-      ).toHaveLength(1);
+      expect(client.removeQueued(thread, queuedId)?.images).toHaveLength(1);
       expect(thread.view.localQueue).toEqual([]);
     } finally {
       vi.mocked(native.sendPiCommand).mockImplementation(original);
+      client.dispose();
+    }
+  });
+  it("keeps running follow-ups in the local queue until the turn settles", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("queue-idle", "D:/one");
+      await client.request(thread, { type: "get_state" });
+      client.beginPrompt(thread, "进行中");
+      const images = [
+        { type: "image" as const, data: "png", mimeType: "image/png" },
+      ];
+      vi.mocked(native.sendPiCommand).mockClear();
+      client.enqueue(thread, "随后看图", images, "followUp");
+      await client.drainQueue(thread);
+      expect(
+        vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.some(([, cmd]) =>
+            ["prompt", "steer", "follow_up"].includes(String(cmd.type)),
+          ),
+      ).toBe(false);
+      expect(thread.view.localQueue).toHaveLength(1);
+      expect(thread.view.localQueue?.[0]).toMatchObject({
+        text: "随后看图",
+        images,
+        behavior: "followUp",
+      });
+      mock.receive({
+        sessionId: thread.runtimeId!,
+        stream: "stdout",
+        event: { type: "agent_settled" },
+      });
+      await vi.waitFor(() =>
+        expect(thread.view.localQueue?.map((item) => item.text)).toEqual([]),
+      );
+      const flushed = vi
+        .mocked(native.sendPiCommand)
+        .mock.calls.filter(([, cmd]) => cmd.type === "prompt");
+      expect(flushed[flushed.length - 1]?.[1]).toMatchObject({
+        type: "prompt",
+        message: "随后看图",
+        images,
+      });
+    } finally {
+      client.dispose();
+    }
+  });
+  it("keeps a steered queue item visible until native consumption completes", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("steer-hold", "D:/one");
+      await client.request(thread, { type: "get_state" });
+      client.beginPrompt(thread, "进行中");
+      const queuedId = client.enqueue(thread, "插入这句", [], "followUp");
+      vi.mocked(native.sendPiCommand).mockClear();
+      const sending = client.sendQueued(thread, queuedId);
+      await vi.waitFor(() =>
+        expect(
+          vi
+            .mocked(native.sendPiCommand)
+            .mock.calls.some(([, cmd]) => cmd.type === "steer"),
+        ).toBe(true),
+      );
+      await sending;
+      expect(thread.view.localQueue?.map((item) => item.text)).toEqual([
+        "插入这句",
+      ]);
+      expect(thread.view.queueSendingId).toBe(queuedId);
+      mock.receive({
+        sessionId: thread.runtimeId!,
+        stream: "stdout",
+        event: {
+          type: "queue_update",
+          steering: ["插入这句"],
+          followUp: [],
+        },
+      });
+      expect(thread.view.localQueue).toHaveLength(1);
+      mock.receive({
+        sessionId: thread.runtimeId!,
+        stream: "stdout",
+        event: {
+          type: "queue_update",
+          steering: [],
+          followUp: [],
+        },
+      });
+      expect(thread.view.localQueue).toEqual([]);
+      expect(thread.view.queueSendingId).toBeUndefined();
+    } finally {
       client.dispose();
     }
   });
@@ -880,9 +971,9 @@ describe("Pi RPC workspace", () => {
       vi.mocked(native.sendPiCommand).mockClear();
       await client.request(thread, { type: "prompt", message: "继续" });
       expect(
-        vi.mocked(native.sendPiCommand).mock.calls.some(
-          ([, command]) => command.type === "set_model",
-        ),
+        vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.some(([, command]) => command.type === "set_model"),
       ).toBe(false);
       expect(thread.runtimeId).toBe(runtimeId);
 
@@ -895,12 +986,14 @@ describe("Pi RPC workspace", () => {
         message: "用新模型继续",
       });
       expect(
-        vi.mocked(native.sendPiCommand).mock.calls.some(
-          ([, command]) =>
-            command.type === "set_model" &&
-            command.provider === "openai" &&
-            command.modelId === "gpt-after-abort",
-        ),
+        vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.some(
+            ([, command]) =>
+              command.type === "set_model" &&
+              command.provider === "openai" &&
+              command.modelId === "gpt-after-abort",
+          ),
       ).toBe(true);
       expect(thread.runtimeId).toBe(runtimeId);
     } finally {

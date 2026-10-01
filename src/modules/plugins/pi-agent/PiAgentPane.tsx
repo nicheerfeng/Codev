@@ -123,7 +123,12 @@ import { PiTranscript } from "./PiTranscript";
 import { ResizableViewportGrid } from "@/components/ResizableViewportGrid";
 import { PiSettings } from "./PiSettings";
 import { plainStatusText } from "./statusText";
-import type { PiMessageItem, PiModel, PiSessionSummary } from "./types";
+import type {
+  PiImage,
+  PiMessageItem,
+  PiModel,
+  PiSessionSummary,
+} from "./types";
 import { localCommand } from "./commands";
 import { editableLastUser } from "./editLastUser";
 import { toast } from "sonner";
@@ -298,8 +303,7 @@ export function PiAgentPane({
   const selectedProjectRef = useRef(project);
   selectedProjectRef.current = project;
   /** 统一 Windows 扩展路径格式，避免 mission 使用 \\?\\ 前缀时丢失子任务挂载。 */
-  const subagentOwnerKey = (value: string) =>
-    subagentPathKey(value);
+  const subagentOwnerKey = (value: string) => subagentPathKey(value);
   /** 仅读取用户选择的项目目录，合并到已访问项目缓存。 */
   const refreshSessions = useCallback(async (cwd?: string) => {
     const target = cwd ?? selectedProjectRef.current;
@@ -757,12 +761,36 @@ export function PiAgentPane({
       const queued =
         alreadySending ||
         thread.view.status === "running" ||
-        thread.view.status === "stopping";
+        thread.view.status === "stopping" ||
+        thread.view.status === "starting" ||
+        !!thread.view.localQueue?.length ||
+        !!thread.view.queueSendingId;
+      if (queued) {
+        const queuedId = client.current!.enqueue(
+          thread,
+          text,
+          draft.images,
+          behavior,
+        );
+        setDrafts((value) => ({
+          ...value,
+          [sourceKey]: EMPTY_DRAFT,
+          [thread.key]: EMPTY_DRAFT,
+        }));
+        if (behavior === "steer")
+          await client.current!.sendQueued(thread, queuedId);
+        else if (
+          !alreadySending &&
+          thread.view.status !== "running" &&
+          thread.view.status !== "stopping" &&
+          thread.view.status !== "starting"
+        )
+          await client.current!.drainQueue(thread);
+        return;
+      }
       setPending((value) => new Set([...value, runtimeKey]));
       setSelected((current) => (current === selected ? thread.key : current));
-      const adapted = queued
-        ? false
-        : await client.current!.prepareCatalogRuntime(thread);
+      const adapted = await client.current!.prepareCatalogRuntime(thread);
       setNotice(adapted ? CATALOG_ADAPT_NOTICE : "", thread.key);
       setSendRevisions((value) => ({
         ...value,
@@ -774,20 +802,11 @@ export function PiAgentPane({
         [sourceKey]: EMPTY_DRAFT,
         [thread.key]: EMPTY_DRAFT,
       }));
-      await client.current!.request(
-        thread,
-        queued
-          ? {
-              type: behavior === "steer" ? "steer" : "follow_up",
-              message: text,
-              ...(draft.images.length ? { images: draft.images } : {}),
-            }
-          : {
-              type: "prompt",
-              message: text,
-              ...(draft.images.length ? { images: draft.images } : {}),
-            },
-      );
+      await client.current!.request(thread, {
+        type: "prompt",
+        message: text,
+        ...(draft.images.length ? { images: draft.images } : {}),
+      });
       await client.current!.refreshState(thread);
     } catch (error) {
       setDrafts((value) => ({
@@ -827,14 +846,14 @@ export function PiAgentPane({
     await operate(thread, "正在停止…", async () => {
       const key = thread.key;
       /** 保留停止期间输入的新草稿，并恢复取回的文字和附件。 */
-      const restore = (texts: string[]) => {
+      const restore = (texts: string[], images: PiImage[] = []) => {
         setDrafts((value) => {
           const current = value[key] ?? EMPTY_DRAFT;
           return {
             ...value,
             [key]: {
               text: [...texts, current.text].filter(Boolean).join("\n\n"),
-              images: current.images,
+              images: [...images, ...current.images],
               files: current.files,
             },
           };
@@ -1272,7 +1291,10 @@ export function PiAgentPane({
                     <div className="flex h-7 shrink-0 items-center gap-1 border-b border-border/60 bg-muted/30 px-2 text-[11px]">
                       {viewportRename?.thread.key === paneKey ? (
                         <input
-                          autoFocus
+                          ref={(node) => {
+                            node?.focus();
+                            node?.select();
+                          }}
                           aria-label="重命名 Pi 视口"
                           className="h-5 min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-[11px] outline-none focus:border-primary/60"
                           value={viewportRename.name}
@@ -1450,10 +1472,13 @@ export function PiAgentPane({
                     onLocalQueueAction={(id, action) => {
                       if (!activeThread) return;
                       if (action === "steer") {
-                        client.current!.setQueuedBehavior(activeThread, id, "steer");
+                        run(
+                          client.current!.sendQueued(activeThread, id),
+                          activeThread.key,
+                        );
                         return;
                       }
-                      const item = client.current!.removeQueued(
+                      const item = client.current!.restoreQueuedMessage(
                         activeThread,
                         id,
                       );
@@ -1476,54 +1501,6 @@ export function PiAgentPane({
                           [draftKey]: (value[draftKey] ?? 0) + 1,
                         }));
                       }
-                    }}
-                    onRetryQueue={() => {
-                      if (activeThread)
-                        run(
-                          client.current!.drainQueue(activeThread),
-                          activeThread.key,
-                        );
-                    }}
-                    onQueueAction={(kind, index, text, action) => {
-                      if (!activeThread) return;
-                      const thread = activeThread;
-                      const label =
-                        action === "steer"
-                          ? "正在安排为下一步…"
-                          : action === "edit"
-                            ? "正在退回输入框…"
-                            : "正在删除排队消息…";
-                      run(
-                        operate(thread, label, () =>
-                          client.current!.updateQueuedMessage(
-                            thread,
-                            kind,
-                            index,
-                            text,
-                            action,
-                            (texts) => {
-                              setDrafts((value) => {
-                                const current =
-                                  value[thread.key] ?? EMPTY_DRAFT;
-                                return {
-                                  ...value,
-                                  [thread.key]: {
-                                    ...current,
-                                    text: [...texts, current.text]
-                                      .filter(Boolean)
-                                      .join("\n\n"),
-                                  },
-                                };
-                              });
-                              setFocusRevisions((value) => ({
-                                ...value,
-                                [thread.key]: (value[thread.key] ?? 0) + 1,
-                              }));
-                            },
-                          ),
-                        ),
-                        thread.key,
-                      );
                     }}
                     onStop={() => {
                       if (activeThread) run(stopThread(activeThread), draftKey);
@@ -1646,7 +1623,7 @@ export function PiAgentPane({
           >
             <Input
               aria-label="线程名称"
-              autoFocus
+              ref={(node) => node?.focus()}
               value={rename?.name ?? ""}
               onChange={(event) =>
                 setRename((value) =>

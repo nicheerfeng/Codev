@@ -300,7 +300,10 @@ export function CodexComposer({
             </p>
           )}
           {session.queue.map((entry) => (
-            <div key={entry.id} className="flex items-center gap-2 py-1">
+            <div
+              key={entry.id}
+              className={`flex items-center gap-2 py-1${session.queueSendingId === entry.id ? " opacity-60" : ""}`}
+            >
               {entry.images.length > 0 && (
                 <div className="flex shrink-0 gap-1">
                   {entry.images.slice(0, 3).map((src, index) => (
@@ -308,11 +311,13 @@ export function CodexComposer({
                       key={`${entry.id}-${index}-${src.slice(-16)}`}
                       src={src}
                       alt={`排队图片 ${index + 1}`}
-                      className="size-8 rounded-md object-cover"
+                      className="size-[21px] rounded-md object-cover"
                     />
                   ))}
                   {entry.images.length > 3 && (
-                    <span className="self-center text-[10px] text-muted-foreground">+{entry.images.length - 3}</span>
+                    <span className="self-center text-[10px] text-muted-foreground">
+                      +{entry.images.length - 3}
+                    </span>
                   )}
                 </div>
               )}
@@ -331,7 +336,9 @@ export function CodexComposer({
                   size="icon-xs"
                   title="安排到当前步骤之后"
                   aria-label="安排到当前步骤之后"
-                  disabled={session.sending}
+                  disabled={
+                    session.sending || session.queueSendingId === entry.id
+                  }
                   onClick={() =>
                     void client
                       .queueAction(id, entry.id, "steer")
@@ -345,7 +352,9 @@ export function CodexComposer({
                   size="icon-xs"
                   title="退回输入框编辑"
                   aria-label="退回编辑"
-                  disabled={session.sending}
+                  disabled={
+                    session.sending || session.queueSendingId === entry.id
+                  }
                   onClick={() =>
                     void client
                       .queueAction(id, entry.id, "edit")
@@ -359,7 +368,9 @@ export function CodexComposer({
                   size="icon-xs"
                   title="删除排队消息"
                   aria-label="删除排队消息"
-                  disabled={session.sending}
+                  disabled={
+                    session.sending || session.queueSendingId === entry.id
+                  }
                   onClick={() =>
                     void client
                       .queueAction(id, entry.id, "delete")

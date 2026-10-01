@@ -61,6 +61,10 @@ export class PiWorkspaceClient {
   private manualCompactions = new Set<string>();
   private compactionResume = new Set<string>();
   private statsTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private inserting = new Map<
+    string,
+    { id: string; text: string; seenNative: boolean; userCount: number }
+  >();
   private stop: Promise<() => void>;
 
   /** 生成模型身份键，目录刷新不会改变同一模型的 runtime 绑定。 */
@@ -168,7 +172,10 @@ export class PiWorkspaceClient {
       thread.runtimeId = null;
       thread.runtimeModelKey = null;
     }
+    if (event.type === "queue_update" || event.type === "message_end")
+      this.finishInserted(thread, false);
     if (event.type === "agent_settled" && thread.runtimeId !== null) {
+      this.finishInserted(thread, true);
       const resumeQueue = this.compactionResume.delete(thread.key);
       void this.refreshState(thread)
         .then(async () => {
@@ -217,12 +224,14 @@ export class PiWorkspaceClient {
     text: string,
     images?: PiImage[],
     queued = false,
+    keepCompaction = false,
   ) {
     thread.view = piViewReducer(thread.view, {
       type: "prompt",
       text,
       images,
       queued,
+      keepCompaction,
     });
     this.publish();
   }
@@ -255,7 +264,7 @@ export class PiWorkspaceClient {
         thread.runtimeModelKey = selectedKey;
         thread.catalogEpoch = this.catalogEpoch;
         return true;
-      } catch (error) {
+      } catch {
         // set_model 失败（可能是旧版 Pi 不支持），回退到重启 runtime
         thread.view = { ...thread.view, error: CATALOG_ADAPT_NOTICE };
         this.publish();
@@ -516,14 +525,16 @@ export class PiWorkspaceClient {
     images: PiImage[],
     behavior: "steer" | "followUp",
   ) {
+    const id = crypto.randomUUID();
     thread.view = {
       ...thread.view,
       localQueue: [
         ...(thread.view.localQueue ?? []),
-        { id: crypto.randomUUID(), text, images, behavior },
+        { id, text, images, behavior },
       ],
     };
     this.publish();
+    return id;
   }
 
   /** 删除或取回尚未投递的本地消息。 */
@@ -538,63 +549,162 @@ export class PiWorkspaceClient {
     return item;
   }
 
-  /** 调整本地暂存消息的投递顺序，不改动正文或图片附件。 */
-  setQueuedBehavior(thread: PiThread, id: string, behavior: "steer" | "followUp") {
+  /** 插队提到队首；其余消息保持相对顺序。 */
+  setQueuedBehavior(
+    thread: PiThread,
+    id: string,
+    behavior: "steer" | "followUp",
+  ) {
+    const queue = thread.view.localQueue ?? [];
+    const item = queue.find((entry) => entry.id === id);
+    if (!item) return;
+    const rest = queue.filter((entry) => entry.id !== id);
+    const next = { ...item, behavior };
     thread.view = {
       ...thread.view,
-      localQueue: thread.view.localQueue?.map((item) =>
-        item.id === id ? { ...item, behavior } : item,
+      localQueue: behavior === "steer" ? [next, ...rest] : [...rest, next],
+    };
+    this.publish();
+  }
+
+  private userMessageCount(thread: PiThread, text: string) {
+    const cleaned = text.replace(/\s+$/u, "");
+    return thread.view.items.filter(
+      (item) =>
+        item.kind === "message" &&
+        item.role === "user" &&
+        item.text === cleaned,
+    ).length;
+  }
+
+  /** 插入中的条目留在队列里，直到原生真正收下或本轮结束。 */
+  private finishInserted(thread: PiThread, force: boolean) {
+    const pending = this.inserting.get(thread.key);
+    if (!pending) return;
+    const cleaned = pending.text.replace(/\s+$/u, "");
+    const nativeTexts = [
+      ...thread.view.queue.steering.map((item) => item.text),
+      ...thread.view.queue.followUp.map((item) => item.text),
+    ].map((text) => text.replace(/\s+$/u, ""));
+    const stillNative = nativeTexts.includes(cleaned);
+    if (stillNative) pending.seenNative = true;
+    const appeared =
+      this.userMessageCount(thread, pending.text) > pending.userCount;
+    if (!force && stillNative) return;
+    if (!force && !appeared && !pending.seenNative) return;
+    this.inserting.delete(thread.key);
+    thread.view = {
+      ...thread.view,
+      queueSendingId:
+        thread.view.queueSendingId === pending.id
+          ? undefined
+          : thread.view.queueSendingId,
+      localQueue: thread.view.localQueue?.filter(
+        (entry) => entry.id !== pending.id,
       ),
     };
     this.publish();
   }
 
-  /** 原生明确接受后移除缓存；失败保留当前及后续消息，允许用户重试。 */
+  /** 空闲时一次只发出队首；运行中不投递，让用户能看见待发送队列。 */
   async drainQueue(thread: PiThread) {
+    const insertingId = this.inserting.get(thread.key)?.id;
+    const queue = (thread.view.localQueue ?? []).filter(
+      (entry) => entry.id !== insertingId,
+    );
     if (
       this.draining.has(thread.key) ||
       thread.view.compaction?.status === "running" ||
-      !thread.view.localQueue?.length
+      thread.view.status === "running" ||
+      thread.view.status === "stopping" ||
+      thread.view.status === "starting" ||
+      !queue.length
     )
       return;
+    const item = queue.find((entry) => entry.behavior === "steer") ?? queue[0];
     this.draining.add(thread.key);
+    thread.view = { ...thread.view, queueSendingId: item.id };
+    this.publish();
     try {
-      while (
-        thread.view.localQueue?.length &&
-        thread.view.compaction?.status !== "running"
-      ) {
-        const item = thread.view.localQueue[0];
-        thread.view = { ...thread.view, queueSendingId: item.id };
-        this.publish();
-        const live =
-          thread.view.status === "running" || thread.view.status === "stopping";
-        await this.request(
-          thread,
-          live
-            ? {
-                type: item.behavior === "steer" ? "steer" : "follow_up",
-                message: item.text,
-                ...(item.images.length ? { images: item.images } : {}),
-              }
-            : {
-                type: "prompt",
-                message: item.text,
-                ...(item.images.length ? { images: item.images } : {}),
-                streamingBehavior: item.behavior,
-              },
-        );
-        thread.view = {
-          ...thread.view,
-          localQueue: thread.view.localQueue?.filter(
-            (entry) => entry.id !== item.id,
-          ),
-        };
-        this.publish();
-      }
+      this.beginPrompt(thread, item.text, item.images, false, true);
+      await this.request(thread, {
+        type: "prompt",
+        message: item.text,
+        ...(item.images.length ? { images: item.images } : {}),
+      });
+      thread.view = {
+        ...thread.view,
+        localQueue: thread.view.localQueue?.filter(
+          (entry) => entry.id !== item.id,
+        ),
+      };
+      this.publish();
+    } catch (error) {
+      const cleaned = item.text.replace(/\s+$/u, "");
+      const last = thread.view.items[thread.view.items.length - 1];
+      const revertOptimistic =
+        last?.kind === "message" &&
+        last.role === "user" &&
+        last.id.startsWith("local-user-") &&
+        last.text === cleaned;
+      thread.view = {
+        ...thread.view,
+        ...(revertOptimistic ? { items: thread.view.items.slice(0, -1) } : {}),
+        ...(thread.view.phase === "处理中"
+          ? { status: "idle" as const, phase: "" }
+          : {}),
+      };
+      this.error(thread.key, error);
     } finally {
       this.draining.delete(thread.key);
       thread.view = { ...thread.view, queueSendingId: undefined };
       this.publish();
+    }
+  }
+
+  /** 从本地队列取回目标消息，保留正文与图片。 */
+  restoreQueuedMessage(thread: PiThread, id: string) {
+    if (thread.view.queueSendingId === id) return null;
+    return this.removeQueued(thread, id) ?? null;
+  }
+
+  /** 运行中立刻插入当前轮；空闲则提到队首后按普通发送排出。 */
+  async sendQueued(thread: PiThread, id: string) {
+    if (thread.view.queueSendingId === id) return;
+    const item = thread.view.localQueue?.find((entry) => entry.id === id);
+    if (!item) return;
+    if (thread.view.compaction?.status === "running") {
+      this.setQueuedBehavior(thread, id, "steer");
+      return;
+    }
+    const live =
+      thread.view.status === "running" || thread.view.status === "stopping";
+    if (!live) {
+      this.setQueuedBehavior(thread, id, "steer");
+      await this.drainQueue(thread);
+      return;
+    }
+    thread.view = { ...thread.view, queueSendingId: id };
+    this.inserting.set(thread.key, {
+      id,
+      text: item.text,
+      seenNative: false,
+      userCount: this.userMessageCount(thread, item.text),
+    });
+    this.publish();
+    try {
+      this.beginPrompt(thread, item.text, item.images, true);
+      await this.request(thread, {
+        type: "steer",
+        message: item.text,
+        ...(item.images.length ? { images: item.images } : {}),
+      });
+      this.finishInserted(thread, false);
+    } catch (error) {
+      this.inserting.delete(thread.key);
+      thread.view = { ...thread.view, queueSendingId: undefined };
+      this.publish();
+      this.error(thread.key, error);
     }
   }
 
@@ -817,6 +927,43 @@ export class PiWorkspaceClient {
     }
   }
 
+  /** 归一化 Pi 原生队列快照，统一兼容 follow_up 与图片字段命名。 */
+  private normalizeNativeQueue(snapshot: Record<string, unknown> | null) {
+    const normalize = (value: unknown) => {
+      if (!Array.isArray(value)) return [];
+      return value.flatMap((raw) => {
+        const item = typeof raw === "string" ? { text: raw } : objectValue(raw);
+        const text =
+          typeof item?.text === "string"
+            ? item.text
+            : typeof item?.message === "string"
+              ? item.message
+              : null;
+        if (text === null) return [];
+        const images = Array.isArray(item?.images)
+          ? item.images.flatMap((image) => {
+              const value = objectValue(image);
+              if (!value || typeof value.data !== "string") return [];
+              const mimeType = value.mimeType ?? value.mime_type ?? "image/png";
+              return [
+                {
+                  type: "image" as const,
+                  data: value.data,
+                  mimeType:
+                    typeof mimeType === "string" ? mimeType : "image/png",
+                },
+              ];
+            })
+          : [];
+        return [{ text, images }];
+      });
+    };
+    return {
+      steering: normalize(snapshot?.steering),
+      followUp: normalize(snapshot?.followUp ?? snapshot?.follow_up),
+    };
+  }
+
   /** 按原生队列快照修改单条消息，重建失败时将未发送文本退回草稿。 */
   async updateQueuedMessage(
     thread: PiThread,
@@ -824,20 +971,22 @@ export class PiWorkspaceClient {
     index: number,
     text: string,
     action: "edit" | "delete" | "steer",
-    restore: (texts: string[]) => void,
+    restore: (texts: string[], images?: PiImage[]) => void,
   ) {
     const snapshot = await this.clearQueue(thread);
     if (!snapshot) throw new Error("当前 Pi runtime 不支持编辑已排队消息");
+    const nativeQueue = this.normalizeNativeQueue(snapshot);
     const entries = (["steering", "followUp"] as const).flatMap((mode) =>
-      (Array.isArray(snapshot?.[mode])
-        ? (snapshot[mode] as Array<{ text: string; images?: PiImage[] }>)
-        : []
-      ).map((item, position) => ({
-        mode,
-        position,
-        message: item.text,
-        images: item.images,
-      })),
+      nativeQueue[mode].flatMap((raw, position) => {
+        return [
+          {
+            mode,
+            position,
+            message: raw.text,
+            images: raw.images,
+          },
+        ];
+      }),
     );
     const byIndex = entries.find(
       (entry) => entry.mode === kind && entry.position === index,
@@ -848,7 +997,10 @@ export class PiWorkspaceClient {
     if (!target)
       throw new Error("这条消息已开始处理或队列已变化，请查看最新队列");
     const remaining = entries.filter((entry) => entry !== target);
-    if (action === "edit") restore([target.message]);
+    if (action === "edit") {
+      if (target.images.length) restore([target.message], target.images);
+      else restore([target.message]);
+    }
     if (action === "steer") remaining.unshift({ ...target, mode: "steering" });
     for (let position = 0; position < remaining.length; position++) {
       const entry = remaining[position];
@@ -856,32 +1008,51 @@ export class PiWorkspaceClient {
         await this.request(thread, {
           type: entry.mode === "steering" ? "steer" : "follow_up",
           message: entry.message,
+          ...(entry.images.length ? { images: entry.images } : {}),
         });
       } catch (error) {
-        restore(remaining.slice(position).map((item) => item.message));
+        restore(
+          remaining.slice(position).map((item) => item.message),
+          remaining.flatMap((item) => item.images),
+        );
         throw error;
       }
     }
   }
 
   /** 先取回未执行的队列文本，再中断运行，恢复操作始终绑定原线程。 */
-  async stopAndRestore(thread: PiThread, restore: (texts: string[]) => void) {
+  async stopAndRestore(
+    thread: PiThread,
+    restore: (texts: string[], images?: PiImage[]) => void,
+  ) {
     const queued = await this.clearQueue(thread);
-    const steering = Array.isArray(queued?.steering)
-      ? queued.steering.map((item: any) =>
-          typeof item === "string" ? item : item.text,
-        )
+    const nativeQueue = this.normalizeNativeQueue(queued);
+    const steering = nativeQueue.steering.length
+      ? nativeQueue.steering.map((item) => item.text)
       : thread.view.queue.steering.map((item) => item.text);
-    const followUp = Array.isArray(queued?.followUp)
-      ? queued.followUp.map((item: any) =>
-          typeof item === "string" ? item : item.text,
-        )
+    const followUp = nativeQueue.followUp.length
+      ? nativeQueue.followUp.map((item) => item.text)
       : thread.view.queue.followUp.map((item) => item.text);
-    const localQueue = (thread.view.localQueue ?? []).map(
-      (entry) => entry.text,
-    );
+    const localQueue = thread.view.localQueue ?? [];
+    this.inserting.delete(thread.key);
     thread.view = { ...thread.view, localQueue: [], queueSendingId: undefined };
-    restore([...steering, ...followUp, ...localQueue]);
+    const queuedItems = [...nativeQueue.steering, ...nativeQueue.followUp];
+    const images = queuedItems.flatMap((item: unknown) => {
+      return Array.isArray((item as { images?: PiImage[] }).images)
+        ? (item as { images: PiImage[] }).images
+        : [];
+    });
+    const restored = [
+      ...steering,
+      ...followUp,
+      ...localQueue.map((entry) => entry.text),
+    ];
+    if (images.length || localQueue.some((entry) => entry.images.length))
+      restore(restored, [
+        ...images,
+        ...localQueue.flatMap((entry) => entry.images),
+      ]);
+    else restore(restored);
     this.compactionResume.delete(thread.key);
     thread.view = piViewReducer(thread.view, { type: "stopping" });
     this.publish();
@@ -1107,6 +1278,7 @@ export class PiWorkspaceClient {
     this.idleTimers.clear();
     for (const timer of this.statsTimers.values()) clearTimeout(timer);
     this.statsTimers.clear();
+    this.inserting.clear();
     void this.stop.then((stop) => stop());
     for (const thread of this.threads.values())
       if (thread.runtimeId !== null)

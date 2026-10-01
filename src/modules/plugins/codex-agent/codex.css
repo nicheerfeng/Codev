@@ -74,6 +74,7 @@ details[open] > .codex-process-summary svg,details[open] > .codex-activity-summa
 @keyframes codex-project-breathe { 0%,100% { background-color:transparent; } 50% { background-color:rgb(71 127 175 / 12%); } }
 .codex-status-dot { display:block; width:8px; height:8px; flex-shrink:0; border-radius:50%; background:color-mix(in srgb,var(--muted-foreground) 50%,transparent); }
 .codex-status-dot.codex-waiting { background:#d69e35; }
+.codex-status-dot.codex-unread { background:#8eacc9; }
 .codex-status-dot.codex-running { position:relative; background:#8eacc9; color:#8eacc9; }
 .codex-running::after { content:""; position:absolute; inset:-4px; border:1.5px solid currentColor; border-right-color:transparent; border-bottom-color:transparent; border-radius:50%; animation:codex-spin 1s linear infinite; }
 .codex-workspace [data-running-stop="true"] > span { animation:codex-stop-pulse 2.2s ease-in-out infinite; }
@@ -84,7 +85,7 @@ details[open] > .codex-process-summary svg,details[open] > .codex-activity-summa
 @keyframes codex-spin { to { transform:rotate(360deg); } }
 .codex-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; padding:12px; gap:12px; }
 .codex-error { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:8px; color:var(--destructive); overflow-wrap:anywhere; }
-@media(prefers-reduced-motion:reduce) { .codex-summary-transition,.codex-running::after,.codex-sidebar [data-live="true"],[data-running-stop="true"] > span { animation:none; } }
+@media(prefers-reduced-motion:reduce) { .codex-summary-transition,.codex-sidebar [data-live="true"],[data-running-stop="true"] > span { animation:none; } }
 @media(max-width:600px) { .codex-sidebar { max-width:38%; } .codex-grid.codex-multi { grid-template-columns:minmax(0,1fr)!important; grid-template-rows:none!important; grid-auto-rows:360px; overflow:auto; } .codex-transcript { padding:10px; } .codex-composer-footer { padding:6px; } }
 
 .codex-user-file-chip { display:inline-flex; max-width:100%; align-items:center; gap:3px; border:1px solid var(--border); border-radius:999px; background:var(--background); padding:1px 6px; color:var(--muted-foreground); font-size:10px; }

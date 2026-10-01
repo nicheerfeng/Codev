@@ -2,10 +2,47 @@ import type {
   PiEventEnvelope,
   PiImage,
   PiModel,
+  PiQueueItem,
   PiStopReason,
   PiTranscriptItem,
   PiViewState,
 } from "./types";
+
+/** 将 Pi 原生队列图片归一化为前端可渲染的图片对象。 */
+function normalizeQueueImage(value: unknown): PiImage | null {
+  const image = objectValue(value);
+  if (!image || typeof image.data !== "string") return null;
+  const mimeType = image.mimeType ?? image.mime_type ?? "image/png";
+  return {
+    type: "image",
+    data: image.data,
+    mimeType: typeof mimeType === "string" ? mimeType : "image/png",
+  };
+}
+
+/** 兼容 Pi 队列的字符串、对象及 follow_up 字段形态。 */
+function normalizeQueueItems(value: unknown, kind: "steering" | "followUp"): PiQueueItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry, index): PiQueueItem[] => {
+    if (typeof entry === "string")
+      return [{ id: `${kind}-${index}-${entry.slice(0, 24)}`, text: entry }];
+    const item = objectValue(entry);
+    if (!item) return [];
+    const text = item.text ?? item.message;
+    if (typeof text !== "string") return [];
+    const images = Array.isArray(item.images)
+      ? item.images.flatMap((image) => {
+          const normalized = normalizeQueueImage(image);
+          return normalized ? [normalized] : [];
+        })
+      : [];
+    return [{
+      id: `${kind}-${index}-${text.slice(0, 24)}`,
+      text,
+      ...(images.length ? { images } : {}),
+    }];
+  });
+}
 
 export const INITIAL_PI_VIEW_STATE: PiViewState = {
   modelsLoading: false,
@@ -38,6 +75,7 @@ type PiViewAction =
       text: string;
       images?: PiImage[];
       queued?: boolean;
+      keepCompaction?: boolean;
     }
   | {
       type: "history";
@@ -300,32 +338,8 @@ function reduceEvent(
     };
   }
   if (type === "queue_update") {
-    const steering = Array.isArray(event.steering)
-      ? event.steering
-          .filter(
-            (item): item is { text: string; images?: PiImage[] } =>
-              typeof item === "object" &&
-              item !== null &&
-              typeof item.text === "string",
-          )
-          .map((item) => ({
-            text: item.text,
-            images: Array.isArray(item.images) ? item.images : undefined,
-          }))
-      : [];
-    const followUp = Array.isArray(event.followUp)
-      ? event.followUp
-          .filter(
-            (item): item is { text: string; images?: PiImage[] } =>
-              typeof item === "object" &&
-              item !== null &&
-              typeof item.text === "string",
-          )
-          .map((item) => ({
-            text: item.text,
-            images: Array.isArray(item.images) ? item.images : undefined,
-          }))
-      : [];
+    const steering = normalizeQueueItems(event.steering, "steering");
+    const followUp = normalizeQueueItems(event.followUp ?? event.follow_up, "followUp");
     return {
       ...state,
       queue: {
@@ -481,7 +495,13 @@ function reduceEvent(
       false,
     );
   }
-  if (event.command === "get_state")
+  if (event.command === "get_state") {
+    const steering = normalizeQueueItems(data?.steering, "steering");
+    const followUp = normalizeQueueItems(data?.followUp ?? data?.follow_up, "followUp");
+    const hasQueueItems =
+      Array.isArray(data?.steering) ||
+      Array.isArray(data?.followUp) ||
+      Array.isArray(data?.follow_up);
     return {
       ...state,
       status:
@@ -502,12 +522,14 @@ function reduceEvent(
       thinkingLevel: String(data?.thinkingLevel ?? state.thinkingLevel),
       queue: {
         ...state.queue,
+        ...(hasQueueItems ? { steering, followUp } : {}),
         pendingCount:
           typeof data?.pendingMessageCount === "number"
             ? data.pendingMessageCount
             : state.queue.pendingCount,
       },
     };
+  }
   if (event.command === "clear_queue") return state;
   if (event.command === "get_session_stats") {
     const usage = objectValue(data?.contextUsage);
@@ -650,6 +672,7 @@ function beginPrompt(
   text: string,
   images: PiImage[] | undefined,
   queued = false,
+  keepCompaction = false,
 ): PiViewState {
   const cleaned = text.replace(/\s+$/u, "");
   const now = Date.now();
@@ -659,7 +682,9 @@ function beginPrompt(
   return {
     ...state,
     compaction:
-      state.compaction?.status === "running" ? state.compaction : undefined,
+      state.compaction?.status === "running" || keepCompaction
+        ? state.compaction
+        : undefined,
     status: "running",
     phase: queued ? state.phase || "处理中" : "处理中",
     error: null,
@@ -700,7 +725,13 @@ export function piViewReducer(
   if (action.type === "stopping") return { ...state, status: "stopping" };
   if (action.type === "error") return { ...state, error: action.message };
   if (action.type === "prompt")
-    return beginPrompt(state, action.text, action.images, action.queued);
+    return beginPrompt(
+      state,
+      action.text,
+      action.images,
+      action.queued,
+      action.keepCompaction,
+    );
   if (action.type === "history")
     return hydrateHistory(
       state,

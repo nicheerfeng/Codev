@@ -107,6 +107,7 @@ export type Session = {
   skills: Skill[];
   directories: string[];
   queue: Array<Draft & { id: string }>;
+  queueSendingId?: string;
   queueError: string | null;
   stopping: boolean;
   sendRevision: number;
@@ -175,7 +176,8 @@ export function sessionFromThread(thread: Thread): Session {
 /** 完成事件可能只携带最终答复，按编号合并并保留已经收到的过程顺序。 */
 function mergeTurnItems(previous: Item[], incoming: Item[]): Item[] {
   const merged = new Map(previous.map((item) => [item.id, item]));
-  for (const item of incoming) merged.set(item.id, { ...merged.get(item.id), ...item });
+  for (const item of incoming)
+    merged.set(item.id, { ...merged.get(item.id), ...item });
   return [...merged.values()];
 }
 
@@ -189,9 +191,18 @@ function normalizeTokenUsage(raw: unknown): Session["tokenUsage"] {
     model_context_window?: number | null;
   };
   return {
-    last: { totalTokens: Number(value.last?.totalTokens ?? value.last?.total_tokens ?? 0) },
-    total: { totalTokens: Number(value.total?.totalTokens ?? value.total?.total_tokens ?? 0) },
-    modelContextWindow: value.modelContextWindow ?? value.model_context_window ?? null,
+    last: {
+      totalTokens: Number(
+        value.last?.totalTokens ?? value.last?.total_tokens ?? 0,
+      ),
+    },
+    total: {
+      totalTokens: Number(
+        value.total?.totalTokens ?? value.total?.total_tokens ?? 0,
+      ),
+    },
+    modelContextWindow:
+      value.modelContextWindow ?? value.model_context_window ?? null,
   };
 }
 
@@ -201,8 +212,14 @@ export function reduceNotification(
   method: string,
   params: Record<string, unknown>,
 ): Session {
-  if (method === "thread/closed" || (method === "thread/status/changed" &&
-      ["idle", "notLoaded", "systemError"].includes(String((params.status as { type?: string })?.type))))
+  if (
+    method === "thread/closed" ||
+    (method === "thread/status/changed" &&
+      ["idle", "notLoaded", "systemError"].includes(
+        String((params.status as { type?: string })?.type),
+      ))
+  ) {
+    // 原生线程状态是运行生命周期的最终依据，空闲时清除可能漏掉的轮次 ID。
     return {
       ...session,
       busy: false,
@@ -210,6 +227,7 @@ export function reduceNotification(
       stopping: false,
       compacting: session.compactionNotice?.status === "running",
     };
+  }
   if (method === "thread/tokenUsage/updated")
     return {
       ...session,
@@ -235,13 +253,23 @@ export function reduceNotification(
     };
   if (method === "item/started" || method === "item/completed") {
     const item = params.item as Item | undefined;
-    if (item?.type === "contextCompaction" || item?.type === "context_compaction") {
+    if (
+      item?.type === "contextCompaction" ||
+      item?.type === "context_compaction"
+    ) {
       const turnId = String(params.turnId ?? `compaction-${item.id}`);
       const turns = [...session.thread.turns];
       const index = turns.findIndex((turn) => turn.id === turnId);
-      const turn = index >= 0
-        ? { ...turns[index], items: [...turns[index].items.filter((entry) => entry.id !== item.id), item] }
-        : { id: turnId, status: "completed", items: [item] };
+      const turn =
+        index >= 0
+          ? {
+              ...turns[index],
+              items: [
+                ...turns[index].items.filter((entry) => entry.id !== item.id),
+                item,
+              ],
+            }
+          : { id: turnId, status: "completed", items: [item] };
       if (index >= 0) turns[index] = turn;
       else turns.push(turn);
       return {
@@ -260,8 +288,18 @@ export function reduceNotification(
     // 未知通知不能生成幽灵轮次；线程级状态在上方独立处理。
     (params.turnId as string | undefined) ??
     (params.turn as Turn | undefined)?.id;
-  if (!turnId || (!["turn/started", "turn/completed", "item/started", "item/completed"].includes(method) &&
-      !method.endsWith("/delta") && !method.endsWith("Delta"))) return session;
+  if (
+    !turnId ||
+    (![
+      "turn/started",
+      "turn/completed",
+      "item/started",
+      "item/completed",
+    ].includes(method) &&
+      !method.endsWith("/delta") &&
+      !method.endsWith("Delta"))
+  )
+    return session;
   const turns = [...session.thread.turns];
   let index = turns.findIndex((t) => t.id === turnId);
   if (index < 0) {
@@ -278,7 +316,13 @@ export function reduceNotification(
       items: started.items?.length ? started.items : turn.items,
       startedAt: started.startedAt ?? Date.now() / 1000,
     };
-    next = { ...next, turnId, busy: true, error: null, compactionNotice: null };
+    next = {
+      ...next,
+      turnId,
+      busy: true,
+      error: null,
+      compactionNotice: null,
+    };
   }
   if (method === "turn/completed") {
     const completed = params.turn as Turn;
@@ -300,25 +344,33 @@ export function reduceNotification(
   }
   if (method === "item/started" || method === "item/completed") {
     const incoming = params.item as Item;
-    const item =
-      ["reasoning", "webSearch"].includes(incoming.type)
-        ? {
-            ...incoming,
-            status: method === "item/started" ? "inProgress" : "completed",
-          }
-        : incoming;
+    const item = ["reasoning", "webSearch"].includes(incoming.type)
+      ? {
+          ...incoming,
+          status: method === "item/started" ? "inProgress" : "completed",
+        }
+      : incoming;
     const itemIndex = turn.items.findIndex((i) => i.id === item.id);
     if (itemIndex < 0) turn.items.push(item);
-    else turn.items[itemIndex] = method === "item/started"
-      ? { ...item, ...turn.items[itemIndex] }
-      : { ...turn.items[itemIndex], ...item };
+    else
+      turn.items[itemIndex] =
+        method === "item/started"
+          ? { ...item, ...turn.items[itemIndex] }
+          : { ...turn.items[itemIndex], ...item };
   }
   if (method.endsWith("/delta") || method.endsWith("Delta")) {
     const itemId = params.itemId as string;
     let itemIndex = turn.items.findIndex((i) => i.id === itemId);
-    if (itemIndex < 0 && (method === "item/agentMessage/delta" || method === "item/plan/delta")) {
+    if (
+      itemIndex < 0 &&
+      (method === "item/agentMessage/delta" || method === "item/plan/delta")
+    ) {
       itemIndex = turn.items.length;
-      turn.items.push({ id: itemId, type: method === "item/plan/delta" ? "plan" : "agentMessage", text: "" });
+      turn.items.push({
+        id: itemId,
+        type: method === "item/plan/delta" ? "plan" : "agentMessage",
+        text: "",
+      });
     }
     if (itemIndex >= 0) {
       const item = { ...turn.items[itemIndex] };
@@ -346,7 +398,8 @@ export function reduceNotification(
 
 /** 提取真实消息摘要，保留开头并由界面截断尾部。 */
 export function itemText(item: Item): string {
-  if (item.type === "agentMessage" || item.type === "plan") return item.text ?? "";
+  if (item.type === "agentMessage" || item.type === "plan")
+    return item.text ?? "";
   if (item.text) return item.text;
   if (item.type === "userMessage")
     return ((item.content as Array<{ text?: string; path?: string }>) ?? [])
@@ -358,9 +411,16 @@ export function itemText(item: Item): string {
       ...((item.content as string[]) ?? []),
     ].join("\n");
   if (item.type === "webSearch") {
-    const action = item.action as { type?: string; query?: string; queries?: string[]; url?: string; pattern?: string } | null;
+    const action = item.action as {
+      type?: string;
+      query?: string;
+      queries?: string[];
+      url?: string;
+      pattern?: string;
+    } | null;
     if (action?.type === "open_page") return `打开网页 · ${action.url ?? ""}`;
-    if (action?.type === "find_in_page") return `页内查找 · ${action.pattern ?? ""} · ${action.url ?? ""}`;
+    if (action?.type === "find_in_page")
+      return `页内查找 · ${action.pattern ?? ""} · ${action.url ?? ""}`;
     return `搜索 · ${action?.queries?.join(" · ") || action?.query || (typeof item.query === "string" ? item.query : "")}`;
   }
   if (item.command) return item.command;
