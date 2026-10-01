@@ -12,7 +12,7 @@ const transport = vi.hoisted(() => ({
   fail: "",
   hold: "",
   connection: 0,
-  resource: "native",
+  resource: "初始资源",
   switchError: "",
   catalogPages: false,
 }));
@@ -39,18 +39,18 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (command, args) => {
     if (command === "codex_agent_start") {
-      transport.resource = args.resourceId ?? "native";
       return ++transport.connection;
     }
     if (command === "codex_agent_ready")
       return {
-        resourceId: transport.resource,
+        resourceAlias: transport.resource,
         provider: "test",
         lastModel: { model: "selected-model", effort: "" },
       };
     if (command === "codex_resources_models") return [{ id: "selected-model" }];
     if (command === "codex_agent_prepare_switch") {
       if (transport.switchError) throw new Error(transport.switchError);
+      transport.resource = args.resourceAlias;
       return;
     }
     if (command !== "codex_agent_send") return;
@@ -375,7 +375,7 @@ describe("Codex native client", () => {
     });
     client.patch("one", { draft: "keep draft", resumed: true });
     await client.switchResource("b");
-    expect(client.getSnapshot().resourceId).toBe("b");
+    expect(client.getSnapshot().resourceAlias).toBe("b");
     expect(client.getSnapshot().sessions.one.draft).toBe("keep draft");
     expect(client.getSnapshot().sessions.one.resumed).toBe(false);
   });

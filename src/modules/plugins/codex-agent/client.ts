@@ -31,7 +31,7 @@ export type Snapshot = {
   models: Model[];
   cursor: string | null;
   archivedCursor: string | null;
-  resourceId: string;
+  resourceAlias: string;
   provider: string;
   switching: boolean;
   multi: boolean;
@@ -61,7 +61,7 @@ export class CodexClient {
     models: [],
     cursor: null,
     archivedCursor: null,
-    resourceId: "native",
+    resourceAlias: "",
     provider: "",
     switching: false,
     multi: false,
@@ -101,7 +101,6 @@ export class CodexClient {
   private startup?: Promise<void>;
   private disposed = false;
   private owner = crypto.randomUUID();
-  private requestedResource: string | undefined;
   private draining = new Set<string>();
   private inserting = new Map<
     string,
@@ -160,17 +159,12 @@ export class CodexClient {
   setMulti(multi: boolean) {
     if (this.snapshot.multi !== multi) this.update({ multi });
   }
-  /** 当前线程选择立即生效，最近模型按资源记忆供新线程复用。 */
+  /** 当前线程选择立即生效，最近模型在本次连接中供新线程复用。 */
   async selectModel(id: string, model: string, effort: string) {
     effort = effort || "medium";
     this.patch(id, { model, effort });
     const choice = { model, effort };
     this.update({ lastModel: choice });
-    await invoke("codex_resources_model", {
-      id: this.snapshot.resourceId,
-      provider: this.snapshot.provider,
-      choice,
-    });
   }
   /** 汇总隐藏会话和原生事件，始终显示明确的切换阻塞原因。 */
   switchReason(): string {
@@ -193,18 +187,16 @@ export class CodexClient {
     );
   }
   /** 冻结发送后由 Rust 检查全部后台活动，再释放旧连接并初始化新资源。 */
-  async switchResource(id: string) {
+  async switchResource(alias: string) {
     const reason = this.switchReason();
     if (reason) throw new Error(reason);
     this.update({ switching: true, error: null });
-    const previousResource = this.snapshot.resourceId;
     try {
       await invoke("codex_agent_prepare_switch", {
         connectionId: this.connectionId,
-        resourceId: id,
+        resourceAlias: alias,
       });
       this.connectionId = 0;
-      this.requestedResource = id;
       this.update({
         connected: false,
         models: [],
@@ -237,7 +229,6 @@ export class CodexClient {
     } catch (error) {
       await invoke("codex_resources_rollback");
       if (!this.snapshot.connected || !this.connectionId) {
-        this.requestedResource = previousResource;
         await this.connect();
       }
       throw error;
@@ -556,7 +547,6 @@ export class CodexClient {
         });
         this.connectionId = await invoke<number>("codex_agent_start", {
           owner: this.owner,
-          resourceId: this.requestedResource ?? null,
         });
         if (this.disposed) return;
         await this.request("initialize", {
@@ -565,14 +555,13 @@ export class CodexClient {
         });
         await this.write({ method: "initialized" });
         const ready = await invoke<{
-          resourceId: string;
+          resourceAlias: string;
           provider: string;
-          lastModel: Snapshot["lastModel"];
         }>("codex_agent_ready", { connectionId: this.connectionId });
         this.update({
           connected: false,
           stateUnknown: false,
-          resourceId: ready.resourceId,
+          resourceAlias: ready.resourceAlias,
           provider: ready.provider,
           // 每次连接都以当前资源的实时目录重建，不沿用旧渠道模型缓存。
           lastModel: null,
@@ -581,7 +570,7 @@ export class CodexClient {
         try {
           const upstream = await invoke<Array<{ id: string; name?: string }>>(
             "codex_resources_models",
-            { id: ready.resourceId },
+            { alias: ready.resourceAlias },
           );
           const available = mergeModels([], upstream ?? []);
           if (!available.length) throw new Error("当前资源没有返回可用模型");
@@ -594,12 +583,8 @@ export class CodexClient {
               model: available[0].model,
               effort: available[0].defaultReasoningEffort || "",
             };
-            await invoke("codex_resources_model", {
-              id: ready.resourceId,
-              provider: ready.provider,
-              choice,
-            });
           }
+
           const selectedChoice = choice;
           await invoke("codex_agent_ready", {
             connectionId: this.connectionId,

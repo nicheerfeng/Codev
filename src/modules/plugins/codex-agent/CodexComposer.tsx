@@ -91,31 +91,24 @@ export function CodexComposer({
   const [skills, setSkills] = useState<Skill[]>([]);
   const [skillsError, setSkillsError] = useState("");
   const [skillsLoading, setSkillsLoading] = useState(false);
-  const { skillsRevision, resourceId } = useSyncExternalStore(
+  const { skillsRevision, resourceAlias } = useSyncExternalStore(
     client.subscribe,
     client.getSnapshot,
   );
-  const [resourceName, setResourceName] = useState<{
-    id: string;
-    alias: string;
-  } | null>(null);
+  const [resourceName, setResourceName] = useState("");
   // 打开模型菜单时读取生效资源的别名，避免显示设置中尚未应用的选择。
   useEffect(() => {
     if (!modelOpen) return;
     let cancelled = false;
     void listResources()
       .then((catalog) => {
-        const resource = catalog.resources.find(
-          (item) => item.id === resourceId,
-        );
-        if (!cancelled && resource)
-          setResourceName({ id: resourceId, alias: resource.alias });
+        if (!cancelled) setResourceName(catalog.activeAlias);
       })
       .catch((error) => toast.error(String(error)));
     return () => {
       cancelled = true;
     };
-  }, [modelOpen, resourceId]);
+  }, [modelOpen, resourceAlias]);
   useEffect(() => {
     if (!session.compacting) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -751,9 +744,7 @@ export function CodexComposer({
               <div className="reader-scrollbar max-h-60 overflow-auto">
                 <div className="px-3 py-2 text-xs text-muted-foreground break-words">
                   资源方：
-                  {resourceName?.id === resourceId
-                    ? resourceName.alias
-                    : "读取中…"}
+                  {resourceName || "读取中…"}
                 </div>
                 {models
                   .filter((item) =>

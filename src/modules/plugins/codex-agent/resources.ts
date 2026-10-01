@@ -1,41 +1,34 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type Resource = {
-  id: string;
   alias: string;
   baseUrl: string;
-  keyMask: string;
+  key: string;
 };
 export type ResourceCatalog = {
   provider: string;
-  activeResourceId: string;
+  activeAlias: string;
   resources: Resource[];
   path: string;
 };
 export const RESOURCE_NOTE =
   "多视口或仍有任务运行时不可切换资源，请退出多视口并等待任务结束。";
 
-/** 读取只包含掩码密钥的资源目录。 */
+/** 读取资源目录和当前配置对应的别名。 */
 export function listResources(): Promise<ResourceCatalog> {
   return invoke("codex_resources_list");
 }
-/** 保存档案，不修改正在运行的资源快照。 */
-export function saveResource(input: {
-  id: string;
-  alias: string;
-  baseUrl: string;
-  key: string;
-}): Promise<ResourceCatalog> {
-  return invoke("codex_resources_save", { input });
+/** 按原别名编辑资源；新增时不传原别名。 */
+export function saveResource(input: Resource, originalAlias: string | null): Promise<ResourceCatalog> {
+  return invoke("codex_resources_save", { input, originalAlias });
 }
-/** 删除非当前资源。 */
-export function deleteResource(id: string): Promise<ResourceCatalog> {
-  return invoke("codex_resources_delete", { id });
+/** 删除指定别名的资源。 */
+export function deleteResource(alias: string): Promise<ResourceCatalog> {
+  return invoke("codex_resources_delete", { alias });
 }
-
-/** 主动探测模型目录，不产生模型生成费用。 */
-export function probeResource(id: string): Promise<string> {
-  return invoke("codex_resources_probe", { id });
+/** 查询指定资源的模型目录。 */
+export function probeResource(alias: string): Promise<string> {
+  return invoke("codex_resources_probe", { alias });
 }
 
 /** 将运行态汇总成可读的禁用原因，不因关闭视口漏掉后台会话。 */
@@ -53,11 +46,6 @@ export function resourceSwitchReason(
   if (active) return `还有 ${active} 个任务运行或等待确认`;
   if (pending) return "正在处理请求，请稍后切换";
   return "";
-}
-
-/** 用户进入编辑时读取已有明文密钥。 */
-export function readResourceKey(id: string): Promise<string> {
-  return invoke("codex_resources_key", { id });
 }
 
 /** 读取 Codex 个人全局 AGENTS.md。 */

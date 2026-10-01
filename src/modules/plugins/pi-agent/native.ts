@@ -131,6 +131,14 @@ export function appendPiSession(request: {
   return invoke("pi_agent_append_session", { request });
 }
 
+/** 截断指定用户消息及其后的原生会话记录，保持原线程路径和身份。 */
+export function truncatePiSession(
+  path: string,
+  entryId: string,
+): Promise<void> {
+  return invoke("pi_agent_truncate_session", { path, entryId });
+}
+
 /** 复制会话 JSONL 为新线程，不启动 runtime。 */
 export function clonePiSession(path: string): Promise<PiClonedSession> {
   return invoke<PiClonedSession>("pi_agent_clone_session", { path });

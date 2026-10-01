@@ -30,7 +30,7 @@ struct Process {
     child: Child,
     stdin: Option<ChildStdin>,
     activity: Arc<Mutex<Activity>>,
-    resource_id: String,
+    resource_alias: String,
     provider: String,
     next_query: u64,
     #[cfg(windows)]
@@ -252,7 +252,6 @@ pub fn codex_agent_start(
     app: AppHandle,
     state: State<'_, CodexAgentState>,
     owner: String,
-    resource_id: Option<String>,
 ) -> Result<u64, String> {
     let mut slot = state.process.lock().map_err(|e| e.to_string())?;
     if let Some(process) = slot.as_mut() {
@@ -280,8 +279,7 @@ pub fn codex_agent_start(
     }
     *slot = None;
     let mut command = codex_command()?;
-    let (resource_id, provider, secret) =
-        resources::configure(&mut command, resource_id.as_deref())?;
+    let (resource_alias, provider, secret) = resources::configure(&mut command)?;
     if let Some(home) = dirs::home_dir() {
         command.current_dir(home);
     }
@@ -311,7 +309,7 @@ pub fn codex_agent_start(
         child,
         stdin: Some(stdin),
         activity: Arc::clone(&activity),
-        resource_id,
+        resource_alias,
         provider,
         next_query: 0,
         #[cfg(windows)]
@@ -404,12 +402,10 @@ pub fn codex_agent_ready(
         .filter(|p| p.id == connection_id)
         .ok_or("Codex 连接已关闭")?;
     if commit.unwrap_or(false) {
-        resources::commit(&process.resource_id)?;
+        resources::commit()?;
     }
     process.activity.lock().map_err(|_| "状态锁不可用")?.ready = true;
-    Ok(
-        json!({"resourceId":process.resource_id,"provider":process.provider,"lastModel":resources::last_model(&process.resource_id, &process.provider)?}),
-    )
+    Ok(json!({"resourceAlias":process.resource_alias,"provider":process.provider}))
 }
 
 /// 在原生核验期间保持进程操作锁，成功后才释放旧 runtime。
@@ -417,9 +413,9 @@ pub fn codex_agent_ready(
 pub async fn codex_agent_prepare_switch(
     app: AppHandle,
     connection_id: u64,
-    resource_id: String,
+    resource_alias: String,
 ) -> Result<(), String> {
-    let models = resources::codex_resources_models(resource_id.clone()).await?;
+    let models = resources::codex_resources_models(resource_alias.clone()).await?;
     let model = models
         .first()
         .and_then(|item| item.get("id"))
@@ -434,12 +430,12 @@ pub async fn codex_agent_prepare_switch(
             .as_mut()
             .filter(|p| p.id == connection_id)
             .ok_or("连接已改变，请重试")?;
-        let (_, provider, _) = resources::configure(&mut codex_command()?, Some(&resource_id))?;
+        let (_, provider, _) = resources::configure(&mut codex_command()?)?;
         if provider != process.provider {
             return Err("原生 provider 已改变，请重新连接后再切换资源".into());
         }
         process.verify_idle()?;
-        if let Err(error) = resources::apply_resource(&resource_id, &model) {
+        if let Err(error) = resources::apply_resource(&resource_alias, &model) {
             resources::codex_resources_rollback()?;
             return Err(error);
         }
@@ -509,34 +505,29 @@ mod tests {
     fn installed_cli_resource_switch_checks() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("config.toml"), "model_provider = \"codev_qa\"\nmodel = \"gpt-5.4\"\n[model_providers.codev_qa]\nname = \"QA\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"http://127.0.0.1:1/native/v1\"\n").unwrap();
-        std::fs::write(
-            root.path().join("auth.json"),
-            "{\"OPENAI_API_KEY\":\"fake-original\"}",
-        )
-        .unwrap();
         resources::fake_resource(root.path());
         let config_path = root.path().join("config.toml");
-        let original = std::fs::read_to_string(&config_path).unwrap()
-            + "experimental_bearer_token = \"fake-legacy\"\nenv_key = \"FAKE_OLD_KEY\"\n";
+        let original = std::fs::read_to_string(&config_path).unwrap();
         std::fs::write(&config_path, &original).unwrap();
-        resources::apply_resource_at(root.path(), "fake", "gpt-5.4").unwrap();
+        resources::apply_resource_at(root.path(), "QA", "gpt-5.4").unwrap();
         let stored: toml::Value =
             toml::from_str(&std::fs::read_to_string(root.path().join("config.toml")).unwrap())
                 .unwrap();
         assert_eq!(stored["model"].as_str(), Some("gpt-5.4"));
         assert_eq!(
             stored["model_providers"]["codev_qa"]["requires_openai_auth"].as_bool(),
-            Some(true)
+            Some(false)
         );
-        assert!(stored["model_providers"]["codev_qa"]
-            .get("experimental_bearer_token")
-            .is_none());
+        assert_eq!(
+            stored["model_providers"]["codev_qa"]["experimental_bearer_token"].as_str(),
+            Some("fake-codev-resource")
+        );
         assert!(stored["model_providers"]["codev_qa"]
             .get("env_key")
             .is_none());
         let mut command = codex_command().unwrap();
-        let (resource_id, provider, _) =
-            resources::configure_at(&mut command, Some("fake"), root.path()).unwrap();
+        let (resource_alias, provider, _) =
+            resources::configure_at(&mut command, root.path()).unwrap();
         command
             .env("CODEX_HOME", root.path())
             .current_dir(root.path());
@@ -573,7 +564,7 @@ mod tests {
             child,
             stdin: Some(stdin),
             activity,
-            resource_id,
+            resource_alias,
             provider,
             next_query: 0,
             #[cfg(windows)]
@@ -589,10 +580,6 @@ mod tests {
         process.stdin.as_mut().unwrap().flush().unwrap();
         process.activity.lock().unwrap().ready = true;
         let config = process.query("config/read", json!({})).unwrap();
-        let account = process
-            .query("account/read", json!({"refreshToken":false}))
-            .unwrap();
-        assert_eq!(account["account"]["type"], "apiKey");
         assert_eq!(config["config"]["model_provider"], "codev_qa");
         assert_eq!(
             config["config"]["model_providers"]["codev_qa"]["base_url"],
@@ -600,7 +587,7 @@ mod tests {
         );
         assert_eq!(
             config["config"]["model_providers"]["codev_qa"]["requires_openai_auth"],
-            true
+            false
         );
         let thread = process
             .query(
@@ -620,14 +607,8 @@ mod tests {
         process.activity.lock().unwrap().active.clear();
         process.shutdown_idle().unwrap();
         assert!(process.child.try_wait().unwrap().is_some());
-        assert!(std::fs::read_to_string(root.path().join("auth.json"))
-            .unwrap()
-            .contains("fake-codev-resource"));
         resources::codex_resources_rollback().unwrap();
         assert_eq!(std::fs::read_to_string(config_path).unwrap(), original);
-        assert!(std::fs::read_to_string(root.path().join("auth.json"))
-            .unwrap()
-            .contains("fake-original"));
         assert!(!root.path().join("backups").exists());
     }
 
@@ -652,7 +633,7 @@ mod tests {
             child,
             stdin: Some(stdin),
             activity: Arc::new(Mutex::new(Activity::default())),
-            resource_id: "native".into(),
+            resource_alias: "初始资源".into(),
             provider: "test".into(),
             next_query: 0,
             #[cfg(windows)]
