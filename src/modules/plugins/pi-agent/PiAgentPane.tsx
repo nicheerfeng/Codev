@@ -868,7 +868,7 @@ export function PiAgentPane({
       else throw new Error("只有运行中的回复可以停止");
     });
   };
-  /** 原位编辑已结束或主动终止的最后一轮，并通过 Pi 分叉重新执行。 */
+  /** 原位撤回最后一轮并重发，原线程身份不变。 */
   const editLastUser = async (
     thread: PiThread,
     item: PiMessageItem,
@@ -894,6 +894,12 @@ export function PiAgentPane({
         await refreshSessions();
       }
       return accepted;
+    } catch (error) {
+      setDrafts((current) => ({
+        ...current,
+        [key]: { ...(current[key] ?? EMPTY_DRAFT), text, images: item.images ?? [] },
+      }));
+      throw error;
     } finally {
       operationKeys.current.delete(key);
       setOperations((value) => ({ ...value, [key]: "" }));

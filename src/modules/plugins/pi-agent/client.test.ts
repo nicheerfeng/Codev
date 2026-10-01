@@ -44,6 +44,7 @@ vi.mock("./native", () => ({
     name: null,
   })),
   appendPiSession: vi.fn(async () => undefined),
+  truncatePiSession: vi.fn(async () => undefined),
   sendPiCommand: vi.fn(async (runtimeId, command) => {
     queueMicrotask(() =>
       mock.receive({
@@ -1066,32 +1067,21 @@ describe("Pi RPC workspace", () => {
     });
     client.dispose();
   });
-  it("forks before the last user message and resends the edited text", async () => {
+  it("truncates the current session and resends the edited text", async () => {
     const native = await import("./native");
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
     const thread = await client.open("source", "D:/one");
     await client.request(thread, { type: "get_state" });
+    thread.view.items = [{ id: "entry-last", kind: "message", role: "user", text: "原始输入", thinking: "", streaming: false }];
     vi.mocked(native.sendPiCommand).mockClear();
+    vi.mocked(native.truncatePiSession).mockClear();
+    vi.mocked(native.clonePiSession).mockClear();
     await expect(client.editLastUser(thread, "修改后的输入")).resolves.toBe(
       true,
     );
-    expect(
-      vi
-        .mocked(native.sendPiCommand)
-        .mock.calls.map(([, command]) => command.type),
-    ).toEqual([
-      "get_fork_messages",
-      "fork",
-      "get_messages",
-      "get_state",
-      "get_session_stats",
-      "prompt",
-    ]);
-    expect(
-      vi
-        .mocked(native.sendPiCommand)
-        .mock.calls.find(([, command]) => command.type === "fork")?.[1],
-    ).toMatchObject({ type: "fork", entryId: "entry-last" });
+    expect(native.truncatePiSession).toHaveBeenCalledWith("session-1.jsonl", "entry-last");
+    expect(native.clonePiSession).not.toHaveBeenCalled();
+    expect(vi.mocked(native.sendPiCommand).mock.calls.some(([, command]) => command.type === "fork")).toBe(false);
     expect(
       vi
         .mocked(native.sendPiCommand)
@@ -1115,6 +1105,8 @@ describe("Pi RPC workspace", () => {
       event: { type: "agent_settled" },
     });
     expect(restore).toHaveBeenCalledWith(["排队指令", "后续任务"]);
+    thread.view.sessionFile = "history.jsonl";
+    thread.view.items = [{ id: "entry-last", kind: "message", role: "user", text: "原始输入", thinking: "", streaming: false }];
     const images = [
       { type: "image" as const, data: "image-data", mimeType: "image/png" },
     ];

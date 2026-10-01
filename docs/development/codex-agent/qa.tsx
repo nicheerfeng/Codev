@@ -12,8 +12,8 @@ const exports: Array<{ path: string; content: string }> = [];
 for (const thread of threads) { thread.turns[0].startedAt = 1750000000; thread.turns[0].completedAt = 1750000185; thread.turns[0].durationMs = 185000; }
 const archived = new Set<string>();
 let connectionId = 0;
-let resourceId = "native";
-const resourceCatalog = { provider: "qa-provider", activeResourceId: "native", path: "QA/codev.json", resources: [{ id: "native", alias: "原生资源", baseUrl: "", keyMask: "沿用原生认证" }, { id: "qa-resource", alias: "资源 B", baseUrl: "https://example.invalid/v1", keyMask: "••••••••" }] };
+let resourceAlias = "初始资源";
+const resourceCatalog = { provider: "qa-provider", activeAlias: "初始资源", path: "QA/codev.json", resources: [{ alias: "初始资源", baseUrl: "https://example.invalid/v1", key: "qa-a" }, { alias: "资源 B", baseUrl: "https://example.invalid/v1", key: "qa-b" }] };
 /** 发送隔离协议事件，所有生产组件仍走真实 IPC 封装。 */
 function event(message: Message) { return emit("codev://codex-agent-event", { connectionId, message }); }
 mockWindows("main");
@@ -27,12 +27,14 @@ mockIPC(async (command, args: any) => {
   if (command === "fs_stat") return { kind: String(args.path).endsWith("/folder") ? "dir" : "file" };
   if (command === "fs_read_asset_bytes") return [137, 80, 78, 71];
   if (command === "plugin:dialog|open") return args.options?.directory ? "D:/qa/NewProject" : ["D:/qa/readme.md"];
-  if (command === "codex_agent_start") { resourceId = args.resourceId ?? resourceId; return ++connectionId; }
-  if (command === "codex_agent_ready") { resourceCatalog.activeResourceId = resourceId; return { resourceId, provider: "qa-provider" }; }
+  if (command === "codex_agent_start") { return ++connectionId; }
+  if (command === "codex_agent_ready") { resourceCatalog.activeAlias = resourceAlias; return { resourceAlias, provider: "qa-provider" }; }
+  if (command === "codex_agent_prepare_switch") { resourceAlias = args.resourceAlias; return; }
+  if (command === "codex_resources_models") return [{ id: "qa", name: "QA Model" }];
   if (command === "codex_resources_list") return structuredClone(resourceCatalog);
   if (command === "codex_resources_probe") return "模型目录可达，共 1 个模型；未执行生成调用。";
-  if (command === "codex_resources_save") { const input = args.input; const existing = resourceCatalog.resources.findIndex((r) => r.id === input.id); const row = { id: input.id, alias: input.alias, baseUrl: input.baseUrl, keyMask: "••••••••" }; if (existing >= 0) resourceCatalog.resources[existing] = row; else resourceCatalog.resources.push(row); return structuredClone(resourceCatalog); }
-  if (command === "codex_resources_delete") { resourceCatalog.resources = resourceCatalog.resources.filter((r) => r.id !== args.id); return structuredClone(resourceCatalog); }
+  if (command === "codex_resources_save") { const input = args.input; const existing = resourceCatalog.resources.findIndex((r) => r.alias === args.originalAlias); const row = input; if (existing >= 0) resourceCatalog.resources[existing] = row; else resourceCatalog.resources.push(row); return structuredClone(resourceCatalog); }
+  if (command === "codex_resources_delete") { resourceCatalog.resources = resourceCatalog.resources.filter((r) => r.alias !== args.alias); return structuredClone(resourceCatalog); }
   if (command !== "codex_agent_send") return;
   const message: Message = args.message; sent.push(message);
   if (!message.method || message.id === undefined) return;

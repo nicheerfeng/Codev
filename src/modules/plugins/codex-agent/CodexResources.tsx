@@ -29,7 +29,6 @@ import {
   deleteResource,
   listResources,
   saveResource,
-  readResourceKey,
   probeResource,
   RESOURCE_NOTE,
   type ResourceCatalog,
@@ -53,12 +52,13 @@ export function CodexResources({
   const [catalog, setCatalog] = useState<ResourceCatalog | null>(null);
   const [open, setOpen] = useState(false);
   const [panel, setPanel] = useState<"resources" | "instructions">("resources");
-  const [selectedId, setSelectedId] = useState(state.resourceId);
+  const [selectedAlias, setSelectedAlias] = useState("");
+  const activeAlias = catalog?.activeAlias ?? "";
   useEffect(() => {
-    setSelectedId(state.resourceId);
-  }, [state.resourceId, open]);
+    setSelectedAlias((current) => catalog?.resources.some((resource) => resource.alias === current) ? current : activeAlias);
+  }, [catalog, activeAlias]);
   const [editing, setEditing] = useState<{
-    id: string;
+    originalAlias: string | null;
     alias: string;
     baseUrl: string;
     key: string;
@@ -74,7 +74,7 @@ export function CodexResources({
   const [remove, setRemove] = useState<string | null>(null);
   const reason = client.switchReason();
   const switching = state.switching;
-  /** 每次打开设置刷新档案，不向前端读取密钥。
+  /** 每次打开设置刷新资源。
    */
   const refresh = () => {
     void listResources()
@@ -89,7 +89,7 @@ export function CodexResources({
     void listResources()
       .then(setCatalog)
       .catch((failure) => setError(String(failure)));
-  }, [state.resourceId, open, active]);
+  }, [state.resourceAlias, open, active]);
   useEffect(() => {
     if (open)
       void readCodexInstructions()
@@ -113,9 +113,11 @@ export function CodexResources({
     if (!editing) return;
     setSaving(true);
     try {
-      setCatalog(await saveResource(editing));
-      setSelectedId(editing.id);
-      if (editing.id === state.resourceId) setEditedCurrent(true);
+      const { originalAlias, ...resource } = editing;
+      setCatalog(await saveResource(resource, originalAlias));
+      setSelectedAlias(resource.alias.trim());
+      if (originalAlias === activeAlias) setEditedCurrent(true);
+      setError("");
       setEditing(null);
       toast.success("资源已保存，点击应用后生效");
     } catch (failure) {
@@ -125,11 +127,11 @@ export function CodexResources({
     }
   };
   /** 切换失败保持当前显示并呈现原生核验结果。 */
-  const select = (id: string) => {
-    setSelectedId(id);
+  const select = (alias: string) => {
+    setSelectedAlias(alias);
     void client
-      .switchResource(id)
-      .then(() => setEditedCurrent(false))
+      .switchResource(alias)
+      .then(() => { setEditedCurrent(false); refresh(); })
       .catch((failure) => toast.error(String(failure)));
   };
   return (
@@ -139,7 +141,7 @@ export function CodexResources({
         className="flex min-w-0 max-w-40 items-center gap-1"
       >
         <Select
-          value={state.resourceId}
+          value={activeAlias}
           disabled={Boolean(reason) || !catalog}
           onValueChange={select}
         >
@@ -152,7 +154,7 @@ export function CodexResources({
           </SelectTrigger>
           <SelectContent className="rounded-xl">
             {catalog?.resources.map((resource) => (
-              <SelectItem key={resource.id} value={resource.id}>
+              <SelectItem key={resource.alias} value={resource.alias}>
                 {resource.alias}
               </SelectItem>
             ))}
@@ -255,11 +257,8 @@ export function CodexResources({
                             ~/.codex/config.toml 的配置。
                           </li>
                           <li>
-                            多渠道 API 保存在
-                            ~/.codex/codev.json；别名与地址明文保存，key 使用
-                            Windows 用户加密保护；应用时同步 config.toml 和
-                            auth.json。 传输是否加密取决于所配置地址是否使用
-                            HTTPS。
+                            资源保存在
+                            ~/.codex/codev.json，仅包含别名、baseURL 和明文 key；应用时写入 config.toml。
                           </li>
                           <li>
                             受线程写锁限制，切换前须确认本插件所有任务结束，再退出旧
@@ -288,7 +287,7 @@ export function CodexResources({
                       size="xs"
                       onClick={() => {
                         setEditing({
-                          id: crypto.randomUUID(),
+                          originalAlias: null,
                           alias: "",
                           baseUrl: "",
                           key: "",
@@ -314,17 +313,17 @@ export function CodexResources({
                   <div className="reader-scrollbar max-h-64 overflow-auto rounded-lg border border-border">
                     {catalog?.resources.map((resource) => (
                       <div
-                        key={resource.id}
-                        className={`flex min-w-0 items-center gap-2 border-b border-border px-3 py-2 last:border-0 ${selectedId === resource.id ? "bg-accent ring-1 ring-inset ring-primary/40" : ""}`}
+                        key={resource.alias}
+                        className={`flex min-w-0 items-center gap-2 border-b border-border px-3 py-2 last:border-0 ${selectedAlias === resource.alias ? "bg-accent ring-1 ring-inset ring-primary/40" : ""}`}
                       >
                         <button
                           type="button"
-                          aria-pressed={selectedId === resource.id}
+                          aria-pressed={selectedAlias === resource.alias}
                           className="flex min-w-0 flex-1 items-center gap-2 text-left text-xs"
-                          onClick={() => setSelectedId(resource.id)}
+                          onClick={() => setSelectedAlias(resource.alias)}
                         >
                           <span
-                            className={`size-3 shrink-0 rounded-full border ${selectedId === resource.id ? "border-primary bg-primary" : "border-muted-foreground"}`}
+                            className={`size-3 shrink-0 rounded-full border ${selectedAlias === resource.alias ? "border-primary bg-primary" : "border-muted-foreground"}`}
                           />
                           <span
                             className="max-w-28 shrink-0 truncate"
@@ -332,7 +331,7 @@ export function CodexResources({
                           >
                             {resource.alias}
                           </span>
-                          {state.resourceId === resource.id && (
+                          {activeAlias === resource.alias && (
                             <span className="shrink-0 text-[10px] text-muted-foreground">
                               使用中
                             </span>
@@ -353,26 +352,22 @@ export function CodexResources({
                           title={`编辑 ${resource.alias}`}
                           aria-label={`编辑 ${resource.alias}`}
                           onClick={() => {
-                            setSelectedId(resource.id);
+                            setSelectedAlias(resource.alias);
                             setError("");
-                            void readResourceKey(resource.id)
-                              .then((key) => setEditing({ ...resource, key }))
-                              .catch((failure) => setError(String(failure)));
+                            setEditing({ ...resource, originalAlias: resource.alias });
                           }}
                         >
                           <HugeiconsIcon icon={PencilEdit01Icon} size={13} />
                         </Button>
-                        {resource.id !== "native" && (
-                          <>
-                            <Button
+                        <Button
                               variant="ghost"
                               size="xs"
                               disabled={probing !== null}
                               title="仅探测模型目录，不执行生成调用"
                               onClick={() => {
-                                setProbing(resource.id);
+                                setProbing(resource.alias);
                                 setProbeResult("");
-                                void probeResource(resource.id)
+                                void probeResource(resource.alias)
                                   .then(setProbeResult)
                                   .catch((failure) =>
                                     setProbeResult(String(failure)),
@@ -380,22 +375,18 @@ export function CodexResources({
                                   .finally(() => setProbing(null));
                               }}
                             >
-                              {probing === resource.id ? "探测中…" : "探测"}
+                              {probing === resource.alias ? "探测中…" : "探测"}
                             </Button>
                             <Button
                               variant="ghost"
                               size="icon-xs"
                               title={`删除 ${resource.alias}`}
                               aria-label={`删除 ${resource.alias}`}
-                              disabled={
-                                state.resourceId === resource.id || saving
-                              }
-                              onClick={() => setRemove(resource.id)}
+                              disabled={saving}
+                              onClick={() => setRemove(resource.alias)}
                             >
                               <HugeiconsIcon icon={Delete02Icon} size={13} />
                             </Button>
-                          </>
-                        )}
                       </div>
                     ))}
                   </div>
@@ -412,8 +403,8 @@ export function CodexResources({
                             .then((value) => {
                               setCatalog(value);
                               setRemove(null);
-                              if (selectedId === remove)
-                                setSelectedId(state.resourceId);
+                              if (selectedAlias === remove)
+                                setSelectedAlias(activeAlias);
                             })
                             .catch((failure) => setError(String(failure)))
                             .finally(() => setSaving(false));
@@ -461,7 +452,7 @@ export function CodexResources({
                         aria-label="资源 API key"
                         type="text"
                         autoComplete="new-password"
-                        placeholder="API key（编辑时留空保留原密钥）"
+                        placeholder="API key"
                         value={editing.key}
                         onChange={(event) =>
                           setEditing({ ...editing, key: event.target.value })
@@ -505,10 +496,10 @@ export function CodexResources({
                           Boolean(reason) ||
                           saving ||
                           !catalog?.resources.some(
-                            (resource) => resource.id === selectedId,
+                            (resource) => resource.alias === selectedAlias,
                           )
                         }
-                        onClick={() => select(selectedId)}
+                        onClick={() => select(selectedAlias)}
                       >
                         应用选中资源
                       </Button>

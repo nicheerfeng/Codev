@@ -8,6 +8,7 @@ import {
   readPiSession,
   sendPiCommand,
   startPiAgent,
+  truncatePiSession,
 } from "./native";
 import { INITIAL_PI_VIEW_STATE, objectValue, piViewReducer } from "./reducer";
 import type { PiEventEnvelope, PiImage, PiModel, PiViewState } from "./types";
@@ -58,6 +59,7 @@ export class PiWorkspaceClient {
   private catalogModels: PiModel[] = [];
   private catalogEpoch = 0;
   private draining = new Set<string>();
+  private editing = new Set<string>();
   private manualCompactions = new Set<string>();
   private compactionResume = new Set<string>();
   private statsTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -206,6 +208,8 @@ export class PiWorkspaceClient {
     thread: PiThread,
     command: Record<string, unknown>,
   ): Promise<unknown> {
+    if (this.editing.has(thread.key))
+      return Promise.reject(new Error("正在重新编辑当前轮，请稍候"));
     const adapt =
       command.type === "prompt"
         ? this.adaptCatalogRuntime(thread)
@@ -608,6 +612,7 @@ export class PiWorkspaceClient {
 
   /** 空闲时一次只发出队首；运行中不投递，让用户能看见待发送队列。 */
   async drainQueue(thread: PiThread) {
+    if (this.editing.has(thread.key)) return;
     const insertingId = this.inserting.get(thread.key)?.id;
     const queue = (thread.view.localQueue ?? []).filter(
       (entry) => entry.id !== insertingId,
@@ -670,6 +675,7 @@ export class PiWorkspaceClient {
 
   /** 运行中立刻插入当前轮；空闲则提到队首后按普通发送排出。 */
   async sendQueued(thread: PiThread, id: string) {
+    if (this.editing.has(thread.key)) return;
     if (thread.view.queueSendingId === id) return;
     const item = thread.view.localQueue?.find((entry) => entry.id === id);
     if (!item) return;
@@ -710,6 +716,7 @@ export class PiWorkspaceClient {
 
   /** 用户打开命令菜单时按需连接 Pi，复用启动阶段获取的原生命令。 */
   async loadCommands(thread: PiThread) {
+    if (this.editing.has(thread.key)) return;
     if (thread.view.commands.length) return;
     const alreadyRunning = thread.runtimeId !== null;
     await this.ensureRuntime(thread);
@@ -719,6 +726,7 @@ export class PiWorkspaceClient {
 
   /** 读取会话名称、模型、实际上下文用量。 */
   async refreshState(thread: PiThread) {
+    if (this.editing.has(thread.key)) return;
     await this.ensureRuntime(thread);
     await Promise.all([
       this.sendRequest(thread, { type: "get_state" }),
@@ -1060,38 +1068,89 @@ export class PiWorkspaceClient {
     await this.refreshState(thread);
   }
 
-  /** 在当前 Pi session 分叉到最后一条用户输入前，并重发编辑后的内容。 */
+  /** 在原会话中撤回最后一轮，重启同路径 runtime 后发送编辑内容。 */
   async editLastUser(
     thread: PiThread,
     text: string,
     images: PiImage[] = [],
   ): Promise<boolean> {
-    if (thread.view.status !== "idle")
+    if (
+      thread.view.status !== "idle" ||
+      this.editing.has(thread.key) ||
+      thread.view.compaction?.status === "running" ||
+      thread.view.historyLoadingMore
+    )
       throw new Error("请等待运行结束后再编辑");
     if (!text.trim()) throw new Error("编辑内容不能为空");
-    const forkData = objectValue(
-      await this.request(thread, { type: "get_fork_messages" }),
-    );
-    const messages = Array.isArray(forkData?.messages)
-      ? forkData.messages
-          .map((value) => objectValue(value))
-          .filter((value): value is Record<string, unknown> => value !== null)
-      : [];
-    const target = messages[messages.length - 1];
-    const entryId = typeof target?.entryId === "string" ? target.entryId : "";
-    if (!entryId) throw new Error("无法定位最后一条用户输入");
-    const forkResult = objectValue(
-      await this.request(thread, { type: "fork", entryId }),
-    );
-    if (forkResult?.cancelled === true) return false;
-    await this.request(thread, { type: "get_messages" });
-    await this.refreshState(thread);
-    await this.request(thread, {
-      type: "prompt",
-      message: text,
-      ...(images.length ? { images } : {}),
-    });
-    return true;
+    const target = [...thread.view.items]
+      .reverse()
+      .find((item) => item.kind === "message" && item.role === "user");
+    if (!target || target.kind !== "message")
+      throw new Error("找不到最后一条用户输入");
+    this.editing.add(thread.key);
+    let truncated = false;
+    try {
+      // 流式 UI 的 message-N 不是 JSONL entry ID；此命令只读取原生输入索引。
+      await this.ensureRuntime(thread);
+      const data = objectValue(
+        await this.sendRequest(thread, { type: "get_fork_messages" }),
+      );
+      const messages = Array.isArray(data?.messages) ? data.messages : [];
+      const last = objectValue(messages[messages.length - 1]);
+      const entryId = typeof last?.entryId === "string" ? last.entryId : "";
+      const source = thread.view.sessionFile;
+      if (
+        !source ||
+        !entryId ||
+        typeof last?.text !== "string" ||
+        last.text.replace(/\s+$/u, "") !== target.text
+      )
+        throw new Error("最后一条输入已变化，请刷新后重试");
+      await this.close(thread.key);
+      await truncatePiSession(source, entryId);
+      truncated = true;
+      const index = thread.view.items.findIndex(
+        (item) => item.id === target.id,
+      );
+      thread.view = {
+        ...thread.view,
+        items: index >= 0 ? thread.view.items.slice(0, index) : [],
+        status: "idle",
+        phase: "",
+        error: null,
+        compaction: undefined,
+        contextTokens: null,
+        contextPercent: null,
+        processStartedAt: undefined,
+        processFinishedAt: undefined,
+        queue: { steering: [], followUp: [], pendingCount: 0 },
+      };
+      this.beginPrompt(thread, text, images);
+      await this.ensureRuntime(thread);
+      await this.sendRequest(thread, {
+        type: "prompt",
+        message: text,
+        ...(images.length ? { images } : {}),
+      });
+      this.syncStats(thread);
+      return true;
+    } catch (error) {
+      if (truncated) {
+        await this.close(thread.key);
+        thread.view = {
+          ...thread.view,
+          items: thread.view.items.filter(
+            (item) => !item.id.startsWith("local-user-"),
+          ),
+          status: "idle",
+          phase: "",
+        };
+      } else thread.view = { ...thread.view, status: "idle" };
+      throw error;
+    } finally {
+      this.editing.delete(thread.key);
+      this.publish();
+    }
   }
 
   /** 复制会话文件为新线程，不启动 runtime。 */
@@ -1253,9 +1312,15 @@ export class PiWorkspaceClient {
     if (statsTimer) clearTimeout(statsTimer);
     this.statsTimers.delete(key);
     const id = thread.runtimeId;
-    await closePiAgent(id);
     thread.runtimeId = null;
     thread.runtimeModelKey = null;
+    this.rejectRequests(id, "Pi 会话已关闭");
+    try {
+      await closePiAgent(id);
+    } catch (error) {
+      thread.runtimeId = id;
+      throw error;
+    }
     thread.view = piViewReducer(thread.view, {
       type: "event",
       payload: {

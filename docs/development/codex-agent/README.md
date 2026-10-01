@@ -48,7 +48,7 @@ cargo test codex_agent::tests::installed_cli_stdio_handshake --lib -- --ignored 
 
 顶部登录资源选择器始终显示，Codex 设置中提供“服务商存储”Tab。顶部提示：**多视口或仍有任务运行时不可切换资源，请退出多视口并等待任务结束。**
 
-`$CODEX_HOME/codev.json` 保存别名、baseURL、DPAPI 加密 key、当前资源以及按 provider/资源分别保存的最近模型。原生资源沿用原有认证，不自动复制 auth.json 中的 key。自定义档案只在对应子进程中覆盖同名 provider 的地址和认证；不修改原生 config.toml/auth.json。Windows 用户或机器改变后需重新输入密钥。使用额外 command auth 或自定义认证头的 provider 当前明确拒绝仅 baseURL/key 的替换。
+`$CODEX_HOME/codev.json` 是仅包含 `alias`、`baseUrl`、`key` 的资源数组。加载时以当前 config.toml 的 base_url 与 experimental_bearer_token 匹配；新组合追加为“初始资源”“初始资源2号”等未占用别名，已有资源不重复初始化。别名可编辑且必须唯一，切换直接写回 config.toml，不使用资源 ID、加密迁移或独立认证文件。
 
 编辑档案只保存，不会改变运行中的进程；“重新应用当前资源”执行同样的空闲检查。目录探测只 GET `/models`，不调用模型；404/405 不能判定生成能力不可用。
 
