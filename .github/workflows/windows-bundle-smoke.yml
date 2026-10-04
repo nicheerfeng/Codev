@@ -1,0 +1,44 @@
+name: Windows Bundle Smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bundle:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+          key: windows-bundle-smoke
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Windows installers
+        run: pnpm tauri build --bundles nsis,msi
+
+      - name: Verify installer output
+        shell: pwsh
+        run: |
+          $bundleDir = "src-tauri/target/release/bundle"
+          $nsis = Get-ChildItem "$bundleDir/nsis" -Filter "*.exe" | Select-Object -First 1
+          $msi = Get-ChildItem "$bundleDir/msi" -Filter "*.msi" | Select-Object -First 1
+          if (-not $nsis) { throw "No NSIS installer produced" }
+          if (-not $msi) { throw "No MSI installer produced" }
+          Write-Host "NSIS: $($nsis.FullName)"
+          Write-Host "MSI: $($msi.FullName)"

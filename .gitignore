@@ -1,0 +1,56 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+stats.html
+.playwright-cli/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+*.tsbuildinfo
+
+# Target-suffixed Tauri sidecars generated during local builds
+src-tauri/binaries/
+src-tauri/target
+src-tauri/.cargo/config.toml
+
+# Local installer and portable deliverables
+artifacts/
+
+# Read-only upstream snapshots used during feature design; never shipped.
+.reference-cache/
+output/
+
+# Local voice credentials and vendor reference snapshots; never shipped.
+docs/小米语音资源/keys.md
+docs/豆包语音资源/关键key.txt
+docs/mcode-master/
+docs/terax-ai-main/
+docs/terax-ai-main.zip
+docs/豆包语音资源/
+
+# Local Pi Agent design dumps and session transcripts; never shipped.
+docs/ref-piagent/
+docs/ref-codexmonitor/
+docs/codev-pi-agent工作进展.md
+docs/Pi-session*.html
+docs/recent_update_pi-agent.md

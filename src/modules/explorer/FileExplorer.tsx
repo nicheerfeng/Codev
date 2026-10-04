@@ -1,0 +1,1175 @@
+import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  Cancel01Icon,
+  FileAddIcon,
+  Folder01Icon,
+  FolderAddIcon,
+  PlusSignIcon,
+  Refresh01Icon,
+  Search01Icon,
+} from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import { toast } from "sonner";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import {
+  forwardRef,
+  memo,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
+import { useT } from "@/lib/i18n";
+import { currentWorkspaceEnv } from "@/modules/workspace";
+import { copyToClipboard } from "./lib/contextActions";
+import { COMPACT_CONTENT, COMPACT_ITEM } from "./lib/menuItemClass";
+import { RootTree, type RootTreeHandle, type RootTreeProps } from "./RootTree";
+import { folderIconUrl } from "./lib/iconResolver";
+import { useFileTransfer } from "./lib/useFileTransfer";
+import { useSelectedFileMeta } from "./lib/useSelectedFileMeta";
+import { useWorkspaceFolderDrop } from "./lib/useWorkspaceFolderDrop";
+import { ExplorerStatusBar } from "./ExplorerStatusBar";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { InlineInput } from "./InlineInput";
+import { cacheRenamedExpansion } from "./lib/useFileTree";
+import {
+  mergeNewCollapsedRoots,
+  readFileTreeRootCollapsed,
+  rootCollapseKey,
+  writeFileTreeRootCollapsed,
+} from "./lib/rootCollapse";
+import { useRootReorder } from "./lib/useRootReorder";
+import { replacePathPrefix } from "@/lib/pathPrefix";
+import { useExplorerDnd } from "./lib/useExplorerDnd";
+import {
+  selectExplorerClipboard,
+  type ExplorerClipboardPayload,
+} from "./lib/clipboardPriority";
+
+export type FileExplorerHandle = {
+  focus: () => void;
+  isFocused: () => boolean;
+  focusSearch: () => void;
+};
+
+type Props = Omit<
+  RootTreeProps,
+  | "rootPath"
+  | "selectedPaths"
+  | "onSelectPath"
+  | "onActivateRoot"
+  | "showToolbar"
+  | "onAddAsRoot"
+  | "onRequestAddRoot"
+> & {
+  /** Imported workspace roots (forward-slash absolute paths). */
+  roots: string[];
+  activeRoot: string | null;
+  onAddRoot: (path: string) => void;
+  onRemoveRoot: (path: string) => void;
+  onRenameRoot: (from: string, to: string) => void | Promise<void>;
+  onReorderRoot: (source: string, gap: number) => void | Promise<void>;
+  onSetActiveRoot: (path: string | null) => void;
+};
+
+type ClipboardKind = "files" | "directories" | "mixed";
+
+type ExternalFileClipboard = ExplorerClipboardPayload;
+
+/** 提取工作区根目录的最后一级名称。 */
+function basename(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : path;
+}
+
+const ROOT_COLORS = [
+  "#31b8d8",
+  "#d89b31",
+  "#bf31d8",
+  "#4cd831",
+  "#313ad8",
+  "#b1d831",
+  "#31d894",
+  "#7431d8",
+  "#3186d8",
+  "#d8cd31",
+  "#7ed831",
+  "#31d849",
+  "#31d8c6",
+  "#65d831",
+  "#31d862",
+  "#31d8ad",
+  "#319fd8",
+  "#3153d8",
+  "#4131d8",
+  "#8d31d8",
+  "#a631d8",
+  "#d831d8",
+  "#d8b431",
+  "#cad831",
+  "#98d831",
+  "#33d831",
+  "#31d87b",
+  "#31d1d8",
+  "#316cd8",
+  "#5b31d8",
+] as const;
+
+/** 按根目录顺序分配鲜明的 30 色色谱，避免相邻目录拿到近似颜色。 */
+function rootColor(path: string, roots: string[]): string {
+  const normalizedPath = path.replace(/\\/g, "/").toLowerCase();
+  const index = roots.findIndex(
+    (root) => root.replace(/\\/g, "/").toLowerCase() === normalizedPath,
+  );
+  return ROOT_COLORS[Math.max(0, index) % ROOT_COLORS.length];
+}
+
+/** 为文件树空白区域提供稳定的添加工作区目录菜单。 */
+function EmptyExplorerContextMenu({
+  onAddFolder,
+  onPaste,
+  children,
+}: {
+  onAddFolder: () => void;
+  onPaste?: () => void;
+  children: React.ReactNode;
+}) {
+  const t = useT();
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent className={COMPACT_CONTENT}>
+        {onPaste ? (
+          <ContextMenuItem className={COMPACT_ITEM} onSelect={onPaste}>
+            {t("Paste")}
+          </ContextMenuItem>
+        ) : null}
+        <ContextMenuItem className={COMPACT_ITEM} onSelect={onAddFolder}>
+          {t("Add folder to workspace")}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/** 保留项目根目录的可见分组与独立管理入口。 */
+function RootSection({
+  reorderHeaderProps,
+  insertBefore,
+  root,
+  roots,
+  selected,
+  revealRequest,
+  onRevealPath,
+  onActivate,
+  onSelectRoot,
+  onRemove,
+  onCopy,
+  onRename,
+  onCreateFile,
+  onCreateFolder,
+  onAddFolder,
+  onOpenTerminal,
+  onPaste,
+  open,
+  onOpenChange,
+  pathDropTarget,
+  children,
+}: {
+  reorderHeaderProps: React.HTMLAttributes<HTMLDivElement>;
+  insertBefore: boolean;
+  root: string;
+  roots: string[];
+  selected: boolean;
+  revealRequest: { nonce: number; path: string } | null;
+  onRevealPath: (root: string, path: string) => void;
+  onActivate: () => void;
+  onSelectRoot: () => void;
+  onRemove: () => void;
+  onCopy: () => void;
+  onRename: (name: string) => void;
+  onCreateFile: () => void;
+  onCreateFolder: () => void;
+  onAddFolder: () => void;
+  onOpenTerminal?: () => void;
+  onPaste?: () => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  pathDropTarget?: RootTreeProps["pathDropTarget"];
+  children: React.ReactNode;
+}) {
+  const t = useT();
+  const [renaming, setRenaming] = useState(false);
+  const [rootHeaderHovered, setRootHeaderHovered] = useState(false);
+  const color = rootColor(root, roots);
+  const canRename = root !== "/" && !/^[A-Za-z]:\/$/.test(root);
+  const rootDnd = useExplorerDnd({
+    rootPath: root,
+    isDir: (path) => path === root,
+    selectedPaths: [root],
+    onMove: () => {},
+    pathDropTarget,
+  });
+
+  useEffect(() => {
+    if (!revealRequest) return;
+    onOpenChange(true);
+    const frame = requestAnimationFrame(() =>
+      onRevealPath(root, revealRequest.path),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [onOpenChange, onRevealPath, revealRequest, root]);
+
+  return (
+    <div
+      className="relative flex min-w-0 flex-col"
+      data-explorer-drop=""
+      data-fs-path={root}
+      data-fs-kind="dir"
+    >
+      {insertBefore && (
+        <span className="pointer-events-none absolute inset-x-0 top-0 z-20 h-0.5 bg-[#7894b0]" />
+      )}
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div
+            {...reorderHeaderProps}
+            data-root-reorder-header=""
+            className={`relative flex h-7 shrink-0 cursor-pointer items-center gap-1 overflow-hidden border-b border-l-2 px-2 text-xs font-medium select-none hover:bg-accent/70 ${selected ? "border-primary bg-primary/12 ring-1 ring-inset ring-primary/80" : "border-border/60"}`}
+            style={{
+              borderLeftColor: color,
+              color: "var(--foreground)",
+            }}
+            onMouseEnter={() => setRootHeaderHovered(true)}
+            onMouseLeave={() => setRootHeaderHovered(false)}
+            onPointerDown={(event) => {
+              reorderHeaderProps.onPointerDown?.(event);
+              rootDnd.onPointerDown(event);
+            }}
+            onClickCapture={(event) => {
+              reorderHeaderProps.onClickCapture?.(event);
+              rootDnd.onClickCapture(event);
+            }}
+            onContextMenu={() => onSelectRoot()}
+            onClick={() => {
+              onSelectRoot();
+              onActivate();
+              onOpenChange(!open);
+            }}
+            title={root}
+          >
+            {selected && (
+              <span className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-primary" />
+            )}
+            <button
+              type="button"
+              className="size-4 shrink-0 text-muted-foreground hover:text-foreground"
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenChange(!open);
+              }}
+              aria-label={open ? t("Collapse") : t("Expand")}
+            >
+              <span className="inline-block text-[10px] leading-4">
+                {open ? "▾" : "▸"}
+              </span>
+            </button>
+            <img
+              src={folderIconUrl(basename(root), false, color)}
+              alt=""
+              height={14}
+              width={14}
+              className="mx-0.5 shrink-0"
+            />
+            {renaming ? (
+              <span
+                className="flex min-w-0 flex-1"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <InlineInput
+                  initial={basename(root)}
+                  onCommit={(name) => {
+                    setRenaming(false);
+                    onRename(name);
+                  }}
+                  onCancel={() => setRenaming(false)}
+                />
+              </span>
+            ) : (
+              <span className="min-w-0 flex-1 truncate pr-1">
+                {basename(root) || root}
+              </span>
+            )}
+            <button
+              type="button"
+              data-root-remove=""
+              className="flex size-5 shrink-0 items-center justify-center text-foreground/80 transition-[opacity,color] hover:text-foreground focus-visible:text-foreground"
+              style={{
+                opacity: rootHeaderHovered ? 1 : 0,
+                pointerEvents: rootHeaderHovered ? "auto" : "none",
+              }}
+              onClick={(event) => {
+                event.stopPropagation();
+                onRemove();
+              }}
+              aria-label={t("Remove root")}
+              title={t("Remove from workspace")}
+            >
+              <HugeiconsIcon icon={Cancel01Icon} size={11} strokeWidth={1.5} />
+            </button>
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent className={COMPACT_CONTENT}>
+          <ContextMenuItem
+            className={COMPACT_ITEM}
+            onSelect={() => {
+              onOpenChange(true);
+              requestAnimationFrame(onCreateFile);
+            }}
+          >
+            {t("New file")}
+          </ContextMenuItem>
+          <ContextMenuItem
+            className={COMPACT_ITEM}
+            onSelect={() => {
+              onOpenChange(true);
+              requestAnimationFrame(onCreateFolder);
+            }}
+          >
+            {t("New folder")}
+          </ContextMenuItem>
+          <ContextMenuSeparator className="my-0.5" />
+          <ContextMenuItem
+            className={COMPACT_ITEM}
+            disabled={!canRename}
+            onSelect={() => setRenaming(true)}
+          >
+            {t("Rename")}
+          </ContextMenuItem>
+          {onPaste ? (
+            <ContextMenuItem className={COMPACT_ITEM} onSelect={onPaste}>
+              {t("Paste")}
+            </ContextMenuItem>
+          ) : null}
+          <ContextMenuItem className={COMPACT_ITEM} onSelect={onAddFolder}>
+            {t("Add folder to workspace")}
+          </ContextMenuItem>
+          {onOpenTerminal ? (
+            <ContextMenuItem className={COMPACT_ITEM} onSelect={onOpenTerminal}>
+              {t("New terminal")}
+            </ContextMenuItem>
+          ) : null}
+          <ContextMenuSeparator className="my-0.5" />
+          <ContextMenuItem className={COMPACT_ITEM} onSelect={onCopy}>
+            {t("Copy Path")}
+          </ContextMenuItem>
+          <ContextMenuItem
+            className={COMPACT_ITEM}
+            onSelect={() =>
+              void revealItemInDir(root).catch((error) =>
+                toast.error("无法在文件管理器中显示", {
+                  description: String(error),
+                }),
+              )
+            }
+          >
+            {t("Reveal in Finder")}
+          </ContextMenuItem>
+          <ContextMenuSeparator className="my-0.5" />
+          <ContextMenuItem className={COMPACT_ITEM} onSelect={onRemove}>
+            {t("Remove from workspace")}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      {open ? <div className="min-w-0 pt-1">{children}</div> : null}
+    </div>
+  );
+}
+
+export const FileExplorer = memo(
+  forwardRef<FileExplorerHandle, Props>(function FileExplorer(
+    {
+      roots,
+      activeRoot,
+      onAddRoot,
+      onRemoveRoot,
+      onRenameRoot,
+      onReorderRoot,
+      onSetActiveRoot,
+      ...treeProps
+    },
+    ref,
+  ) {
+    const t = useT();
+    const storedRootCollapsed = useRef(readFileTreeRootCollapsed());
+    const [collapsedRoots, setCollapsedRoots] = useState<Set<string>>(
+      () => storedRootCollapsed.current.keys,
+    );
+    const knownCollapsedRoots = useRef(
+      new Set(storedRootCollapsed.current.keys),
+    );
+    const seededCollapsedRoots = useRef(false);
+    const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+    useEffect(() => {
+      const keys = roots.map(rootCollapseKey);
+      if (!seededCollapsedRoots.current) {
+        seededCollapsedRoots.current = true;
+        if (!storedRootCollapsed.current.ready) {
+          knownCollapsedRoots.current = new Set(keys);
+          setCollapsedRoots(new Set(keys));
+          return;
+        }
+        knownCollapsedRoots.current = new Set([
+          ...knownCollapsedRoots.current,
+          ...keys,
+        ]);
+        return;
+      }
+      setCollapsedRoots((current) => {
+        const next = mergeNewCollapsedRoots(
+          current,
+          knownCollapsedRoots.current,
+          keys,
+        );
+        knownCollapsedRoots.current = next.known;
+        return next.changed ? next.collapsed : current;
+      });
+    }, [roots]);
+    useEffect(() => {
+      if (!seededCollapsedRoots.current) return;
+      writeFileTreeRootCollapsed(collapsedRoots);
+    }, [collapsedRoots]);
+    const setRootOpen = useCallback((root: string, nextOpen: boolean) => {
+      const key = rootCollapseKey(root);
+      setCollapsedRoots((current) => {
+        const next = new Set(current);
+        if (nextOpen) next.delete(key);
+        else next.add(key);
+        return next;
+      });
+    }, []);
+    const [clipboard, setClipboard] = useState<{
+      paths: string[];
+      mode: "copy" | "move";
+      kind: ClipboardKind;
+      sequence: number;
+    } | null>(null);
+    const [externalClipboard, setExternalClipboard] =
+      useState<ExternalFileClipboard | null>(null);
+    const transfer = useFileTransfer();
+    const selectedMeta = useSelectedFileMeta(treeProps.activeFilePath ?? null);
+    const containerRef = useRef<HTMLDivElement>(null);
+    /** 保存排序失败时提示用户，避免静默丢失顺序。 */
+    const persistRootOrder = async (source: string, gap: number) => {
+      try {
+        await onReorderRoot(source, gap);
+      } catch (error) {
+        toast.error(`根目录排序保存失败：${String(error)}`);
+      }
+    };
+    const rootReorder = useRootReorder(containerRef, persistRootOrder);
+    const sourceIndex = roots.indexOf(rootReorder.position?.source ?? "");
+    /** 仅显示实际改变顺序的根目录插入位置。 */
+    const showRootGap = (gap: number) =>
+      rootReorder.position?.gap === gap &&
+      gap !== sourceIndex &&
+      gap !== sourceIndex + 1;
+    const treeRefs = useRef<Map<string, RootTreeHandle>>(new Map());
+    const rootRevealNonceRef = useRef(0);
+    const [rootRevealRequest, setRootRevealRequest] = useState<{
+      root: string;
+      nonce: number;
+      path: string;
+    } | null>(null);
+    const refreshedTransferIds = useRef<Set<string>>(new Set());
+    const { onPathDeleted } = treeProps;
+
+    /** 查询系统文件剪贴板及其变更序号。 */
+    const readExternalClipboard = useCallback(async () => {
+      return invoke<ExternalFileClipboard>("fs_get_file_clipboard").catch(
+        () => null,
+      );
+    }, []);
+
+    /** 刷新外部剪贴板快照，供右键菜单判断粘贴是否可用。 */
+    const refreshExternalClipboard = useCallback(async () => {
+      setExternalClipboard(await readExternalClipboard());
+    }, [readExternalClipboard]);
+
+    useEffect(() => {
+      void refreshExternalClipboard();
+      const onWindowFocus = () => void refreshExternalClipboard();
+      window.addEventListener("focus", onWindowFocus);
+      return () => window.removeEventListener("focus", onWindowFocus);
+    }, [refreshExternalClipboard]);
+
+    /** 将文件路径转换为当前文件树内部可执行的父目录。 */
+    const parentPath = useCallback((path: string): string => {
+      const index = path.lastIndexOf("/");
+      return index > 0 ? path.slice(0, index) : path;
+    }, []);
+
+    /** 判断应用内剪切板内容是否全部为文件。 */
+    const detectClipboardKind = useCallback(async (paths: string[]) => {
+      const stats = await Promise.all(
+        paths.map((path) =>
+          invoke<{ kind: "file" | "dir" | "symlink" }>("fs_stat", {
+            path,
+            workspace: currentWorkspaceEnv(),
+          }).catch(() => null),
+        ),
+      );
+      if (stats.every((stat) => stat?.kind === "file")) return "files";
+      if (stats.every((stat) => stat?.kind === "dir")) return "directories";
+      return "mixed";
+    }, []);
+
+    /** 将选中路径放入应用内复制剪切板，不写入系统文本剪贴板。 */
+    const copyPaths = useCallback(
+      async (paths: string[]) => {
+        const uniquePaths = [...new Set(paths)];
+        if (uniquePaths.length === 0) return;
+        const kind = await detectClipboardKind(uniquePaths);
+        const system = await readExternalClipboard();
+        if (system) setExternalClipboard(system);
+        transfer.clear();
+        setClipboard({
+          paths: uniquePaths,
+          mode: "copy",
+          kind,
+          sequence: system?.sequence ?? externalClipboard?.sequence ?? 0,
+        });
+        toast.success(`已复制 ${uniquePaths.length} 项`);
+      },
+      [
+        detectClipboardKind,
+        externalClipboard?.sequence,
+        readExternalClipboard,
+        transfer.clear,
+      ],
+    );
+
+    /** 将选中路径放入应用内剪切剪贴板。 */
+    const cutPaths = useCallback(
+      async (paths: string[]) => {
+        const uniquePaths = [...new Set(paths)];
+        if (uniquePaths.length === 0) return;
+        const kind = await detectClipboardKind(uniquePaths);
+        const system = await readExternalClipboard();
+        if (system) setExternalClipboard(system);
+        transfer.clear();
+        setClipboard({
+          paths: uniquePaths,
+          mode: "move",
+          kind,
+          sequence: system?.sequence ?? externalClipboard?.sequence ?? 0,
+        });
+        toast.success(`已剪切 ${uniquePaths.length} 项`);
+      },
+      [
+        detectClipboardKind,
+        externalClipboard?.sequence,
+        readExternalClipboard,
+        transfer.clear,
+      ],
+    );
+
+    /** 将复制、剪切和拖拽统一提交到后台迁移任务。 */
+    const startTransfer = useCallback(
+      (sources: string[], toDir: string, copy: boolean) => {
+        void transfer.start(sources, toDir, copy ? "copy" : "move");
+      },
+      [transfer.start],
+    );
+
+    /** 处理系统文件拖入，统一作为复制任务执行。 */
+    const startExternalCopy = useCallback(
+      (sources: string[], toDir: string) => {
+        startTransfer(sources, toDir, true);
+      },
+      [startTransfer],
+    );
+
+    /** 将外部拖入的目录直接登记为新的工作区根目录。 */
+    const addDroppedRoots = useCallback(
+      (paths: string[]) => {
+        for (const path of paths) onAddRoot(path.replace(/\\/g, "/"));
+      },
+      [onAddRoot],
+    );
+
+    useWorkspaceFolderDrop({ onAddRoot: addDroppedRoots });
+
+    /** 删除当前右键选中的文件或目录，并同步编辑器路径状态。 */
+    const deletePaths = useCallback(
+      async (paths: string[]) => {
+        for (const path of paths) {
+          try {
+            await invoke("fs_delete", {
+              path,
+              workspace: currentWorkspaceEnv(),
+            });
+            onPathDeleted?.(path);
+            const parent = parentPath(path);
+            for (const [root, tree] of treeRefs.current) {
+              if (parent === root || parent.startsWith(`${root}/`)) {
+                tree.refreshPath(parent);
+                break;
+              }
+            }
+          } catch (error) {
+            toast.error(`删除失败：${String(error)}`);
+          }
+        }
+        setSelectedPaths([]);
+      },
+      [onPathDeleted, parentPath],
+    );
+
+    /** 通过 Ctrl+V 将应用内或系统文件剪贴板迁移到当前选中的目录。 */
+    const pasteClipboard = useCallback(
+      async (targetDirectory?: string) => {
+        const system = await readExternalClipboard();
+        if (system) setExternalClipboard(system);
+        const pending = selectExplorerClipboard(clipboard, system);
+        if (!pending || pending.paths.length === 0) return;
+        const selected = selectedPaths[selectedPaths.length - 1];
+        const destination =
+          targetDirectory ?? selected ?? activeRoot ?? roots[0];
+        if (!destination) return;
+        try {
+          let toDir = targetDirectory;
+          if (!toDir) {
+            const stat = await invoke<{ kind: "file" | "dir" | "symlink" }>(
+              "fs_stat",
+              { path: destination, workspace: currentWorkspaceEnv() },
+            );
+            toDir = stat.kind === "dir" ? destination : parentPath(destination);
+          }
+          const result = await transfer.start(
+            pending.paths,
+            toDir,
+            pending.mode === "copy" ? "copy" : "move",
+          );
+          if (pending.mode === "move" && result?.status === "completed") {
+            if (pending.source === "internal") setClipboard(null);
+            setExternalClipboard(null);
+          }
+        } catch (error) {
+          toast.error(`迁移启动失败：${String(error)}`);
+        }
+      },
+      [
+        activeRoot,
+        clipboard,
+        parentPath,
+        readExternalClipboard,
+        roots,
+        selectedPaths,
+        transfer.start,
+      ],
+    );
+
+    const pasteAvailable =
+      selectExplorerClipboard(clipboard, externalClipboard) !== null;
+
+    /** 仅在文件树获得焦点时接管复制、剪切、粘贴快捷键。 */
+    const handleExplorerKeyDown = useCallback(
+      (event: React.KeyboardEvent<HTMLDivElement>) => {
+        const target = event.target as HTMLElement;
+        if (
+          target.closest("input, textarea, [contenteditable='true']") ||
+          !(event.ctrlKey || event.metaKey)
+        ) {
+          return;
+        }
+        const key = event.key.toLowerCase();
+        if (key === "c" && selectedPaths.length > 0) {
+          event.preventDefault();
+          copyPaths(selectedPaths);
+        } else if (key === "x" && selectedPaths.length > 0) {
+          event.preventDefault();
+          cutPaths(selectedPaths);
+        } else if (key === "v") {
+          event.preventDefault();
+          void pasteClipboard();
+        }
+      },
+      [copyPaths, cutPaths, pasteClipboard, selectedPaths],
+    );
+
+    useEffect(() => {
+      const current = transfer.event;
+      if (
+        !current ||
+        (current.status !== "completed" &&
+          current.status !== "failed" &&
+          current.status !== "cancelled") ||
+        refreshedTransferIds.current.has(current.id)
+      ) {
+        return;
+      }
+      refreshedTransferIds.current.add(current.id);
+      for (const tree of treeRefs.current.values()) tree.refresh();
+    }, [transfer.event]);
+
+    /** 直接打开系统目录选择器并把所选目录加入工作区。 */
+    const requestAddFolder = useCallback(() => {
+      void open({
+        directory: true,
+        multiple: false,
+        title: t("Select folder"),
+      })
+        .then((result) => {
+          if (typeof result === "string") onAddRoot(result.replace(/\\/g, "/"));
+        })
+        .catch((cause) => {
+          console.error("[Codev] folder picker failed:", cause);
+        });
+    }, [onAddRoot, t]);
+
+    /** 更新整个侧栏共享的 Ctrl/⌘ 多选路径集合。 */
+    const selectPath = useCallback((path: string, multi: boolean) => {
+      setSelectedPaths((paths) => {
+        if (!multi) return [path];
+        return paths.includes(path)
+          ? paths.filter((item) => item !== path)
+          : [...paths, path];
+      });
+    }, []);
+
+    /** 选择工作区根目录并清理之前残留的子目录选择。 */
+    const selectRoot = useCallback(
+      (root: string) => {
+        setSelectedPaths([root]);
+        onSetActiveRoot(root);
+      },
+      [onSetActiveRoot],
+    );
+
+    /** 移除项目根目录时同步清理侧栏中的选中路径。 */
+    const removeRoot = useCallback(
+      (root: string) => {
+        setSelectedPaths((paths) =>
+          paths.filter((path) => path !== root && !path.startsWith(`${root}/`)),
+        );
+        onRemoveRoot(root);
+      },
+      [onRemoveRoot],
+    );
+
+    /** 同步目录重命名影响的共享选中项、剪贴板和标签路径。 */
+    const handleTreePathRenamed = useCallback(
+      (from: string, to: string) => {
+        setSelectedPaths((paths) =>
+          paths.map((path) => replacePathPrefix(path, from, to)),
+        );
+        setClipboard((current) =>
+          current
+            ? {
+                ...current,
+                paths: current.paths.map((path) =>
+                  replacePathPrefix(path, from, to),
+                ),
+              }
+            : null,
+        );
+        treeProps.onPathRenamed?.(from, to);
+      },
+      [treeProps.onPathRenamed],
+    );
+
+    /** 重命名磁盘根目录并同步工作区、展开缓存和关联路径。 */
+    const renameRoot = useCallback(
+      async (root: string, newName: string) => {
+        const trimmed = newName.trim();
+        if (!trimmed || trimmed === basename(root)) return;
+        if (/[\\/]/.test(trimmed)) {
+          toast.error("名称不能包含路径分隔符");
+          return;
+        }
+        const separator = root.lastIndexOf("/");
+        if (separator < 0) return;
+        const to = `${root.slice(0, separator + 1)}${trimmed}`;
+        try {
+          await invoke("fs_rename", {
+            from: root,
+            to,
+            workspace: currentWorkspaceEnv(),
+          });
+          cacheRenamedExpansion(
+            root,
+            to,
+            treeRefs.current.get(root)?.expandedPaths() ?? [],
+          );
+          const fromKey = rootCollapseKey(root);
+          const toKey = rootCollapseKey(to);
+          if (fromKey !== toKey) {
+            knownCollapsedRoots.current.delete(fromKey);
+            knownCollapsedRoots.current.add(toKey);
+            setCollapsedRoots((current) => {
+              if (!current.has(fromKey)) return current;
+              const next = new Set(current);
+              next.delete(fromKey);
+              next.add(toKey);
+              return next;
+            });
+          }
+          handleTreePathRenamed(root, to);
+          await onRenameRoot(root, to);
+        } catch (error) {
+          toast.error(`重命名失败：${String(error)}`);
+        }
+      },
+      [handleTreePathRenamed, onRenameRoot],
+    );
+
+    const getActiveTree = useCallback((): RootTreeHandle | null => {
+      if (activeRoot) return treeRefs.current.get(activeRoot) ?? null;
+      return null;
+    }, [activeRoot]);
+
+    /** 在目标根树挂载后定位目录，并消费请求以免后续渲染重复展开。 */
+    const revealRootPath = useCallback((root: string, path: string) => {
+      treeRefs.current.get(root)?.revealPath(path);
+      setRootRevealRequest(null);
+    }, []);
+
+    /** 将搜索命中的目录路由到拥有它的工作区根树。 */
+    const revealSearchDirectory = useCallback(
+      (path: string) => {
+        const target = path.replace(/\\/g, "/").replace(/\/+$/, "");
+        let owner: string | null = null;
+        for (const root of roots) {
+          const normalized = root.replace(/\\/g, "/").replace(/\/+$/, "");
+          if (
+            (target === normalized || target.startsWith(`${normalized}/`)) &&
+            (!owner || normalized.length > owner.length)
+          ) {
+            owner = root;
+          }
+        }
+        if (owner) {
+          const nonce = ++rootRevealNonceRef.current;
+          setRootRevealRequest({ root: owner, nonce, path });
+          onSetActiveRoot(owner);
+        }
+      },
+      [onSetActiveRoot, roots],
+    );
+
+    /** 在当前项目根打开文件搜索。 */
+    const focusActiveSearch = useCallback(() => {
+      getActiveTree()?.focusSearch();
+    }, [getActiveTree]);
+
+    /** 在当前项目根创建文件。 */
+    const createActiveFile = useCallback(() => {
+      getActiveTree()?.createFile();
+    }, [getActiveTree]);
+
+    /** 在当前项目根创建文件夹。 */
+    const createActiveFolder = useCallback(() => {
+      getActiveTree()?.createFolder();
+    }, [getActiveTree]);
+
+    /** 刷新当前项目根的文件树。 */
+    const refreshActiveRoot = useCallback(() => {
+      getActiveTree()?.refresh();
+    }, [getActiveTree]);
+
+    useImperativeHandle(
+      ref,
+      () => ({
+        focus: () => {
+          getActiveTree()?.focus() ?? containerRef.current?.focus();
+        },
+        isFocused: () => {
+          const c = containerRef.current;
+          if (!c) return false;
+          const active = document.activeElement;
+          return active instanceof Node && c.contains(active);
+        },
+        focusSearch: () => getActiveTree()?.focusSearch(),
+      }),
+      [getActiveTree],
+    );
+
+    return (
+      <div
+        ref={containerRef}
+        className="flex h-full flex-col outline-none"
+        tabIndex={0}
+        role="tree"
+        onKeyDown={handleExplorerKeyDown}
+      >
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <div
+              className="flex h-8 shrink-0 items-center gap-1 border-b border-border/60 px-2"
+              data-workspace-folder-drop=""
+            >
+              <span className="flex min-w-0 flex-1 items-center truncate text-xs font-medium text-foreground/80">
+                {t("Workspace")}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-6 text-muted-foreground hover:text-foreground disabled:opacity-35"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  focusActiveSearch();
+                }}
+                disabled={!activeRoot}
+                title={t("Search files")}
+                aria-label={t("Search files")}
+              >
+                <HugeiconsIcon icon={Search01Icon} size={13} strokeWidth={2} />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-6 text-muted-foreground hover:text-foreground disabled:opacity-35"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  createActiveFile();
+                }}
+                disabled={!activeRoot}
+                title={t("New file")}
+                aria-label={t("New file")}
+              >
+                <HugeiconsIcon icon={FileAddIcon} size={13} strokeWidth={2} />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-6 text-muted-foreground hover:text-foreground disabled:opacity-35"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  createActiveFolder();
+                }}
+                disabled={!activeRoot}
+                title={t("New folder")}
+                aria-label={t("New folder")}
+              >
+                <HugeiconsIcon icon={FolderAddIcon} size={13} strokeWidth={2} />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-6 text-muted-foreground hover:text-foreground disabled:opacity-35"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  refreshActiveRoot();
+                }}
+                disabled={!activeRoot}
+                title={t("Refresh")}
+                aria-label={t("Refresh")}
+              >
+                <HugeiconsIcon icon={Refresh01Icon} size={12} strokeWidth={2} />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-6 text-muted-foreground hover:text-foreground"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  requestAddFolder();
+                }}
+                title={t("Add folder to workspace")}
+                aria-label={t("Add folder to workspace")}
+              >
+                <HugeiconsIcon icon={PlusSignIcon} size={13} strokeWidth={2} />
+              </Button>
+            </div>
+          </ContextMenuTrigger>
+          <ContextMenuContent className={COMPACT_CONTENT}>
+            {pasteAvailable && activeRoot ? (
+              <ContextMenuItem
+                className={COMPACT_ITEM}
+                onSelect={() => void pasteClipboard(activeRoot)}
+              >
+                {t("Paste")}
+              </ContextMenuItem>
+            ) : null}
+            <ContextMenuItem
+              className={COMPACT_ITEM}
+              onSelect={requestAddFolder}
+            >
+              {t("Add folder to workspace")}
+            </ContextMenuItem>
+            {roots.length > 0 ? (
+              <>
+                <ContextMenuSeparator className="my-0.5" />
+                {roots.map((root) => (
+                  <ContextMenuItem
+                    key={`copy:${root}`}
+                    className={COMPACT_ITEM}
+                    onSelect={() => void copyToClipboard(root)}
+                  >
+                    {t("Copy Path")} · {basename(root)}
+                  </ContextMenuItem>
+                ))}
+                {roots.map((root) => (
+                  <ContextMenuItem
+                    key={`remove:${root}`}
+                    className={COMPACT_ITEM}
+                    onSelect={() => removeRoot(root)}
+                  >
+                    {t("Remove from workspace")} · {basename(root)}
+                  </ContextMenuItem>
+                ))}
+              </>
+            ) : null}
+          </ContextMenuContent>
+        </ContextMenu>
+
+        {roots.length === 0 ? (
+          <ContextMenu>
+            <ContextMenuTrigger asChild>
+              <div
+                className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center"
+                data-workspace-folder-drop=""
+              >
+                <HugeiconsIcon
+                  icon={Folder01Icon}
+                  size={24}
+                  strokeWidth={1.5}
+                  className="text-muted-foreground"
+                />
+                <div className="text-xs text-muted-foreground">
+                  {t("No folders in workspace")}
+                </div>
+                <div className="text-[11px] text-muted-foreground/70">
+                  {t("Choose a project folder to add to the file tree.")}
+                </div>
+              </div>
+            </ContextMenuTrigger>
+            <ContextMenuContent className={COMPACT_CONTENT}>
+              <ContextMenuItem
+                className={COMPACT_ITEM}
+                onSelect={requestAddFolder}
+              >
+                {t("Add folder to workspace")}
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
+        ) : (
+          <EmptyExplorerContextMenu
+            onAddFolder={requestAddFolder}
+            onPaste={
+              pasteAvailable && activeRoot
+                ? () => void pasteClipboard(activeRoot)
+                : undefined
+            }
+          >
+            <div className="min-h-0 min-w-0 flex-1" data-explorer-empty="">
+              <ScrollArea className="explorer-scroll-flow h-full min-h-0 min-w-0">
+                <div className="min-w-0">
+                  {roots.map((root, index) => (
+                    <RootSection
+                      key={root}
+                      reorderHeaderProps={rootReorder.headerProps(root)}
+                      insertBefore={showRootGap(index)}
+                      root={root}
+                      roots={roots}
+                      selected={selectedPaths.includes(root)}
+                      revealRequest={
+                        rootRevealRequest?.root === root
+                          ? rootRevealRequest
+                          : null
+                      }
+                      onRevealPath={revealRootPath}
+                      onActivate={() => onSetActiveRoot(root)}
+                      onSelectRoot={() => selectRoot(root)}
+                      onRemove={() => removeRoot(root)}
+                      onCopy={() => void copyToClipboard(root)}
+                      onRename={(name) => void renameRoot(root, name)}
+                      onCreateFile={() =>
+                        treeRefs.current.get(root)?.createFile()
+                      }
+                      onCreateFolder={() =>
+                        treeRefs.current.get(root)?.createFolder()
+                      }
+                      onAddFolder={requestAddFolder}
+                      onOpenTerminal={
+                        treeProps.onRevealInTerminal
+                          ? () => treeProps.onRevealInTerminal?.(root)
+                          : undefined
+                      }
+                      onPaste={
+                        pasteAvailable
+                          ? () => void pasteClipboard(root)
+                          : undefined
+                      }
+                      open={!collapsedRoots.has(rootCollapseKey(root))}
+                      onOpenChange={(nextOpen) => setRootOpen(root, nextOpen)}
+                      pathDropTarget={treeProps.pathDropTarget}
+                    >
+                      <RootTree
+                        ref={(h) => {
+                          if (h) treeRefs.current.set(root, h);
+                          else treeRefs.current.delete(root);
+                        }}
+                        rootPath={root}
+                        onAddAsRoot={onAddRoot}
+                        onRequestAddRoot={requestAddFolder}
+                        selectedPaths={selectedPaths}
+                        onSelectPath={selectPath}
+                        onActivateRoot={() => onSetActiveRoot(root)}
+                        showToolbar={false}
+                        {...treeProps}
+                        onPathRenamed={handleTreePathRenamed}
+                        onRevealDirectory={revealSearchDirectory}
+                        onTransfer={startTransfer}
+                        onExternalCopy={startExternalCopy}
+                        onCopyPaths={copyPaths}
+                        onCutPaths={cutPaths}
+                        onDeletePaths={deletePaths}
+                        clipboardAvailable={pasteAvailable}
+                        onPasteTo={(path) => void pasteClipboard(path)}
+                        sharedScroll
+                      />
+                    </RootSection>
+                  ))}
+                  {showRootGap(roots.length) && (
+                    <div className="relative h-0">
+                      <span className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-[#7894b0]" />
+                    </div>
+                  )}
+                </div>
+              </ScrollArea>
+            </div>
+          </EmptyExplorerContextMenu>
+        )}
+        <ExplorerStatusBar
+          transfer={transfer.event}
+          selectedMeta={selectedMeta}
+          clipboard={
+            clipboard
+              ? { mode: clipboard.mode, count: clipboard.paths.length }
+              : null
+          }
+          onCancel={() => void transfer.cancel()}
+          onUndo={() => void transfer.undo()}
+          onClear={transfer.clear}
+        />
+      </div>
+    );
+  }),
+);
