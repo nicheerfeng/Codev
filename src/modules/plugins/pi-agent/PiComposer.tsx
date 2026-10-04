@@ -32,7 +32,7 @@ import type { PiImage, PiModel, PiViewState } from "./types";
 import { PI_LOCAL_COMMANDS } from "./commands";
 import { draftHasPayload, EMPTY_DRAFT, type PiDraft } from "./piAttachments";
 import { usePiComposerDropStore } from "./piComposerDropStore";
-import { VoiceInputButton } from "@/modules/voice/VoiceInputButton";
+import { VoiceInputButton } from "@/modules/plugins/pi-agent/voice/VoiceInputButton";
 import {
   mergePromptHistory,
   nextHistoryIndex,
@@ -49,7 +49,10 @@ type Props = {
   view: PiViewState;
   onSend: (behavior: "steer" | "followUp") => void;
   onStop: () => void;
-  onLocalQueueAction?: (id: string, action: "edit" | "delete" | "steer") => void;
+  onLocalQueueAction?: (
+    id: string,
+    action: "edit" | "delete" | "steer",
+  ) => void;
   onRetryQueue?: () => void;
   onQueueAction: (
     kind: "steering" | "followUp",
@@ -360,7 +363,10 @@ export function PiComposer(props: Props) {
                 size="icon-xs"
                 title="安排到当前步骤之后"
                 aria-label="安排到当前步骤之后"
-                disabled={props.view.queueSendingId === item.id || item.behavior === "steer"}
+                disabled={
+                  props.view.queueSendingId === item.id ||
+                  item.behavior === "steer"
+                }
                 onClick={() => props.onLocalQueueAction?.(item.id, "steer")}
               >
                 <HugeiconsIcon icon={ArrowUp01Icon} size={13} />
@@ -428,7 +434,10 @@ export function PiComposer(props: Props) {
                       })}
                     </div>
                   )}
-                  <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]" title={item.text}>
+                  <span
+                    className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]"
+                    title={item.text}
+                  >
                     {item.text || "图片消息"}
                   </span>
                 </div>
@@ -436,10 +445,16 @@ export function PiComposer(props: Props) {
                   <Button
                     variant="ghost"
                     size="icon-xs"
-                    title={kind === "followUp" ? "安排到当前步骤之后" : "已安排为下一步"}
+                    title={
+                      kind === "followUp"
+                        ? "安排到当前步骤之后"
+                        : "已安排为下一步"
+                    }
                     aria-label="安排到当前步骤之后"
                     disabled={props.disabled || kind === "steering"}
-                    onClick={() => props.onQueueAction(kind, index, item.text, "steer")}
+                    onClick={() =>
+                      props.onQueueAction(kind, index, item.text, "steer")
+                    }
                   >
                     <HugeiconsIcon icon={ArrowUp01Icon} size={13} />
                   </Button>
@@ -701,9 +716,13 @@ export function PiComposer(props: Props) {
             <HugeiconsIcon icon={PlusSignIcon} size={14} />
           </Button>
           <VoiceInputButton
-            scope="pi"
             disabled={props.disabled}
-            onText={(text) => changeDraft({ ...props.draft, text: `${props.draft.text}${props.draft.text ? " " : ""}${text}` })}
+            onText={(text) =>
+              changeDraft({
+                ...props.draft,
+                text: `${props.draft.text}${props.draft.text ? " " : ""}${text}`,
+              })
+            }
           />
           <Popover
             open={modelOpen}

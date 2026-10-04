@@ -84,6 +84,7 @@ export type Preferences = {
   editorWordWrapColumn: number;
   markdownDefaultView: MarkdownDefaultView;
   showHidden: boolean;
+  gitEnabled: boolean;
   /** Multi-root workspace: imported folder roots (forward-slash paths). */
   workspaceRoots: string[];
   activeWorkspaceRoot: string | null;
@@ -118,6 +119,7 @@ const KEY_EDITOR_WORD_WRAP = "editorWordWrap";
 const KEY_EDITOR_WORD_WRAP_COLUMN = "editorWordWrapColumn";
 const KEY_MARKDOWN_DEFAULT_VIEW = "markdownDefaultView";
 const KEY_SHOW_HIDDEN = "showHidden";
+const KEY_GIT_ENABLED = "gitEnabled";
 const LEGACY_KEY_SHOW_HIDDEN_DIRS = "showHiddenDirectories";
 const KEY_WORKSPACE_ROOTS = "workspaceRoots";
 const KEY_ACTIVE_WORKSPACE_ROOT = "activeWorkspaceRoot";
@@ -180,6 +182,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   editorWordWrapColumn: EDITOR_WORD_WRAP_COLUMN_DEFAULT,
   markdownDefaultView: "rendered",
   showHidden: true,
+  gitEnabled: false,
   workspaceRoots: [],
   activeWorkspaceRoot: null,
   terminalCursorBlink: false,
@@ -308,6 +311,7 @@ export async function loadPreferences(): Promise<Preferences> {
       get<boolean>(KEY_SHOW_HIDDEN) ??
       get<boolean>(LEGACY_KEY_SHOW_HIDDEN_DIRS) ??
       DEFAULT_PREFERENCES.showHidden,
+    gitEnabled: get<boolean>(KEY_GIT_ENABLED) ?? DEFAULT_PREFERENCES.gitEnabled,
     workspaceRoots,
     activeWorkspaceRoot,
     terminalCursorBlink:
@@ -502,6 +506,10 @@ export async function setShowHidden(value: boolean): Promise<void> {
   await writePref(KEY_SHOW_HIDDEN, value);
 }
 
+export async function setGitEnabled(value: boolean): Promise<void> {
+  await writePref(KEY_GIT_ENABLED, value);
+}
+
 export async function setTerminalCursorBlink(value: boolean): Promise<void> {
   await writePref(KEY_TERMINAL_CURSOR_BLINK, value);
 }
@@ -629,6 +637,7 @@ export async function onPreferencesChange(
     [KEY_EDITOR_WORD_WRAP_COLUMN]: "editorWordWrapColumn",
     [KEY_MARKDOWN_DEFAULT_VIEW]: "markdownDefaultView",
     [KEY_SHOW_HIDDEN]: "showHidden",
+    [KEY_GIT_ENABLED]: "gitEnabled",
     [KEY_WORKSPACE_ROOTS]: "workspaceRoots",
     [KEY_ACTIVE_WORKSPACE_ROOT]: "activeWorkspaceRoot",
     [KEY_TERMINAL_CURSOR_BLINK]: "terminalCursorBlink",
@@ -673,5 +682,6 @@ export async function setAutoCheckUpdates(value: boolean): Promise<void> {
 
 /** 保存以小时为单位的检查间隔。 */
 export async function setUpdateCheckHours(value: number): Promise<void> {
-  if (Number.isFinite(value) && value >= 1 && value <= 168) await writePref("updateCheckHours", value);
+  if (Number.isFinite(value) && value >= 1 && value <= 168)
+    await writePref("updateCheckHours", value);
 }

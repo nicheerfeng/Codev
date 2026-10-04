@@ -11,6 +11,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -38,7 +39,7 @@ import {
   writeCodexInstructions,
 } from "./resources";
 import type { CodexClient, Snapshot } from "./client";
-import { VoiceSettingsPanel } from "@/modules/voice/VoiceSettingsPanel";
+import { VoiceSettingsPanel } from "@/modules/plugins/codex-agent/voice/VoiceSettingsPanel";
 
 /** 资源选择始终显示，禁用状态说明具体原因，设置仍可管理未生效档案。 */
 export function CodexResources({
@@ -54,8 +55,11 @@ export function CodexResources({
 }) {
   const [catalog, setCatalog] = useState<ResourceCatalog | null>(null);
   const [open, setOpen] = useState(false);
-  const [panel, setPanel] = useState<"resources" | "instructions" | "voice">(
-    "resources",
+  const [panel, setPanel] = useState<
+    "resources" | "instructions" | "voice" | "general"
+  >("resources");
+  const [turnDiff, setTurnDiff] = useState(
+    () => localStorage.getItem("codev.codex.turn-diff") === "1",
   );
   const [selectedId, setSelectedId] = useState(state.resourceId);
   useEffect(() => {
@@ -238,6 +242,16 @@ export function CodexResources({
                 自定义提示词
               </Button>
               <Button
+                variant={panel === "general" ? "secondary" : "ghost"}
+                size="sm"
+                aria-current={panel === "general" ? "page" : undefined}
+                className="mt-1 w-full justify-start gap-1.5 rounded-lg px-2 text-xs"
+                onClick={() => setPanel("general")}
+              >
+                <HugeiconsIcon icon={Settings01Icon} size={14} />
+                通用
+              </Button>
+              <Button
                 variant={panel === "voice" ? "secondary" : "ghost"}
                 size="sm"
                 aria-current={panel === "voice" ? "page" : undefined}
@@ -252,8 +266,36 @@ export function CodexResources({
               className="flex min-h-0 min-w-0 flex-1 flex-col"
               aria-label="Codex 设置内容"
             >
-              {panel === "voice" ? (
-                <VoiceSettingsPanel scope="codex" />
+              {panel === "general" ? (
+                <div className="reader-scrollbar min-h-0 flex-1 space-y-3 overflow-auto p-3 sm:p-4">
+                  <div>
+                    <h2 className="text-sm font-medium">通用</h2>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      只影响 Codex，不改变文件点击后的打开方式。
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3 rounded-lg border border-border/70 p-3">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-xs font-medium">回合文件感知</h3>
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        开启后显示本回合修改的文件卡片。
+                      </p>
+                    </div>
+                    <Switch
+                      checked={turnDiff}
+                      aria-label="开启 Codex 回合文件感知"
+                      onCheckedChange={(value) => {
+                        setTurnDiff(value);
+                        localStorage.setItem(
+                          "codev.codex.turn-diff",
+                          value ? "1" : "0",
+                        );
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : panel === "voice" ? (
+                <VoiceSettingsPanel />
               ) : panel === "resources" ? (
                 <div className="reader-scrollbar min-h-0 flex-1 space-y-3 overflow-auto p-3 sm:p-4">
                   <h2 className="text-sm font-medium">服务商存储</h2>

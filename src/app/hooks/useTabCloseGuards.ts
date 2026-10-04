@@ -273,7 +273,12 @@ export function useTabCloseGuards({
     (path: string) => {
       const dirty: number[] = [];
       for (const t of tabs) {
-        if (t.kind === "terminal") continue;
+        if (
+          t.kind === "terminal" ||
+          t.kind === "git-diff" ||
+          t.kind === "git-history"
+        )
+          continue;
         if (t.path !== path && !t.path.startsWith(`${path}/`)) continue;
         if (t.dirty) {
           dirty.push(t.id);

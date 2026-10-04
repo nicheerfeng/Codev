@@ -6,6 +6,7 @@ import type {
   PiTranscriptItem,
   PiViewState,
 } from "./types";
+import { recordPiTurnFile } from "./turnDiff";
 
 export const INITIAL_PI_VIEW_STATE: PiViewState = {
   modelsLoading: false,
@@ -410,6 +411,22 @@ function reduceEvent(
     const old = previous?.kind === "tool" ? previous : null;
     const currentTime = eventTimestamp(event);
     const toolName = String(event.toolName ?? old?.name ?? "tool");
+    const args = (event.args ?? old?.args ?? null) as {
+      path?: unknown;
+      file_path?: unknown;
+    } | null;
+    const filePath =
+      typeof args?.path === "string"
+        ? args.path
+        : typeof args?.file_path === "string"
+          ? args.file_path
+          : "";
+    if (
+      type === "tool_execution_start" &&
+      ["edit", "write"].includes(toolName) &&
+      filePath
+    )
+      recordPiTurnFile(String(event.sessionKey ?? "pi"), filePath, null);
     const activityOrder = (state.activityRevision ?? 0) + 1;
 
     // 并发工具只结束自身 phase；仍运行的其他调用继续作为活动状态。

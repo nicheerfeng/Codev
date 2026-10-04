@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { uiState } from "@/lib/uiState";
 import { CodexClient, onCodexTurnCompleted } from "./client";
-import { speakFinalIfEnabled } from "@/modules/voice/output";
+import { speakFinalIfEnabled } from "@/modules/plugins/codex-agent/voice/output";
 import { Approval, Title, Tool } from "./controls";
 import { CodexComposer } from "./CodexComposer";
 import { parentThread } from "./subagents";
@@ -214,8 +214,8 @@ function Workspace({
         .join("\n")
         .trim();
       if (!text) return;
-      void speakFinalIfEnabled("codex", text, `${sessionId}:${turn.id}`).catch(
-        (error) => console.error("Codex 语音播放失败", error),
+      void speakFinalIfEnabled(text, `${sessionId}:${turn.id}`).catch((error) =>
+        console.error("Codex 语音播放失败", error),
       );
     });
   }, []);

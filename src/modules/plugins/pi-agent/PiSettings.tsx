@@ -9,9 +9,11 @@ import {
   PuzzleIcon,
   InformationCircleIcon,
   PencilEdit01Icon,
+  Settings01Icon,
   VolumeHighIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -47,7 +49,7 @@ import { PiModelsHelp } from "./PiModelsHelp";
 import { testSavedModel } from "./modelTest";
 import { PiAssetsPanel } from "./PiAssetsPanel";
 import { PiVersionPanel } from "./PiVersionPanel";
-import { VoiceSettingsPanel } from "@/modules/voice/VoiceSettingsPanel";
+import { VoiceSettingsPanel } from "@/modules/plugins/pi-agent/voice/VoiceSettingsPanel";
 
 /** 检查公共配置卡片，错误就地展示且不覆盖用户输入。 */
 function providerError(text: string): string {
@@ -81,12 +83,21 @@ export function PiSettings({
   const [confirm, setConfirm] = useState(false);
   const [help, setHelp] = useState(false);
   const [panel, setPanel] = useState<
-    "models" | "prompts" | "skills" | "plugins" | "voice" | "version"
+    | "models"
+    | "prompts"
+    | "skills"
+    | "plugins"
+    | "voice"
+    | "general"
+    | "version"
   >("models");
   const [prompts, setPrompts] = useState<PiPromptFile[]>([]);
   const [promptBusy, setPromptBusy] = useState(false);
   const [promptMessage, setPromptMessage] = useState("");
   const [testing, setTesting] = useState(false);
+  const [turnDiff, setTurnDiff] = useState(
+    () => localStorage.getItem("codev.pi.turn-diff") === "1",
+  );
   const [testResults, setTestResults] = useState<Record<string, string>>({});
   const testAbort = useRef<AbortController | null>(null);
   const provider = dashboard?.providers.find(
@@ -450,6 +461,16 @@ export function PiSettings({
               插件
             </Button>
             <Button
+              variant={panel === "general" ? "secondary" : "ghost"}
+              size="sm"
+              aria-current={panel === "general" ? "page" : undefined}
+              className="mt-1 w-full justify-start rounded-lg px-2 text-xs"
+              onClick={() => setPanel("general")}
+            >
+              <HugeiconsIcon icon={Settings01Icon} size={14} />
+              通用
+            </Button>
+            <Button
               variant={panel === "voice" ? "secondary" : "ghost"}
               size="sm"
               aria-current={panel === "voice" ? "page" : undefined}
@@ -474,8 +495,36 @@ export function PiSettings({
             className="flex min-h-0 min-w-0 flex-1 flex-col"
             aria-label="模型看板"
           >
-            {panel === "voice" ? (
-              <VoiceSettingsPanel scope="pi" />
+            {panel === "general" ? (
+              <div className="reader-scrollbar min-h-0 flex-1 space-y-3 overflow-auto p-3 sm:p-4">
+                <div>
+                  <h2 className="text-sm font-medium">通用</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    只影响 Pi，不改变文件点击后的打开方式。
+                  </p>
+                </div>
+                <div className="flex items-center gap-3 rounded-lg border border-border/70 p-3">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-xs font-medium">回合文件感知</h3>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      开启后显示本回合修改的文件卡片。
+                    </p>
+                  </div>
+                  <Switch
+                    checked={turnDiff}
+                    aria-label="开启 Pi 回合文件感知"
+                    onCheckedChange={(value) => {
+                      setTurnDiff(value);
+                      localStorage.setItem(
+                        "codev.pi.turn-diff",
+                        value ? "1" : "0",
+                      );
+                    }}
+                  />
+                </div>
+              </div>
+            ) : panel === "voice" ? (
+              <VoiceSettingsPanel />
             ) : panel === "prompts" ? (
               <div className="reader-scrollbar min-h-0 flex-1 space-y-4 overflow-auto p-3 sm:p-4">
                 <div>

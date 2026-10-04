@@ -126,16 +126,18 @@ export function stopVoiceOutput() {
   publish({ scope: null, status: "idle", error: null });
 }
 
-export async function speakVoice(scope: VoiceScope, text: string) {
+const SCOPE = "pi" as const;
+
+export async function speakVoice(text: string) {
   const trimmed = text.trim();
   if (!trimmed) return;
   const current = ++requestId;
   playback?.stop();
   playback = null;
-  publish({ scope, status: "playing", error: null });
+  publish({ scope: SCOPE, status: "playing", error: null });
   await ensureStream();
   try {
-    const streamId = await startVoiceTts(scope, trimmed);
+    const streamId = await startVoiceTts(SCOPE, trimmed);
     if (current !== requestId) return;
     activeStream = streamId;
     const player = new PcmPlayer(() => {
@@ -148,19 +150,15 @@ export async function speakVoice(scope: VoiceScope, text: string) {
     if (finishedStreams.delete(streamId)) player.finish();
   } catch (error) {
     if (current !== requestId) return;
-    publish({ scope, status: "error", error: String(error) });
+    publish({ scope: SCOPE, status: "error", error: String(error) });
   }
 }
 
-export async function speakFinalIfEnabled(
-  scope: VoiceScope,
-  text: string,
-  identity: string,
-) {
-  const key = `codev.voice.spoken.${scope}`;
+export async function speakFinalIfEnabled(text: string, identity: string) {
+  const key = `codev.voice.spoken.${SCOPE}`;
   if (sessionStorage.getItem(key) === identity) return;
   const config = await listVoiceConfig();
-  const selected = config[scope];
+  const selected = config[SCOPE];
   if (
     !selected.enabled ||
     !selected.tts.enabled ||
@@ -169,7 +167,7 @@ export async function speakFinalIfEnabled(
   )
     return;
   sessionStorage.setItem(key, identity);
-  await speakVoice(scope, text);
+  await speakVoice(text);
 }
 
 export function onVoiceEvents(handler: (event: VoiceStreamEvent) => void) {
@@ -178,19 +176,19 @@ export function onVoiceEvents(handler: (event: VoiceStreamEvent) => void) {
   return () => streamHandlers.delete(handler);
 }
 
-export function useVoiceScopeConfig(scope: VoiceScope): VoiceScopeView | null {
+export function useVoiceScopeConfig(): VoiceScopeView | null {
   const [config, setConfig] = useState<VoiceScopeView | null>(null);
   useEffect(() => {
     let cancelled = false;
     void listVoiceConfig()
       .then((value) => {
-        if (!cancelled) setConfig(value[scope]);
+        if (!cancelled) setConfig(value[SCOPE]);
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [scope]);
+  }, []);
   return config;
 }
 

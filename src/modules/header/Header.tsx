@@ -15,6 +15,8 @@ import type { Tab } from "@/modules/tabs";
 import { labelFor } from "@/modules/tabs/lib/tabLabel";
 import {
   Files01Icon,
+  FolderTreeIcon,
+  GitBranchIcon,
   Settings01Icon,
   SidebarLeftIcon,
   TerminalIcon,
@@ -29,6 +31,10 @@ import {
 
 type Props = {
   onToggleSidebar: () => void;
+  sidebarMode: "files" | "git";
+  gitEnabled: boolean;
+  onShowFiles: () => void;
+  onShowGit: () => void;
   onOpenSettings: () => void;
   terminalPanelCollapsed: boolean;
   onToggleTerminalPanel: () => void;
@@ -41,11 +47,11 @@ type Props = {
 
 const COMPACT_WIDTH = 720;
 
-type FileTab = Exclude<Tab, { kind: "terminal" }>;
+type FileTab = Exclude<Tab, { kind: "terminal" } | { kind: "git-history" }>;
 
 /** 判断标签是否为可切换的文件标签。 */
 function isFileTab(tab: Tab): tab is FileTab {
-  return tab.kind !== "terminal";
+  return tab.kind !== "terminal" && tab.kind !== "git-history";
 }
 
 /** 返回文件路径中紧邻文件名的父目录，用于列表中的轻量定位提示。 */
@@ -161,6 +167,10 @@ function OpenFilePicker({
 
 export function Header({
   onToggleSidebar,
+  sidebarMode,
+  gitEnabled,
+  onShowFiles,
+  onShowGit,
   onOpenSettings,
   terminalPanelCollapsed,
   onToggleTerminalPanel,
@@ -219,11 +229,35 @@ export function Header({
               strokeWidth={1.75}
             />
           </Button>
+          <Button
+            onClick={onShowFiles}
+            title="文件树"
+            aria-label="文件树"
+            aria-pressed={sidebarMode === "files"}
+            variant="ghost"
+            size="icon-sm"
+            className={`shrink-0 rounded-md hover:bg-accent hover:text-foreground ${sidebarMode === "files" ? "text-foreground" : "text-muted-foreground"}`}
+          >
+            <HugeiconsIcon icon={FolderTreeIcon} size={16} strokeWidth={1.75} />
+          </Button>
+          {gitEnabled && (
+            <Button
+              onClick={onShowGit}
+              title="Git"
+              aria-label="Git"
+              aria-pressed={sidebarMode === "git"}
+              variant="ghost"
+              size="icon-sm"
+              className={`shrink-0 rounded-md hover:bg-accent hover:text-foreground ${sidebarMode === "git" ? "text-foreground" : "text-muted-foreground"}`}
+            >
+              <HugeiconsIcon
+                icon={GitBranchIcon}
+                size={16}
+                strokeWidth={1.75}
+              />
+            </Button>
+          )}
         </div>
-
-        {!IS_MAC && <span className="mx-1 h-full w-px shrink-0 bg-border/70" />}
-
-        {IS_MAC && <span className="mr-1 h-full w-px shrink-0 bg-border/70" />}
 
         <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
 

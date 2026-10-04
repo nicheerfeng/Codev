@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import type { ThemePref } from "@/modules/settings/store";
 import {
+  setGitEnabled,
   setLocale,
   setShowHidden,
   setZoomLevel,
@@ -46,6 +47,7 @@ export function GeneralSection() {
   const t = useT();
   const locale = usePreferencesStore((s) => s.locale);
   const showHidden = usePreferencesStore((s) => s.showHidden);
+  const gitEnabled = usePreferencesStore((s) => s.gitEnabled);
   const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
 
   return (
@@ -114,6 +116,12 @@ export function GeneralSection() {
         <Switch
           checked={showHidden}
           onCheckedChange={(value) => void setShowHidden(value)}
+        />
+      </SettingRow>
+      <SettingRow title="Git" description="在文件树旁显示 Git 仓库管理。">
+        <Switch
+          checked={gitEnabled}
+          onCheckedChange={(value) => void setGitEnabled(value)}
         />
       </SettingRow>
     </section>

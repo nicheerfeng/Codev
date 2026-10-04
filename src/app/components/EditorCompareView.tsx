@@ -7,6 +7,8 @@ import { cn } from "@/lib/utils";
 import { EditorStack, type EditorPaneHandle } from "@/modules/editor";
 import { MarkdownStack } from "@/modules/markdown";
 import { HtmlStack } from "@/modules/html";
+import { GitDiffView } from "@/modules/git/GitDiffView";
+import { GitHistoryView } from "@/modules/git/GitHistoryView";
 import { ReaderContextMenu } from "@/modules/editor/ReaderContextMenu";
 import { TabBar } from "@/modules/tabs";
 import type { Tab } from "@/modules/tabs";
@@ -70,6 +72,8 @@ function EditorGroup({
     activeTab?.kind === "markdown" && activeTab.viewMode === "rendered";
   const showHtmlStack =
     activeTab?.kind === "html" && activeTab.viewMode === "rendered";
+  const showGitDiff = activeTab?.kind === "git-diff";
+  const showGitHistory = activeTab?.kind === "git-history";
 
   return (
     <div
@@ -101,55 +105,65 @@ function EditorGroup({
         </div>
       )}
       <ReaderContextMenu>
-      <div
-        className="absolute inset-0"
-        onFocusCapture={() => {
-          if (activeTab) onFocusEditor(activeTab.id);
-        }}
-      >
         <div
-          className={cn(
-            "absolute inset-0",
-            showEditorStack ? "pointer-events-auto" : "pointer-events-none",
-          )}
+          className="absolute inset-0"
+          onFocusCapture={() => {
+            if (activeTab) onFocusEditor(activeTab.id);
+          }}
         >
-          <EditorStack
-            tabs={tabs}
-            activeId={activeId}
-            registerHandle={registerEditorHandle}
-            onDirtyChange={onDirtyChange}
-            onSetMarkdownView={onSetMarkdownView}
-            onSetHtmlView={onSetHtmlView}
-          />
-        </div>
-        <div
-          className={cn(
-            "absolute inset-0",
-            showHtmlStack ? "pointer-events-auto" : "pointer-events-none",
+          <div
+            className={cn(
+              "absolute inset-0",
+              showEditorStack ? "pointer-events-auto" : "pointer-events-none",
+            )}
+          >
+            <EditorStack
+              tabs={tabs}
+              activeId={activeId}
+              registerHandle={registerEditorHandle}
+              onDirtyChange={onDirtyChange}
+              onSetMarkdownView={onSetMarkdownView}
+              onSetHtmlView={onSetHtmlView}
+            />
+          </div>
+          <div
+            className={cn(
+              "absolute inset-0",
+              showHtmlStack ? "pointer-events-auto" : "pointer-events-none",
+            )}
+          >
+            <HtmlStack
+              tabs={tabs}
+              activeId={activeId}
+              registerHandle={registerEditorHandle}
+              onSetHtmlView={onSetHtmlView}
+              onFocusSearch={onFocusSearch}
+            />
+          </div>
+          <div
+            className={cn(
+              "absolute inset-0",
+              showMarkdownStack ? "pointer-events-auto" : "pointer-events-none",
+            )}
+          >
+            <MarkdownStack
+              tabs={tabs}
+              activeId={activeId}
+              registerHandle={registerEditorHandle}
+              onSetMarkdownView={onSetMarkdownView}
+            />
+          </div>
+          {showGitHistory && activeTab?.kind === "git-history" && (
+            <div className="absolute inset-0">
+              <GitHistoryView commits={activeTab.commits} />
+            </div>
           )}
-        >
-          <HtmlStack
-            tabs={tabs}
-            activeId={activeId}
-            registerHandle={registerEditorHandle}
-            onSetHtmlView={onSetHtmlView}
-            onFocusSearch={onFocusSearch}
-          />
-        </div>
-        <div
-          className={cn(
-            "absolute inset-0",
-            showMarkdownStack ? "pointer-events-auto" : "pointer-events-none",
+          {showGitDiff && activeTab?.kind === "git-diff" && (
+            <div className="absolute inset-0">
+              <GitDiffView diff={activeTab.diff} />
+            </div>
           )}
-        >
-          <MarkdownStack
-            tabs={tabs}
-            activeId={activeId}
-            registerHandle={registerEditorHandle}
-            onSetMarkdownView={onSetMarkdownView}
-          />
         </div>
-      </div>
       </ReaderContextMenu>
     </div>
   );

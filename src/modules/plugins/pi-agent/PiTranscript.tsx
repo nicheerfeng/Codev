@@ -53,7 +53,9 @@ import {
   stopVoiceOutput,
   useVoiceOutput,
   useVoiceScopeConfig,
-} from "@/modules/voice/output";
+} from "@/modules/plugins/pi-agent/voice/output";
+import { PiTurnFilesCard } from "./PiTurnFilesCard";
+import { piTurnDiffEnabled, piTurnFiles } from "./turnDiff";
 
 const STREAMDOWN_CONTROLS = {
   code: { copy: true, download: false },
@@ -123,26 +125,18 @@ function UserMessageText({
   );
 }
 
-function VoiceMessageButton({
-  text,
-  scope,
-}: {
-  text: string;
-  scope: "pi" | "codex";
-}) {
-  const config = useVoiceScopeConfig(scope);
+function VoiceMessageButton({ text }: { text: string }) {
+  const config = useVoiceScopeConfig();
   const output = useVoiceOutput();
   if (!config?.enabled || !config.tts.enabled || !config.hasKey) return null;
-  const playing = output.scope === scope && output.status === "playing";
+  const playing = output.scope === "pi" && output.status === "playing";
   return (
     <Button
       variant="ghost"
       size="icon-xs"
       title={playing ? "停止朗读" : "朗读消息"}
       aria-label={playing ? "停止朗读" : "朗读消息"}
-      onClick={() =>
-        playing ? stopVoiceOutput() : void speakVoice(scope, text)
-      }
+      onClick={() => (playing ? stopVoiceOutput() : void speakVoice(text))}
     >
       <HugeiconsIcon
         icon={playing ? VolumeMute01Icon : VolumeHighIcon}
@@ -341,7 +335,7 @@ const TranscriptItem = memo(function TranscriptItem({
             <HugeiconsIcon icon={Copy01Icon} size={13} />
           </Button>
           {isAssistant && showActions && (
-            <VoiceMessageButton text={item.text} scope="pi" />
+            <VoiceMessageButton text={item.text} />
           )}
           {item.role === "user" &&
             item.id === actions.lastUserId &&
@@ -1013,6 +1007,12 @@ export function PiTranscript({
                 query={searchOpen ? query : ""}
                 actions={actions}
               />
+              {piTurnDiffEnabled() && row.index === blocks.length - 1 && (
+                <PiTurnFilesCard
+                  files={piTurnFiles(threadKey)}
+                  onOpenFile={onOpenFile}
+                />
+              )}
             </div>
           ))}
         </div>

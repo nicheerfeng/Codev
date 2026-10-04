@@ -27,6 +27,7 @@ import {
   useEditorFileSync,
 } from "@/modules/editor";
 import { FileExplorer, type FileExplorerHandle } from "@/modules/explorer";
+import { GitPanel } from "@/modules/git/GitPanel";
 import {
   Header,
   type SearchInlineHandle,
@@ -117,6 +118,7 @@ function tabPathMatches(tab: Tab, path: string): boolean {
 
 export default function App() {
   const [installStamp, setInstallStamp] = useState<string | null>(null);
+  const [sidebarMode, setSidebarMode] = useState<"files" | "git">("files");
   const [showWelcome, setShowWelcome] = useState(() => shouldShowWelcome(null));
   const [needsInitialLayout] = useState(() => needsFirstLayout());
   const [initialFirstSizes] = useState(() =>
@@ -136,6 +138,8 @@ export default function App() {
     setActiveSpaceForNewTabs,
     newTab,
     openFileTab,
+    openGitDiffTab,
+    openGitHistoryTab,
     pinTab,
     newMarkdownTab,
     newHtmlTab,
@@ -1278,6 +1282,14 @@ export default function App() {
           {!zenMode && (
             <Header
               onToggleSidebar={toggleSidebar}
+              sidebarMode={sidebarMode}
+              gitEnabled={usePreferencesStore((state) => state.gitEnabled)}
+              onShowFiles={() => setSidebarMode("files")}
+              onShowGit={() => {
+                setSidebarMode("git");
+                if (sidebarRef.current?.getSize().inPixels === 0)
+                  toggleSidebar();
+              }}
               onOpenSettings={() => void openSettingsWindow()}
               terminalPanelCollapsed={terminalPanelCollapsed}
               onToggleTerminalPanel={() => {
@@ -1327,23 +1339,39 @@ export default function App() {
               >
                 <div className="flex h-full min-h-0 flex-col border-r border-border/60 bg-card">
                   <div className="min-h-0 flex-1 codev-panel-in">
-                    <FileExplorer
-                      ref={explorerRef}
-                      roots={workspaceRoots}
-                      activeRoot={activeRoot}
-                      onAddRoot={(p) => void addRoot(p)}
-                      onRemoveRoot={(p) => void removeRoot(p)}
-                      onRenameRoot={renameWorkspaceRoot}
-                      onReorderRoot={reorderRoot}
-                      onSetActiveRoot={(p) => void setActiveRoot(p)}
-                      activeFilePath={explorerActiveFilePath}
-                      onOpenFile={handleOpenFile}
-                      onOpenFileToSide={handleOpenFileToSide}
-                      onPathRenamed={handlePathRenamed}
-                      onPathDeleted={handlePathDeleted}
-                      onRevealInTerminal={cdInNewTab}
-                      pathDropTarget={explorerPathDropTarget}
-                    />
+                    {sidebarMode === "git" ? (
+                      <GitPanel
+                        roots={workspaceRoots}
+                        onOpenDiff={(repo, change, diff) =>
+                          openGitDiffTab({
+                            repoRoot: repo.root,
+                            path: change.path,
+                            diff,
+                          })
+                        }
+                        onOpenHistory={(repo, commits) =>
+                          openGitHistoryTab({ repoRoot: repo.root, commits })
+                        }
+                      />
+                    ) : (
+                      <FileExplorer
+                        ref={explorerRef}
+                        roots={workspaceRoots}
+                        activeRoot={activeRoot}
+                        onAddRoot={(p) => void addRoot(p)}
+                        onRemoveRoot={(p) => void removeRoot(p)}
+                        onRenameRoot={renameWorkspaceRoot}
+                        onReorderRoot={reorderRoot}
+                        onSetActiveRoot={(p) => void setActiveRoot(p)}
+                        activeFilePath={explorerActiveFilePath}
+                        onOpenFile={handleOpenFile}
+                        onOpenFileToSide={handleOpenFileToSide}
+                        onPathRenamed={handlePathRenamed}
+                        onPathDeleted={handlePathDeleted}
+                        onRevealInTerminal={cdInNewTab}
+                        pathDropTarget={explorerPathDropTarget}
+                      />
+                    )}
                   </div>
                 </div>
               </ResizablePanel>

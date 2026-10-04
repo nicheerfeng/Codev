@@ -128,7 +128,7 @@ import { localCommand } from "./commands";
 import { editableLastUser } from "./editLastUser";
 import { toast } from "sonner";
 import { onPiAgentSettled } from "./client";
-import { speakFinalIfEnabled } from "@/modules/voice/output";
+import { speakFinalIfEnabled } from "@/modules/plugins/pi-agent/voice/output";
 import { MAX_PI_VIEWPORTS, placePiSession } from "./viewportLayout";
 import "./pi-agent.css";
 
@@ -428,8 +428,8 @@ export function PiAgentPane({
     );
     client.current = runtime;
     const stopVoice = onPiAgentSettled((thread, text) => {
-      void speakFinalIfEnabled("pi", text, `${thread.key}:${text}`).catch(
-        (error) => console.error("Pi 语音播放失败", error),
+      void speakFinalIfEnabled(text, `${thread.key}:${text}`).catch((error) =>
+        console.error("Pi 语音播放失败", error),
       );
     });
     void probePiAgent()

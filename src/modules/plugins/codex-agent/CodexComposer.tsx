@@ -49,7 +49,7 @@ import { Tool } from "./controls";
 import { CODEX_COMMANDS, parseCommand } from "./commands";
 import { SANDBOX_LABELS, sandboxMode, type SandboxMode } from "./sandbox";
 import { listResources } from "./resources";
-import { VoiceInputButton } from "@/modules/voice/VoiceInputButton";
+import { VoiceInputButton } from "@/modules/plugins/codex-agent/voice/VoiceInputButton";
 
 /** 将剪贴板图片读成官方 image 输入支持的数据 URL。 */
 function imageUrl(file: File): Promise<string> {
@@ -313,7 +313,9 @@ export function CodexComposer({
                     />
                   ))}
                   {entry.images.length > 3 && (
-                    <span className="self-center text-[10px] text-muted-foreground">+{entry.images.length - 3}</span>
+                    <span className="self-center text-[10px] text-muted-foreground">
+                      +{entry.images.length - 3}
+                    </span>
                   )}
                 </div>
               )}
@@ -702,9 +704,12 @@ export function CodexComposer({
             }
           />
           <VoiceInputButton
-            scope="codex"
             disabled={disabled}
-            onText={(text) => client.patch(id, { draft: `${session.draft}${session.draft ? " " : ""}${text}` })}
+            onText={(text) =>
+              client.patch(id, {
+                draft: `${session.draft}${session.draft ? " " : ""}${text}`,
+              })
+            }
           />
           <Popover open={modelOpen} onOpenChange={setModelOpen}>
             <PopoverTrigger asChild>

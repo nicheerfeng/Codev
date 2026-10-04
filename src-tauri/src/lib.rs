@@ -1,6 +1,6 @@
 pub mod modules;
 
-use modules::{codex_agent, fs, github, history, pi_agent, pty, voice, workspace};
+use modules::{codex_agent, fs, git, github, history, pi_agent, pty, voice, workspace};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::menu::MenuBuilder;
@@ -553,6 +553,16 @@ pub fn run() {
             voice::voice_config_copy_to_codex,
             voice::voice_asr_start,
             voice::voice_tts_start,
+            git::git_discover,
+            git::git_snapshot,
+            git::git_diff,
+            git::git_stage,
+            git::git_commit,
+            git::git_log,
+            git::git_fetch,
+            git::git_tracking,
+            git::git_pull,
+            git::git_push,
             pi_agent::pi_agent_list_sessions,
             pi_agent::pi_agent_delete_session,
             pi_agent::pi_agent_read_models,

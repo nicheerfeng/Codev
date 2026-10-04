@@ -37,7 +37,7 @@ import { labelFor } from "./lib/tabLabel";
 import { tabWheelDelta } from "./lib/tabScroll";
 import type { EditorTab, Tab } from "./lib/useTabs";
 
-type FileTab = Exclude<Tab, { kind: "terminal" }>;
+type FileTab = Exclude<Tab, { kind: "terminal" } | { kind: "git-history" }>;
 
 /** 判断标签是否承载工作区文件。 */
 function isFileTab(tab: Tab): tab is FileTab {
@@ -567,7 +567,10 @@ export function TabBar({
                           </span>
                         )}
                       </span>
-                      {t.kind !== "terminal" && t.dirty ? (
+                      {t.kind !== "terminal" &&
+                      t.kind !== "git-diff" &&
+                      t.kind !== "git-history" &&
+                      t.dirty ? (
                         <span
                           aria-label={translate("Unsaved changes")}
                           className="size-1.5 shrink-0 rounded-full bg-foreground/70"

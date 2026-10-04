@@ -81,7 +81,36 @@ export type HtmlTab = TabBase & {
   dirty: boolean;
 };
 
-export type Tab = TerminalTab | EditorTab | MarkdownTab | HtmlTab;
+export type GitDiffTab = TabBase & {
+  id: number;
+  kind: "git-diff";
+  title: string;
+  path: string;
+  repoRoot: string;
+  diff: string;
+};
+
+export type GitHistoryTab = TabBase & {
+  id: number;
+  kind: "git-history";
+  title: string;
+  repoRoot: string;
+  commits: {
+    hash: string;
+    subject: string;
+    author: string;
+    date: string;
+    refs: string;
+  }[];
+};
+
+export type Tab =
+  | TerminalTab
+  | EditorTab
+  | MarkdownTab
+  | HtmlTab
+  | GitDiffTab
+  | GitHistoryTab;
 
 /** 递归更新终端分屏树内受目录重命名影响的工作目录。 */
 function rebasePaneCwds(node: PaneNode, from: string, to: string): PaneNode {
@@ -103,6 +132,7 @@ function rebasePaneCwds(node: PaneNode, from: string, to: string): PaneNode {
 export function rebaseTabPaths(tabs: Tab[], from: string, to: string): Tab[] {
   let changed = false;
   const next = tabs.map((tab) => {
+    if (tab.kind === "git-history") return tab;
     if (tab.kind === "terminal") {
       const paneTree = rebasePaneCwds(tab.paneTree, from, to);
       const cwd = tab.cwd ? replacePathPrefix(tab.cwd, from, to) : tab.cwd;
@@ -444,7 +474,9 @@ export function applyCloseTabsPlan(
   const closing = tabs.filter(
     (tab) =>
       tab.id !== anchorId &&
-      (plan.scopeIds ? plan.scopeIds.includes(tab.id) : tab.spaceId === anchor.spaceId) &&
+      (plan.scopeIds
+        ? plan.scopeIds.includes(tab.id)
+        : tab.spaceId === anchor.spaceId) &&
       requested.has(tab.id),
   );
   if (closing.length === 0) return null;
@@ -560,9 +592,12 @@ export function useTabs(initial?: Partial<TerminalTab>) {
   /** 只唤醒当前并行组里的终端，不改变焦点或启动其他恢复标签。 */
   const showTerminals = useCallback((ids: number[]) => {
     setTabs((current) => {
-      if (!current.some((tab) =>
-        tab.kind === "terminal" && tab.cold && ids.includes(tab.id),
-      )) return current;
+      if (
+        !current.some(
+          (tab) => tab.kind === "terminal" && tab.cold && ids.includes(tab.id),
+        )
+      )
+        return current;
       return current.map((tab) =>
         tab.kind === "terminal" && tab.cold && ids.includes(tab.id)
           ? { ...tab, cold: false }
@@ -713,6 +748,77 @@ export function useTabs(initial?: Partial<TerminalTab>) {
    *   reused: if a persistent tab for the path already exists it is activated;
    *   otherwise the current preview slot is replaced with the new path.
    */
+  const openGitHistoryTab = useCallback(
+    (input: { repoRoot: string; commits: GitHistoryTab["commits"] }) => {
+      const existing = tabsRef.current.find(
+        (tab) => tab.kind === "git-history" && tab.repoRoot === input.repoRoot,
+      );
+      if (existing?.kind === "git-history") {
+        const next = tabsRef.current.map((tab) =>
+          tab.id === existing.id
+            ? { ...existing, commits: input.commits }
+            : tab,
+        );
+        tabsRef.current = next;
+        setTabs(next);
+        setActiveId(existing.id);
+        return existing.id;
+      }
+      const id = nextIdRef.current++;
+      const tab: GitHistoryTab = {
+        id,
+        kind: "git-history",
+        spaceId: activeSpaceIdRef.current,
+        title: "Commit Graph",
+        repoRoot: input.repoRoot,
+        commits: input.commits,
+      };
+      const next = [...tabsRef.current, tab];
+      tabsRef.current = next;
+      setTabs(next);
+      setActiveId(id);
+      return id;
+    },
+    [],
+  );
+
+  const openGitDiffTab = useCallback(
+    (input: { repoRoot: string; path: string; diff: string }) => {
+      const title = input.path.split(/[\\/]/).pop() || input.path;
+      const existing = tabsRef.current.find(
+        (tab) =>
+          tab.kind === "git-diff" &&
+          tab.repoRoot === input.repoRoot &&
+          tab.path === input.path,
+      );
+      if (existing?.kind === "git-diff") {
+        const tabs = tabsRef.current.map((tab) =>
+          tab.id === existing.id ? { ...existing, diff: input.diff } : tab,
+        );
+        tabsRef.current = tabs;
+        setTabs(tabs);
+        setActiveId(existing.id);
+        return existing.id;
+      }
+      const id = nextIdRef.current++;
+      const tab: GitDiffTab = {
+        id,
+        kind: "git-diff",
+        spaceId: activeSpaceIdRef.current,
+        title,
+        path: input.path,
+        repoRoot: input.repoRoot,
+        diff: input.diff,
+      };
+      const tabs = [...tabsRef.current, tab];
+      tabsRef.current = tabs;
+      setTabs(tabs);
+      setActiveId(id);
+      return id;
+    },
+    [],
+  );
+
   const openFileTab = useCallback(
     (path: string, pin = true, options: OpenFileTabOptions = {}) => {
       const targetSpaceId = options.spaceId ?? activeSpaceIdRef.current;
@@ -1154,6 +1260,8 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     setOverrideLanguage,
     newTab,
     openFileTab,
+    openGitDiffTab,
+    openGitHistoryTab,
     pinTab,
     newMarkdownTab,
     newHtmlTab,

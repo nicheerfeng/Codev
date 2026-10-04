@@ -31,7 +31,9 @@ import {
   stopVoiceOutput,
   useVoiceOutput,
   useVoiceScopeConfig,
-} from "@/modules/voice/output";
+} from "@/modules/plugins/codex-agent/voice/output";
+import { CodexTurnFilesCard } from "./CodexTurnFilesCard";
+import { codexTurnDiffEnabled, codexTurnFiles } from "./turnDiff";
 import { editableLastUser } from "./editLastUser";
 import { Tool } from "./controls";
 import { WebSearchDetails } from "./WebSearchDetails";
@@ -91,7 +93,7 @@ function Markdown({ text }: { text: string }) {
 
 /** 消息正文保持可读，复制入口在悬停时展示。 */
 function VoiceMessageButton({ text }: { text: string }) {
-  const config = useVoiceScopeConfig("codex");
+  const config = useVoiceScopeConfig();
   const output = useVoiceOutput();
   if (!config?.enabled || !config.tts.enabled || !config.hasKey) return null;
   const playing = output.scope === "codex" && output.status === "playing";
@@ -101,9 +103,7 @@ function VoiceMessageButton({ text }: { text: string }) {
       size="icon-xs"
       title={playing ? "停止朗读" : "朗读消息"}
       aria-label={playing ? "停止朗读" : "朗读消息"}
-      onClick={() =>
-        playing ? stopVoiceOutput() : void speakVoice("codex", text)
-      }
+      onClick={() => (playing ? stopVoiceOutput() : void speakVoice(text))}
     >
       <HugeiconsIcon
         icon={playing ? VolumeMute01Icon : VolumeHighIcon}
@@ -938,6 +938,14 @@ export function CodexTranscript({
                         : undefined
                     }
                   />
+                  {codexTurnDiffEnabled() && (
+                    <CodexTurnFilesCard
+                      files={codexTurnFiles(
+                        turn.items.flatMap((item) => item.changes ?? []),
+                      )}
+                      onOpenFile={onOpenFile}
+                    />
+                  )}
                 </div>
               );
             })}

@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
-  Copy01Icon,
   FloppyDiskIcon,
   Key01Icon,
   Refresh01Icon,
@@ -20,18 +19,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  copyPiVoiceToCodex,
-  listVoiceConfig,
-  readVoiceSecret,
-  saveVoiceConfig,
-} from "./native";
+import { listVoiceConfig, readVoiceSecret, saveVoiceConfig } from "./native";
 import {
   VOICE_OPTIONS,
   type AsrConfig,
   type TtsConfig,
   type VoiceConfigInput,
-  type VoiceScope,
   type VoiceScopeView,
 } from "./types";
 
@@ -43,7 +36,9 @@ function cloneInput(value: VoiceScopeView): VoiceConfigInput {
   };
 }
 
-export function VoiceSettingsPanel({ scope }: { scope: VoiceScope }) {
+const SCOPE = "codex" as const;
+
+export function VoiceSettingsPanel() {
   const [value, setValue] = useState<VoiceScopeView | null>(null);
   const [draft, setDraft] = useState<VoiceConfigInput | null>(null);
   const [key, setKey] = useState("");
@@ -56,11 +51,11 @@ export function VoiceSettingsPanel({ scope }: { scope: VoiceScope }) {
     setBusy(true);
     try {
       const all = await listVoiceConfig();
-      const next = all[scope];
+      const next = all[SCOPE];
       setValue(next);
       setDraft(cloneInput(next));
       setPath(all.path);
-      setKey(next.hasKey ? await readVoiceSecret(scope) : "");
+      setKey(next.hasKey ? await readVoiceSecret(SCOPE) : "");
       setShowKey(false);
       setMessage("");
     } catch (error) {
@@ -72,7 +67,7 @@ export function VoiceSettingsPanel({ scope }: { scope: VoiceScope }) {
 
   useEffect(() => {
     void load();
-  }, [scope]);
+  }, []);
 
   if (!value || !draft) {
     return (
@@ -95,38 +90,20 @@ export function VoiceSettingsPanel({ scope }: { scope: VoiceScope }) {
   const save = async () => {
     setBusy(true);
     try {
-      const all = await saveVoiceConfig(scope, { ...draft, key });
-      const next = all[scope];
+      const all = await saveVoiceConfig(SCOPE, { ...draft, key });
+      const next = all[SCOPE];
       setValue(next);
       setDraft(cloneInput(next));
-      setKey(next.hasKey ? await readVoiceSecret(scope) : "");
+      setKey(next.hasKey ? await readVoiceSecret(SCOPE) : "");
       setShowKey(false);
       setMessage("已保存");
-      toast.success(`${scope === "pi" ? "Pi" : "Codex"} 小米语音配置已保存`);
+      toast.success("Codex 小米语音配置已保存");
     } catch (error) {
       setMessage(String(error));
     } finally {
       setBusy(false);
     }
   };
-  const copyToCodex = async () => {
-    setBusy(true);
-    try {
-      await saveVoiceConfig("pi", { ...draft, key });
-      const copied = await copyPiVoiceToCodex();
-      setMessage(
-        copied.codex.enabled
-          ? "已同步到 Codex，并保留启用状态"
-          : "已同步到 Codex",
-      );
-      toast.success("Pi 的小米语音配置已同步到 Codex");
-    } catch (error) {
-      setMessage(String(error));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <div className="reader-scrollbar min-h-0 flex-1 overflow-auto p-3 sm:p-4">
       <div className="mb-4 flex items-start gap-3">
@@ -136,8 +113,7 @@ export function VoiceSettingsPanel({ scope }: { scope: VoiceScope }) {
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-medium">小米语音</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            一个 API Key 同时用于流式识别和流式朗读，只在当前{" "}
-            {scope === "pi" ? "Pi" : "Codex"} 生效。
+            一个 API Key 同时用于流式识别和流式朗读，只在当前 Codex 生效。
           </p>
         </div>
         <Switch
@@ -177,7 +153,7 @@ export function VoiceSettingsPanel({ scope }: { scope: VoiceScope }) {
                   setShowKey(false);
                   return;
                 }
-                if (!key && value.hasKey) setKey(await readVoiceSecret(scope));
+                if (!key && value.hasKey) setKey(await readVoiceSecret(SCOPE));
                 setShowKey(true);
               })()
             }
@@ -277,17 +253,6 @@ export function VoiceSettingsPanel({ scope }: { scope: VoiceScope }) {
           <HugeiconsIcon icon={Refresh01Icon} size={14} />
           刷新
         </Button>
-        {scope === "pi" && (
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={busy}
-            onClick={() => void copyToCodex()}
-          >
-            <HugeiconsIcon icon={Copy01Icon} size={14} />
-            保存并同步到 Codex 插件
-          </Button>
-        )}
         {message && (
           <span className="text-[10px] text-muted-foreground">{message}</span>
         )}

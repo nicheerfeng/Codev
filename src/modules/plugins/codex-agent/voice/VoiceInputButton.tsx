@@ -4,7 +4,7 @@ import { Mic01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { listVoiceConfig, startVoiceAsr } from "./native";
 import { onVoiceEvents } from "./output";
-import type { VoiceScope, VoiceScopeView } from "./types";
+import type { VoiceScopeView } from "./types";
 
 function toWav(samples: Float32Array, sampleRate: number): Uint8Array {
   const bytes = new Uint8Array(44 + samples.length * 2);
@@ -33,12 +33,12 @@ function toWav(samples: Float32Array, sampleRate: number): Uint8Array {
   return bytes;
 }
 
+const SCOPE = "codex" as const;
+
 export function VoiceInputButton({
-  scope,
   disabled,
   onText,
 }: {
-  scope: VoiceScope;
   disabled?: boolean;
   onText: (text: string) => void;
 }) {
@@ -58,13 +58,13 @@ export function VoiceInputButton({
     let cancelled = false;
     void listVoiceConfig()
       .then((value) => {
-        if (!cancelled) setConfig(value[scope]);
+        if (!cancelled) setConfig(value[SCOPE]);
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [scope]);
+  }, []);
 
   useEffect(() => {
     let pending = "";
@@ -107,7 +107,7 @@ export function VoiceInputButton({
       merged.set(chunk, offset);
       offset += chunk.length;
     });
-    void startVoiceAsr(scope, toWav(merged, sampleRate))
+    void startVoiceAsr(SCOPE, toWav(merged, sampleRate))
       .then((streamId) => {
         active.current = streamId;
       })
@@ -121,7 +121,7 @@ export function VoiceInputButton({
   const start = async () => {
     setError("");
     const current = await listVoiceConfig()
-      .then((value) => value[scope])
+      .then((value) => value[SCOPE])
       .catch(() => config);
     if (current) setConfig(current);
     if (!current?.enabled || !current.asr.enabled || !current.hasKey) {
