@@ -926,6 +926,55 @@ describe("Pi RPC workspace", () => {
     expect(result.thread.runtimeId).toBeNull();
     client.dispose();
   });
+  it("forks a settled thread after process_exit without starting a runtime", async () => {
+    const native = await import("./native");
+    vi.mocked(native.startPiAgent).mockClear();
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const thread = await client.open("source", "D:/one", "source.jsonl");
+    await client.hydrateFromDisk(thread);
+    thread.view = {
+      ...thread.view,
+      status: "idle",
+      items: [
+        {
+          id: "u1",
+          kind: "message",
+          role: "user",
+          text: "完成这轮",
+          thinking: "",
+          streaming: false,
+        },
+      ],
+    };
+    thread.view = piViewReducer(thread.view, {
+      type: "event",
+      payload: {
+        sessionId: 1,
+        stream: "lifecycle",
+        event: { type: "process_exit" },
+      },
+    });
+    expect(thread.view.status).toBe("idle");
+    vi.mocked(native.startPiAgent).mockClear();
+    const result = await client.branch(thread, "Demo · 分叉 2");
+    expect(native.startPiAgent).not.toHaveBeenCalled();
+    expect(result.thread.runtimeId).toBeNull();
+    client.dispose();
+  });
+  it("rejects fork while a turn is live or connecting", async () => {
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const thread = await client.open("source", "D:/one", "source.jsonl");
+    await client.hydrateFromDisk(thread);
+    thread.view = { ...thread.view, status: "running" };
+    await expect(client.branch(thread)).rejects.toThrow(
+      "请先停止当前任务再分叉",
+    );
+    thread.view = { ...thread.view, status: "starting" };
+    await expect(client.branch(thread)).rejects.toThrow(
+      "正在连接 Pi，请稍后再分叉",
+    );
+    client.dispose();
+  });
   it("changes model and thinking without starting a runtime", async () => {
     const native = await import("./native");
     vi.mocked(native.startPiAgent).mockClear();

@@ -260,9 +260,14 @@ function reduceEvent(
     return { ...state, error: String(event.error), status: "failed" };
   if (type === "process_exit") {
     const finishedAt = Date.now();
+    const hadTurn =
+      state.items.length > 0 ||
+      state.status === "idle" ||
+      state.status === "running" ||
+      state.status === "stopping";
     return {
       ...state,
-      status: "stopped",
+      status: hadTurn ? "idle" : "stopped",
       phase: "",
       processFinishedAt: finishedAt,
       items: stampTurnTiming(

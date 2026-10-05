@@ -944,8 +944,17 @@ export class PiWorkspaceClient {
 
   /** 复制会话文件为新线程，不启动 runtime。 */
   async branch(thread: PiThread, name?: string) {
-    if (thread.view.status !== "idle")
-      throw new Error("请先停止当前任务再分叉");
+    if (
+      thread.view.status === "running" ||
+      thread.view.status === "stopping" ||
+      thread.view.status === "starting" ||
+      thread.view.compaction?.status === "running"
+    )
+      throw new Error(
+        thread.view.status === "starting"
+          ? "正在连接 Pi，请稍后再分叉"
+          : "请先停止当前任务再分叉",
+      );
     const source = thread.view.sessionFile;
     if (!source) throw new Error("当前线程尚未写入会话文件");
     const cloned = await clonePiSession(source);

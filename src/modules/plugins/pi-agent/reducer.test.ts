@@ -171,6 +171,32 @@ describe("piViewReducer", () => {
     expect(state.items[1]).toMatchObject({ text: "haha" });
   });
 
+  it("returns idle after process_exit when the thread already has a turn", () => {
+    const settled = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "prompt",
+      text: "先完成这轮",
+    });
+    const done = piViewReducer(settled, {
+      type: "event",
+      payload: rpc({ type: "agent_settled" }),
+    });
+    expect(done.status).toBe("idle");
+    const exited = piViewReducer(done, {
+      type: "event",
+      payload: rpc({ type: "process_exit" }),
+    });
+    expect(exited.status).toBe("idle");
+    expect(exited.phase).toBe("");
+  });
+
+  it("keeps empty unused threads stopped after process_exit", () => {
+    const exited = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "event",
+      payload: rpc({ type: "process_exit" }),
+    });
+    expect(exited.status).toBe("stopped");
+  });
+
   it("waits for settled instead of ending during intermediate agent_end retry", () => {
     let state = piViewReducer(INITIAL_PI_VIEW_STATE, {
       type: "event",
