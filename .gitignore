@@ -40,17 +40,18 @@ artifacts/
 .reference-cache/
 output/
 
-# Local voice credentials and vendor reference snapshots; never shipped.
-docs/小米语音资源/keys.md
-docs/豆包语音资源/关键key.txt
-docs/mcode-master/
-docs/terax-ai-main/
-docs/terax-ai-main.zip
-docs/豆包语音资源/
-
-# Local Pi Agent design dumps and session transcripts; never shipped.
-docs/ref-piagent/
-docs/ref-codexmonitor/
-docs/codev-pi-agent工作进展.md
-docs/Pi-session*.html
-docs/recent_update_pi-agent.md
+# Local notes, vendor snapshots and reference code; never shipped.
+# Keep docs README files and images used by them.
+docs/**
+!docs/
+!docs/**/
+!docs/README.md
+!docs/**/README.md
+!docs/**/readme.md
+!docs/readme-main.png
+!docs/**/*.png
+!docs/**/*.jpg
+!docs/**/*.jpeg
+!docs/**/*.gif
+!docs/**/*.webp
+!docs/**/*.svg
