@@ -30,7 +30,7 @@ struct Process {
     child: Child,
     stdin: Option<ChildStdin>,
     activity: Arc<Mutex<Activity>>,
-    resource_id: String,
+    resource_alias: String,
     provider: String,
     next_query: u64,
     #[cfg(windows)]
@@ -252,7 +252,6 @@ pub fn codex_agent_start(
     app: AppHandle,
     state: State<'_, CodexAgentState>,
     owner: String,
-    resource_id: Option<String>,
 ) -> Result<u64, String> {
     let mut slot = state.process.lock().map_err(|e| e.to_string())?;
     if let Some(process) = slot.as_mut() {
@@ -280,8 +279,7 @@ pub fn codex_agent_start(
     }
     *slot = None;
     let mut command = codex_command()?;
-    let (resource_id, provider, secret) =
-        resources::configure(&mut command, resource_id.as_deref())?;
+    let (resource_alias, provider, secret) = resources::configure(&mut command)?;
     if let Some(home) = dirs::home_dir() {
         command.current_dir(home);
     }
@@ -311,7 +309,7 @@ pub fn codex_agent_start(
         child,
         stdin: Some(stdin),
         activity: Arc::clone(&activity),
-        resource_id,
+        resource_alias,
         provider,
         next_query: 0,
         #[cfg(windows)]
@@ -403,11 +401,9 @@ pub fn codex_agent_ready(
         .as_mut()
         .filter(|p| p.id == connection_id)
         .ok_or("Codex 连接已关闭")?;
-    if commit.unwrap_or(false) { resources::commit(&process.resource_id)?; }
+    if commit.unwrap_or(false) { resources::commit()?; }
     process.activity.lock().map_err(|_| "状态锁不可用")?.ready = true;
-    Ok(
-        json!({"resourceId":process.resource_id,"provider":process.provider,"lastModel":resources::last_model(&process.resource_id, &process.provider)?}),
-    )
+    Ok(json!({"resourceAlias":process.resource_alias,"provider":process.provider}))
 }
 
 /// 在原生核验期间保持进程操作锁，成功后才释放旧 runtime。
@@ -415,9 +411,9 @@ pub fn codex_agent_ready(
 pub async fn codex_agent_prepare_switch(
     app: AppHandle,
     connection_id: u64,
-    resource_id: String,
+    resource_alias: String,
 ) -> Result<(), String> {
-    let models = resources::codex_resources_models(resource_id.clone()).await?;
+    let models = resources::codex_resources_models(resource_alias.clone()).await?;
     let model = models.first().and_then(|item| item.get("id")).and_then(Value::as_str).ok_or("资源未返回可用模型，切换未执行")?.to_string();
     tauri::async_runtime::spawn_blocking(move || {
         use tauri::Manager;
@@ -427,12 +423,12 @@ pub async fn codex_agent_prepare_switch(
             .as_mut()
             .filter(|p| p.id == connection_id)
             .ok_or("连接已改变，请重试")?;
-        let (_, provider, _) = resources::configure(&mut codex_command()?, Some(&resource_id))?;
+        let (_, provider, _) = resources::configure(&mut codex_command()?)?;
         if provider != process.provider {
             return Err("原生 provider 已改变，请重新连接后再切换资源".into());
         }
         process.verify_idle()?;
-        if let Err(error) = resources::apply_resource(&resource_id, &model) {
+        if let Err(error) = resources::apply_resource(&resource_alias, &model) {
             resources::codex_resources_rollback()?;
             return Err(error);
         }
@@ -518,8 +514,8 @@ mod tests {
         assert!(stored["model_providers"]["codev_qa"].get("experimental_bearer_token").is_none());
         assert!(stored["model_providers"]["codev_qa"].get("env_key").is_none());
         let mut command = codex_command().unwrap();
-        let (resource_id, provider, _) =
-            resources::configure_at(&mut command, Some("fake"), root.path()).unwrap();
+        let (resource_alias, provider, _) =
+            resources::configure_at(&mut command, root.path()).unwrap();
         command
             .env("CODEX_HOME", root.path())
             .current_dir(root.path());
@@ -556,7 +552,7 @@ mod tests {
             child,
             stdin: Some(stdin),
             activity,
-            resource_id,
+            resource_alias,
             provider,
             next_query: 0,
             #[cfg(windows)]
@@ -631,7 +627,7 @@ mod tests {
             child,
             stdin: Some(stdin),
             activity: Arc::new(Mutex::new(Activity::default())),
-            resource_id: "native".into(),
+            resource_alias: "初始资源".into(),
             provider: "test".into(),
             next_query: 0,
             #[cfg(windows)]

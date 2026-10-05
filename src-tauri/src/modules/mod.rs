@@ -1,3 +1,4 @@
+pub mod browser;
 pub mod codex_agent;
 pub mod fs;
 pub mod git;

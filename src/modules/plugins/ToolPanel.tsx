@@ -16,10 +16,15 @@ const PiAgentPane = lazy(() =>
     default: module.PiAgentPane,
   })),
 );
+const BrowserPane = lazy(() =>
+  import("./browser/BrowserPane").then((module) => ({
+    default: module.BrowserPane,
+  })),
+);
 
 const MAX_FORMATTER_PANES = 2;
 
-export type ToolId = "json" | "diff" | "pi" | "codex";
+export type ToolId = "json" | "diff" | "pi" | "codex" | "browser";
 
 /** 渲染最多两个横向 JSON 格式化页面。 */
 function JsonFormatterTool() {
@@ -59,12 +64,14 @@ export function ToolPanel({
   tool = "json",
   active = true,
   onOpenFile,
+  onOpenDiff,
   workspaceRoots = [],
   onAddWorkspaceRoot,
 }: {
   tool?: ToolId;
   active?: boolean;
   onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string, diff: string) => void;
   workspaceRoots?: string[];
   onAddWorkspaceRoot?: (path: string) => void;
 }) {
@@ -100,6 +107,7 @@ export function ToolPanel({
             <CodexPane
               active={active && tool === "codex"}
               onOpenFile={onOpenFile}
+              onOpenDiff={onOpenDiff}
               workspaceRoots={workspaceRoots}
               onAddWorkspaceRoot={onAddWorkspaceRoot}
             />
@@ -136,11 +144,27 @@ export function ToolPanel({
             <PiAgentPane
               active={active && tool === "pi"}
               onOpenFile={onOpenFile}
+              onOpenDiff={onOpenDiff}
               workspaceRoots={workspaceRoots}
               onAddWorkspaceRoot={onAddWorkspaceRoot}
             />
           </Suspense>
         )}
+      </div>
+      <div
+        className={
+          tool === "browser" ? "absolute inset-0" : "hidden absolute inset-0"
+        }
+      >
+        <Suspense
+          fallback={
+            <div className="p-4 text-xs text-muted-foreground">
+              正在加载浏览器…
+            </div>
+          }
+        >
+          <BrowserPane visible={active && tool === "browser"} />
+        </Suspense>
       </div>
     </div>
   );

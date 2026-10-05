@@ -38,7 +38,11 @@ function cloneInput(value: VoiceScopeView): VoiceConfigInput {
 
 const SCOPE = "codex" as const;
 
-export function VoiceSettingsPanel() {
+export function VoiceSettingsPanel({
+  embedded = false,
+}: {
+  embedded?: boolean;
+}) {
   const [value, setValue] = useState<VoiceScopeView | null>(null);
   const [draft, setDraft] = useState<VoiceConfigInput | null>(null);
   const [key, setKey] = useState("");
@@ -105,14 +109,38 @@ export function VoiceSettingsPanel() {
     }
   };
   return (
-    <div className="reader-scrollbar min-h-0 flex-1 overflow-auto p-3 sm:p-4">
-      <div className="mb-4 flex items-start gap-3">
-        <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent/15 text-accent">
-          <HugeiconsIcon icon={VolumeHighIcon} size={17} />
-        </div>
+    <div
+      className={
+        embedded
+          ? "rounded-lg border border-border/70 p-3"
+          : "reader-scrollbar min-h-0 flex-1 overflow-auto p-3 sm:p-4"
+      }
+    >
+      <div
+        className={
+          embedded
+            ? "mb-3 flex items-start gap-3"
+            : "mb-4 flex items-start gap-3"
+        }
+      >
+        {!embedded && (
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent/15 text-accent">
+            <HugeiconsIcon icon={VolumeHighIcon} size={17} />
+          </div>
+        )}
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-medium">小米语音</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <h2
+            className={embedded ? "text-xs font-medium" : "text-sm font-medium"}
+          >
+            小米语音
+          </h2>
+          <p
+            className={
+              embedded
+                ? "mt-1 text-[11px] text-muted-foreground"
+                : "mt-1 text-xs text-muted-foreground"
+            }
+          >
             一个 API Key 同时用于流式识别和流式朗读，只在当前 Codex 生效。
           </p>
         </div>
@@ -126,10 +154,16 @@ export function VoiceSettingsPanel() {
         />
       </div>
 
-      <section className="space-y-3 rounded-lg border border-border/70 p-3">
-        <div className="flex items-center gap-2">
+      <section className="space-y-2 rounded-lg border border-border/70 p-3">
+        <div className="flex min-w-0 items-center gap-2">
           <HugeiconsIcon icon={Key01Icon} size={14} />
-          <h3 className="text-xs font-medium">API Key</h3>
+          <h3 className="shrink-0 text-xs font-medium">API Key</h3>
+          <p
+            className="min-w-0 flex-1 truncate text-right text-[10px] text-muted-foreground"
+            title={path}
+          >
+            {path}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <Input
@@ -161,13 +195,10 @@ export function VoiceSettingsPanel() {
             <HugeiconsIcon icon={showKey ? ViewOffIcon : ViewIcon} size={14} />
           </Button>
         </div>
-        <p className="truncate text-[10px] text-muted-foreground" title={path}>
-          {path}
-        </p>
       </section>
 
-      <section className="mt-3 space-y-3 rounded-lg border border-border/70 p-3">
-        <div className="flex items-center gap-2">
+      <div className="mt-3 flex gap-2">
+        <section className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/70 p-3">
           <h3 className="shrink-0 text-xs font-medium">语音输入</h3>
           <Select
             value={draft.asr.language}
@@ -189,21 +220,18 @@ export function VoiceSettingsPanel() {
             checked={draft.asr.enabled}
             onCheckedChange={(enabled) => updateAsr({ enabled })}
             disabled={busy || !draft.enabled}
-            className="ml-auto"
+            className="ml-auto shrink-0"
             aria-label="启用语音输入"
           />
-        </div>
-      </section>
-
-      <section className="mt-3 rounded-lg border border-border/70 p-3">
-        <div className="flex items-center gap-2">
+        </section>
+        <section className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/70 p-3">
           <h3 className="shrink-0 text-xs font-medium">语音播放</h3>
           <Select
             value={draft.tts.voice}
             onValueChange={(voice) => updateTts({ voice })}
             disabled={busy || !draft.enabled}
           >
-            <SelectTrigger aria-label="朗读音色" className="w-24">
+            <SelectTrigger aria-label="朗读音色" className="w-20">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -221,7 +249,7 @@ export function VoiceSettingsPanel() {
             }
             disabled={busy || !draft.enabled}
           >
-            <SelectTrigger aria-label="播放方式" className="w-28">
+            <SelectTrigger aria-label="播放方式" className="w-24">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -233,11 +261,11 @@ export function VoiceSettingsPanel() {
             checked={draft.tts.enabled}
             onCheckedChange={(enabled) => updateTts({ enabled })}
             disabled={busy || !draft.enabled}
-            className="ml-auto"
+            className="ml-auto shrink-0"
             aria-label="启用语音播放"
           />
-        </div>
-      </section>
+        </section>
+      </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <Button size="sm" disabled={busy} onClick={() => void save()}>

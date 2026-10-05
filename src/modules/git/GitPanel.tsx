@@ -271,7 +271,11 @@ export function GitPanel({ roots, onOpenDiff, onOpenHistory }: Props) {
           </div>
           <Button
             title="把已暂存的改动记录到本地当前分支"
-            disabled={busy || !message.trim()}
+            disabled={
+              busy ||
+              !message.trim() ||
+              !snapshot.changes.some((change) => change.staged)
+            }
             onClick={() => void commit()}
           >
             提交

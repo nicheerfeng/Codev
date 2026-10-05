@@ -6,7 +6,6 @@ import type {
   PiTranscriptItem,
   PiViewState,
 } from "./types";
-import { recordPiTurnFile } from "./turnDiff";
 
 export const INITIAL_PI_VIEW_STATE: PiViewState = {
   modelsLoading: false,
@@ -39,6 +38,7 @@ type PiViewAction =
       text: string;
       images?: PiImage[];
       queued?: boolean;
+      keepCompaction?: boolean;
     }
   | {
       type: "history";
@@ -416,22 +416,6 @@ function reduceEvent(
     const old = previous?.kind === "tool" ? previous : null;
     const currentTime = eventTimestamp(event);
     const toolName = String(event.toolName ?? old?.name ?? "tool");
-    const args = (event.args ?? old?.args ?? null) as {
-      path?: unknown;
-      file_path?: unknown;
-    } | null;
-    const filePath =
-      typeof args?.path === "string"
-        ? args.path
-        : typeof args?.file_path === "string"
-          ? args.file_path
-          : "";
-    if (
-      type === "tool_execution_start" &&
-      ["edit", "write"].includes(toolName) &&
-      filePath
-    )
-      recordPiTurnFile(String(event.sessionKey ?? "pi"), filePath, null);
     const activityOrder = (state.activityRevision ?? 0) + 1;
 
     // 并发工具只结束自身 phase；仍运行的其他调用继续作为活动状态。
@@ -672,6 +656,7 @@ function beginPrompt(
   text: string,
   images: PiImage[] | undefined,
   queued = false,
+  keepCompaction = false,
 ): PiViewState {
   const cleaned = text.replace(/\s+$/u, "");
   const now = Date.now();
@@ -681,7 +666,9 @@ function beginPrompt(
   return {
     ...state,
     compaction:
-      state.compaction?.status === "running" ? state.compaction : undefined,
+      state.compaction?.status === "running" || keepCompaction
+        ? state.compaction
+        : undefined,
     status: "running",
     phase: queued ? state.phase || "处理中" : "处理中",
     error: null,
@@ -694,7 +681,7 @@ function beginPrompt(
         ? state.processFinishedAt
         : undefined,
     items:
-      queued || duplicate || !cleaned
+      queued || keepCompaction || duplicate || !cleaned
         ? state.items
         : [
             ...state.items,
@@ -722,7 +709,13 @@ export function piViewReducer(
   if (action.type === "stopping") return { ...state, status: "stopping" };
   if (action.type === "error") return { ...state, error: action.message };
   if (action.type === "prompt")
-    return beginPrompt(state, action.text, action.images, action.queued);
+    return beginPrompt(
+      state,
+      action.text,
+      action.images,
+      action.queued,
+      action.keepCompaction,
+    );
   if (action.type === "history")
     return hydrateHistory(
       state,

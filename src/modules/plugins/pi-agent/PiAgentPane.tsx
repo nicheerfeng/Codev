@@ -152,11 +152,13 @@ function latestAssistantSummary(thread?: PiThread): string | null {
 export function PiAgentPane({
   active,
   onOpenFile,
+  onOpenDiff,
   workspaceRoots = [],
   onAddWorkspaceRoot,
 }: {
   active: boolean;
   onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string, diff: string) => void;
   workspaceRoots?: string[];
   onAddWorkspaceRoot?: (path: string) => void;
 }) {
@@ -764,12 +766,36 @@ export function PiAgentPane({
       const queued =
         alreadySending ||
         thread.view.status === "running" ||
-        thread.view.status === "stopping";
+        thread.view.status === "stopping" ||
+        thread.view.status === "starting" ||
+        !!thread.view.localQueue?.length ||
+        !!thread.view.queueSendingId;
+      if (queued) {
+        const queuedId = client.current!.enqueue(
+          thread,
+          text,
+          draft.images,
+          behavior,
+        );
+        setDrafts((value) => ({
+          ...value,
+          [sourceKey]: EMPTY_DRAFT,
+          [thread.key]: EMPTY_DRAFT,
+        }));
+        if (behavior === "steer")
+          await client.current!.sendQueued(thread, queuedId);
+        else if (
+          !alreadySending &&
+          thread.view.status !== "running" &&
+          thread.view.status !== "stopping" &&
+          thread.view.status !== "starting"
+        )
+          await client.current!.drainQueue(thread);
+        return;
+      }
       setPending((value) => new Set([...value, runtimeKey]));
       setSelected((current) => (current === selected ? thread.key : current));
-      const adapted = queued
-        ? false
-        : await client.current!.prepareCatalogRuntime(thread);
+      const adapted = await client.current!.prepareCatalogRuntime(thread);
       setNotice(adapted ? CATALOG_ADAPT_NOTICE : "", thread.key);
       setSendRevisions((value) => ({
         ...value,
@@ -781,20 +807,11 @@ export function PiAgentPane({
         [sourceKey]: EMPTY_DRAFT,
         [thread.key]: EMPTY_DRAFT,
       }));
-      await client.current!.request(
-        thread,
-        queued
-          ? {
-              type: behavior === "steer" ? "steer" : "follow_up",
-              message: text,
-              ...(draft.images.length ? { images: draft.images } : {}),
-            }
-          : {
-              type: "prompt",
-              message: text,
-              ...(draft.images.length ? { images: draft.images } : {}),
-            },
-      );
+      await client.current!.request(thread, {
+        type: "prompt",
+        message: text,
+        ...(draft.images.length ? { images: draft.images } : {}),
+      });
       await client.current!.refreshState(thread);
     } catch (error) {
       setDrafts((value) => ({
@@ -1374,6 +1391,7 @@ export function PiAgentPane({
                     searchOpen={searchOpen && paneKey === selectedKey}
                     onCloseSearch={() => setSearchOpen(false)}
                     onOpenFile={onOpenFile}
+                    onOpenDiff={onOpenDiff}
                     onCopy={(text) => run(writeText(text))}
                     onEdit={async (item, text) => {
                       if (!activeThread) throw new Error("当前没有活动线程");
@@ -1457,10 +1475,9 @@ export function PiAgentPane({
                     onLocalQueueAction={(id, action) => {
                       if (!activeThread) return;
                       if (action === "steer") {
-                        client.current!.setQueuedBehavior(
-                          activeThread,
-                          id,
-                          "steer",
+                        run(
+                          client.current!.sendQueued(activeThread, id),
+                          activeThread.key,
                         );
                         return;
                       }

@@ -41,7 +41,7 @@ type FileTab = Exclude<Tab, { kind: "terminal" } | { kind: "git-history" }>;
 
 /** 判断标签是否承载工作区文件。 */
 function isFileTab(tab: Tab): tab is FileTab {
-  return tab.kind !== "terminal";
+  return tab.kind !== "terminal" && tab.kind !== "git-history";
 }
 
 type Props = {

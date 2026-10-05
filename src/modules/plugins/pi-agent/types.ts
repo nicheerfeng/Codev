@@ -158,4 +158,5 @@ export type PiViewState = {
   historyOffset: number | null;
   historyHasMore: boolean;
   historyLoadingMore: boolean;
+  snapshotRevision?: number;
 };

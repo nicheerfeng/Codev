@@ -4,10 +4,9 @@ import {
   Settings01Icon,
   Cancel01Icon,
   CpuIcon,
-  PencilEdit01Icon,
   PlusSignIcon,
   Delete02Icon,
-  VolumeHighIcon,
+  PencilEdit01Icon,
 } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -31,7 +30,6 @@ import {
   deleteResource,
   listResources,
   saveResource,
-  readResourceKey,
   probeResource,
   RESOURCE_NOTE,
   type ResourceCatalog,
@@ -55,18 +53,21 @@ export function CodexResources({
 }) {
   const [catalog, setCatalog] = useState<ResourceCatalog | null>(null);
   const [open, setOpen] = useState(false);
-  const [panel, setPanel] = useState<
-    "resources" | "instructions" | "voice" | "general"
-  >("resources");
+  const [panel, setPanel] = useState<"resources" | "general">("resources");
   const [turnDiff, setTurnDiff] = useState(
     () => localStorage.getItem("codev.codex.turn-diff") === "1",
   );
-  const [selectedId, setSelectedId] = useState(state.resourceId);
+  const [selectedAlias, setSelectedAlias] = useState("");
+  const activeAlias = catalog?.activeAlias ?? "";
   useEffect(() => {
-    setSelectedId(state.resourceId);
-  }, [state.resourceId, open]);
+    setSelectedAlias((current) =>
+      catalog?.resources.some((resource) => resource.alias === current)
+        ? current
+        : activeAlias,
+    );
+  }, [catalog, activeAlias]);
   const [editing, setEditing] = useState<{
-    id: string;
+    originalAlias: string | null;
     alias: string;
     baseUrl: string;
     key: string;
@@ -97,7 +98,7 @@ export function CodexResources({
     void listResources()
       .then(setCatalog)
       .catch((failure) => setError(String(failure)));
-  }, [state.resourceId, open, active]);
+  }, [state.resourceAlias, open, active]);
   useEffect(() => {
     if (open)
       void readCodexInstructions()
@@ -121,9 +122,11 @@ export function CodexResources({
     if (!editing) return;
     setSaving(true);
     try {
-      setCatalog(await saveResource(editing));
-      setSelectedId(editing.id);
-      if (editing.id === state.resourceId) setEditedCurrent(true);
+      const { originalAlias, ...resource } = editing;
+      setCatalog(await saveResource(resource, originalAlias));
+      setSelectedAlias(resource.alias.trim());
+      if (originalAlias === activeAlias) setEditedCurrent(true);
+      setError("");
       setEditing(null);
       toast.success("资源已保存，点击应用后生效");
     } catch (failure) {
@@ -133,11 +136,14 @@ export function CodexResources({
     }
   };
   /** 切换失败保持当前显示并呈现原生核验结果。 */
-  const select = (id: string) => {
-    setSelectedId(id);
+  const select = (alias: string) => {
+    setSelectedAlias(alias);
     void client
-      .switchResource(id)
-      .then(() => setEditedCurrent(false))
+      .switchResource(alias)
+      .then(() => {
+        setEditedCurrent(false);
+        refresh();
+      })
       .catch((failure) => toast.error(String(failure)));
   };
   return (
@@ -147,7 +153,7 @@ export function CodexResources({
         className="flex min-w-0 max-w-40 items-center gap-1"
       >
         <Select
-          value={state.resourceId}
+          value={activeAlias}
           disabled={Boolean(reason) || !catalog}
           onValueChange={select}
         >
@@ -160,7 +166,7 @@ export function CodexResources({
           </SelectTrigger>
           <SelectContent className="rounded-xl">
             {catalog?.resources.map((resource) => (
-              <SelectItem key={resource.id} value={resource.id}>
+              <SelectItem key={resource.alias} value={resource.alias}>
                 {resource.alias}
               </SelectItem>
             ))}
@@ -232,16 +238,6 @@ export function CodexResources({
                 服务商存储
               </Button>
               <Button
-                variant={panel === "instructions" ? "secondary" : "ghost"}
-                size="sm"
-                aria-current={panel === "instructions" ? "page" : undefined}
-                className="mt-1 w-full justify-start gap-1.5 rounded-lg px-2 text-xs"
-                onClick={() => setPanel("instructions")}
-              >
-                <HugeiconsIcon icon={PencilEdit01Icon} size={14} />
-                自定义提示词
-              </Button>
-              <Button
                 variant={panel === "general" ? "secondary" : "ghost"}
                 size="sm"
                 aria-current={panel === "general" ? "page" : undefined}
@@ -251,16 +247,6 @@ export function CodexResources({
                 <HugeiconsIcon icon={Settings01Icon} size={14} />
                 通用
               </Button>
-              <Button
-                variant={panel === "voice" ? "secondary" : "ghost"}
-                size="sm"
-                aria-current={panel === "voice" ? "page" : undefined}
-                className="mt-1 w-full justify-start gap-1.5 rounded-lg px-2 text-xs"
-                onClick={() => setPanel("voice")}
-              >
-                <HugeiconsIcon icon={VolumeHighIcon} size={14} />
-                小米语音
-              </Button>
             </nav>
             <main
               className="flex min-h-0 min-w-0 flex-1 flex-col"
@@ -268,17 +254,49 @@ export function CodexResources({
             >
               {panel === "general" ? (
                 <div className="reader-scrollbar min-h-0 flex-1 space-y-3 overflow-auto p-3 sm:p-4">
-                  <div>
-                    <h2 className="text-sm font-medium">通用</h2>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      只影响 Codex，不改变文件点击后的打开方式。
-                    </p>
-                  </div>
+                  <h2 className="text-sm font-medium">通用</h2>
+                  <section className="space-y-2 rounded-lg border border-border/70 p-3">
+                    <div className="flex items-center gap-2">
+                      <div className="min-w-0 flex-1">
+                        <h3 className="text-xs font-medium">自定义提示词</h3>
+                        <p className="mt-0.5 text-[11px] text-muted-foreground">
+                          对所有 Codex 项目生效；项目目录内的 AGENTS.md
+                          仍会继续叠加。
+                        </p>
+                      </div>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={instructionsBusy}
+                        onClick={() => void saveInstructions()}
+                      >
+                        保存
+                      </Button>
+                    </div>
+                    <Textarea
+                      value={instructions}
+                      onChange={(event) => setInstructions(event.target.value)}
+                      className="min-h-28 rounded-lg font-mono text-xs"
+                      disabled={instructionsBusy}
+                      aria-label="Codex 自定义提示词"
+                    />
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-[10px] text-muted-foreground">
+                        ~/.codex/AGENTS.md
+                      </span>
+                      {instructionsMessage && (
+                        <span className="text-[11px] text-muted-foreground">
+                          {instructionsMessage}
+                        </span>
+                      )}
+                    </div>
+                  </section>
                   <div className="flex items-center gap-3 rounded-lg border border-border/70 p-3">
                     <div className="min-w-0 flex-1">
                       <h3 className="text-xs font-medium">回合文件感知</h3>
                       <p className="mt-1 text-[11px] text-muted-foreground">
-                        开启后显示本回合修改的文件卡片。
+                        Codex
+                        使用本回合协议返回的文件差异。没有差异记录的修改暂无法支持感知。
                       </p>
                     </div>
                     <Switch
@@ -293,10 +311,9 @@ export function CodexResources({
                       }}
                     />
                   </div>
+                  <VoiceSettingsPanel embedded />
                 </div>
-              ) : panel === "voice" ? (
-                <VoiceSettingsPanel />
-              ) : panel === "resources" ? (
+              ) : (
                 <div className="reader-scrollbar min-h-0 flex-1 space-y-3 overflow-auto p-3 sm:p-4">
                   <h2 className="text-sm font-medium">服务商存储</h2>
                   <ul className="list-disc pl-4 text-xs text-muted-foreground space-y-1">
@@ -346,7 +363,7 @@ export function CodexResources({
                       size="xs"
                       onClick={() => {
                         setEditing({
-                          id: crypto.randomUUID(),
+                          originalAlias: null,
                           alias: "",
                           baseUrl: "",
                           key: "",
@@ -372,17 +389,17 @@ export function CodexResources({
                   <div className="reader-scrollbar max-h-64 overflow-auto rounded-lg border border-border">
                     {catalog?.resources.map((resource) => (
                       <div
-                        key={resource.id}
-                        className={`flex min-w-0 items-center gap-2 border-b border-border px-3 py-2 last:border-0 ${selectedId === resource.id ? "bg-accent ring-1 ring-inset ring-primary/40" : ""}`}
+                        key={resource.alias}
+                        className={`flex min-w-0 items-center gap-2 border-b border-border px-3 py-2 last:border-0 ${selectedAlias === resource.alias ? "bg-accent ring-1 ring-inset ring-primary/40" : ""}`}
                       >
                         <button
                           type="button"
-                          aria-pressed={selectedId === resource.id}
+                          aria-pressed={selectedAlias === resource.alias}
                           className="flex min-w-0 flex-1 items-center gap-2 text-left text-xs"
-                          onClick={() => setSelectedId(resource.id)}
+                          onClick={() => setSelectedAlias(resource.alias)}
                         >
                           <span
-                            className={`size-3 shrink-0 rounded-full border ${selectedId === resource.id ? "border-primary bg-primary" : "border-muted-foreground"}`}
+                            className={`size-3 shrink-0 rounded-full border ${selectedAlias === resource.alias ? "border-primary bg-primary" : "border-muted-foreground"}`}
                           />
                           <span
                             className="max-w-28 shrink-0 truncate"
@@ -390,7 +407,7 @@ export function CodexResources({
                           >
                             {resource.alias}
                           </span>
-                          {state.resourceId === resource.id && (
+                          {activeAlias === resource.alias && (
                             <span className="shrink-0 text-[10px] text-muted-foreground">
                               使用中
                             </span>
@@ -411,16 +428,17 @@ export function CodexResources({
                           title={`编辑 ${resource.alias}`}
                           aria-label={`编辑 ${resource.alias}`}
                           onClick={() => {
-                            setSelectedId(resource.id);
+                            setSelectedAlias(resource.alias);
                             setError("");
-                            void readResourceKey(resource.id)
-                              .then((key) => setEditing({ ...resource, key }))
-                              .catch((failure) => setError(String(failure)));
+                            setEditing({
+                              ...resource,
+                              originalAlias: resource.alias,
+                            });
                           }}
                         >
                           <HugeiconsIcon icon={PencilEdit01Icon} size={13} />
                         </Button>
-                        {resource.id !== "native" && (
+                        {
                           <>
                             <Button
                               variant="ghost"
@@ -428,9 +446,9 @@ export function CodexResources({
                               disabled={probing !== null}
                               title="仅探测模型目录，不执行生成调用"
                               onClick={() => {
-                                setProbing(resource.id);
+                                setProbing(resource.alias);
                                 setProbeResult("");
-                                void probeResource(resource.id)
+                                void probeResource(resource.alias)
                                   .then(setProbeResult)
                                   .catch((failure) =>
                                     setProbeResult(String(failure)),
@@ -438,7 +456,7 @@ export function CodexResources({
                                   .finally(() => setProbing(null));
                               }}
                             >
-                              {probing === resource.id ? "探测中…" : "探测"}
+                              {probing === resource.alias ? "探测中…" : "探测"}
                             </Button>
                             <Button
                               variant="ghost"
@@ -446,14 +464,14 @@ export function CodexResources({
                               title={`删除 ${resource.alias}`}
                               aria-label={`删除 ${resource.alias}`}
                               disabled={
-                                state.resourceId === resource.id || saving
+                                activeAlias === resource.alias || saving
                               }
-                              onClick={() => setRemove(resource.id)}
+                              onClick={() => setRemove(resource.alias)}
                             >
                               <HugeiconsIcon icon={Delete02Icon} size={13} />
                             </Button>
                           </>
-                        )}
+                        }
                       </div>
                     ))}
                   </div>
@@ -470,8 +488,8 @@ export function CodexResources({
                             .then((value) => {
                               setCatalog(value);
                               setRemove(null);
-                              if (selectedId === remove)
-                                setSelectedId(state.resourceId);
+                              if (selectedAlias === remove)
+                                setSelectedAlias(activeAlias);
                             })
                             .catch((failure) => setError(String(failure)))
                             .finally(() => setSaving(false));
@@ -563,10 +581,10 @@ export function CodexResources({
                           Boolean(reason) ||
                           saving ||
                           !catalog?.resources.some(
-                            (resource) => resource.id === selectedId,
+                            (resource) => resource.alias === selectedAlias,
                           )
                         }
-                        onClick={() => select(selectedId)}
+                        onClick={() => select(selectedAlias)}
                       >
                         应用选中资源
                       </Button>
@@ -594,38 +612,6 @@ export function CodexResources({
                   {reason && (
                     <p role="status" className="text-xs text-muted-foreground">
                       {reason}
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <div className="flex min-h-0 flex-1 flex-col gap-3 p-3 sm:p-4">
-                  <h2 className="text-sm font-medium">自定义提示词</h2>
-                  <p className="text-xs text-muted-foreground">
-                    对所有 Codex 项目生效；项目目录内的 AGENTS.md 仍会继续叠加。
-                  </p>
-                  <Textarea
-                    value={instructions}
-                    onChange={(event) => setInstructions(event.target.value)}
-                    className="field-sizing-fixed min-h-0 flex-1 overflow-auto rounded-lg font-mono text-xs"
-                    disabled={instructionsBusy}
-                    aria-label="Codex 自定义提示词"
-                  />
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs text-muted-foreground">
-                      ~/.codex/AGENTS.md
-                    </span>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={instructionsBusy}
-                      onClick={() => void saveInstructions()}
-                    >
-                      保存
-                    </Button>
-                  </div>
-                  {instructionsMessage && (
-                    <p role="status" className="text-xs text-muted-foreground">
-                      {instructionsMessage}
                     </p>
                   )}
                 </div>

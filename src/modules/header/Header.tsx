@@ -229,17 +229,23 @@ export function Header({
               strokeWidth={1.75}
             />
           </Button>
-          <Button
-            onClick={onShowFiles}
-            title="文件树"
-            aria-label="文件树"
-            aria-pressed={sidebarMode === "files"}
-            variant="ghost"
-            size="icon-sm"
-            className={`shrink-0 rounded-md hover:bg-accent hover:text-foreground ${sidebarMode === "files" ? "text-foreground" : "text-muted-foreground"}`}
-          >
-            <HugeiconsIcon icon={FolderTreeIcon} size={16} strokeWidth={1.75} />
-          </Button>
+          {gitEnabled && (
+            <Button
+              onClick={onShowFiles}
+              title="文件树"
+              aria-label="文件树"
+              aria-pressed={sidebarMode === "files"}
+              variant="ghost"
+              size="icon-sm"
+              className={`shrink-0 rounded-md hover:bg-accent hover:text-foreground ${sidebarMode === "files" ? "text-foreground" : "text-muted-foreground"}`}
+            >
+              <HugeiconsIcon
+                icon={FolderTreeIcon}
+                size={16}
+                strokeWidth={1.75}
+              />
+            </Button>
+          )}
           {gitEnabled && (
             <Button
               onClick={onShowGit}

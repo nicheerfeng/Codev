@@ -287,6 +287,87 @@ fn emit_event(app: &AppHandle, session_id: u64, stream: &'static str, event: Val
     );
 }
 
+fn resolve_tool_path(cwd: &Path, raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let candidate = PathBuf::from(trimmed);
+    Some(if candidate.is_absolute() {
+        candidate
+    } else {
+        cwd.join(candidate)
+    })
+}
+
+fn tool_snapshot_paths(cwd: &Path, event: &Value) -> Vec<PathBuf> {
+    let tool = event.get("toolName").and_then(Value::as_str).unwrap_or("");
+    let args = event.get("args");
+    let mut paths = Vec::new();
+    let mut push = |raw: &str| {
+        if let Some(path) = resolve_tool_path(cwd, raw) {
+            paths.push(path);
+        }
+    };
+    match tool {
+        "edit" | "write" | "delete" | "delete_file" | "remove_file" => {
+            if let Some(raw) = args
+                .and_then(|value| value.get("path").or_else(|| value.get("file_path")))
+                .and_then(Value::as_str)
+            {
+                push(raw);
+            }
+        }
+        "apply_patch" => {
+            let patch = args
+                .and_then(|value| {
+                    value.as_str().or_else(|| {
+                        value
+                            .get("patch")
+                            .or_else(|| value.get("input"))
+                            .and_then(Value::as_str)
+                    })
+                })
+                .unwrap_or("");
+            for line in patch.lines() {
+                for prefix in ["*** Add File: ", "*** Update File: ", "*** Delete File: "] {
+                    if let Some(rest) = line.strip_prefix(prefix) {
+                        push(rest);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    paths
+}
+
+/// 在工具真正写盘前记下原文，避免前端异步读到改后内容。
+fn attach_snapshot_before(cwd: &Path, event: &mut Value) {
+    if event.get("type").and_then(Value::as_str) != Some("tool_execution_start") {
+        return;
+    }
+    let paths = tool_snapshot_paths(cwd, event);
+    if paths.is_empty() {
+        return;
+    }
+    let mut map = serde_json::Map::new();
+    for path in paths {
+        let key = path.display().to_string();
+        match fs::read_to_string(&path) {
+            Ok(content) => {
+                map.insert(key, Value::String(content));
+            }
+            Err(_) => {
+                map.insert(key, Value::Null);
+            }
+        }
+    }
+    if let Some(object) = event.as_object_mut() {
+        object.insert("snapshotBefore".into(), Value::Object(map));
+    }
+}
+
 /// 解析一条严格 LF JSONL 记录，并兼容记录尾部的单个 CR。
 fn parse_rpc_line(buffer: &[u8]) -> Result<Option<Value>, String> {
     let mut line = buffer;
@@ -305,7 +386,12 @@ fn parse_rpc_line(buffer: &[u8]) -> Result<Option<Value>, String> {
 }
 
 /// 按严格 LF 分隔读取 Pi stdout，并解析每一条 JSON 事件。
-fn stream_stdout(app: AppHandle, session_id: u64, stdout: impl Read + Send + 'static) {
+fn stream_stdout(
+    app: AppHandle,
+    session_id: u64,
+    cwd: PathBuf,
+    stdout: impl Read + Send + 'static,
+) {
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
         let mut buffer = Vec::new();
@@ -314,7 +400,10 @@ fn stream_stdout(app: AppHandle, session_id: u64, stdout: impl Read + Send + 'st
             match reader.read_until(b'\n', &mut buffer) {
                 Ok(0) => break,
                 Ok(_) => match parse_rpc_line(&buffer) {
-                    Ok(Some(event)) => emit_event(&app, session_id, "stdout", event),
+                    Ok(Some(mut event)) => {
+                        attach_snapshot_before(&cwd, &mut event);
+                        emit_event(&app, session_id, "stdout", event);
+                    }
                     Ok(None) => {}
                     Err(error) => emit_event(
                         &app,
@@ -533,7 +622,7 @@ pub fn pi_agent_start(
             },
         );
 
-    stream_stdout(app.clone(), session_id, stdout);
+    stream_stdout(app.clone(), session_id, cwd, stdout);
     stream_stderr(app.clone(), session_id, stderr);
     watch_exit(app, session_id, child, state.sessions.clone());
 

@@ -156,34 +156,66 @@ export function CodexSidebar({
       renameInput.current?.select();
     }
   }, [editing?.id]);
-  const { projectMap, projects, sessionIds, sessionsByProject } = useMemo(() => {
-    const projectMap = new Map<string, string>();
-    const sessionsByProject = new Map<string, typeof state.sessions[string][]>();
-    const sessionIds = ordered(state.order, layout.sessionOrder, true);
-    for (const cwd of [...layout.projects, ...(state.historyProjects ?? [])])
-      if (!layout.hidden.includes(pathKey(cwd))) projectMap.set(pathKey(cwd), cwd);
-    for (const id of sessionIds) {
-      const session = state.sessions[id];
-      const key = pathKey(session.thread.cwd);
-      if (!layout.hidden.includes(key)) projectMap.set(key, session.thread.cwd);
-      const rows = sessionsByProject.get(key) ?? [];
-      rows.push(session);
-      sessionsByProject.set(key, rows);
-    }
-    return { projectMap, projects: ordered([...projectMap.keys()], layout.projectOrder), sessionIds, sessionsByProject };
-  }, [state.sessions, state.order, layout.projects, layout.hidden, layout.projectOrder, layout.sessionOrder, state.historyProjects]);
+  const { projectMap, projects, sessionIds, sessionsByProject } =
+    useMemo(() => {
+      const projectMap = new Map<string, string>();
+      const sessionsByProject = new Map<
+        string,
+        (typeof state.sessions)[string][]
+      >();
+      const sessionIds = ordered(state.order, layout.sessionOrder, true);
+      for (const cwd of [...layout.projects, ...(state.historyProjects ?? [])])
+        if (!layout.hidden.includes(pathKey(cwd)))
+          projectMap.set(pathKey(cwd), cwd);
+      for (const id of sessionIds) {
+        const session = state.sessions[id];
+        const key = pathKey(session.thread.cwd);
+        if (!layout.hidden.includes(key))
+          projectMap.set(key, session.thread.cwd);
+        const rows = sessionsByProject.get(key) ?? [];
+        rows.push(session);
+        sessionsByProject.set(key, rows);
+      }
+      return {
+        projectMap,
+        projects: ordered([...projectMap.keys()], layout.projectOrder),
+        sessionIds,
+        sessionsByProject,
+      };
+    }, [
+      state.sessions,
+      state.order,
+      layout.projects,
+      layout.hidden,
+      layout.projectOrder,
+      layout.sessionOrder,
+      state.historyProjects,
+    ]);
   useEffect(() => {
-    const discovered = [...new Set([...(state.historyProjects ?? []), ...Object.values(state.sessions).map(session => session.thread.cwd)])];
-    setLayout(current => {
-      const added = discovered.filter(cwd => !current.hidden.includes(pathKey(cwd)) && !current.projects.some(path => pathKey(path) === pathKey(cwd)));
-      return added.length ? { ...current, projects: [...current.projects, ...added] } : current;
+    const discovered = [
+      ...new Set([
+        ...(state.historyProjects ?? []),
+        ...Object.values(state.sessions).map((session) => session.thread.cwd),
+      ]),
+    ];
+    setLayout((current) => {
+      const added = discovered.filter(
+        (cwd) =>
+          !current.hidden.includes(pathKey(cwd)) &&
+          !current.projects.some((path) => pathKey(path) === pathKey(cwd)),
+      );
+      return added.length
+        ? { ...current, projects: [...current.projects, ...added] }
+        : current;
     });
   }, [state.sessions, state.historyProjects]);
   const query = filter.trim().toLowerCase();
   /** 只有用户展开项目时读取该目录历史，显示已保存入口不触发读取。 */
   const loadProject = (cwd: string, archived = false) => {
-    setOpenedProjects(current => new Set(current).add(pathKey(cwd)));
-    void client.refreshProject(cwd, archived).catch(error => toast.error(String(error)));
+    setOpenedProjects((current) => new Set(current).add(pathKey(cwd)));
+    void client
+      .refreshProject(cwd, archived)
+      .catch((error) => toast.error(String(error)));
   };
   /** 收纳状态写入统一布局文件。 */
   const toggle = (key: string) =>
@@ -292,8 +324,12 @@ export function CodexSidebar({
   };
   /** 线程行沿用 Pi 的单行标题、状态点与右键操作布局。 */
   const row = (session: Session) => {
-    const thread = { ...session.thread, id: client.sessionKey(session.thread.id) };
-    const title = thread.agentNickname || thread.name || thread.preview || "新线程";
+    const thread = {
+      ...session.thread,
+      id: client.sessionKey(session.thread.id),
+    };
+    const title =
+      thread.agentNickname || thread.name || thread.preview || "新线程";
     const children = childrenByParent.get(session.thread.id) ?? [];
     const collapseKey = `subagents:${session.thread.id}`;
     const childrenClosed = layout.collapsed.includes(collapseKey);
@@ -310,7 +346,6 @@ export function CodexSidebar({
               : {})}
             className={`codex-session group ${selected === client.sessionKey(thread.id) ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}
           >
-
             {inline?.id === thread.id ? (
               <Input
                 autoFocus
@@ -364,11 +399,17 @@ export function CodexSidebar({
                 aria-expanded={!childrenClosed}
                 aria-label={`${childrenClosed ? "展开" : "收起"} ${children.length} 个子任务`}
                 title="展开或收起子任务"
-                onClick={(event) => { event.stopPropagation(); toggle(collapseKey); }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  toggle(collapseKey);
+                }}
                 onDoubleClick={(event) => event.stopPropagation()}
-                className={`mr-1 flex h-7 min-w-7 shrink-0 justify-center items-center gap-0.5 rounded px-1 text-[10px] hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring ${children.some(child => child.requests.length) ? "text-amber-600 dark:text-amber-300" : children.some(child => child.busy) ? "animate-pulse text-[#477faf] dark:text-[#a6cceb]" : "text-muted-foreground"}`}
+                className={`mr-1 flex h-7 min-w-7 shrink-0 justify-center items-center gap-0.5 rounded px-1 text-[10px] hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring ${children.some((child) => child.requests.length) ? "text-amber-600 dark:text-amber-300" : children.some((child) => child.busy) ? "animate-pulse text-[#477faf] dark:text-[#a6cceb]" : "text-muted-foreground"}`}
               >
-                <HugeiconsIcon size={12} icon={childrenClosed ? ArrowRight01Icon : ArrowDown01Icon} />
+                <HugeiconsIcon
+                  size={12}
+                  icon={childrenClosed ? ArrowRight01Icon : ArrowDown01Icon}
+                />
                 <span>{children.length}</span>
               </button>
             )}
@@ -432,21 +473,29 @@ export function CodexSidebar({
     const children = new Map<string, Session[]>();
     for (const session of Object.values(state.sessions)) {
       const parent = parentThread(session.thread);
-      if (parent) children.set(parent, [...(children.get(parent) ?? []), session]);
+      if (parent)
+        children.set(parent, [...(children.get(parent) ?? []), session]);
     }
     return children;
   }, [state.sessions]);
   /** 父线程保留原生子代理层级，折叠只控制子行显示，不改变会话与选中状态。 */
-  const treeRow = (session: Session, ancestors: string[] = []): React.ReactNode => {
+  const treeRow = (
+    session: Session,
+    ancestors: string[] = [],
+  ): React.ReactNode => {
     const id = session.thread.id;
     if (ancestors.includes(id)) return null;
     const children = childrenByParent.get(id) ?? [];
-    return <div key={id}>
-      {row(session)}
-      {!!children.length && !layout.collapsed.includes(`subagents:${id}`) && <div className="ml-4 border-l border-border pl-2">
-        {children.map(child => treeRow(child, [...ancestors, id]))}
-      </div>}
-    </div>;
+    return (
+      <div key={id}>
+        {row(session)}
+        {!!children.length && !layout.collapsed.includes(`subagents:${id}`) && (
+          <div className="ml-4 border-l border-border pl-2">
+            {children.map((child) => treeRow(child, [...ancestors, id]))}
+          </div>
+        )}
+      </div>
+    );
   };
   /** 项目默认展示五条线程，可展开更多并独立创建会话。 */
   const project = (key: string, archived = false) => {
@@ -457,21 +506,22 @@ export function CodexSidebar({
       )?.thread.cwd ??
       key;
     const nodeKey = archived ? `archive:${key}` : key;
-    const rows = (sessionsByProject.get(key) ?? [])
-      .filter(
-        (session) =>
-          !parentThread(session.thread) &&
-          pathKey(session.thread.cwd) === key &&
-          session.archived === archived &&
-          (!query ||
-            `${session.thread.name} ${session.thread.preview} ${cwd}`
-              .toLowerCase()
-              .includes(query)),
-      );
+    const rows = (sessionsByProject.get(key) ?? []).filter(
+      (session) =>
+        !parentThread(session.thread) &&
+        pathKey(session.thread.cwd) === key &&
+        session.archived === archived &&
+        (!query ||
+          `${session.thread.name} ${session.thread.preview} ${cwd}`
+            .toLowerCase()
+            .includes(query)),
+    );
     if (archived && !rows.length) return null;
     if (query && !rows.length && !cwd.toLowerCase().includes(query))
       return null;
-    const closed = (!openedProjects.has(key) && !rows.length) || (!query && layout.collapsed.includes(nodeKey));
+    const closed =
+      (!openedProjects.has(key) && !rows.length) ||
+      (!query && layout.collapsed.includes(nodeKey));
     const live = rows.some((session) => session.busy);
     return (
       <div key={key} className="mb-1 min-w-0">
@@ -500,7 +550,12 @@ export function CodexSidebar({
                 onClick={() => {
                   if (!openedProjects.has(key)) {
                     loadProject(cwd, archived);
-                    setLayout(current => ({ ...current, collapsed: current.collapsed.filter(value => value !== nodeKey) }));
+                    setLayout((current) => ({
+                      ...current,
+                      collapsed: current.collapsed.filter(
+                        (value) => value !== nodeKey,
+                      ),
+                    }));
                   } else {
                     if (closed) loadProject(cwd, archived);
                     toggle(nodeKey);
@@ -595,7 +650,7 @@ export function CodexSidebar({
           <div className="ml-3 border-l border-border/60 pl-1">
             {rows
               .slice(0, query ? rows.length : (counts[nodeKey] ?? 5))
-              .map(session => treeRow(session))}
+              .map((session) => treeRow(session))}
             {!rows.length && (
               <p className="px-2 py-2 text-[11px] text-muted-foreground">
                 暂无会话
@@ -784,8 +839,17 @@ export function CodexSidebar({
                 aria-expanded={layout.temporaryOpen || !!query}
                 className="flex min-w-0 flex-1 items-center gap-1 py-1 text-left text-[11px] text-muted-foreground"
                 onClick={() => {
-                  if (!layout.temporaryOpen || !openedProjects.has(pathKey(home))) loadProject(home);
-                  setLayout(current => ({ ...current, temporaryOpen: !openedProjects.has(pathKey(home)) || !current.temporaryOpen }));
+                  if (
+                    !layout.temporaryOpen ||
+                    !openedProjects.has(pathKey(home))
+                  )
+                    loadProject(home);
+                  setLayout((current) => ({
+                    ...current,
+                    temporaryOpen:
+                      !openedProjects.has(pathKey(home)) ||
+                      !current.temporaryOpen,
+                  }));
                 }}
               >
                 <HugeiconsIcon
@@ -827,7 +891,9 @@ export function CodexSidebar({
                   : rows.slice(0, counts[pathKey(home)] ?? 5);
                 return (
                   <>
-                    {visible.filter(session => !parentThread(session.thread)).map(session => treeRow(session))}
+                    {visible
+                      .filter((session) => !parentThread(session.thread))
+                      .map((session) => treeRow(session))}
                     {visible.length < rows.length && (
                       <Button
                         variant="ghost"
@@ -905,48 +971,48 @@ export function CodexSidebar({
             aria-labelledby="codex-delete-title"
             className="grid w-full max-w-sm gap-4 rounded-xl bg-popover p-5 text-sm text-popover-foreground shadow-xl ring-1 ring-foreground/10"
           >
-          <h2 className="font-heading text-base leading-none font-medium">
-            <span id="codex-delete-title">
-              {confirm.kind === "thread" ? "彻底删除线程？" : "移除项目？"}
-            </span>
-          </h2>
-          <p className="text-xs text-muted-foreground">
-            {confirm.kind === "thread"
-              ? "原生会话将被删除，此操作无法撤销。"
-              : "仅移除项目入口，保留会话历史；可通过添加项目恢复。"}
-          </p>
-          <div className="flex justify-end gap-2">
-            <Button
-              variant="ghost"
-              disabled={deleting}
-              autoFocus
-              onClick={() => setConfirm(null)}
-            >
-              取消
-            </Button>
-            <Button
-              disabled={deleting}
-              onClick={() => {
-                if (!confirm) return;
-                if (confirm.kind === "project") {
-                  setLayout((current) => ({
-                    ...current,
-                    hidden: [...current.hidden, confirm.id],
-                  }));
-                  setConfirm(null);
-                } else {
-                  setDeleting(true);
-                  void client
-                    .deleteThread(confirm.id)
-                    .then(() => setConfirm(null))
-                    .catch((error) => toast.error(String(error)))
-                    .finally(() => setDeleting(false));
-                }
-              }}
-            >
-              确认
-            </Button>
-          </div>
+            <h2 className="font-heading text-base leading-none font-medium">
+              <span id="codex-delete-title">
+                {confirm.kind === "thread" ? "彻底删除线程？" : "移除项目？"}
+              </span>
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              {confirm.kind === "thread"
+                ? "原生会话将被删除，此操作无法撤销。"
+                : "仅移除项目入口，保留会话历史；可通过添加项目恢复。"}
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                disabled={deleting}
+                autoFocus
+                onClick={() => setConfirm(null)}
+              >
+                取消
+              </Button>
+              <Button
+                disabled={deleting}
+                onClick={() => {
+                  if (!confirm) return;
+                  if (confirm.kind === "project") {
+                    setLayout((current) => ({
+                      ...current,
+                      hidden: [...current.hidden, confirm.id],
+                    }));
+                    setConfirm(null);
+                  } else {
+                    setDeleting(true);
+                    void client
+                      .deleteThread(confirm.id)
+                      .then(() => setConfirm(null))
+                      .catch((error) => toast.error(String(error)))
+                      .finally(() => setDeleting(false));
+                  }
+                }}
+              >
+                确认
+              </Button>
+            </div>
           </div>
         </div>
       )}

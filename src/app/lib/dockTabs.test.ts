@@ -14,8 +14,9 @@ it("restores order including hidden tabs and appends missing entries", () => {
     "json",
     "diff",
     "codex",
+    "browser",
   ]);
-  expect(normalizeDockOrder(null)).toEqual([...all, "codex"]);
+  expect(normalizeDockOrder(null)).toEqual([...all, "codex", "browser"]);
 });
 
 describe("reorderDockTabsAtGap", () => {

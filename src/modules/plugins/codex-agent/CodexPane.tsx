@@ -61,11 +61,13 @@ function readSlots(): (string | null)[] {
 export function CodexPane({
   active = true,
   onOpenFile,
+  onOpenDiff,
   workspaceRoots = [],
   onAddWorkspaceRoot,
 }: {
   active?: boolean;
   onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string, diff: string) => void;
   workspaceRoots?: string[];
   onAddWorkspaceRoot?: (path: string) => void;
 }) {
@@ -85,6 +87,7 @@ export function CodexPane({
       active={active}
       client={client}
       onOpenFile={onOpenFile}
+      onOpenDiff={onOpenDiff}
       workspaceRoots={workspaceRoots}
       onAddWorkspaceRoot={onAddWorkspaceRoot}
     />
@@ -96,12 +99,14 @@ function Workspace({
   active,
   client,
   onOpenFile,
+  onOpenDiff,
   workspaceRoots,
   onAddWorkspaceRoot,
 }: {
   active: boolean;
   client: CodexClient;
   onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string, diff: string) => void;
   workspaceRoots: string[];
   onAddWorkspaceRoot?: (path: string) => void;
 }) {
@@ -479,6 +484,7 @@ function Workspace({
                       client={client}
                       search={focused === index && searchOpen ? search : ""}
                       onOpenFile={onOpenFile}
+                      onOpenDiff={onOpenDiff}
                     />
                     {!!session.requests.length && (
                       <div className="codex-approvals reader-scrollbar">

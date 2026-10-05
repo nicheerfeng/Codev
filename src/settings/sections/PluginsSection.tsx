@@ -4,6 +4,7 @@ import {
   JSON_FORMATTER_PLUGIN_ID,
   PI_AGENT_PLUGIN_ID,
   CODEX_AGENT_PLUGIN_ID,
+  BROWSER_PLUGIN_ID,
   TEXT_DIFF_PLUGIN_ID,
   setPluginEnabled,
   usePluginStore,
@@ -26,6 +27,9 @@ export function PluginsSection() {
   const init = usePluginStore((state) => state.init);
   const codexEnabled = usePluginStore(
     (state) => state.enabled[CODEX_AGENT_PLUGIN_ID],
+  );
+  const browserEnabled = usePluginStore(
+    (state) => state.enabled[BROWSER_PLUGIN_ID],
   );
 
   useEffect(() => {
@@ -69,6 +73,17 @@ export function PluginsSection() {
           checked={codexEnabled}
           onCheckedChange={(value) =>
             void setPluginEnabled(CODEX_AGENT_PLUGIN_ID, value)
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        title="浏览器"
+        description="在右侧插件区打开网页，与文件阅读区分开。默认关闭。"
+      >
+        <Switch
+          checked={browserEnabled}
+          onCheckedChange={(value) =>
+            void setPluginEnabled(BROWSER_PLUGIN_ID, value)
           }
         />
       </SettingRow>

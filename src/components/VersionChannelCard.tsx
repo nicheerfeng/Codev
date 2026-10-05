@@ -41,6 +41,7 @@ export function VersionChannelCard(props: {
   repoUrl: string;
   channel: VersionChannelState;
   onCheck: () => void;
+  plain?: boolean;
 }) {
   const message =
     props.channel.error ||
@@ -48,19 +49,52 @@ export function VersionChannelCard(props: {
     (props.channel.latest ? `GitHub 最新 ${props.channel.latest}` : "");
   const published = formatPublishedAt(props.channel.publishedAt);
   return (
-    <article className="rounded-lg border border-border bg-card p-4 shadow-sm">
+    <article
+      className={
+        props.plain
+          ? ""
+          : "rounded-lg border border-border bg-card p-4 shadow-sm"
+      }
+    >
       <div className="flex items-center gap-4">
         <div className="min-w-0 flex-1">
-          <p className="text-[10px] text-muted-foreground">{props.title}</p>
-          <p className="mt-1 text-lg font-medium">
-            {props.channel.installed ?? props.fallback}
-          </p>
-          {props.channel.detail && (
-            <p className="mt-2 break-all text-[10px] text-muted-foreground/80">
-              {props.channel.detail}
-            </p>
+          {props.plain ? (
+            <div className="flex min-w-0 items-baseline gap-2">
+              <p className="shrink-0 text-[10px] text-muted-foreground">
+                {props.title}
+              </p>
+              <p className="shrink-0 text-sm font-medium">
+                {props.channel.installed ?? props.fallback}
+              </p>
+              {props.channel.detail && (
+                <p
+                  className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground/80"
+                  title={props.channel.detail}
+                >
+                  {props.channel.detail}
+                </p>
+              )}
+            </div>
+          ) : (
+            <>
+              <p className="text-[10px] text-muted-foreground">{props.title}</p>
+              <p className="mt-1 text-lg font-medium">
+                {props.channel.installed ?? props.fallback}
+              </p>
+              {props.channel.detail && (
+                <p className="mt-2 break-all text-[10px] text-muted-foreground/80">
+                  {props.channel.detail}
+                </p>
+              )}
+            </>
           )}
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div
+            className={
+              props.plain
+                ? "mt-2 flex flex-wrap gap-2"
+                : "mt-3 flex flex-wrap gap-2"
+            }
+          >
             <Button
               size="sm"
               variant="secondary"

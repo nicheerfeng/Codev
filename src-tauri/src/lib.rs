@@ -1,6 +1,6 @@
 pub mod modules;
 
-use modules::{codex_agent, fs, git, github, history, pi_agent, pty, voice, workspace};
+use modules::{browser, codex_agent, fs, git, github, history, pi_agent, pty, voice, workspace};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::menu::MenuBuilder;
@@ -539,8 +539,6 @@ pub fn run() {
             codex_agent::resources::codex_resources_list,
             codex_agent::resources::codex_resources_save,
             codex_agent::resources::codex_resources_delete,
-            codex_agent::resources::codex_resources_model,
-            codex_agent::resources::codex_resources_key,
             codex_agent::resources::codex_resources_models,
             codex_agent::usage::codex_agent_read_usage,
             codex_agent::resources::codex_resources_rollback,
@@ -563,6 +561,11 @@ pub fn run() {
             git::git_tracking,
             git::git_pull,
             git::git_push,
+            browser::browser_show,
+            browser::browser_set_bounds,
+            browser::browser_reload,
+            browser::browser_inspect,
+            browser::browser_hide,
             pi_agent::pi_agent_list_sessions,
             pi_agent::pi_agent_delete_session,
             pi_agent::pi_agent_read_models,

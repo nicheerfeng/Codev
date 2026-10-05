@@ -4,17 +4,30 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowDown01Icon } from "@hugeicons/core-free-icons";
 import { collectFileOperations, type FileOperation } from "./fileOperations";
 import type { PiTranscriptItem } from "./types";
+import type { PiTurnFile } from "./turnDiff";
+
+function pathKey(path: string): string {
+  const value = path.replace(/\\/g, "/");
+  return /^[A-Za-z]:/u.test(value) ? value.toLowerCase() : value;
+}
 
 /** 展示本轮已识别文件操作；点击在主界面打开，不加入工作区根目录。 */
 export function PiFileOperations({
   items,
   cwd,
   onOpenFile,
+  diffs,
+  onOpenDiff,
 }: {
   items: PiTranscriptItem[];
   cwd: string;
   onOpenFile?: (path: string) => void;
+  diffs?: PiTurnFile[];
+  onOpenDiff?: (path: string, diff: string) => void;
 }) {
+  const diffByPath = new Map(
+    (diffs ?? []).map((file) => [pathKey(file.path), file]),
+  );
   const files = collectFileOperations(items, cwd);
   if (!files.length) return null;
   /** 已删除文件定位父目录，无法定位时提示具体错误。 */
@@ -31,6 +44,11 @@ export function PiFileOperations({
   }
   /** 打开观测文件，删除记录则定位原目录。 */
   function openFile(file: FileOperation) {
+    const diff = diffByPath.get(pathKey(file.path));
+    if (diff && onOpenDiff) {
+      onOpenDiff(diff.path, diff.diff);
+      return;
+    }
     if (file.operation === "删除" || !onOpenFile) {
       void reveal(file);
       return;
@@ -51,12 +69,31 @@ export function PiFileOperations({
           <div key={file.path} className="flex items-start gap-1">
             <button
               type="button"
-              title="在主界面打开"
+              title={
+                diffByPath.has(pathKey(file.path))
+                  ? "在主区打开本回合差异"
+                  : "在主界面打开"
+              }
               className="min-w-0 flex-1 text-left leading-5 hover:text-foreground [overflow-wrap:anywhere]"
               onClick={() => openFile(file)}
             >
               {file.operation} · {file.path}
             </button>
+            {(() => {
+              const diff = diffByPath.get(pathKey(file.path));
+              if (!diff) return null;
+              return (
+                <span className="shrink-0 font-mono text-[10px] leading-5">
+                  {diff.adds > 0 && (
+                    <span className="text-green-500">+{diff.adds}</span>
+                  )}
+                  {diff.adds > 0 && diff.dels > 0 ? " " : ""}
+                  {diff.dels > 0 && (
+                    <span className="text-red-500">-{diff.dels}</span>
+                  )}
+                </span>
+              );
+            })()}
             <button
               type="button"
               title="在资源管理器中显示"

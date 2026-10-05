@@ -7,10 +7,7 @@ import {
   HelpCircleIcon,
   BookOpen01Icon,
   PuzzleIcon,
-  InformationCircleIcon,
-  PencilEdit01Icon,
   Settings01Icon,
-  VolumeHighIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -83,13 +80,7 @@ export function PiSettings({
   const [confirm, setConfirm] = useState(false);
   const [help, setHelp] = useState(false);
   const [panel, setPanel] = useState<
-    | "models"
-    | "prompts"
-    | "skills"
-    | "plugins"
-    | "voice"
-    | "general"
-    | "version"
+    "models" | "skills" | "plugins" | "general"
   >("models");
   const [prompts, setPrompts] = useState<PiPromptFile[]>([]);
   const [promptBusy, setPromptBusy] = useState(false);
@@ -431,16 +422,6 @@ export function PiSettings({
               模型选择
             </Button>
             <Button
-              variant={panel === "prompts" ? "secondary" : "ghost"}
-              size="sm"
-              aria-current={panel === "prompts" ? "page" : undefined}
-              className="mt-1 w-full justify-start rounded-lg px-2 text-xs"
-              onClick={() => setPanel("prompts")}
-            >
-              <HugeiconsIcon icon={PencilEdit01Icon} size={14} />
-              自定义提示词
-            </Button>
-            <Button
               variant={panel === "skills" ? "secondary" : "ghost"}
               size="sm"
               aria-current={panel === "skills" ? "page" : undefined}
@@ -470,26 +451,6 @@ export function PiSettings({
               <HugeiconsIcon icon={Settings01Icon} size={14} />
               通用
             </Button>
-            <Button
-              variant={panel === "voice" ? "secondary" : "ghost"}
-              size="sm"
-              aria-current={panel === "voice" ? "page" : undefined}
-              className="mt-1 w-full justify-start rounded-lg px-2 text-xs"
-              onClick={() => setPanel("voice")}
-            >
-              <HugeiconsIcon icon={VolumeHighIcon} size={14} />
-              小米语音
-            </Button>
-            <Button
-              variant={panel === "version" ? "secondary" : "ghost"}
-              size="sm"
-              aria-current={panel === "version" ? "page" : undefined}
-              className="mt-1 w-full justify-start rounded-lg px-2 text-xs"
-              onClick={() => setPanel("version")}
-            >
-              <HugeiconsIcon icon={InformationCircleIcon} size={14} />
-              版本
-            </Button>
           </nav>
           <main
             className="flex min-h-0 min-w-0 flex-1 flex-col"
@@ -497,17 +458,58 @@ export function PiSettings({
           >
             {panel === "general" ? (
               <div className="reader-scrollbar min-h-0 flex-1 space-y-3 overflow-auto p-3 sm:p-4">
-                <div>
-                  <h2 className="text-sm font-medium">通用</h2>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    只影响 Pi，不改变文件点击后的打开方式。
-                  </p>
-                </div>
+                <h2 className="text-sm font-medium">通用</h2>
+                <section className="space-y-2 rounded-lg border border-border/70 p-3">
+                  <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-xs font-medium">自定义提示词</h3>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                        保存后对后续 Pi 会话生效，追加在默认系统提示词之后。
+                      </p>
+                    </div>
+                    {prompts.map((prompt) => (
+                      <Button
+                        key={prompt.path}
+                        size="xs"
+                        variant="outline"
+                        disabled={promptBusy}
+                        onClick={() => void savePrompt(prompt)}
+                      >
+                        保存
+                      </Button>
+                    ))}
+                  </div>
+                  {prompts.map((prompt) => (
+                    <Textarea
+                      key={prompt.path}
+                      value={prompt.content}
+                      onChange={(event) =>
+                        setPrompts((items) =>
+                          items.map((item) =>
+                            item.path === prompt.path
+                              ? { ...item, content: event.target.value }
+                              : item,
+                          ),
+                        )
+                      }
+                      placeholder="在此输入自定义提示词内容，将追加到 Pi 的默认系统提示词之后..."
+                      className="min-h-28 rounded-lg font-mono text-xs"
+                      disabled={promptBusy}
+                    />
+                  ))}
+                  {promptMessage && (
+                    <p className="text-[11px] text-muted-foreground">
+                      {promptMessage}
+                    </p>
+                  )}
+                </section>
                 <div className="flex items-center gap-3 rounded-lg border border-border/70 p-3">
                   <div className="min-w-0 flex-1">
                     <h3 className="text-xs font-medium">回合文件感知</h3>
                     <p className="mt-1 text-[11px] text-muted-foreground">
-                      开启后显示本回合修改的文件卡片。
+                      Pi 依赖于 edit / write / delete / apply_patch
+                      感知修改前后的文件 diff，少数 bash
+                      驱动的文件修改暂无法支持感知。
                     </p>
                   </div>
                   <Switch
@@ -522,55 +524,10 @@ export function PiSettings({
                     }}
                   />
                 </div>
+                <VoiceSettingsPanel embedded />
+                <PiVersionPanel embedded />
               </div>
-            ) : panel === "voice" ? (
-              <VoiceSettingsPanel />
-            ) : panel === "prompts" ? (
-              <div className="reader-scrollbar min-h-0 flex-1 space-y-4 overflow-auto p-3 sm:p-4">
-                <div>
-                  <h2 className="text-sm font-medium">追加 Agent 提示词</h2>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    保存后对后续 Pi 会话生效。追加在默认系统提示词之后。
-                  </p>
-                </div>
-                {prompts.map((prompt) => (
-                  <div key={prompt.path} className="space-y-2">
-                    <div className="flex items-center justify-end gap-2">
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        disabled={promptBusy}
-                        onClick={() => void savePrompt(prompt)}
-                      >
-                        保存
-                      </Button>
-                    </div>
-                    <Textarea
-                      value={prompt.content}
-                      onChange={(event) =>
-                        setPrompts((items) =>
-                          items.map((item) =>
-                            item.path === prompt.path
-                              ? { ...item, content: event.target.value }
-                              : item,
-                          ),
-                        )
-                      }
-                      placeholder="在此输入自定义提示词内容，将追加到 Pi 的默认系统提示词之后..."
-                      className="min-h-60 rounded-lg font-mono text-xs"
-                      disabled={promptBusy}
-                    />
-                  </div>
-                ))}
-                {promptMessage && (
-                  <p className="text-xs text-muted-foreground">
-                    {promptMessage}
-                  </p>
-                )}
-              </div>
-            ) : panel === "version" ? (
-              <PiVersionPanel />
-            ) : panel !== "models" ? (
+            ) : panel === "skills" || panel === "plugins" ? (
               <PiAssetsPanel kind={panel} />
             ) : (
               <>

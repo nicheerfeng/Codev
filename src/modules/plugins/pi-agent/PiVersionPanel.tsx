@@ -21,7 +21,7 @@ export const parsePiVersion = parseDottedVersion;
 export const comparePiVersions = compareDottedVersions;
 
 /** Pi 设置只展示本机 CLI 和上游发行，不再混入 Codev。 */
-export function PiVersionPanel() {
+export function PiVersionPanel({ embedded = false }: { embedded?: boolean }) {
   const [channel, setChannel] = useState<VersionChannelState>({
     ...EMPTY_VERSION_CHANNEL,
     releaseUrl: PI_RELEASES_URL,
@@ -72,9 +72,30 @@ export function PiVersionPanel() {
     }
   };
   return (
-    <section className="flex min-h-0 flex-1 flex-col" aria-label="Pi 版本">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-3 sm:px-4">
-        <h2 className="flex-1 text-sm font-medium">Pi 版本</h2>
+    <section
+      className={
+        embedded
+          ? "rounded-lg border border-border/70"
+          : "flex min-h-0 flex-1 flex-col"
+      }
+      aria-label="Pi 版本"
+    >
+      <div
+        className={
+          embedded
+            ? "flex items-center gap-2 px-3 pt-3"
+            : "flex shrink-0 items-center gap-2 border-b border-border px-3 py-3 sm:px-4"
+        }
+      >
+        <h2
+          className={
+            embedded
+              ? "flex-1 text-xs font-medium"
+              : "flex-1 text-sm font-medium"
+          }
+        >
+          Pi 版本
+        </h2>
         <Button
           variant="ghost"
           size="icon-sm"
@@ -90,14 +111,27 @@ export function PiVersionPanel() {
           />
         </Button>
       </div>
-      <div className="reader-scrollbar min-h-0 flex-1 overflow-auto p-3 sm:p-4">
-        <div className="mx-auto flex max-w-xl flex-col gap-3">
+      <div
+        className={
+          embedded
+            ? "p-3 pt-0"
+            : "reader-scrollbar min-h-0 flex-1 overflow-auto p-3 sm:p-4"
+        }
+      >
+        <div
+          className={
+            embedded
+              ? "flex flex-col gap-3"
+              : "mx-auto flex max-w-xl flex-col gap-3"
+          }
+        >
           <VersionChannelCard
             title="本机 Pi CLI"
             fallback="未探测到"
             repoUrl={PI_REPO_URL}
             channel={channel}
             onCheck={() => void check()}
+            plain={embedded}
           />
         </div>
       </div>

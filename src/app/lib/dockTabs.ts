@@ -1,8 +1,15 @@
-export type DockTab = "terminal" | "json" | "diff" | "pi" | "codex";
+export type DockTab = "terminal" | "json" | "diff" | "pi" | "codex" | "browser";
 
 /** 恢复标签顺序，去掉无效重复项并补齐新加入的插件。 */
 export function normalizeDockOrder(value: unknown): DockTab[] {
-  const defaults: DockTab[] = ["terminal", "json", "diff", "pi", "codex"];
+  const defaults: DockTab[] = [
+    "terminal",
+    "json",
+    "diff",
+    "pi",
+    "codex",
+    "browser",
+  ];
   const saved = Array.isArray(value)
     ? value.filter((tab): tab is DockTab => defaults.includes(tab))
     : [];

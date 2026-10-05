@@ -81,6 +81,7 @@ import { ThemeProvider, useThemeFileEditing } from "@/modules/theme";
 import { useWorkspaceEnvStore } from "@/modules/workspace";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { USE_CUSTOM_WINDOW_CONTROLS } from "@/lib/platform";
 import type { SearchAddon } from "@xterm/addon-search";
 import {
   Fragment,
@@ -228,7 +229,8 @@ export default function App() {
       state.enabled["json-formatter"] ||
       state.enabled["text-diff"] ||
       state.enabled["pi-agent"] ||
-      state.enabled["codex-agent"],
+      state.enabled["codex-agent"] ||
+      state.enabled["browser"],
   );
   const jsonFormatterEnabled = usePluginStore(
     (state) => state.enabled["json-formatter"],
@@ -236,13 +238,14 @@ export default function App() {
   const textDiffEnabled = usePluginStore((state) => state.enabled["text-diff"]);
   const piAgentEnabled = usePluginStore((state) => state.enabled["pi-agent"]);
   const codexEnabled = usePluginStore((state) => state.enabled["codex-agent"]);
+  const browserEnabled = usePluginStore((state) => state.enabled["browser"]);
   const initPlugins = usePluginStore((state) => state.init);
   const [rightDockView, setRightDockView] = useState<"terminal" | "tools">(
     "terminal",
   );
-  const [toolView, setToolView] = useState<"json" | "diff" | "pi" | "codex">(
-    "pi",
-  );
+  const [toolView, setToolView] = useState<
+    "json" | "diff" | "pi" | "codex" | "browser"
+  >("pi");
   const [dockOrder, setDockOrder] = useState<DockTab[]>(() => {
     try {
       return normalizeDockOrder(
@@ -263,8 +266,15 @@ export default function App() {
       ...(textDiffEnabled ? ["diff" as const] : []),
       ...(piAgentEnabled ? ["pi" as const] : []),
       ...(codexEnabled ? ["codex" as const] : []),
+      ...(browserEnabled ? ["browser" as const] : []),
     ],
-    [jsonFormatterEnabled, piAgentEnabled, textDiffEnabled, codexEnabled],
+    [
+      jsonFormatterEnabled,
+      piAgentEnabled,
+      textDiffEnabled,
+      codexEnabled,
+      browserEnabled,
+    ],
   );
   const dockTabs = useMemo(
     () => dockOrder.filter((tab) => availableDockTabs.includes(tab)),
@@ -299,6 +309,9 @@ export default function App() {
     if (toolView === "codex" && !codexEnabled) {
       setRightDockView("terminal");
     }
+    if (toolView === "browser" && !browserEnabled) {
+      setRightDockView("terminal");
+    }
     if (toolView === "pi" && !piAgentEnabled) {
       setToolView(jsonFormatterEnabled ? "json" : "diff");
     }
@@ -308,6 +321,7 @@ export default function App() {
     textDiffEnabled,
     toolView,
     codexEnabled,
+    browserEnabled,
   ]);
 
   // Drives session disposal off the pane tree, not React lifecycles —
@@ -1279,16 +1293,30 @@ export default function App() {
       )}
       <TooltipProvider>
         <div className="relative flex h-screen flex-col overflow-hidden bg-background text-foreground">
+          {USE_CUSTOM_WINDOW_CONTROLS && <WindowResizeEdges />}
+
           {!zenMode && (
             <Header
               onToggleSidebar={toggleSidebar}
               sidebarMode={sidebarMode}
               gitEnabled={usePreferencesStore((state) => state.gitEnabled)}
-              onShowFiles={() => setSidebarMode("files")}
-              onShowGit={() => {
-                setSidebarMode("git");
-                if (sidebarRef.current?.getSize().inPixels === 0)
+              onShowFiles={() => {
+                const collapsed = sidebarRef.current?.getSize().inPixels === 0;
+                if (sidebarMode === "files" && !collapsed) {
                   toggleSidebar();
+                  return;
+                }
+                setSidebarMode("files");
+                if (collapsed) toggleSidebar();
+              }}
+              onShowGit={() => {
+                const collapsed = sidebarRef.current?.getSize().inPixels === 0;
+                if (sidebarMode === "git" && !collapsed) {
+                  toggleSidebar();
+                  return;
+                }
+                setSidebarMode("git");
+                if (collapsed) toggleSidebar();
               }}
               onOpenSettings={() => void openSettingsWindow()}
               terminalPanelCollapsed={terminalPanelCollapsed}
@@ -1441,7 +1469,9 @@ export default function App() {
                                 ? "文本对照"
                                 : tab === "codex"
                                   ? "Codex"
-                                  : "Pi";
+                                  : tab === "browser"
+                                    ? "浏览器"
+                                    : "Pi";
                         return (
                           <Fragment key={tab}>
                             {dockReorder.dropIndex === index && (
@@ -1516,6 +1546,23 @@ export default function App() {
                           tool={toolView}
                           active={rightDockView === "tools"}
                           onOpenFile={(path) => handleOpenFile(path, false)}
+                          onOpenDiff={(path, diff) => {
+                            const normalized = path.replace(/\\/g, "/");
+                            const matchedRoot = workspaceRoots.find((root) =>
+                              normalized
+                                .toLowerCase()
+                                .startsWith(
+                                  root.replace(/\\/g, "/").toLowerCase(),
+                                ),
+                            );
+                            const parent =
+                              path.replace(/[\\/][^\\/]+$/, "") || path;
+                            openGitDiffTab({
+                              repoRoot: matchedRoot ?? parent,
+                              path,
+                              diff,
+                            });
+                          }}
                           workspaceRoots={workspaceRoots}
                           onAddWorkspaceRoot={(path) => void addRoot(path)}
                         />
@@ -1573,4 +1620,36 @@ export default function App() {
   );
 
   return shell;
+}
+
+const RESIZE_EDGES = [
+  ["North", "inset-x-2 top-0 h-1.5 cursor-ns-resize"],
+  ["South", "inset-x-2 bottom-0 h-1.5 cursor-ns-resize"],
+  ["West", "inset-y-2 left-0 w-1.5 cursor-ew-resize"],
+  ["East", "inset-y-2 right-0 w-1.5 cursor-ew-resize"],
+  ["NorthWest", "top-0 left-0 size-2 cursor-nwse-resize"],
+  ["NorthEast", "top-0 right-0 size-2 cursor-nesw-resize"],
+  ["SouthWest", "bottom-0 left-0 size-2 cursor-nesw-resize"],
+  ["SouthEast", "bottom-0 right-0 size-2 cursor-nwse-resize"],
+] as const;
+
+/** 无边框窗口没有系统边框，四周用窄条交给系统拉伸。 */
+function WindowResizeEdges() {
+  return (
+    <>
+      {RESIZE_EDGES.map(([direction, className]) => (
+        <div
+          key={direction}
+          className={`absolute z-50 ${className}`}
+          onMouseDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            void getCurrentWindow()
+              .startResizeDragging(direction)
+              .catch(() => {});
+          }}
+        />
+      ))}
+    </>
+  );
 }

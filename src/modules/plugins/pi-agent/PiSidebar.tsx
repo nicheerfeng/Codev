@@ -122,27 +122,41 @@ export function PiSidebar(props: Props) {
     for (const thread of props.threads) {
       const tasks = [
         { key: thread.key, status: thread.status ?? "", child: false },
-        ...(thread.subagents ?? []).map(run => ({ key: run.runId, status: run.status, child: true })),
+        ...(thread.subagents ?? []).map((run) => ({
+          key: run.runId,
+          status: run.status,
+          child: true,
+        })),
       ];
       for (const task of tasks) {
         const previous = previousTaskStatus.current.get(task.key);
         const active = ["running", "queued", "stopping"].includes(task.status);
         const done = ["idle", "complete", "completed"].includes(task.status);
         if (active) running.push(task.key);
-        if (done && (previous === "running" || previous === "queued" || previous === "stopping" || (task.child && previous === undefined))) completed.push(task.key);
+        if (
+          done &&
+          (previous === "running" ||
+            previous === "queued" ||
+            previous === "stopping" ||
+            (task.child && previous === undefined))
+        )
+          completed.push(task.key);
         previousTaskStatus.current.set(task.key, task.status);
       }
     }
-    setUnreadTasks(current => {
+    setUnreadTasks((current) => {
       const next = new Set(current);
-      running.forEach(key => next.delete(key));
-      completed.forEach(key => next.add(key));
-      return next.size === current.size && [...next].every(key => current.has(key)) ? current : next;
+      running.forEach((key) => next.delete(key));
+      completed.forEach((key) => next.add(key));
+      return next.size === current.size &&
+        [...next].every((key) => current.has(key))
+        ? current
+        : next;
     });
   }, [props.threads]);
   /** 点击任务确认已查看，不影响其他父子任务的待审核标记。 */
   function markTaskRead(key: string) {
-    setUnreadTasks(current => {
+    setUnreadTasks((current) => {
       if (!current.has(key)) return current;
       const next = new Set(current);
       next.delete(key);
@@ -412,7 +426,6 @@ export function PiSidebar(props: Props) {
                   : "hover:bg-muted"
             }`}
           >
-
             <button
               type="button"
               className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left"
@@ -435,14 +448,18 @@ export function PiSidebar(props: Props) {
                     ? "等待输入"
                     : thread.status === "running"
                       ? "运行中"
-                      : unreadTasks.has(thread.key) ? "已完成，待查看" : "就绪"
+                      : unreadTasks.has(thread.key)
+                        ? "已完成，待查看"
+                        : "就绪"
                 }
                 title={
                   thread.waiting
                     ? "等待输入"
                     : thread.status === "running"
                       ? "运行中"
-                      : unreadTasks.has(thread.key) ? "已完成，待查看" : "就绪"
+                      : unreadTasks.has(thread.key)
+                        ? "已完成，待查看"
+                        : "就绪"
                 }
                 className={`size-2 shrink-0 rounded-full ${thread.waiting ? "bg-amber-600 ring-2 ring-amber-600/25 dark:bg-amber-300" : thread.status === "running" ? "pi-running-dot bg-[#477faf] text-[#477faf] dark:bg-[#a6cceb] dark:text-[#a6cceb]" : unreadTasks.has(thread.key) ? "bg-[#477faf] dark:bg-[#a6cceb]" : "bg-muted-foreground/50"}`}
               />
@@ -477,24 +494,73 @@ export function PiSidebar(props: Props) {
               <button
                 type="button"
                 data-no-drag=""
-                aria-expanded={!collapsed.has(`subagents:${sessionIdentity(thread.path, thread.key)}`)}
+                aria-expanded={
+                  !collapsed.has(
+                    `subagents:${sessionIdentity(thread.path, thread.key)}`,
+                  )
+                }
                 aria-label={`${collapsed.has(`subagents:${sessionIdentity(thread.path, thread.key)}`) ? "展开" : "收起"} ${thread.subagents.length} 个子任务`}
                 title="展开或收起子任务"
-                onClick={(event) => { event.stopPropagation(); toggle(`subagents:${sessionIdentity(thread.path, thread.key)}`); }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  toggle(
+                    `subagents:${sessionIdentity(thread.path, thread.key)}`,
+                  );
+                }}
                 onDoubleClick={(event) => event.stopPropagation()}
-                className={`mr-1 flex h-7 min-w-7 shrink-0 justify-center items-center gap-0.5 rounded px-1 text-[10px] hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring ${thread.subagents.some(run => ["running", "queued"].includes(run.status)) ? "text-[#477faf] dark:text-[#a6cceb]" : thread.subagents.some(run => unreadTasks.has(run.runId)) ? "text-[#477faf] dark:text-[#a6cceb]" : "text-muted-foreground"}`}
+                className={`mr-1 flex h-7 min-w-7 shrink-0 justify-center items-center gap-0.5 rounded px-1 text-[10px] hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring ${thread.subagents.some((run) => ["running", "queued"].includes(run.status)) ? "text-[#477faf] dark:text-[#a6cceb]" : thread.subagents.some((run) => unreadTasks.has(run.runId)) ? "text-[#477faf] dark:text-[#a6cceb]" : "text-muted-foreground"}`}
               >
-                <HugeiconsIcon size={12} icon={collapsed.has(`subagents:${sessionIdentity(thread.path, thread.key)}`) ? ArrowRight01Icon : ArrowDown01Icon} />
+                <HugeiconsIcon
+                  size={12}
+                  icon={
+                    collapsed.has(
+                      `subagents:${sessionIdentity(thread.path, thread.key)}`,
+                    )
+                      ? ArrowRight01Icon
+                      : ArrowDown01Icon
+                  }
+                />
                 <span>{thread.subagents.length}</span>
               </button>
             )}
           </div>
-          {!collapsed.has(`subagents:${sessionIdentity(thread.path, thread.key)}`) && thread.subagents?.map((run) => (
-            <button type="button" key={run.runId} disabled={!run.session} onClick={() => { if (run.session) { markTaskRead(run.runId); props.onSelect({ ...run.session, key: run.session.path }); } }} className={`ml-5 flex w-[calc(100%-1.25rem)] min-w-0 items-center gap-2 border-l border-border px-2 py-1 text-left text-[11px] text-muted-foreground hover:bg-accent ${run.session && pathKey(props.selectedKey ?? "") === pathKey(run.session.path) ? "bg-accent" : ""}`}>
-              <span role="img" aria-label={run.status === "running" || run.status === "queued" ? "运行中" : run.status === "failed" ? "失败" : unreadTasks.has(run.runId) ? "已完成，待查看" : "已查看"} className={`size-1.5 shrink-0 rounded-full ${run.status === "running" || run.status === "queued" ? "bg-[#477faf] dark:bg-[#a6cceb]" : run.status === "failed" ? "bg-destructive" : unreadTasks.has(run.runId) ? "bg-[#477faf] dark:bg-[#a6cceb]" : "bg-muted-foreground/50"}`} />
-              <span className="min-w-0 flex-1 truncate" title={run.summary || run.title}>{run.agent} · {run.title}</span>
-            </button>
-          ))}
+          {!collapsed.has(
+            `subagents:${sessionIdentity(thread.path, thread.key)}`,
+          ) &&
+            thread.subagents?.map((run) => (
+              <button
+                type="button"
+                key={run.runId}
+                disabled={!run.session}
+                onClick={() => {
+                  if (run.session) {
+                    markTaskRead(run.runId);
+                    props.onSelect({ ...run.session, key: run.session.path });
+                  }
+                }}
+                className={`ml-5 flex w-[calc(100%-1.25rem)] min-w-0 items-center gap-2 border-l border-border px-2 py-1 text-left text-[11px] text-muted-foreground hover:bg-accent ${run.session && pathKey(props.selectedKey ?? "") === pathKey(run.session.path) ? "bg-accent" : ""}`}
+              >
+                <span
+                  role="img"
+                  aria-label={
+                    run.status === "running" || run.status === "queued"
+                      ? "运行中"
+                      : run.status === "failed"
+                        ? "失败"
+                        : unreadTasks.has(run.runId)
+                          ? "已完成，待查看"
+                          : "已查看"
+                  }
+                  className={`size-1.5 shrink-0 rounded-full ${run.status === "running" || run.status === "queued" ? "bg-[#477faf] dark:bg-[#a6cceb]" : run.status === "failed" ? "bg-destructive" : unreadTasks.has(run.runId) ? "bg-[#477faf] dark:bg-[#a6cceb]" : "bg-muted-foreground/50"}`}
+                />
+                <span
+                  className="min-w-0 flex-1 truncate"
+                  title={run.summary || run.title}
+                >
+                  {run.agent} · {run.title}
+                </span>
+              </button>
+            ))}
           {!isArchived &&
             index === list.length - 1 &&
             gapAt(
@@ -552,7 +618,9 @@ export function PiSidebar(props: Props) {
     );
     if (isArchived && !rows.length) return null;
     const nodeKey = `${isArchived ? "archive:" : "project:"}${key}`;
-    const closed = (!openedProjects.has(key) && !rows.length) || (!filter && collapsed.has(nodeKey));
+    const closed =
+      (!openedProjects.has(key) && !rows.length) ||
+      (!filter && collapsed.has(nodeKey));
     const live = !isArchived && cwdIsLive(props.threads, cwd);
     const groupId = org.projectGroups[key] ?? "";
     const groupProjects = applySavedOrder(
@@ -602,8 +670,12 @@ export function PiSidebar(props: Props) {
                   onClick={() => {
                     if (closed) props.onSelectProject(cwd);
                     if (!openedProjects.has(key)) {
-                      setOpenedProjects(current => new Set(current).add(key));
-                      setCollapsed(current => { const next = new Set(current); next.delete(nodeKey); return next; });
+                      setOpenedProjects((current) => new Set(current).add(key));
+                      setCollapsed((current) => {
+                        const next = new Set(current);
+                        next.delete(nodeKey);
+                        return next;
+                      });
                     } else toggle(nodeKey);
                   }}
                   disabled={props.organizationReady === false}
@@ -669,7 +741,9 @@ export function PiSidebar(props: Props) {
             <ContextMenuItem onSelect={() => props.onNew(cwd)}>
               新建线程
             </ContextMenuItem>
-            {!props.workspaceRoots.some((root) => pathKey(root) === pathKey(cwd)) && (
+            {!props.workspaceRoots.some(
+              (root) => pathKey(root) === pathKey(cwd),
+            ) && (
               <ContextMenuItem onSelect={() => props.onAddWorkspaceRoot?.(cwd)}>
                 添加到工作区
               </ContextMenuItem>
@@ -914,7 +988,11 @@ export function PiSidebar(props: Props) {
             <button
               type="button"
               className="flex min-w-0 flex-1 items-center gap-1 py-1 text-left text-[11px] text-muted-foreground"
-              onClick={() => { if (props.temporaryHome) props.onSelectProject(props.temporaryHome); toggle(`group:${TEMPORARY_GROUP_ID}`); }}
+              onClick={() => {
+                if (props.temporaryHome)
+                  props.onSelectProject(props.temporaryHome);
+                toggle(`group:${TEMPORARY_GROUP_ID}`);
+              }}
             >
               <HugeiconsIcon
                 icon={

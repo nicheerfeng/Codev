@@ -54,8 +54,11 @@ import {
   useVoiceOutput,
   useVoiceScopeConfig,
 } from "@/modules/plugins/pi-agent/voice/output";
-import { PiTurnFilesCard } from "./PiTurnFilesCard";
-import { piTurnDiffEnabled, piTurnFiles } from "./turnDiff";
+import {
+  piTurnDiffEnabled,
+  piTurnSnapshots,
+  type PiTurnSnapshot,
+} from "./turnDiff";
 
 const STREAMDOWN_CONTROLS = {
   code: { copy: true, download: false },
@@ -75,6 +78,7 @@ type MessageActions = {
   ) => boolean | undefined | Promise<boolean | undefined>;
   onFork?: () => void;
   onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string, diff: string) => void;
   canEditLastUser?: boolean;
   lastUserId?: string;
 };
@@ -470,11 +474,13 @@ function TimelineBlock({
   query,
   actions,
   cwd,
+  snapshot,
 }: {
   cwd: string;
   block: PiTimelineBlock;
   query: string;
   actions: MessageActions;
+  snapshot?: PiTurnSnapshot;
 }) {
   const isProcess = block.kind === "process";
   const blockRunning = isProcess ? block.running : false;
@@ -565,6 +571,8 @@ function TimelineBlock({
         items={block.items}
         cwd={cwd}
         onOpenFile={actions.onOpenFile}
+        diffs={piTurnDiffEnabled() ? snapshot?.files : undefined}
+        onOpenDiff={piTurnDiffEnabled() ? actions.onOpenDiff : undefined}
       />
     </>
   );
@@ -643,6 +651,7 @@ export function PiTranscript({
   onEdit,
   onFork,
   onOpenFile,
+  onOpenDiff,
   onLoadOlder,
   canEditLastUser,
 }: {
@@ -662,12 +671,21 @@ export function PiTranscript({
       onEdit,
       onFork,
       onOpenFile,
+      onOpenDiff,
       canEditLastUser,
       lastUserId: [...view.items]
         .reverse()
         .find((item) => item.kind === "message" && item.role === "user")?.id,
     }),
-    [view.items, onCopy, onEdit, onFork, onOpenFile, canEditLastUser],
+    [
+      view.items,
+      onCopy,
+      onEdit,
+      onFork,
+      onOpenFile,
+      onOpenDiff,
+      canEditLastUser,
+    ],
   );
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -691,6 +709,28 @@ export function PiTranscript({
       }),
     [view.items, running, view.processStartedAt, view.processFinishedAt],
   );
+  const snapshots = useMemo(
+    () => (piTurnDiffEnabled() ? piTurnSnapshots(threadKey) : []),
+    [threadKey, view.snapshotRevision],
+  );
+  const processBlocks = useMemo(
+    () => blocks.filter((block) => block.kind === "process"),
+    [blocks],
+  );
+  const snapshotByBlock = useMemo(() => {
+    const map = new Map<string, PiTurnSnapshot>();
+    const unused = [...snapshots];
+    for (const block of processBlocks) {
+      if (block.kind !== "process") continue;
+      const ids = new Set(block.items.map((item) => item.id));
+      const index = unused.findIndex(
+        (item) => item.anchorId && ids.has(item.anchorId),
+      );
+      const snapshot = index >= 0 ? unused.splice(index, 1)[0] : unused.shift();
+      if (snapshot) map.set(block.id, snapshot);
+    }
+    return map;
+  }, [processBlocks, snapshots]);
   const matches = useMemo(
     () =>
       query
@@ -1006,13 +1046,8 @@ export function PiTranscript({
                 block={blocks[row.index]}
                 query={searchOpen ? query : ""}
                 actions={actions}
+                snapshot={snapshotByBlock.get(blocks[row.index].id)}
               />
-              {piTurnDiffEnabled() && row.index === blocks.length - 1 && (
-                <PiTurnFilesCard
-                  files={piTurnFiles(threadKey)}
-                  onOpenFile={onOpenFile}
-                />
-              )}
             </div>
           ))}
         </div>
