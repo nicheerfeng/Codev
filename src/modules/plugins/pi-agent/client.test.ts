@@ -89,7 +89,7 @@ vi.mock("./native", () => ({
   }),
 }));
 import { PiWorkspaceClient } from "./client";
-import { piViewReducer } from "./reducer";
+import { DEFAULT_PI_THINKING_LEVELS, piViewReducer } from "./reducer";
 
 describe("Pi RPC workspace", () => {
   // 同一个 JSONL 的普通路径与 Windows 长路径必须复用同一内存线程。
@@ -617,6 +617,59 @@ describe("Pi RPC workspace", () => {
     });
     client.dispose();
   });
+  it("invalidates only runtimes whose resource fingerprint changed", async () => {
+    const native = await import("./native");
+    vi.mocked(native.startPiAgent).mockClear();
+    vi.mocked(native.listPiModels)
+      .mockResolvedValueOnce([
+        {
+          provider: "one",
+          id: "model-a",
+          baseUrl: "https://one.example/v1",
+          keyFingerprint: "sha256:a",
+        },
+        {
+          provider: "two",
+          id: "model-b",
+          baseUrl: "https://two.example/v1",
+          keyFingerprint: "sha256:b",
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          provider: "one",
+          id: "model-a",
+          baseUrl: "https://one.example/v1",
+          keyFingerprint: "sha256:a2",
+        },
+        {
+          provider: "two",
+          id: "model-b",
+          baseUrl: "https://two.example/v1",
+          keyFingerprint: "sha256:b",
+        },
+      ]);
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const first = await client.open("first", "D:/one");
+    await client.loadModels(first);
+    first.view = {
+      ...first.view,
+      model: first.view.models.find((model) => model.id === "model-a") ?? null,
+    };
+    await client.request(first, { type: "get_state" });
+    const second = await client.open("second", "D:/two");
+    await client.loadModels(second);
+    second.view = {
+      ...second.view,
+      model: second.view.models.find((model) => model.id === "model-b") ?? null,
+    };
+    await client.request(second, { type: "get_state" });
+    const secondRuntimeKey = second.runtimeModelKey;
+    await client.reloadCatalog();
+    expect(first.runtimeModelKey).toBeNull();
+    expect(second.runtimeModelKey).toBe(secondRuntimeKey);
+    client.dispose();
+  });
   it("fills idle history context percent from catalog window without starting a runtime", async () => {
     const native = await import("./native");
     vi.mocked(native.startPiAgent).mockClear();
@@ -1105,6 +1158,7 @@ describe("Pi RPC workspace", () => {
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
     const thread = await client.open("one", "D:/one");
     await client.request(thread, { type: "get_state" });
+    await client.setThinkingLevel(thread, "high");
     const previous = thread.runtimeId;
     vi.mocked(native.listPiModels).mockResolvedValueOnce([
       { provider: "openai", id: "gpt-new", name: "New" },
@@ -1122,6 +1176,14 @@ describe("Pi RPC workspace", () => {
         .mocked(native.sendPiCommand)
         .mock.calls.find(([, command]) => command.type === "set_model"),
     ).toBeTruthy();
+    expect(
+      vi
+        .mocked(native.sendPiCommand)
+        .mock.calls.some(
+          ([, command]) =>
+            command.type === "set_thinking_level" && command.level === "high",
+        ),
+    ).toBe(true);
     // 验证仍然发送了 prompt
     expect(
       vi
@@ -1171,6 +1233,15 @@ describe("Pi RPC workspace", () => {
       provider: "openai",
       modelId: "gpt-new",
     });
+    client.dispose();
+  });
+  it("shows the default thinking ladder on a new thread before runtime levels arrive", async () => {
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    const thread = await client.open("draft", "D:/one");
+    expect(thread.view.thinkingLevel).toBe("high");
+    expect(thread.view.thinkingLevels).toEqual(DEFAULT_PI_THINKING_LEVELS);
+    client.applyCatalogModel(thread, null);
+    expect(thread.view.thinkingLevels).toEqual(DEFAULT_PI_THINKING_LEVELS);
     client.dispose();
   });
 });

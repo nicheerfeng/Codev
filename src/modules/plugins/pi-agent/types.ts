@@ -62,6 +62,8 @@ export type PiModel = {
   id: string;
   name?: string;
   contextWindow?: number;
+  baseUrl?: string;
+  keyFingerprint?: string;
 };
 
 export type PiStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";

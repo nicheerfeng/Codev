@@ -107,6 +107,20 @@ export function isTemporaryCwd(
   return !!home && pathKey(cwd) === pathKey(home);
 }
 
+/** 临时聊天按归档状态分开，避免已归档会话从两侧同时消失。 */
+export function temporaryChatThreads<T extends { cwd: string; path: string }>(
+  threads: T[],
+  home: string | null | undefined,
+  archived: string[],
+  archivedOnly = false,
+): T[] {
+  return threads.filter(
+    (thread) =>
+      isTemporaryCwd(thread.cwd, home) &&
+      isArchivedPath(thread.path, archived) === archivedOnly,
+  );
+}
+
 /** 普通项目列表排除 Pi 主目录。 */
 export function visiblePiProjects(
   projects: string[],

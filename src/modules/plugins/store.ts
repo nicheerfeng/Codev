@@ -58,7 +58,7 @@ const DEFAULT_PLUGIN_STATE: PluginState = {
   piAgentHiddenProjects: [],
   piAgentOrganization: EMPTY_ORGANIZATION,
   piAgentLastModel: null,
-  piAgentLastThinkingLevel: "off",
+  piAgentLastThinkingLevel: "high",
   piAgentProjectOrder: [],
   piAgentSessionOrder: [],
 };
@@ -72,7 +72,7 @@ function normalizePluginState(
   projects: unknown = [],
   hiddenProjects: unknown = [],
   lastModel: unknown = null,
-  lastThinkingLevel: unknown = "off",
+  lastThinkingLevel: unknown = "high",
 ): PluginState {
   const enabled =
     typeof value === "object" && value !== null
@@ -126,7 +126,7 @@ function normalizePluginState(
     piAgentLastThinkingLevel:
       typeof lastThinkingLevel === "string" && lastThinkingLevel.trim()
         ? lastThinkingLevel
-        : "off",
+        : "high",
     piAgentProjectOrder: [],
     piAgentSessionOrder: [],
   };

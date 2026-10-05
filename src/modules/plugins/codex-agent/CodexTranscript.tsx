@@ -32,7 +32,6 @@ import {
   useVoiceOutput,
   useVoiceScopeConfig,
 } from "@/modules/plugins/codex-agent/voice/output";
-import { CodexTurnFilesCard } from "./CodexTurnFilesCard";
 import { codexTurnDiffEnabled, codexTurnFiles } from "./turnDiff";
 import { editableLastUser } from "./editLastUser";
 import { Tool } from "./controls";
@@ -55,11 +54,16 @@ const components = {
   table: MarkdownTable,
 };
 
-/** 删除记录定位原目录，其余文件交给主阅读器打开。 */
+/** 快照开启时打开本回合差异，否则在主界面打开文件。 */
 function openChangedFile(
   file: NonNullable<Item["changes"]>[number],
   onOpenFile?: (path: string) => void,
+  onOpenDiff?: (path: string, diff: string) => void,
 ) {
+  if (onOpenDiff && file.diff) {
+    onOpenDiff(file.path, file.diff);
+    return;
+  }
   if (file.kind?.type === "delete" || !onOpenFile) void revealChangedFile(file);
   else onOpenFile(file.path);
 }

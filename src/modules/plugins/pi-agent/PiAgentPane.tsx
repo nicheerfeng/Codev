@@ -36,6 +36,11 @@ import {
 } from "./client";
 import { INITIAL_PI_VIEW_STATE, objectValue } from "./reducer";
 
+/** 无活动线程时沿用最近思考等级，避免空 composer 把选择器藏掉。 */
+function idlePiView(thinkingLevel: string) {
+  return { ...INITIAL_PI_VIEW_STATE, thinkingLevel };
+}
+
 /** 判断路径是否为嵌套在父会话 JSONL 下的 pi-subagents 子会话。 */
 function isNestedPiSubagentSession(path: string) {
   const normalized = path.replace(/\\/g, "/").toLowerCase();
@@ -280,7 +285,7 @@ export function PiAgentPane({
   const projectOrder = usePluginStore((state) => state.piAgentProjectOrder);
   const sessionOrder = usePluginStore((state) => state.piAgentSessionOrder);
   const activeThread = threads.find((thread) => thread.key === selected);
-  const view = activeThread?.view ?? INITIAL_PI_VIEW_STATE;
+  const view = activeThread?.view ?? idlePiView(lastThinkingLevel);
   const activeCwd = activeThread?.cwd ?? project;
   const draftKey = selected ?? "";
   const draft = drafts[draftKey] ?? EMPTY_DRAFT;
@@ -1190,7 +1195,7 @@ export function PiAgentPane({
               const activeThread = threads.find(
                 (thread) => thread.key === paneKey,
               );
-              const view = activeThread?.view ?? INITIAL_PI_VIEW_STATE;
+              const view = activeThread?.view ?? idlePiView(lastThinkingLevel);
               const activeCwd =
                 activeThread?.cwd ??
                 rows.find((row) => row.key === paneKey)?.cwd ??

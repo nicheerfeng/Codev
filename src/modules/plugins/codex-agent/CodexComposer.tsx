@@ -107,10 +107,10 @@ export function CodexComposer({
     void listResources()
       .then((catalog) => {
         const resource = catalog.resources.find(
-          (item) => item.id === resourceId,
+          (item) => item.alias === resourceId,
         );
         if (!cancelled && resource)
-          setResourceName({ id: resourceId, alias: resource.alias });
+          setResourceName({ id: resource.alias, alias: resource.alias });
       })
       .catch((error) => toast.error(String(error)));
     return () => {

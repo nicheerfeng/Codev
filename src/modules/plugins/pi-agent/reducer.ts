@@ -7,6 +7,16 @@ import type {
   PiViewState,
 } from "./types";
 
+export const DEFAULT_PI_THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
 export const INITIAL_PI_VIEW_STATE: PiViewState = {
   modelsLoading: false,
   commands: [],
@@ -17,8 +27,8 @@ export const INITIAL_PI_VIEW_STATE: PiViewState = {
   sessionName: null,
   model: null,
   models: [],
-  thinkingLevel: "off",
-  thinkingLevels: ["off"],
+  thinkingLevel: "high",
+  thinkingLevels: DEFAULT_PI_THINKING_LEVELS,
   contextPercent: null,
   contextTokens: null,
   queue: { steering: [], followUp: [], pendingCount: 0 },
@@ -70,6 +80,18 @@ export function resultText(value: unknown): string {
   const result = objectValue(value);
   if (result?.content) return resultText(result.content);
   return value == null ? "" : JSON.stringify(value, null, 2);
+}
+
+/** Pi 处理超宽图时会把尺寸说明追加到用户文本，比对和展示都去掉它。 */
+const PI_IMAGE_SIZE_NOTE = /(?:\n|^)\s*\[Image: original [^\]]*\]\s*$/u;
+
+function comparableUserText(text: string): string {
+  return text.replace(PI_IMAGE_SIZE_NOTE, "").replace(/\s+$/u, "");
+}
+
+/** Pi 启动时的扩展 Warning/Info 不当作用户可见错误。 */
+function isPiStderrNoise(message: string): boolean {
+  return /^(?:warning|warn|info|debug)\b/i.test(message);
 }
 
 /** 将 Pi 的毫秒、秒或 ISO 时间统一为毫秒时间戳。 */
@@ -134,7 +156,7 @@ function normalizeMessage(message: unknown, id: string): PiTranscriptItem[] {
         id,
         kind: "message",
         role,
-        text: resultText(content).replace(/\s+$/u, ""),
+        text: comparableUserText(resultText(content)),
         thinking: "",
         streaming: false,
         images: content.filter(
@@ -199,7 +221,7 @@ function mergeItems(
           existing.kind === "message" &&
           existing.role === "user" &&
           existing.id.startsWith("local-user-") &&
-          existing.text === item.text,
+          comparableUserText(existing.text) === comparableUserText(item.text),
       );
     if (index < 0) next.push(item);
     else {
@@ -230,6 +252,11 @@ function modelValue(value: unknown): PiModel | null {
           typeof model.contextWindow === "number"
             ? model.contextWindow
             : undefined,
+        baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+        keyFingerprint:
+          typeof model.keyFingerprint === "string"
+            ? model.keyFingerprint
+            : undefined,
       }
     : null;
 }
@@ -254,8 +281,13 @@ function reduceEvent(
 ): PiViewState {
   const event = payload.event;
   const type = event.type;
-  if (payload.stream === "stderr")
-    return { ...state, error: String(event.message ?? "Pi 运行输出异常") };
+  if (payload.stream === "stderr") {
+    const message = String(
+      event.message ?? event.error ?? "Pi 运行输出异常",
+    ).trim();
+    if (!message || isPiStderrNoise(message)) return state;
+    return { ...state, error: message };
+  }
   if (payload.stream === "protocol")
     return { ...state, error: String(event.error), status: "failed" };
   if (type === "process_exit") {
@@ -505,7 +537,6 @@ function reduceEvent(
           ? data.sessionName
           : state.sessionName,
       model: state.model ?? modelValue(data?.model),
-      thinkingLevel: String(data?.thinkingLevel ?? state.thinkingLevel),
       queue: {
         ...state.queue,
         pendingCount:
@@ -543,15 +574,17 @@ function reduceEvent(
             .filter((value): value is PiModel => value !== null)
         : [],
     };
-  if (event.command === "get_available_thinking_levels")
+  if (event.command === "get_available_thinking_levels") {
+    const levels = Array.isArray(data?.levels)
+      ? data.levels.filter(
+          (value): value is string => typeof value === "string",
+        )
+      : [];
     return {
       ...state,
-      thinkingLevels: Array.isArray(data?.levels)
-        ? data.levels.filter(
-            (value): value is string => typeof value === "string",
-          )
-        : ["off"],
+      thinkingLevels: levels.length ? levels : DEFAULT_PI_THINKING_LEVELS,
     };
+  }
   if (event.command === "set_model")
     return { ...state, model: modelValue(event.data) ?? state.model };
   return state;
@@ -637,7 +670,7 @@ function hydrateHistory(
       (item) =>
         item.kind === "message" &&
         item.role === "user" &&
-        item.text === last.text,
+        comparableUserText(item.text) === comparableUserText(last.text),
     )
   )
     items = [...items, last];
@@ -662,7 +695,9 @@ function beginPrompt(
   const now = Date.now();
   const last = state.items[state.items.length - 1];
   const duplicate =
-    last?.kind === "message" && last.role === "user" && last.text === cleaned;
+    last?.kind === "message" &&
+    last.role === "user" &&
+    comparableUserText(last.text) === comparableUserText(cleaned);
   return {
     ...state,
     compaction:

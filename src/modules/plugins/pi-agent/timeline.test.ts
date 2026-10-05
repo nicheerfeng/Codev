@@ -10,6 +10,7 @@ import {
   defaultPiCollapsedKeys,
   isArchivedPath,
   isTemporaryCwd,
+  temporaryChatThreads,
   nextDraftKey,
   normalizeOrganization,
   pathKey,
@@ -409,6 +410,33 @@ describe("Pi turn grouping", () => {
     expect(one).toMatch(/^draft:d:\/work\/one:[0-9a-f-]{36}$/i);
     expect(two).toMatch(/^draft:d:\/work\/one:[0-9a-f-]{36}$/i);
     expect(one).not.toBe(two);
+  });
+  it("keeps archived temporary chats out of the live temporary group", () => {
+    const home = "C:/Users/me/.pi/agent";
+    const live = {
+      cwd: home,
+      path: `${home}/sessions/live.jsonl`,
+    };
+    const archived = {
+      cwd: home,
+      path: `${home}/sessions/archived.jsonl`,
+    };
+    const project = {
+      cwd: "D:/Work/One",
+      path: "D:/Work/One/session.jsonl",
+    };
+    const archivedPaths = [archived.path];
+    expect(
+      temporaryChatThreads([live, archived, project], home, archivedPaths),
+    ).toEqual([live]);
+    expect(
+      temporaryChatThreads(
+        [live, archived, project],
+        home,
+        archivedPaths,
+        true,
+      ),
+    ).toEqual([archived]);
   });
   it("keeps the Pi home directory out of ordinary projects", () => {
     const home = "C:/Users/me/.pi/agent";

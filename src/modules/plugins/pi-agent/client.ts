@@ -9,7 +9,12 @@ import {
   sendPiCommand,
   startPiAgent,
 } from "./native";
-import { INITIAL_PI_VIEW_STATE, objectValue, piViewReducer } from "./reducer";
+import {
+  DEFAULT_PI_THINKING_LEVELS,
+  INITIAL_PI_VIEW_STATE,
+  objectValue,
+  piViewReducer,
+} from "./reducer";
 import type { PiEventEnvelope, PiImage, PiModel, PiViewState } from "./types";
 import {
   anchorPiTurn,
@@ -86,7 +91,12 @@ export class PiWorkspaceClient {
   /** 生成模型身份键，目录刷新不会改变同一模型的 runtime 绑定。 */
   private modelKey(model: PiModel | null | undefined): string | null {
     if (!model?.provider || !model.id) return null;
-    return `${model.provider}\u0000${model.id}`;
+    return [
+      model.provider,
+      model.id,
+      model.baseUrl ?? "",
+      model.keyFingerprint ?? "",
+    ].join("\u0000");
   }
 
   /** 注册一次事件监听，以 runtimeId 分发并合并流式渲染刷新。 */
@@ -334,6 +344,11 @@ export class PiWorkspaceClient {
           provider: model.provider,
           modelId: model.id,
         });
+        if (thread.view.thinkingLevel)
+          await this.sendRequest(thread, {
+            type: "set_thinking_level",
+            level: thread.view.thinkingLevel,
+          });
         thread.runtimeModelKey = selectedKey;
         thread.catalogEpoch = this.catalogEpoch;
         return true;
@@ -387,11 +402,12 @@ export class PiWorkspaceClient {
     this.touchRuntime(thread);
     const runtimeId = thread.runtimeId;
     const id = crypto.randomUUID();
+    const timeoutMs = command.type === "compact" ? 180_000 : 120_000;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Pi ${command.type} 响应超时`));
-      }, 120_000);
+      }, timeoutMs);
       this.pending.set(id, { runtimeId, resolve, reject, timer });
       void sendPiCommand(runtimeId, { ...command, id }).catch((error) => {
         clearTimeout(timer);
@@ -495,7 +511,7 @@ export class PiWorkspaceClient {
         });
       }
       thread.runtimeModelKey = this.modelKey(model ?? thread.view.model);
-      if (intendedThinking && intendedThinking !== "off")
+      if (intendedThinking)
         await this.sendRequest(thread, {
           type: "set_thinking_level",
           level: intendedThinking,
@@ -906,18 +922,26 @@ export class PiWorkspaceClient {
   /** 设置页改完 models.json 后，刷新选择器并增加代次，不关闭任何进程。 */
   async reloadCatalog() {
     this.catalogEpoch += 1;
+    const previousCatalog = this.catalogModels;
     await this.loadCatalog(true);
     for (const thread of this.threads.values()) {
+      const previousModel = thread.view.model;
+      const previousCatalogModel = previousCatalog.find(
+        (model) =>
+          model.provider === previousModel?.provider &&
+          model.id === previousModel?.id,
+      );
+      const nextModel = this.withCatalogWindow(previousModel);
       thread.view = {
         ...thread.view,
         models: this.catalogModels,
-        model:
-          this.withCatalogWindow(thread.view.model) ??
-          this.catalogModels[0] ??
-          thread.view.model,
+        model: nextModel ?? this.catalogModels[0] ?? previousModel,
       };
-      // 清空 runtimeModelKey，强制下次操作时重新同步配置到 runtime
-      thread.runtimeModelKey = null;
+      if (
+        this.modelKey(previousCatalogModel ?? previousModel) !==
+        this.modelKey(thread.view.model)
+      )
+        thread.runtimeModelKey = null;
       this.fillContextPercent(thread);
     }
     this.publish();
@@ -940,7 +964,7 @@ export class PiWorkspaceClient {
       thinkingLevels:
         thread.view.thinkingLevels.length > 1
           ? thread.view.thinkingLevels
-          : ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+          : DEFAULT_PI_THINKING_LEVELS,
     };
     this.fillContextPercent(thread);
     this.publish();
@@ -956,6 +980,8 @@ export class PiWorkspaceClient {
       id: listed.id,
       name: listed.name ?? model.name,
       contextWindow: listed.contextWindow ?? model.contextWindow,
+      baseUrl: listed.baseUrl ?? model.baseUrl,
+      keyFingerprint: listed.keyFingerprint ?? model.keyFingerprint,
     };
   }
 
@@ -1158,6 +1184,11 @@ export class PiWorkspaceClient {
         provider: model.provider,
         modelId: model.id,
       });
+      if (thread.view.thinkingLevel)
+        await this.sendRequest(thread, {
+          type: "set_thinking_level",
+          level: thread.view.thinkingLevel,
+        });
       thread.runtimeModelKey = this.modelKey(model);
       thread.catalogEpoch = this.catalogEpoch;
       return;

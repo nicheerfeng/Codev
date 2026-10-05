@@ -66,6 +66,7 @@ tempfile = "3"
 notify = "8.2.0"
 trash = "5"
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+sha2 = "0.10"
 
 [dev-dependencies]
 proptest = "1"

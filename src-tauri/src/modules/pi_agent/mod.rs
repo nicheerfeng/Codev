@@ -15,6 +15,7 @@ use paths::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -133,6 +134,8 @@ pub struct PiListedModel {
     id: String,
     name: Option<String>,
     context_window: Option<u64>,
+    base_url: Option<String>,
+    key_fingerprint: String,
 }
 
 /// 表示 pi-subagents 为当前父会话记录的一个只读运行任务。
@@ -435,12 +438,24 @@ fn stream_stderr(app: AppHandle, session_id: u64, stderr: impl Read + Send + 'st
     thread::spawn(move || {
         for line in BufReader::new(stderr).lines() {
             match line {
-                Ok(message) if !message.trim().is_empty() => emit_event(
-                    &app,
-                    session_id,
-                    "stderr",
-                    json!({"type": "stderr", "message": message}),
-                ),
+                Ok(message) if !message.trim().is_empty() => {
+                    let trimmed = message.trim();
+                    if trimmed.to_ascii_lowercase().starts_with("warning")
+                        || trimmed.to_ascii_lowercase().starts_with("warn:")
+                        || trimmed.to_ascii_lowercase().starts_with("info:")
+                        || trimmed.to_ascii_lowercase().starts_with("debug:")
+                    {
+                        log::info!("pi stderr: {trimmed}");
+                    } else {
+                        log::warn!("pi stderr: {trimmed}");
+                        emit_event(
+                            &app,
+                            session_id,
+                            "stderr",
+                            json!({"type": "stderr", "message": message}),
+                        );
+                    }
+                }
                 Ok(_) => {}
                 Err(error) => {
                     emit_event(
@@ -717,6 +732,18 @@ fn list_models_from_file() -> Result<Vec<PiListedModel>, String> {
                     .and_then(Value::as_str)
                     .map(str::to_string),
                 context_window: model.get("contextWindow").and_then(Value::as_u64),
+                base_url: config
+                    .get("baseUrl")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                key_fingerprint: config
+                    .get("apiKey")
+                    .and_then(Value::as_str)
+                    .map(|key| {
+                        let digest = Sha256::digest(key.as_bytes());
+                        format!("sha256:{digest:x}")
+                    })
+                    .unwrap_or_default(),
             });
         }
     }

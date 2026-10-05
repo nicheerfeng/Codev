@@ -31,6 +31,7 @@ import {
   defaultPiCollapsedKeys,
   isTemporaryCwd,
   isArchivedPath,
+  temporaryChatThreads,
   pathKey,
   projectName,
   sessionIdentity,
@@ -177,10 +178,20 @@ export function PiSidebar(props: Props) {
   );
   const temporaryThreads = useMemo(
     () =>
-      props.threads.filter(
-        (thread) =>
-          isTemporaryCwd(thread.cwd, props.temporaryHome) &&
-          !isArchivedPath(thread.path, props.organization.archived),
+      temporaryChatThreads(
+        props.threads,
+        props.temporaryHome,
+        props.organization.archived,
+      ),
+    [props.threads, props.temporaryHome, props.organization.archived],
+  );
+  const archivedTemporaryThreads = useMemo(
+    () =>
+      temporaryChatThreads(
+        props.threads,
+        props.temporaryHome,
+        props.organization.archived,
+        true,
       ),
     [props.threads, props.temporaryHome, props.organization.archived],
   );
@@ -604,6 +615,61 @@ export function PiSidebar(props: Props) {
       </ContextMenuContent>
     </ContextMenu>
   );
+  /** 临时聊天按活跃/归档分页渲染，不进入普通项目分组。 */
+  const temporaryThreadList = (isArchived: boolean) => {
+    const nodeKey = isArchived
+      ? `archive:${TEMPORARY_GROUP_ID}`
+      : `group:${TEMPORARY_GROUP_ID}`;
+    const source = isArchived ? archivedTemporaryThreads : temporaryThreads;
+    const rows = source.filter(
+      (thread) =>
+        !filter ||
+        `${thread.name ?? ""} ${thread.preview ?? ""} 临时聊天`
+          .toLocaleLowerCase()
+          .includes(filter.toLocaleLowerCase()),
+    );
+    if (isArchived && !rows.length) return null;
+    const ordered = applySavedOrder(
+      rows.map((row) => sessionIdentity(row.path, row.key)),
+      sessionOrder,
+    )
+      .map(
+        (id) => rows.find((row) => sessionIdentity(row.path, row.key) === id)!,
+      )
+      .filter(Boolean);
+    const visible = ordered.slice(
+      0,
+      filter ? ordered.length : (counts[nodeKey] ?? SESSION_PAGE),
+    );
+    return (
+      <>
+        {visible.map((thread, index) =>
+          threadRow(
+            thread,
+            isArchived,
+            TEMPORARY_GROUP_ID,
+            index,
+            visible.map((item) => sessionIdentity(item.path, item.key)),
+          ),
+        )}
+        {visible.length < rows.length && (
+          <Button
+            size="xs"
+            variant="ghost"
+            className="text-muted-foreground"
+            onClick={() =>
+              setCounts((value) => ({
+                ...value,
+                [nodeKey]: (value[nodeKey] ?? SESSION_PAGE) + SESSION_MORE,
+              }))
+            }
+          >
+            显示更多（{rows.length - visible.length}）
+          </Button>
+        )}
+      </>
+    );
+  };
   /** 渲染项目及分页线程，空项目保留新建入口。 */
   const projectRow = (cwd: string, isArchived = false) => {
     const key = pathKey(cwd);
@@ -1020,62 +1086,7 @@ export function PiSidebar(props: Props) {
             ) : null}
           </div>
           {(!collapsed.has(`group:${TEMPORARY_GROUP_ID}`) || filter) &&
-            (() => {
-              const nodeKey = `group:${TEMPORARY_GROUP_ID}`;
-              const rows = temporaryThreads.filter(
-                (thread) =>
-                  !filter ||
-                  `${thread.name ?? ""} ${thread.preview ?? ""} 临时聊天`
-                    .toLocaleLowerCase()
-                    .includes(filter.toLocaleLowerCase()),
-              );
-              const ordered = applySavedOrder(
-                rows.map((row) => sessionIdentity(row.path, row.key)),
-                sessionOrder,
-              )
-                .map(
-                  (id) =>
-                    rows.find(
-                      (row) => sessionIdentity(row.path, row.key) === id,
-                    )!,
-                )
-                .filter(Boolean);
-              const visible = ordered.slice(
-                0,
-                filter ? ordered.length : (counts[nodeKey] ?? SESSION_PAGE),
-              );
-              return (
-                <>
-                  {visible.map((thread, index) =>
-                    threadRow(
-                      thread,
-                      false,
-                      TEMPORARY_GROUP_ID,
-                      index,
-                      visible.map((item) =>
-                        sessionIdentity(item.path, item.key),
-                      ),
-                    ),
-                  )}
-                  {visible.length < rows.length && (
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      className="text-muted-foreground"
-                      onClick={() =>
-                        setCounts((value) => ({
-                          ...value,
-                          [nodeKey]:
-                            (value[nodeKey] ?? SESSION_PAGE) + SESSION_MORE,
-                        }))
-                      }
-                    >
-                      显示更多（{rows.length - visible.length}）
-                    </Button>
-                  )}
-                </>
-              );
-            })()}
+            temporaryThreadList(false)}
         </section>
         <section className="border-t border-border pt-2">
           <button
@@ -1097,8 +1108,19 @@ export function PiSidebar(props: Props) {
               }
             </span>
           </button>
-          {(archiveOpen || filter) &&
-            projects.map((path) => projectRow(path, true))}
+          {(archiveOpen || filter) && (
+            <>
+              {archivedTemporaryThreads.length > 0 && (
+                <div className="mb-2">
+                  <div className="px-1 py-1 text-[11px] text-muted-foreground">
+                    临时聊天
+                  </div>
+                  {temporaryThreadList(true)}
+                </div>
+              )}
+              {projects.map((path) => projectRow(path, true))}
+            </>
+          )}
         </section>
       </div>
       {ghost && (

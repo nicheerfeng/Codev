@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { INITIAL_PI_VIEW_STATE, piViewReducer } from "./reducer";
+import {
+  DEFAULT_PI_THINKING_LEVELS,
+  INITIAL_PI_VIEW_STATE,
+  piViewReducer,
+} from "./reducer";
 import type { PiEventEnvelope } from "./types";
 
 /** 构造单元测试使用的 stdout RPC 事件。 */
@@ -431,7 +435,7 @@ describe("piViewReducer", () => {
         success: true,
         data: {
           sessionFile: "session.jsonl",
-          thinkingLevel: "high",
+          thinkingLevel: "max",
           model: { provider: "openai", id: "gpt" },
         },
       }),
@@ -464,6 +468,47 @@ describe("piViewReducer", () => {
     expect(older.historyHasMore).toBe(false);
   });
 
+  it("replaces a local user prompt when Pi appends a wide-image size note", () => {
+    const prompted = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "prompt",
+      text: "最快速度将执行日志也挪到第一行的右侧去，，",
+      images: [{ type: "image", data: "abc", mimeType: "image/png" }],
+    });
+    expect(prompted.items).toHaveLength(1);
+    const hydrated = piViewReducer(prompted, {
+      type: "event",
+      payload: rpc({
+        type: "response",
+        command: "get_messages",
+        success: true,
+        data: {
+          messages: [
+            {
+              id: "06603301",
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "最快速度将执行日志也挪到第一行的右侧去，，\n\n[Image: original 2763x132, displayed at 2000x96. Multiply coordinates by 1.38 to map to original image.]",
+                },
+                { type: "image", data: "abc", mimeType: "image/png" },
+              ],
+            },
+          ],
+        },
+      }),
+    });
+    const users = hydrated.items.filter(
+      (item) => item.kind === "message" && item.role === "user",
+    );
+    expect(users).toHaveLength(1);
+    expect(users[0]).toMatchObject({
+      id: "06603301",
+      text: "最快速度将执行日志也挪到第一行的右侧去，，",
+    });
+    expect(users[0].kind === "message" && users[0].images).toHaveLength(1);
+  });
+
   it("clears a finished compaction notice on the next prompt", () => {
     const compacted = {
       ...INITIAL_PI_VIEW_STATE,
@@ -492,5 +537,66 @@ describe("piViewReducer", () => {
       queued: true,
     });
     expect(next.compaction?.status).toBe("running");
+  });
+
+  it("ignores Pi extension warnings on stderr", () => {
+    const state = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "event",
+      payload: {
+        sessionId: 1,
+        stream: "stderr",
+        event: {
+          type: "stderr",
+          message:
+            'Warning: Extension package "pi-lens": Host-provided extension packages must be declared in peerDependencies',
+        },
+      },
+    });
+    expect(state.error).toBeNull();
+  });
+
+  it("shows the default thinking ladder before a runtime answers", () => {
+    expect(INITIAL_PI_VIEW_STATE.thinkingLevel).toBe("high");
+    expect(INITIAL_PI_VIEW_STATE.thinkingLevels).toEqual(
+      DEFAULT_PI_THINKING_LEVELS,
+    );
+  });
+
+  it("keeps runtime thinking levels and falls back when the list is empty", () => {
+    const listed = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "event",
+      payload: rpc({
+        type: "response",
+        command: "get_available_thinking_levels",
+        success: true,
+        data: { levels: ["off", "high"] },
+      }),
+    });
+    expect(listed.thinkingLevels).toEqual(["off", "high"]);
+    const empty = piViewReducer(listed, {
+      type: "event",
+      payload: rpc({
+        type: "response",
+        command: "get_available_thinking_levels",
+        success: true,
+        data: { levels: [] },
+      }),
+    });
+    expect(empty.thinkingLevels).toEqual(DEFAULT_PI_THINKING_LEVELS);
+  });
+
+  it("still surfaces real Pi stderr errors", () => {
+    const state = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "event",
+      payload: {
+        sessionId: 1,
+        stream: "stderr",
+        event: {
+          type: "stderr",
+          message: "Error: failed to start session",
+        },
+      },
+    });
+    expect(state.error).toBe("Error: failed to start session");
   });
 });
