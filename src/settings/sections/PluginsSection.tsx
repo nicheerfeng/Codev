@@ -6,6 +6,7 @@ import {
   CODEX_AGENT_PLUGIN_ID,
   BROWSER_PLUGIN_ID,
   TEXT_DIFF_PLUGIN_ID,
+  TASKBAR_UNREAD_PLUGIN_ID,
   setPluginEnabled,
   usePluginStore,
 } from "@/modules/plugins";
@@ -30,6 +31,9 @@ export function PluginsSection() {
   );
   const browserEnabled = usePluginStore(
     (state) => state.enabled[BROWSER_PLUGIN_ID],
+  );
+  const taskbarUnreadEnabled = usePluginStore(
+    (state) => state.enabled[TASKBAR_UNREAD_PLUGIN_ID],
   );
 
   useEffect(() => {
@@ -84,6 +88,19 @@ export function PluginsSection() {
           checked={browserEnabled}
           onCheckedChange={(value) =>
             void setPluginEnabled(BROWSER_PLUGIN_ID, value)
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        title={t("Taskbar unread badge")}
+        description={t(
+          "Show finished Pi and Codex tasks as a count on the app icon. Default on.",
+        )}
+      >
+        <Switch
+          checked={taskbarUnreadEnabled}
+          onCheckedChange={(value) =>
+            void setPluginEnabled(TASKBAR_UNREAD_PLUGIN_ID, value)
           }
         />
       </SettingRow>

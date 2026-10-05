@@ -4,6 +4,7 @@ export {
   CODEX_AGENT_PLUGIN_ID,
   BROWSER_PLUGIN_ID,
   TEXT_DIFF_PLUGIN_ID,
+  TASKBAR_UNREAD_PLUGIN_ID,
   setPluginEnabled,
   usePluginStore,
 } from "./store";

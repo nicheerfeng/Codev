@@ -1,11 +1,12 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import { JsonFormatterPane } from "./JsonFormatterPane";
-import { TextDiffPane } from "./TextDiffPane";
+import { JsonFormatterPane } from "./json-formatter/JsonFormatterPane";
+import { TextDiffPane } from "./text-diff/TextDiffPane";
 import {
   CODEX_AGENT_PLUGIN_ID,
   PI_AGENT_PLUGIN_ID,
   usePluginStore,
 } from "./store";
+import { clearUnreadPrefix } from "./taskbar-unread/unreadTasks";
 const CodexPane = lazy(() =>
   import("./codex-agent/CodexPane").then((module) => ({
     default: module.CodexPane,
@@ -89,6 +90,18 @@ export function ToolPanel({
   useEffect(() => {
     if (active && tool === "pi") setPiVisited(true);
   }, [tool, active]);
+  useEffect(() => {
+    if (!piEnabled) {
+      setPiVisited(false);
+      clearUnreadPrefix("pi:");
+    }
+  }, [piEnabled]);
+  useEffect(() => {
+    if (!codexEnabled) {
+      setCodexVisited(false);
+      clearUnreadPrefix("codex:");
+    }
+  }, [codexEnabled]);
   return (
     <div className="relative h-full min-h-0 min-w-0 overflow-hidden bg-card">
       <div

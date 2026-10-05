@@ -91,6 +91,9 @@ const ZH: Record<string, string> = {
   "Text Diff": "文本对照",
   "Compare two texts in aligned editors with automatic difference highlighting.":
     "在对齐编辑器中比较两段文本并自动高亮差异。",
+  "Taskbar unread badge": "任务栏待读角标",
+  "Show finished Pi and Codex tasks as a count on the app icon. Default on.":
+    "把 Pi 和 Codex 已完成未查看的任务数叠到应用图标右下角。默认开启。",
   Shortcuts: "快捷键",
   "Show hidden files": "显示隐藏文件",
   "Semi-Bold": "半粗",

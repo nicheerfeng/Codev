@@ -33,6 +33,14 @@ import { Tool } from "./controls";
 import { useCodexSidebarReorder } from "./useCodexSidebarReorder";
 import { exportMarkdown } from "./export";
 import { homeDir } from "@tauri-apps/api/path";
+import {
+  applyUnreadStatusChanges,
+  collectUnreadStatusChanges,
+  hasUnreadTask,
+  markTaskRead as markUnreadTaskRead,
+  subscribeUnreadTasks,
+  unreadTaskId,
+} from "../taskbar-unread/unreadTasks";
 
 type Layout = {
   projects: string[];
@@ -124,6 +132,38 @@ export function CodexSidebar({
     null,
   );
   const inlineCommitting = useRef(false);
+  const previousTaskStatus = useRef(new Map<string, string>());
+  const [unreadRevision, setUnreadRevision] = useState(0);
+  useEffect(
+    () => subscribeUnreadTasks(() => setUnreadRevision((value) => value + 1)),
+    [],
+  );
+  useEffect(() => {
+    const tasks = Object.values(state.sessions).map((session) => {
+      const key = client.sessionKey(session.thread.id);
+      const status = session.requests.length
+        ? "waiting"
+        : session.stopping
+          ? "stopping"
+          : session.busy || session.sending || session.queue.length
+            ? "running"
+            : session.error
+              ? "failed"
+              : "idle";
+      return { key, status };
+    });
+    applyUnreadStatusChanges(
+      collectUnreadStatusChanges(previousTaskStatus.current, tasks, (key) =>
+        unreadTaskId("codex", key),
+      ),
+    );
+  }, [client, state.sessions]);
+  void unreadRevision;
+  const isUnread = (id: string) =>
+    hasUnreadTask(unreadTaskId("codex", client.sessionKey(id)));
+  const markCodexRead = (id: string) => {
+    markUnreadTaskRead(unreadTaskId("codex", client.sessionKey(id)));
+  };
   useEffect(() => {
     void homeDir()
       .then(setHome)
@@ -371,6 +411,7 @@ export function CodexSidebar({
                 className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left"
                 aria-label={`${title} ${projectName(thread.cwd)}`}
                 onClick={() => {
+                  markCodexRead(thread.id);
                   onSelect(thread.id);
                 }}
                 onDoubleClick={() => {
@@ -385,9 +426,11 @@ export function CodexSidebar({
                       ? "等待输入"
                       : session.busy
                         ? "运行中"
-                        : "就绪"
+                        : isUnread(thread.id)
+                          ? "已完成，待查看"
+                          : "就绪"
                   }
-                  className={`codex-status-dot ${session.requests.length ? "codex-waiting" : session.busy ? "codex-running" : ""}`}
+                  className={`codex-status-dot ${session.requests.length ? "codex-waiting" : session.busy ? "codex-running" : isUnread(thread.id) ? "codex-unread" : ""}`}
                 />
                 <span className="min-w-0 flex-1 truncate text-xs">{title}</span>
               </button>
@@ -404,7 +447,7 @@ export function CodexSidebar({
                   toggle(collapseKey);
                 }}
                 onDoubleClick={(event) => event.stopPropagation()}
-                className={`mr-1 flex h-7 min-w-7 shrink-0 justify-center items-center gap-0.5 rounded px-1 text-[10px] hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring ${children.some((child) => child.requests.length) ? "text-amber-600 dark:text-amber-300" : children.some((child) => child.busy) ? "animate-pulse text-[#477faf] dark:text-[#a6cceb]" : "text-muted-foreground"}`}
+                className={`mr-1 flex h-7 min-w-7 shrink-0 justify-center items-center gap-0.5 rounded px-1 text-[10px] hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring ${children.some((child) => child.requests.length) ? "text-amber-600 dark:text-amber-300" : children.some((child) => child.busy) ? "animate-pulse text-[#477faf] dark:text-[#a6cceb]" : children.some((child) => isUnread(child.thread.id)) ? "text-[#477faf] dark:text-[#a6cceb]" : "text-muted-foreground"}`}
               >
                 <HugeiconsIcon
                   size={12}

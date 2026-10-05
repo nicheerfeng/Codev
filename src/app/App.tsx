@@ -35,7 +35,12 @@ import {
 } from "@/modules/header";
 import { openSettingsWindow } from "@/modules/settings/openSettingsWindow";
 import { usePreferencesStore } from "@/modules/settings/preferences";
-import { ToolPanel, usePluginStore } from "@/modules/plugins";
+import {
+  TASKBAR_UNREAD_PLUGIN_ID,
+  ToolPanel,
+  usePluginStore,
+} from "@/modules/plugins";
+import { useTaskbarUnreadBadge } from "@/modules/plugins/taskbar-unread/useTaskbarUnreadBadge";
 import {
   composeExplorerPathDropTargets,
   createPiComposerPathDropTarget,
@@ -118,6 +123,10 @@ function tabPathMatches(tab: Tab, path: string): boolean {
 }
 
 export default function App() {
+  const taskbarUnreadEnabled = usePluginStore(
+    (state) => state.enabled[TASKBAR_UNREAD_PLUGIN_ID],
+  );
+  useTaskbarUnreadBadge(taskbarUnreadEnabled);
   const [installStamp, setInstallStamp] = useState<string | null>(null);
   const [sidebarMode, setSidebarMode] = useState<"files" | "git">("files");
   const [showWelcome, setShowWelcome] = useState(() => shouldShowWelcome(null));

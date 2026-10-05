@@ -40,6 +40,7 @@ tauri = { version = "2", features = [
   "protocol-asset",
   "tray-icon",
   "image-ico",
+  "image-png",
   "unstable",
 ] }
 tauri-plugin-single-instance = "2"

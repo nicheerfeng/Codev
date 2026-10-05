@@ -56,6 +56,14 @@ import type { PiSessionSummary, PiViewStatus } from "./types";
 import type { PiSubagentRun } from "./native";
 import { cwdIsLive } from "./projectActivity";
 import { usePiSidebarReorder } from "./usePiSidebarReorder";
+import {
+  applyUnreadStatusChanges,
+  collectUnreadStatusChanges,
+  hasUnreadTask,
+  markTaskRead as markUnreadTaskRead,
+  subscribeUnreadTasks,
+  unreadTaskId,
+} from "../taskbar-unread/unreadTasks";
 
 export type SidebarThread = PiSessionSummary & {
   key: string;
@@ -115,55 +123,33 @@ function DropLine() {
 export function PiSidebar(props: Props) {
   const { width, onWidthChange: setWidth } = props;
   const previousTaskStatus = useRef(new Map<string, string>());
-  const [unreadTasks, setUnreadTasks] = useState<Set<string>>(new Set());
+  const [unreadRevision, setUnreadRevision] = useState(0);
+  useEffect(
+    () => subscribeUnreadTasks(() => setUnreadRevision((value) => value + 1)),
+    [],
+  );
   /** 记录本次界面观测到的终轮完成，只有点击对应任务才清除。 */
   useEffect(() => {
-    const completed: string[] = [];
-    const running: string[] = [];
-    for (const thread of props.threads) {
-      const tasks = [
-        { key: thread.key, status: thread.status ?? "", child: false },
-        ...(thread.subagents ?? []).map((run) => ({
-          key: run.runId,
-          status: run.status,
-          child: true,
-        })),
-      ];
-      for (const task of tasks) {
-        const previous = previousTaskStatus.current.get(task.key);
-        const active = ["running", "queued", "stopping"].includes(task.status);
-        const done = ["idle", "complete", "completed"].includes(task.status);
-        if (active) running.push(task.key);
-        if (
-          done &&
-          (previous === "running" ||
-            previous === "queued" ||
-            previous === "stopping" ||
-            (task.child && previous === undefined))
-        )
-          completed.push(task.key);
-        previousTaskStatus.current.set(task.key, task.status);
-      }
-    }
-    setUnreadTasks((current) => {
-      const next = new Set(current);
-      running.forEach((key) => next.delete(key));
-      completed.forEach((key) => next.add(key));
-      return next.size === current.size &&
-        [...next].every((key) => current.has(key))
-        ? current
-        : next;
-    });
+    const tasks = props.threads.flatMap((thread) => [
+      { key: thread.key, status: thread.status ?? "", child: false },
+      ...(thread.subagents ?? []).map((run) => ({
+        key: run.runId,
+        status: run.status,
+        child: true,
+      })),
+    ]);
+    applyUnreadStatusChanges(
+      collectUnreadStatusChanges(previousTaskStatus.current, tasks, (key) =>
+        unreadTaskId("pi", key),
+      ),
+    );
   }, [props.threads]);
   /** 点击任务确认已查看，不影响其他父子任务的待审核标记。 */
   function markTaskRead(key: string) {
-    setUnreadTasks((current) => {
-      if (!current.has(key)) return current;
-      const next = new Set(current);
-      next.delete(key);
-      return next;
-    });
+    markUnreadTaskRead(unreadTaskId("pi", key));
   }
+  void unreadRevision;
+  const isUnread = (key: string) => hasUnreadTask(unreadTaskId("pi", key));
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
   const storedCollapsed = useRef(readPiCollapsed());
   const [openedProjects, setOpenedProjects] = useState<Set<string>>(new Set());
@@ -459,7 +445,7 @@ export function PiSidebar(props: Props) {
                     ? "等待输入"
                     : thread.status === "running"
                       ? "运行中"
-                      : unreadTasks.has(thread.key)
+                      : isUnread(thread.key)
                         ? "已完成，待查看"
                         : "就绪"
                 }
@@ -468,11 +454,11 @@ export function PiSidebar(props: Props) {
                     ? "等待输入"
                     : thread.status === "running"
                       ? "运行中"
-                      : unreadTasks.has(thread.key)
+                      : isUnread(thread.key)
                         ? "已完成，待查看"
                         : "就绪"
                 }
-                className={`size-2 shrink-0 rounded-full ${thread.waiting ? "bg-amber-600 ring-2 ring-amber-600/25 dark:bg-amber-300" : thread.status === "running" ? "pi-running-dot bg-[#477faf] text-[#477faf] dark:bg-[#a6cceb] dark:text-[#a6cceb]" : unreadTasks.has(thread.key) ? "bg-[#477faf] dark:bg-[#a6cceb]" : "bg-muted-foreground/50"}`}
+                className={`size-2 shrink-0 rounded-full ${thread.waiting ? "bg-amber-600 ring-2 ring-amber-600/25 dark:bg-amber-300" : thread.status === "running" ? "pi-running-dot bg-[#477faf] text-[#477faf] dark:bg-[#a6cceb] dark:text-[#a6cceb]" : isUnread(thread.key) ? "bg-[#477faf] dark:bg-[#a6cceb]" : "bg-muted-foreground/50"}`}
               />
               {editingKey === thread.key ? (
                 <Input
@@ -519,7 +505,7 @@ export function PiSidebar(props: Props) {
                   );
                 }}
                 onDoubleClick={(event) => event.stopPropagation()}
-                className={`mr-1 flex h-7 min-w-7 shrink-0 justify-center items-center gap-0.5 rounded px-1 text-[10px] hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring ${thread.subagents.some((run) => ["running", "queued"].includes(run.status)) ? "text-[#477faf] dark:text-[#a6cceb]" : thread.subagents.some((run) => unreadTasks.has(run.runId)) ? "text-[#477faf] dark:text-[#a6cceb]" : "text-muted-foreground"}`}
+                className={`mr-1 flex h-7 min-w-7 shrink-0 justify-center items-center gap-0.5 rounded px-1 text-[10px] hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring ${thread.subagents.some((run) => ["running", "queued"].includes(run.status)) ? "text-[#477faf] dark:text-[#a6cceb]" : thread.subagents.some((run) => isUnread(run.runId)) ? "text-[#477faf] dark:text-[#a6cceb]" : "text-muted-foreground"}`}
               >
                 <HugeiconsIcon
                   size={12}
@@ -558,11 +544,11 @@ export function PiSidebar(props: Props) {
                       ? "运行中"
                       : run.status === "failed"
                         ? "失败"
-                        : unreadTasks.has(run.runId)
+                        : isUnread(run.runId)
                           ? "已完成，待查看"
                           : "已查看"
                   }
-                  className={`size-1.5 shrink-0 rounded-full ${run.status === "running" || run.status === "queued" ? "bg-[#477faf] dark:bg-[#a6cceb]" : run.status === "failed" ? "bg-destructive" : unreadTasks.has(run.runId) ? "bg-[#477faf] dark:bg-[#a6cceb]" : "bg-muted-foreground/50"}`}
+                  className={`size-1.5 shrink-0 rounded-full ${run.status === "running" || run.status === "queued" ? "bg-[#477faf] dark:bg-[#a6cceb]" : run.status === "failed" ? "bg-destructive" : isUnread(run.runId) ? "bg-[#477faf] dark:bg-[#a6cceb]" : "bg-muted-foreground/50"}`}
                 />
                 <span
                   className="min-w-0 flex-1 truncate"

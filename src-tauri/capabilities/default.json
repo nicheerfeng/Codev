@@ -20,6 +20,7 @@
     "core:window:allow-hide",
     "core:window:allow-set-focus",
     "core:window:allow-set-title",
+    "core:window:allow-set-overlay-icon",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "dialog:default",

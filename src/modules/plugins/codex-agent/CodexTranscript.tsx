@@ -300,10 +300,12 @@ function Message({
 function Activity({
   item,
   onOpenFile,
+  onOpenDiff,
   query,
 }: {
   item: Item;
   onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string, diff: string) => void;
   query: string;
 }) {
   const text = itemText(item);
@@ -340,7 +342,7 @@ function Activity({
               <button
                 type="button"
                 className="text-primary hover:underline"
-                onClick={() => openChangedFile(change, onOpenFile)}
+                onClick={() => openChangedFile(change, onOpenFile, onOpenDiff)}
               >
                 {change.path}
               </button>
@@ -365,10 +367,12 @@ function Activity({
 function ActivityGroup({
   items,
   onOpenFile,
+  onOpenDiff,
   query,
 }: {
   items: Item[];
   onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string, diff: string) => void;
   query: string;
 }) {
   const latest = items[items.length - 1];
@@ -386,6 +390,7 @@ function ActivityGroup({
             key={item.id}
             item={item}
             onOpenFile={onOpenFile}
+            onOpenDiff={onOpenDiff}
             query={query}
           />
         ))}
@@ -400,12 +405,14 @@ function Process({
   running,
   query,
   onOpenFile,
+  onOpenDiff,
   turn,
 }: {
   items: Item[];
   running: boolean;
   query: string;
   onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string, diff: string) => void;
   turn: Turn;
 }) {
   const [expanded, setExpanded] = useState(running);
@@ -483,6 +490,7 @@ function Process({
                 key={step.id}
                 items={step.items}
                 onOpenFile={onOpenFile}
+                onOpenDiff={onOpenDiff}
                 query={query}
               />
             ),
@@ -505,34 +513,50 @@ function Process({
             </span>
           </summary>
           <div className="space-y-1 py-1 pl-5">
-            {files.map((file) => (
-              <details key={file.path}>
-                <summary className="truncate">
+            {files.map((file) => {
+              const diff = onOpenDiff
+                ? codexTurnFiles([file]).find((item) => item.path === file.path)
+                : undefined;
+              return (
+                <details key={file.path}>
+                  <summary className="truncate">
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        openChangedFile(file, onOpenFile, onOpenDiff);
+                      }}
+                    >
+                      {file.kind?.type === "add"
+                        ? "新增"
+                        : file.kind?.type === "delete"
+                          ? "删除"
+                          : "修改"}{" "}
+                      · {file.path}
+                      {diff && (diff.adds > 0 || diff.dels > 0) ? (
+                        <span className="ml-2 font-mono text-[10px]">
+                          {diff.adds > 0 && (
+                            <span className="text-green-500">+{diff.adds}</span>
+                          )}
+                          {diff.adds > 0 && diff.dels > 0 ? " " : ""}
+                          {diff.dels > 0 && (
+                            <span className="text-red-500">-{diff.dels}</span>
+                          )}
+                        </span>
+                      ) : null}
+                    </button>
+                  </summary>
                   <button
                     type="button"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      openChangedFile(file, onOpenFile);
-                    }}
+                    className="text-xs text-muted-foreground"
+                    onClick={() => void revealChangedFile(file)}
                   >
-                    {file.kind?.type === "add"
-                      ? "新增"
-                      : file.kind?.type === "delete"
-                        ? "删除"
-                        : "修改"}{" "}
-                    · {file.path}
+                    在资源管理器中显示
                   </button>
-                </summary>
-                <button
-                  type="button"
-                  className="text-xs text-muted-foreground"
-                  onClick={() => void revealChangedFile(file)}
-                >
-                  在资源管理器中显示
-                </button>
-                <pre>{file.diff}</pre>
-              </details>
-            ))}
+                  <pre>{file.diff}</pre>
+                </details>
+              );
+            })}
           </div>
         </details>
       )}
@@ -546,6 +570,7 @@ function TurnView({
   running,
   query,
   onOpenFile,
+  onOpenDiff,
   onFork,
   forkDisabled,
   onEdit,
@@ -555,6 +580,7 @@ function TurnView({
   running: boolean;
   query: string;
   onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string, diff: string) => void;
   onFork: () => void;
   forkDisabled: boolean;
   onEdit?: (text: string) => Promise<void>;
@@ -588,6 +614,7 @@ function TurnView({
             running={running}
             query={query}
             onOpenFile={onOpenFile}
+            onOpenDiff={onOpenDiff}
           />
         ) : (
           <Message
@@ -659,6 +686,7 @@ export function CodexTranscript({
   client,
   search,
   onOpenFile,
+  onOpenDiff,
   onFork,
   active = true,
 }: {
@@ -666,6 +694,7 @@ export function CodexTranscript({
   client: CodexClient;
   search: string;
   onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string, diff: string) => void;
   onFork: (id: string) => void;
   active?: boolean;
 }) {
@@ -917,6 +946,7 @@ export function CodexTranscript({
                     running={session.turnId === turn.id}
                     query={query}
                     onOpenFile={onOpenFile}
+                    onOpenDiff={codexTurnDiffEnabled() ? onOpenDiff : undefined}
                     forkDisabled={
                       !client.getSnapshot().connected ||
                       session.busy ||
@@ -942,14 +972,6 @@ export function CodexTranscript({
                         : undefined
                     }
                   />
-                  {codexTurnDiffEnabled() && (
-                    <CodexTurnFilesCard
-                      files={codexTurnFiles(
-                        turn.items.flatMap((item) => item.changes ?? []),
-                      )}
-                      onOpenFile={onOpenFile}
-                    />
-                  )}
                 </div>
               );
             })}

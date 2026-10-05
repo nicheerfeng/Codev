@@ -14,12 +14,14 @@ export const TEXT_DIFF_PLUGIN_ID = "text-diff" as const;
 export const PI_AGENT_PLUGIN_ID = "pi-agent" as const;
 export const CODEX_AGENT_PLUGIN_ID = "codex-agent" as const;
 export const BROWSER_PLUGIN_ID = "browser" as const;
+export const TASKBAR_UNREAD_PLUGIN_ID = "taskbar-unread" as const;
 export type PluginId =
   | typeof JSON_FORMATTER_PLUGIN_ID
   | typeof TEXT_DIFF_PLUGIN_ID
   | typeof PI_AGENT_PLUGIN_ID
   | typeof CODEX_AGENT_PLUGIN_ID
-  | typeof BROWSER_PLUGIN_ID;
+  | typeof BROWSER_PLUGIN_ID
+  | typeof TASKBAR_UNREAD_PLUGIN_ID;
 
 export type PluginState = {
   enabled: Record<PluginId, boolean>;
@@ -53,6 +55,7 @@ const DEFAULT_PLUGIN_STATE: PluginState = {
     [PI_AGENT_PLUGIN_ID]: false,
     [CODEX_AGENT_PLUGIN_ID]: false,
     [BROWSER_PLUGIN_ID]: false,
+    [TASKBAR_UNREAD_PLUGIN_ID]: true,
   },
   piAgentProjects: [],
   piAgentHiddenProjects: [],
@@ -90,6 +93,7 @@ function normalizePluginState(
       [PI_AGENT_PLUGIN_ID]: enabled[PI_AGENT_PLUGIN_ID] === true,
       [CODEX_AGENT_PLUGIN_ID]: enabled[CODEX_AGENT_PLUGIN_ID] === true,
       [BROWSER_PLUGIN_ID]: enabled[BROWSER_PLUGIN_ID] === true,
+      [TASKBAR_UNREAD_PLUGIN_ID]: enabled[TASKBAR_UNREAD_PLUGIN_ID] !== false,
     },
     piAgentProjects: Array.isArray(projects)
       ? [
@@ -255,7 +259,8 @@ async function onPluginStateChange(
         event.payload.id !== TEXT_DIFF_PLUGIN_ID &&
         event.payload.id !== PI_AGENT_PLUGIN_ID &&
         event.payload.id !== CODEX_AGENT_PLUGIN_ID &&
-        event.payload.id !== BROWSER_PLUGIN_ID
+        event.payload.id !== BROWSER_PLUGIN_ID &&
+        event.payload.id !== TASKBAR_UNREAD_PLUGIN_ID
       )
         return;
       callback(event.payload.id, event.payload.enabled === true);
