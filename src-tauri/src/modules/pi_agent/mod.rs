@@ -1,5 +1,6 @@
 pub mod assets;
 mod history;
+mod model_config;
 mod paths;
 use history::{
     append_session_entry, clone_session_file, delete_session_file, list_sessions,
@@ -61,6 +62,7 @@ pub struct PiStartRequest {
 pub struct PiStartResult {
     session_id: u64,
     process_id: u32,
+    resource_models: Vec<PiListedModel>,
 }
 
 #[derive(Debug, Serialize)]
@@ -136,6 +138,7 @@ pub struct PiListedModel {
     context_window: Option<u64>,
     base_url: Option<String>,
     key_fingerprint: String,
+    resource_fingerprint: String,
 }
 
 /// 表示 pi-subagents 为当前父会话记录的一个只读运行任务。
@@ -598,6 +601,7 @@ pub fn pi_agent_start(
         args.push(name);
     }
 
+    let resource_models = list_models_from_file()?;
     let mut command = create_pi_command(&path, &args);
     command
         .current_dir(&cwd)
@@ -644,6 +648,7 @@ pub fn pi_agent_start(
     Ok(PiStartResult {
         session_id,
         process_id,
+        resource_models,
     })
 }
 
@@ -710,11 +715,10 @@ pub fn codev_install_stamp() -> Option<String> {
 
 fn list_models_from_file() -> Result<Vec<PiListedModel>, String> {
     let file = pi_agent_read_models()?;
-    let value: Value =
-        serde_json::from_str(&file.content).unwrap_or_else(|_| json!({ "providers": {} }));
-    let Some(providers) = value.get("providers").and_then(Value::as_object) else {
-        return Ok(Vec::new());
-    };
+    let value: Value = serde_json::from_str(&file.content)
+        .map_err(|error| format!("Pi 模型配置 JSON 格式错误：{error}"))?;
+    let providers = value.get("providers").and_then(Value::as_object)
+        .ok_or("Pi 模型配置缺少 providers 对象")?;
     let mut models = Vec::new();
     for (provider, config) in providers {
         let Some(list) = config.get("models").and_then(Value::as_array) else {
@@ -732,10 +736,12 @@ fn list_models_from_file() -> Result<Vec<PiListedModel>, String> {
                     .and_then(Value::as_str)
                     .map(str::to_string),
                 context_window: model.get("contextWindow").and_then(Value::as_u64),
-                base_url: config
+                base_url: model
                     .get("baseUrl")
+                    .or_else(|| config.get("baseUrl"))
                     .and_then(Value::as_str)
                     .map(str::to_string),
+                resource_fingerprint: model_config::resource_fingerprint(config, model),
                 key_fingerprint: config
                     .get("apiKey")
                     .and_then(Value::as_str)

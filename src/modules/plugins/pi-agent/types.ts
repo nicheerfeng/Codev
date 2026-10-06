@@ -49,6 +49,7 @@ export type PiClonedSession = {
 export type PiStartResult = {
   sessionId: number;
   processId: number;
+  resourceModels?: PiModel[];
 };
 
 export type PiEventEnvelope = {
@@ -64,6 +65,7 @@ export type PiModel = {
   contextWindow?: number;
   baseUrl?: string;
   keyFingerprint?: string;
+  resourceFingerprint?: string;
 };
 
 export type PiStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";

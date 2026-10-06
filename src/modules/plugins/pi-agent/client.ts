@@ -19,15 +19,19 @@ import {
 } from "./reducer";
 import type { PiEventEnvelope, PiImage, PiModel, PiViewState } from "./types";
 import {
+  capturePiRuntimeConfig,
+  planPiRuntimeConfig,
+  samePiModel,
+  type PiRuntimeAdaptation,
+  type PiRuntimeConfig,
+} from "./runtimeConfig";
+import {
   anchorPiTurn,
   beginPiTurn,
   freezePiTurn,
   recordPiToolPre,
   refreshPiTurn,
 } from "./turnDiff";
-
-export const CATALOG_ADAPT_NOTICE =
-  "当前选择不在历史会话配置中，正在更新以适配";
 
 export type PiSettledListener = (thread: PiThread, text: string) => void;
 const piSettledListeners = new Set<PiSettledListener>();
@@ -42,9 +46,8 @@ export type PiThread = {
   key: string;
   cwd: string;
   runtimeId: number | null;
-  /** 当前 Pi runtime 实际绑定的 provider/model。 */
-  runtimeModelKey: string | null;
-  catalogEpoch: number;
+  /** 当前进程已加载的资源快照与已确认的选择，独立于界面模型。 */
+  runtimeConfig: PiRuntimeConfig | null;
   view: PiViewState;
 };
 type Pending = {
@@ -52,6 +55,7 @@ type Pending = {
   resolve: (data: unknown) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  observedModel: PiRuntimeConfig["model"] | undefined;
 };
 
 /** 统一 Pi 会话路径，避免 Windows 长路径与普通路径创建两个 runtime。 */
@@ -78,7 +82,7 @@ export class PiWorkspaceClient {
   private toolUpdates = new Map<string, PiEventEnvelope>();
   private toolTimer: ReturnType<typeof setTimeout> | null = null;
   private catalogModels: PiModel[] = [];
-  private catalogEpoch = 0;
+  private adapting = new Map<string, Promise<PiRuntimeAdaptation>>();
   private draining = new Set<string>();
   private editing = new Set<string>();
   private inserting = new Map<
@@ -91,15 +95,38 @@ export class PiWorkspaceClient {
   private snapshotWaiters = new Map<string, Promise<void>>();
   private stop: Promise<() => void>;
 
-  /** 生成模型身份键，目录刷新不会改变同一模型的 runtime 绑定。 */
-  private modelKey(model: PiModel | null | undefined): string | null {
-    if (!model?.provider || !model.id) return null;
-    return [
-      model.provider,
-      model.id,
-      model.baseUrl ?? "",
-      model.keyFingerprint ?? "",
-    ].join("\u0000");
+  /** 模型 RPC 只更新已应用选择，不改写进程启动时的资源快照。 */
+  private async applyRuntimeModel(thread: PiThread, model: PiModel) {
+    const binding = thread.runtimeConfig;
+    const response = objectValue(
+      await this.sendRequest(thread, {
+        type: "set_model",
+        provider: model.provider,
+        modelId: model.id,
+      }),
+    );
+    if (!binding || thread.runtimeConfig !== binding)
+      throw new Error("Pi 会话已变化，请重新发送");
+    if (
+      response?.provider &&
+      response.id &&
+      !samePiModel(model, {
+        provider: String(response.provider),
+        id: String(response.id),
+      })
+    )
+      throw new Error("Pi 返回的模型与当前选择不一致，请重新选择模型");
+    binding.model = { provider: model.provider, id: model.id };
+    binding.thinkingLevel = null;
+  }
+
+  /** 等级失败保留健康进程，下次显式适配可重试。 */
+  private async applyRuntimeThinking(thread: PiThread, level: string) {
+    const binding = thread.runtimeConfig;
+    await this.sendRequest(thread, { type: "set_thinking_level", level });
+    if (!binding || thread.runtimeConfig !== binding)
+      throw new Error("Pi 会话已变化，请重新发送");
+    binding.thinkingLevel = level;
   }
 
   /** 注册一次事件监听，以 runtimeId 分发并合并流式渲染刷新。 */
@@ -211,7 +238,25 @@ export class PiWorkspaceClient {
         this.pending.delete(id);
         if (event.success === false)
           request.reject(new Error(String(event.error)));
-        else request.resolve(event.data);
+        else {
+          if (
+            event.command === "get_state" &&
+            thread.runtimeConfig &&
+            request.observedModel === thread.runtimeConfig.model
+          ) {
+            const actual = objectValue(objectValue(event.data)?.model);
+            if (
+              typeof actual?.provider === "string" &&
+              typeof actual.id === "string"
+            ) {
+              const model = { provider: actual.provider, id: actual.id };
+              if (!samePiModel(thread.runtimeConfig.model, model))
+                thread.runtimeConfig.thinkingLevel = null;
+              thread.runtimeConfig.model = model;
+            }
+          }
+          request.resolve(event.data);
+        }
       }
     }
     if (event.type === "extension_ui_request")
@@ -219,7 +264,7 @@ export class PiWorkspaceClient {
     if (event.type === "process_exit") {
       this.rejectRequests(payload.sessionId, "Pi 会话已结束");
       thread.runtimeId = null;
-      thread.runtimeModelKey = null;
+      thread.runtimeConfig = null;
     }
     if (event.type === "agent_settled" && thread.runtimeId !== null) {
       const resumeQueue = this.compactionResume.delete(thread.key);
@@ -296,7 +341,7 @@ export class PiWorkspaceClient {
     const adapt =
       command.type === "prompt"
         ? this.adaptCatalogRuntime(thread)
-        : Promise.resolve(false);
+        : Promise.resolve<PiRuntimeAdaptation>({ kind: "unchanged" });
     return adapt.then(() =>
       this.ensureRuntime(thread).then(() => {
         if (command.type === "prompt") this.syncStats(thread);
@@ -324,8 +369,23 @@ export class PiWorkspaceClient {
     this.publish();
   }
 
-  /** 空闲发送才按 catalog 代次切换模型；优先使用 set_model RPC，失败才重启进程。 */
-  private async adaptCatalogRuntime(thread: PiThread): Promise<boolean> {
+  /** 同一线程只允许一次配置适配，运行期间不改变请求资源。 */
+  private adaptCatalogRuntime(thread: PiThread): Promise<PiRuntimeAdaptation> {
+    const pending = this.adapting.get(thread.key);
+    if (pending) return pending;
+    const operation = this.adaptRuntimeConfig(thread).finally(() => {
+      if (this.adapting.get(thread.key) === operation)
+        this.adapting.delete(thread.key);
+    });
+    this.adapting.set(thread.key, operation);
+    return operation;
+  }
+
+  private async adaptRuntimeConfig(
+    thread: PiThread,
+  ): Promise<PiRuntimeAdaptation> {
+    const opening = this.opening.get(thread.key);
+    if (opening) await opening;
     if (
       thread.runtimeId === null ||
       thread.view.status === "running" ||
@@ -333,48 +393,46 @@ export class PiWorkspaceClient {
       thread.view.status === "starting" ||
       thread.view.compaction?.status === "running"
     )
-      return false;
-    const selectedKey = this.modelKey(thread.view.model);
-    if (!selectedKey || selectedKey === thread.runtimeModelKey) {
-      thread.catalogEpoch = this.catalogEpoch;
-      return false;
-    }
+      return { kind: "deferred" };
+    return this.synchronizeRuntimeConfig(thread);
+  }
 
-    // 优先使用 Pi 原生的 set_model RPC，无需重启进程
-    const model = thread.view.model;
-    if (model?.provider && model.id) {
-      try {
-        await this.sendRequest(thread, {
-          type: "set_model",
-          provider: model.provider,
-          modelId: model.id,
-        });
-        if (thread.view.thinkingLevel)
-          await this.sendRequest(thread, {
-            type: "set_thinking_level",
-            level: thread.view.thinkingLevel,
-          });
-        thread.runtimeModelKey = selectedKey;
-        thread.catalogEpoch = this.catalogEpoch;
-        return true;
-      } catch {
-        // set_model 失败（可能是旧版 Pi 不支持），回退到重启 runtime
-        thread.view = { ...thread.view, error: CATALOG_ADAPT_NOTICE };
-        this.publish();
+  /** 唯一配置应用路径；初始化时不自动递归重启。 */
+  private async synchronizeRuntimeConfig(
+    thread: PiThread,
+    allowRestart = true,
+  ): Promise<PiRuntimeAdaptation> {
+    const binding = thread.runtimeConfig;
+    if (!binding || binding.runtimeId !== thread.runtimeId)
+      throw new Error("Pi 运行配置未知，请关闭当前连接后重试");
+    let result: PiRuntimeAdaptation = { kind: "unchanged" };
+    // Re-evaluate after awaited RPCs so a newer selection is never marked applied.
+    while (true) {
+      if (thread.runtimeConfig !== binding)
+        throw new Error("Pi 会话已变化，请重新发送");
+      const model = thread.view.model;
+      const plan = planPiRuntimeConfig(binding, this.catalogModels, model);
+      if (plan.kind === "restart") {
+        if (!allowRestart)
+          throw new Error(
+            "模型配置在连接期间发生变化，请重新发送以加载最新配置",
+          );
         await this.close(thread.key);
-        thread.view = { ...thread.view, error: CATALOG_ADAPT_NOTICE };
-        this.publish();
-        return true;
+        await this.ensureRuntime(thread);
+        return { kind: "runtime-restarted", reason: plan.reason };
       }
+      if (plan.kind === "switch-model" && model) {
+        await this.applyRuntimeModel(thread, model);
+        result = { kind: "model-switched" };
+        continue;
+      }
+      const thinking = thread.view.thinkingLevel;
+      if (thinking && binding.thinkingLevel !== thinking) {
+        await this.applyRuntimeThinking(thread, thinking);
+        continue;
+      }
+      return result;
     }
-
-    // 模型信息不完整，回退到重启
-    thread.view = { ...thread.view, error: CATALOG_ADAPT_NOTICE };
-    this.publish();
-    await this.close(thread.key);
-    thread.view = { ...thread.view, error: CATALOG_ADAPT_NOTICE };
-    this.publish();
-    return true;
   }
 
   /** 首次真实 RPC 操作时才为线程启动 Pi runtime。 */
@@ -413,7 +471,16 @@ export class PiWorkspaceClient {
         this.pending.delete(id);
         reject(new Error(`Pi ${command.type} 响应超时`));
       }, timeoutMs);
-      this.pending.set(id, { runtimeId, resolve, reject, timer });
+      this.pending.set(id, {
+        runtimeId,
+        resolve,
+        reject,
+        timer,
+        observedModel:
+          command.type === "get_state"
+            ? thread.runtimeConfig?.model
+            : undefined,
+      });
       void sendPiCommand(runtimeId, { ...command, id }).catch((error) => {
         clearTimeout(timer);
         this.pending.delete(id);
@@ -440,8 +507,7 @@ export class PiWorkspaceClient {
       key,
       cwd,
       runtimeId: null,
-      runtimeModelKey: null,
-      catalogEpoch: 0,
+      runtimeConfig: null,
       view: {
         ...INITIAL_PI_VIEW_STATE,
         sessionFile: path ?? null,
@@ -470,19 +536,24 @@ export class PiWorkspaceClient {
     };
     this.threads.set(key, thread);
     this.publish();
+    let initialized = false;
     try {
+      await this.loadCatalog();
+      const catalogAtStart = this.catalogModels;
       const runtime = await startPiAgent(cwd, path, this.modelTest);
       if (this.disposed) {
         await closePiAgent(runtime.sessionId);
         throw new Error("Pi 插件已关闭");
       }
       thread.runtimeId = runtime.sessionId;
-      thread.catalogEpoch = this.catalogEpoch;
       this.touchRuntime(thread);
-      const intendedModel = thread.view.model;
-      const intendedThinking = thread.view.thinkingLevel;
+      const stateRequest = this.sendRequest(thread, { type: "get_state" });
+      const modelsRequest = this.sendRequest(thread, {
+        type: "get_available_models",
+      });
       const hydrates: Promise<unknown>[] = [
-        this.sendRequest(thread, { type: "get_state" }),
+        stateRequest,
+        modelsRequest,
         this.sendRequest(thread, { type: "get_session_stats" }),
         this.sendRequest(thread, { type: "get_available_thinking_levels" }),
         this.sendRequest(thread, { type: "get_commands" }),
@@ -501,35 +572,51 @@ export class PiWorkspaceClient {
             this.sendRequest(thread, { type: "get_entries", since: last.id }),
           );
       }
-      if (!thread.view.models.length && !this.catalogModels.length)
-        hydrates.push(
-          this.sendRequest(thread, { type: "get_available_models" }),
-        );
       await Promise.all(hydrates);
-      const model = this.withCatalogWindow(intendedModel ?? thread.view.model);
-      if (model) {
-        thread.view = { ...thread.view, model };
-        await this.sendRequest(thread, {
-          type: "set_model",
-          provider: model.provider,
-          modelId: model.id,
-        });
-      }
-      thread.runtimeModelKey = this.modelKey(model ?? thread.view.model);
-      if (intendedThinking)
-        await this.sendRequest(thread, {
-          type: "set_thinking_level",
-          level: intendedThinking,
-        });
+      const state = objectValue(await stateRequest);
+      const actual = objectValue(state?.model);
+      const available = objectValue(await modelsRequest);
+      const resources = runtime.resourceModels ?? catalogAtStart;
+      if (runtime.resourceModels && this.catalogModels === catalogAtStart)
+        this.catalogModels = runtime.resourceModels;
+      const availableModels: PiModel[] = Array.isArray(available?.models)
+        ? available.models.filter(
+            (item): item is PiModel =>
+              typeof item?.provider === "string" &&
+              typeof item?.id === "string",
+          )
+        : [];
+      thread.runtimeConfig = capturePiRuntimeConfig(
+        runtime.sessionId,
+        resources,
+        availableModels,
+        typeof actual?.provider === "string" && typeof actual.id === "string"
+          ? { provider: actual.provider, id: actual.id }
+          : null,
+      );
+      initialized = true;
       thread.loadingHistory = false;
+      thread.view = {
+        ...thread.view,
+        modelsLoading: false,
+        models: this.catalogModels.length
+          ? this.catalogModels
+          : availableModels,
+        model:
+          this.withCatalogWindow(thread.view.model, false) ?? thread.view.model,
+      };
+      await this.synchronizeRuntimeConfig(thread, false);
       this.publish();
       return thread;
     } catch (error) {
       thread.loadingHistory = false;
-      if (thread.runtimeId !== null) await this.close(key);
+      // Startup/protocol failure may close a broken process; configuration RPC
+      // failure after initialization must keep the healthy process available.
+      if (!initialized && thread.runtimeId !== null) await this.close(key);
       thread.view = {
         ...thread.view,
-        status: "failed",
+        status: initialized ? "idle" : "failed",
+        phase: "",
         modelsLoading: false,
         error: String(error),
       };
@@ -721,6 +808,7 @@ export class PiWorkspaceClient {
     thread.view = { ...thread.view, queueSendingId: item.id };
     this.publish();
     try {
+      await this.prepareCatalogRuntime(thread);
       this.beginPrompt(thread, item.text, item.images, false, true);
       await this.request(thread, {
         type: "prompt",
@@ -921,10 +1009,10 @@ export class PiWorkspaceClient {
         ...thread.view,
         models: this.catalogModels,
         modelsLoading: false,
-        model:
-          this.withCatalogWindow(thread.view.model) ??
-          this.catalogModels[0] ??
-          thread.view.model,
+        model: thread.view.model
+          ? (this.withCatalogWindow(thread.view.model, !thread.runtimeConfig) ??
+            thread.view.model)
+          : (this.catalogModels[0] ?? null),
       };
       this.fillContextPercent(thread);
     } catch (error) {
@@ -940,29 +1028,16 @@ export class PiWorkspaceClient {
     return thread.view.models;
   }
 
-  /** 设置页改完 models.json 后，刷新选择器并增加代次，不关闭任何进程。 */
+  /** 刷新选择器元数据，保留每个运行进程已加载的资源快照。 */
   async reloadCatalog() {
-    this.catalogEpoch += 1;
-    const previousCatalog = this.catalogModels;
     await this.loadCatalog(true);
     for (const thread of this.threads.values()) {
-      const previousModel = thread.view.model;
-      const previousCatalogModel = previousCatalog.find(
-        (model) =>
-          model.provider === previousModel?.provider &&
-          model.id === previousModel?.id,
-      );
-      const nextModel = this.withCatalogWindow(previousModel);
       thread.view = {
         ...thread.view,
         models: this.catalogModels,
-        model: nextModel ?? this.catalogModels[0] ?? previousModel,
+        model:
+          this.withCatalogWindow(thread.view.model, false) ?? thread.view.model,
       };
-      if (
-        this.modelKey(previousCatalogModel ?? previousModel) !==
-        this.modelKey(thread.view.model)
-      )
-        thread.runtimeModelKey = null;
       this.fillContextPercent(thread);
     }
     this.publish();
@@ -977,10 +1052,12 @@ export class PiWorkspaceClient {
         ? thread.view.models
         : this.catalogModels,
       model:
-        this.withCatalogWindow(thread.view.model) ??
+        (thread.view.model
+          ? (this.withCatalogWindow(thread.view.model, !thread.runtimeConfig) ??
+            thread.view.model)
+          : null) ??
         this.withCatalogWindow(fallback) ??
         this.catalogModels[0] ??
-        thread.view.model ??
         fallback,
       thinkingLevels:
         thread.view.thinkingLevels.length > 1
@@ -992,17 +1069,23 @@ export class PiWorkspaceClient {
   }
 
   /** 用当前 models.json 对齐 provider/窗口；已删除的模型返回 null。 */
-  private withCatalogWindow(model: PiModel | null): PiModel | null {
+  private withCatalogWindow(
+    model: PiModel | null,
+    allowLegacyProvider = true,
+  ): PiModel | null {
     if (!model) return null;
-    const listed = catalogModelFor(this.catalogModels, model);
+    const listed = allowLegacyProvider
+      ? catalogModelFor(this.catalogModels, model)
+      : this.catalogModels.find((item) => samePiModel(item, model));
     if (!listed) return null;
     return {
       provider: listed.provider,
       id: listed.id,
       name: listed.name ?? model.name,
       contextWindow: listed.contextWindow ?? model.contextWindow,
-      baseUrl: listed.baseUrl ?? model.baseUrl,
-      keyFingerprint: listed.keyFingerprint ?? model.keyFingerprint,
+      baseUrl: listed.baseUrl,
+      keyFingerprint: listed.keyFingerprint,
+      resourceFingerprint: listed.resourceFingerprint,
     };
   }
 
@@ -1280,7 +1363,7 @@ export class PiWorkspaceClient {
     return { thread: next, text: "" };
   }
 
-  /** 空闲发送前按 catalog 代次重建当前线程；运行中的进程不跟随。 */
+  /** 在空闲发送前明确决定复用、原地切换或重新加载配置。 */
   async prepareCatalogRuntime(thread: PiThread) {
     return this.adaptCatalogRuntime(thread);
   }
@@ -1292,7 +1375,10 @@ export class PiWorkspaceClient {
     modelId: string,
     name?: string,
   ) {
-    const model = this.withCatalogWindow({ provider, id: modelId, name }) ?? {
+    const model = this.withCatalogWindow(
+      { provider, id: modelId, name },
+      false,
+    ) ?? {
       provider,
       id: modelId,
       name,
@@ -1306,18 +1392,7 @@ export class PiWorkspaceClient {
       thread.view.status === "starting" ||
       thread.view.compaction?.status === "running";
     if (!busy && thread.runtimeId !== null) {
-      await this.sendRequest(thread, {
-        type: "set_model",
-        provider: model.provider,
-        modelId: model.id,
-      });
-      if (thread.view.thinkingLevel)
-        await this.sendRequest(thread, {
-          type: "set_thinking_level",
-          level: thread.view.thinkingLevel,
-        });
-      thread.runtimeModelKey = this.modelKey(model);
-      thread.catalogEpoch = this.catalogEpoch;
+      await this.adaptCatalogRuntime(thread);
       return;
     }
     if (thread.view.sessionFile)
@@ -1334,7 +1409,13 @@ export class PiWorkspaceClient {
     thread.view = { ...thread.view, thinkingLevel: level };
     this.publish();
     if (thread.runtimeId !== null) {
-      await this.sendRequest(thread, { type: "set_thinking_level", level });
+      const opening = this.opening.get(thread.key);
+      if (opening) await opening;
+      const adapting = this.adapting.get(thread.key);
+      if (adapting) await adapting;
+      const selected = thread.view.thinkingLevel;
+      if (thread.runtimeConfig?.thinkingLevel !== selected)
+        await this.applyRuntimeThinking(thread, selected);
       return;
     }
     if (thread.view.sessionFile)
@@ -1415,13 +1496,15 @@ export class PiWorkspaceClient {
     if (statsTimer) clearTimeout(statsTimer);
     this.statsTimers.delete(key);
     const id = thread.runtimeId;
+    const binding = thread.runtimeConfig;
     thread.runtimeId = null;
-    thread.runtimeModelKey = null;
+    thread.runtimeConfig = null;
     this.rejectRequests(id, "Pi 会话已关闭");
     try {
       await closePiAgent(id);
     } catch (error) {
       thread.runtimeId = id;
+      thread.runtimeConfig = binding;
       throw error;
     }
     thread.view = piViewReducer(thread.view, {

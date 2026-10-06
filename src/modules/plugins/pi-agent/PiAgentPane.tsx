@@ -29,11 +29,8 @@ import {
   setPiAgentProjectOrder,
   setPiAgentSessionOrder,
 } from "../store";
-import {
-  CATALOG_ADAPT_NOTICE,
-  PiWorkspaceClient,
-  type PiThread,
-} from "./client";
+import { PiWorkspaceClient, type PiThread } from "./client";
+import { piRuntimeAdaptationNotice } from "./runtimeConfig";
 import { INITIAL_PI_VIEW_STATE, objectValue } from "./reducer";
 
 /** 无活动线程时沿用最近思考等级，避免空 composer 把选择器藏掉。 */
@@ -806,7 +803,7 @@ export function PiAgentPane({
       setPending((value) => new Set([...value, runtimeKey]));
       setSelected((current) => (current === selected ? thread.key : current));
       const adapted = await client.current!.prepareCatalogRuntime(thread);
-      setNotice(adapted ? CATALOG_ADAPT_NOTICE : "", thread.key);
+      setNotice(piRuntimeAdaptationNotice(adapted), thread.key);
       setSendRevisions((value) => ({
         ...value,
         [thread.key]: (value[thread.key] ?? 0) + 1,

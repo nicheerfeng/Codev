@@ -299,6 +299,10 @@ function modelValue(value: unknown): PiModel | null {
           typeof model.keyFingerprint === "string"
             ? model.keyFingerprint
             : undefined,
+        resourceFingerprint:
+          typeof model.resourceFingerprint === "string"
+            ? model.resourceFingerprint
+            : undefined,
       }
     : null;
 }
@@ -617,8 +621,9 @@ function reduceEvent(
       thinkingLevels: levels.length ? levels : DEFAULT_PI_THINKING_LEVELS,
     };
   }
+  // RPC models are runtime facts, not the composer's selected configuration.
   if (event.command === "set_model")
-    return { ...state, model: modelValue(event.data) ?? state.model };
+    return { ...state, model: state.model ?? modelValue(event.data) };
   return state;
 }
 

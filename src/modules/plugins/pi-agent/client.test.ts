@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { PiEventEnvelope } from "./types";
+import type { PiEventEnvelope, PiModel } from "./types";
 
 const mock = vi.hoisted(() => ({
   receive: (_event: PiEventEnvelope) => {},
@@ -11,6 +11,12 @@ const mock = vi.hoisted(() => ({
   rejectPrompt: false,
   forkText: "原始输入",
   cancelBranch: false,
+  rejectModel: false,
+  rejectThinking: false,
+  availableModels: [
+    { provider: "openai", id: "gpt-test", name: "Test" },
+  ] as PiModel[],
+  runtimeModels: new Map<number, PiModel>(),
 }));
 vi.mock("./native", () => ({
   listenPiEvents: vi.fn(async (receive) => {
@@ -20,6 +26,8 @@ vi.mock("./native", () => ({
   startPiAgent: vi.fn(async (_cwd: string, path?: string) => {
     const sessionId = ++mock.next;
     mock.sessionFiles.set(sessionId, path ?? `session-${sessionId}.jsonl`);
+    if (mock.availableModels[0])
+      mock.runtimeModels.set(sessionId, mock.availableModels[0]);
     return { sessionId, processId: 1 };
   }),
   closePiAgent: (...args: unknown[]) => {
@@ -37,7 +45,7 @@ vi.mock("./native", () => ({
     messages: before
       ? [{ id: "older", role: "user", content: "older history" }]
       : [{ id: "latest", role: "user", content: "disk history" }],
-    model: { provider: "openai", id: "gpt-history", name: "History" },
+    model: { provider: "openai", id: "gpt-test", name: "History" },
     thinkingLevel: "high",
     sessionName: "Disk",
     sessionFile: path,
@@ -52,6 +60,20 @@ vi.mock("./native", () => ({
   appendPiSession: vi.fn(async () => undefined),
   truncatePiSession: vi.fn(async () => undefined),
   sendPiCommand: vi.fn(async (runtimeId, command) => {
+    const selected = mock.availableModels.find(
+      (model) =>
+        model.provider === command.provider && model.id === command.modelId,
+    );
+    const success =
+      command.type === "prompt"
+        ? !mock.rejectPrompt
+        : command.type === "set_model"
+          ? !mock.rejectModel && !!selected
+          : command.type === "set_thinking_level"
+            ? !mock.rejectThinking
+            : true;
+    if (command.type === "set_model" && success && selected)
+      mock.runtimeModels.set(runtimeId, selected);
     queueMicrotask(() =>
       mock.receive({
         sessionId: runtimeId,
@@ -60,44 +82,57 @@ vi.mock("./native", () => ({
           type: "response",
           command: command.type,
           id: command.id,
-          success: command.type !== "prompt" || !mock.rejectPrompt,
-          error: "prompt rejected",
+          success,
+          error:
+            command.type === "set_model"
+              ? "model rejected"
+              : command.type === "set_thinking_level"
+                ? "thinking rejected"
+                : "prompt rejected",
           data:
-            command.type === "clear_queue"
+            command.type === "set_model" && selected
               ? {
-                  steering: [{ text: "排队指令", images: [] }],
-                  followUp: [{ text: "后续任务", images: [] }],
+                  provider: selected.provider,
+                  id: selected.id,
+                  baseUrl: selected.baseUrl,
                 }
-              : command.type === "fork" || command.type === "clone"
+              : command.type === "clear_queue"
                 ? {
-                    cancelled: mock.cancelBranch,
-                    text: command.type === "fork" ? "原始输入" : "",
+                    steering: [{ text: "排队指令", images: [] }],
+                    followUp: [{ text: "后续任务", images: [] }],
                   }
-                : command.type === "get_fork_messages"
+                : command.type === "fork" || command.type === "clone"
                   ? {
-                      messages: [
-                        { entryId: "entry-last", text: mock.forkText },
-                      ],
+                      cancelled: mock.cancelBranch,
+                      text: command.type === "fork" ? "原始输入" : "",
                     }
-                  : command.type === "get_messages"
-                    ? { messages: [] }
-                    : command.type === "get_available_models"
-                      ? {
-                          models: [
-                            {
-                              provider: "openai",
-                              id: "gpt-test",
-                              name: "Test",
-                            },
-                          ],
-                        }
-                      : command.type === "get_state"
+                  : command.type === "get_fork_messages"
+                    ? {
+                        messages: [
+                          { entryId: "entry-last", text: mock.forkText },
+                        ],
+                      }
+                    : command.type === "get_messages"
+                      ? { messages: [] }
+                      : command.type === "get_available_models"
                         ? {
-                            sessionFile:
-                              mock.sessionFiles.get(runtimeId) ??
-                              `session-${runtimeId}.jsonl`,
+                            models: mock.availableModels.map(
+                              ({ provider, id, name, baseUrl }) => ({
+                                provider,
+                                id,
+                                name,
+                                baseUrl,
+                              }),
+                            ),
                           }
-                        : {},
+                        : command.type === "get_state"
+                          ? {
+                              model: mock.runtimeModels.get(runtimeId),
+                              sessionFile:
+                                mock.sessionFiles.get(runtimeId) ??
+                                `session-${runtimeId}.jsonl`,
+                            }
+                          : {},
         },
       }),
     );
@@ -105,6 +140,13 @@ vi.mock("./native", () => ({
 }));
 import { PiWorkspaceClient } from "./client";
 import { DEFAULT_PI_THINKING_LEVELS, piViewReducer } from "./reducer";
+import * as nativeMocks from "./native";
+const defaultNative = {
+  models: vi.mocked(nativeMocks.listPiModels).getMockImplementation()!,
+  history: vi.mocked(nativeMocks.readPiSession).getMockImplementation()!,
+  send: vi.mocked(nativeMocks.sendPiCommand).getMockImplementation()!,
+  start: vi.mocked(nativeMocks.startPiAgent).getMockImplementation()!,
+};
 
 describe("Pi RPC workspace", () => {
   // 同一个 JSONL 的普通路径与 Windows 长路径必须复用同一内存线程。
@@ -696,6 +738,24 @@ describe("Pi RPC workspace", () => {
     mock.rejectPrompt = false;
     mock.forkText = "原始输入";
     mock.cancelBranch = false;
+    mock.rejectModel = false;
+    mock.rejectThinking = false;
+    mock.availableModels = [
+      { provider: "openai", id: "gpt-test", name: "Test" },
+    ];
+    mock.runtimeModels.clear();
+    vi.mocked(nativeMocks.listPiModels)
+      .mockReset()
+      .mockImplementation(defaultNative.models);
+    vi.mocked(nativeMocks.readPiSession)
+      .mockReset()
+      .mockImplementation(defaultNative.history);
+    vi.mocked(nativeMocks.sendPiCommand)
+      .mockReset()
+      .mockImplementation(defaultNative.send);
+    vi.mocked(nativeMocks.startPiAgent)
+      .mockReset()
+      .mockImplementation(defaultNative.start);
   });
   it("isolates simultaneous threads and never closes one when opening another", async () => {
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
@@ -839,9 +899,13 @@ describe("Pi RPC workspace", () => {
     });
     client.dispose();
   });
-  it("invalidates only runtimes whose resource fingerprint changed", async () => {
+  it("keeps startup snapshots and reloads only the changed resource at an idle boundary", async () => {
     const native = await import("./native");
     vi.mocked(native.startPiAgent).mockClear();
+    mock.availableModels = [
+      { provider: "one", id: "model-a" },
+      { provider: "two", id: "model-b" },
+    ];
     vi.mocked(native.listPiModels)
       .mockResolvedValueOnce([
         {
@@ -886,10 +950,23 @@ describe("Pi RPC workspace", () => {
       model: second.view.models.find((model) => model.id === "model-b") ?? null,
     };
     await client.request(second, { type: "get_state" });
-    const secondRuntimeKey = second.runtimeModelKey;
+    const firstBinding = first.runtimeConfig;
+    const secondBinding = second.runtimeConfig;
+    const previousRuntime = first.runtimeId;
     await client.reloadCatalog();
-    expect(first.runtimeModelKey).toBeNull();
-    expect(second.runtimeModelKey).toBe(secondRuntimeKey);
+    expect(first.runtimeConfig).toBe(firstBinding);
+    expect(second.runtimeConfig).toBe(secondBinding);
+    expect(mock.close).not.toHaveBeenCalled();
+    expect(await client.prepareCatalogRuntime(second)).toEqual({
+      kind: "unchanged",
+    });
+    expect(await client.prepareCatalogRuntime(first)).toEqual({
+      kind: "runtime-restarted",
+      reason: "resource-changed",
+    });
+    expect(first.runtimeId).not.toBe(previousRuntime);
+    expect(second.runtimeConfig).toBe(secondBinding);
+    expect(mock.close).toHaveBeenCalledExactlyOnceWith(previousRuntime);
     client.dispose();
   });
   it("fills idle history context percent from catalog window without starting a runtime", async () => {
@@ -1139,14 +1216,15 @@ describe("Pi RPC workspace", () => {
     const native = await import("./native");
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
     try {
+      mock.availableModels.push({ provider: "openai", id: "gpt-after-abort" });
       const thread = await client.open("abort-model", "D:/one");
       await client.request(thread, { type: "get_state" });
       const runtimeId = thread.runtimeId;
-      const originalModelKey = thread.runtimeModelKey;
+      const originalBinding = thread.runtimeConfig;
       thread.view.status = "running";
       await client.stopAndRestore(thread, vi.fn());
       expect(thread.runtimeId).toBe(runtimeId);
-      expect(thread.runtimeModelKey).toBe(originalModelKey);
+      expect(thread.runtimeConfig).toBe(originalBinding);
 
       // 模拟 abort 已收敛到 idle；未改模型时继续发送不得触发同步。
       thread.view.status = "idle";
@@ -1543,20 +1621,26 @@ describe("Pi RPC workspace", () => {
     await client.reloadCatalog();
     expect(thread.runtimeId).toBe(runtimeId);
     expect(mock.close).not.toHaveBeenCalled();
-    expect(thread.view.model).toMatchObject({ id: "gpt-new" });
+    expect(thread.view.model).toMatchObject({ id: "gpt-test" });
     client.dispose();
   });
-  it("uses set_model RPC on the next send after catalog reload", async () => {
+  it("switches to a model in the startup catalog through RPC without restarting", async () => {
     const native = await import("./native");
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    mock.availableModels.push({
+      provider: "openai",
+      id: "gpt-new",
+      name: "New",
+    });
+    vi.mocked(native.listPiModels).mockResolvedValue(mock.availableModels);
     const thread = await client.open("one", "D:/one");
     await client.request(thread, { type: "get_state" });
     await client.setThinkingLevel(thread, "high");
     const previous = thread.runtimeId;
-    vi.mocked(native.listPiModels).mockResolvedValueOnce([
-      { provider: "openai", id: "gpt-new", name: "New" },
-    ]);
     await client.reloadCatalog();
+    thread.view.status = "running";
+    await client.setModel(thread, "openai", "gpt-new", "New");
+    thread.view.status = "idle";
     mock.close.mockClear();
     vi.mocked(native.sendPiCommand).mockClear();
     await client.request(thread, { type: "prompt", message: "下一轮" });
@@ -1585,6 +1669,190 @@ describe("Pi RPC workspace", () => {
     ).toBe(true);
     client.dispose();
   });
+  it("keeps a fingerprinted model and reuses runtime after state and thinking RPCs", async () => {
+    const native = await import("./native");
+    const resource = {
+      provider: "openai",
+      id: "gpt-test",
+      baseUrl: "https://example.invalid/v1",
+      keyFingerprint: "sha256:key",
+      resourceFingerprint: "sha256:request",
+    };
+    vi.mocked(native.listPiModels).mockResolvedValue([resource]);
+    mock.availableModels = [resource];
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("fingerprint", "D:/one");
+      await client.loadModels(thread);
+      await client.request(thread, { type: "get_state" });
+      const binding = thread.runtimeConfig;
+      const runtimeId = thread.runtimeId;
+      vi.mocked(native.sendPiCommand).mockClear();
+      await client.setThinkingLevel(thread, "xhigh");
+      await client.request(thread, { type: "get_state" });
+      await client.reloadCatalog();
+      client.applyCatalogModel(thread, resource);
+      expect(await client.prepareCatalogRuntime(thread)).toEqual({
+        kind: "unchanged",
+      });
+      expect(thread.view.model?.resourceFingerprint).toBe(
+        resource.resourceFingerprint,
+      );
+      expect(thread.runtimeConfig).toBe(binding);
+      expect(thread.runtimeId).toBe(runtimeId);
+      expect(mock.close).not.toHaveBeenCalled();
+      expect(
+        vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.filter(([, command]) => command.type === "set_model"),
+      ).toHaveLength(0);
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("keeps an initialized runtime when startup thinking synchronization fails", async () => {
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("thinking-start", "D:/one");
+      mock.rejectThinking = true;
+      await expect(
+        client.request(thread, { type: "get_state" }),
+      ).rejects.toThrow("thinking rejected");
+      expect(thread.runtimeId).not.toBeNull();
+      expect(thread.runtimeConfig?.thinkingLevel).toBeNull();
+      expect(mock.close).not.toHaveBeenCalled();
+      mock.rejectThinking = false;
+      expect(await client.prepareCatalogRuntime(thread)).toEqual({
+        kind: "unchanged",
+      });
+      expect(thread.runtimeConfig?.thinkingLevel).toBe("high");
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("records a successful model switch even if its following thinking RPC fails", async () => {
+    const native = await import("./native");
+    mock.availableModels.push({ provider: "openai", id: "gpt-next" });
+    vi.mocked(native.listPiModels).mockResolvedValue(mock.availableModels);
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("thinking-switch", "D:/one");
+      await client.request(thread, { type: "get_state" });
+      const runtimeId = thread.runtimeId;
+      mock.rejectThinking = true;
+      await expect(
+        client.setModel(thread, "openai", "gpt-next"),
+      ).rejects.toThrow("thinking rejected");
+      expect(thread.runtimeConfig?.model).toEqual({
+        provider: "openai",
+        id: "gpt-next",
+      });
+      expect(thread.runtimeId).toBe(runtimeId);
+      expect(mock.close).not.toHaveBeenCalled();
+      mock.rejectThinking = false;
+      vi.mocked(native.sendPiCommand).mockClear();
+      await client.prepareCatalogRuntime(thread);
+      expect(
+        vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.filter(([, command]) => command.type === "set_model"),
+      ).toHaveLength(0);
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("reports model RPC failures without closing runtime or advancing its applied selection", async () => {
+    const native = await import("./native");
+    mock.availableModels.push({ provider: "openai", id: "gpt-next" });
+    vi.mocked(native.listPiModels).mockResolvedValue(mock.availableModels);
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("model-failure", "D:/one");
+      await client.request(thread, { type: "get_state" });
+      const runtimeId = thread.runtimeId;
+      mock.rejectModel = true;
+      await expect(
+        client.setModel(thread, "openai", "gpt-next"),
+      ).rejects.toThrow("model rejected");
+      expect(thread.runtimeConfig?.model).toEqual({
+        provider: "openai",
+        id: "gpt-test",
+      });
+      expect(thread.view.model?.id).toBe("gpt-next");
+      expect(thread.runtimeId).toBe(runtimeId);
+      expect(mock.close).not.toHaveBeenCalled();
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("loads newly added models through a single shared runtime replacement", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("added", "D:/one");
+      await client.request(thread, { type: "get_state" });
+      const runtimeId = thread.runtimeId;
+      mock.availableModels.push({ provider: "openai", id: "gpt-added" });
+      vi.mocked(native.listPiModels).mockResolvedValue(mock.availableModels);
+      await client.reloadCatalog();
+      thread.view.status = "running";
+      await client.setModel(thread, "openai", "gpt-added");
+      thread.view.status = "idle";
+      const [one, two] = await Promise.all([
+        client.prepareCatalogRuntime(thread),
+        client.prepareCatalogRuntime(thread),
+      ]);
+      expect(one).toEqual({ kind: "runtime-restarted", reason: "model-added" });
+      expect(two).toEqual(one);
+      expect(mock.close).toHaveBeenCalledExactlyOnceWith(runtimeId);
+      expect(thread.runtimeId).not.toBe(runtimeId);
+      expect(thread.runtimeConfig?.model?.id).toBe("gpt-added");
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("adapts changed resources before optimistically beginning a queued prompt", async () => {
+    const native = await import("./native");
+    const original = {
+      provider: "openai",
+      id: "gpt-test",
+      resourceFingerprint: "sha256:old",
+    };
+    vi.mocked(native.listPiModels).mockResolvedValue([original]);
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("queued-config", "D:/one");
+      await client.loadModels(thread);
+      await client.request(thread, { type: "get_state" });
+      const runtimeId = thread.runtimeId;
+      vi.mocked(native.listPiModels).mockResolvedValue([
+        { ...original, resourceFingerprint: "sha256:new" },
+      ]);
+      await client.reloadCatalog();
+      client.enqueue(thread, "next", [], "followUp");
+      await client.drainQueue(thread);
+      expect(mock.close).toHaveBeenCalledExactlyOnceWith(runtimeId);
+      expect(thread.runtimeConfig?.loadedModels[0].resourceFingerprint).toBe(
+        "sha256:new",
+      );
+      expect(
+        vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.some(
+            ([id, command]) =>
+              id === thread.runtimeId && command.type === "prompt",
+          ),
+      ).toBe(true);
+    } finally {
+      client.dispose();
+    }
+  });
+
   it("does not restart a running runtime after catalog reload", async () => {
     const native = await import("./native");
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());

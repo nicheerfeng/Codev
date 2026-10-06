@@ -491,6 +491,28 @@ describe("piViewReducer", () => {
     expect(state.thinkingLevel).toBe("high");
   });
 
+  it("keeps selected catalog metadata when native model responses arrive", () => {
+    const model = {
+      provider: "openai", id: "gpt", name: "Selected",
+      baseUrl: "https://example.invalid/v1", keyFingerprint: "sha256:key",
+      resourceFingerprint: "sha256:request",
+    };
+    const selected = { ...INITIAL_PI_VIEW_STATE, model };
+    const switched = piViewReducer(selected, {
+      type: "event",
+      payload: rpc({ type: "response", command: "set_model", success: true,
+        data: { provider: "openai", id: "gpt", baseUrl: model.baseUrl } }),
+    });
+    expect(switched.model).toBe(model);
+    const stale = piViewReducer(switched, {
+      type: "event",
+      payload: rpc({ type: "response", command: "get_state", success: true,
+        data: { model: { provider: "old", id: "old" }, thinkingLevel: "off" } }),
+    });
+    expect(stale.model).toBe(model);
+    expect(stale.thinkingLevel).toBe("high");
+  });
+
   it("prepends older history pages without replacing the latest messages", () => {
     const latest = piViewReducer(INITIAL_PI_VIEW_STATE, {
       type: "history",
