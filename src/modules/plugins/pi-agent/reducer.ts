@@ -2,10 +2,52 @@ import type {
   PiEventEnvelope,
   PiImage,
   PiModel,
+  PiQueueItem,
   PiStopReason,
   PiTranscriptItem,
   PiViewState,
 } from "./types";
+
+/** 将 Pi 原生队列图片归一化为前端可渲染的图片对象。 */
+function normalizeQueueImage(value: unknown): PiImage | null {
+  const image = objectValue(value);
+  if (!image || typeof image.data !== "string") return null;
+  const mimeType = image.mimeType ?? image.mime_type ?? "image/png";
+  return {
+    type: "image",
+    data: image.data,
+    mimeType: typeof mimeType === "string" ? mimeType : "image/png",
+  };
+}
+
+/** 兼容 Pi 队列的字符串、对象及 follow_up 字段形态。 */
+function normalizeQueueItems(
+  value: unknown,
+  kind: "steering" | "followUp",
+): PiQueueItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry, index): PiQueueItem[] => {
+    if (typeof entry === "string")
+      return [{ id: `${kind}-${index}-${entry.slice(0, 24)}`, text: entry }];
+    const item = objectValue(entry);
+    if (!item) return [];
+    const text = item.text ?? item.message;
+    if (typeof text !== "string") return [];
+    const images = Array.isArray(item.images)
+      ? item.images.flatMap((image) => {
+          const normalized = normalizeQueueImage(image);
+          return normalized ? [normalized] : [];
+        })
+      : [];
+    return [
+      {
+        id: `${kind}-${index}-${text.slice(0, 24)}`,
+        text,
+        ...(images.length ? { images } : {}),
+      },
+    ];
+  });
+}
 
 export const DEFAULT_PI_THINKING_LEVELS = [
   "off",
@@ -85,7 +127,7 @@ export function resultText(value: unknown): string {
 /** Pi 处理超宽图时会把尺寸说明追加到用户文本，比对和展示都去掉它。 */
 const PI_IMAGE_SIZE_NOTE = /(?:\n|^)\s*\[Image: original [^\]]*\]\s*$/u;
 
-function comparableUserText(text: string): string {
+export function comparableUserText(text: string): string {
   return text.replace(PI_IMAGE_SIZE_NOTE, "").replace(/\s+$/u, "");
 }
 
@@ -338,32 +380,11 @@ function reduceEvent(
     };
   }
   if (type === "queue_update") {
-    const steering = Array.isArray(event.steering)
-      ? event.steering
-          .filter(
-            (item): item is { text: string; images?: PiImage[] } =>
-              typeof item === "object" &&
-              item !== null &&
-              typeof item.text === "string",
-          )
-          .map((item) => ({
-            text: item.text,
-            images: Array.isArray(item.images) ? item.images : undefined,
-          }))
-      : [];
-    const followUp = Array.isArray(event.followUp)
-      ? event.followUp
-          .filter(
-            (item): item is { text: string; images?: PiImage[] } =>
-              typeof item === "object" &&
-              item !== null &&
-              typeof item.text === "string",
-          )
-          .map((item) => ({
-            text: item.text,
-            images: Array.isArray(item.images) ? item.images : undefined,
-          }))
-      : [];
+    const steering = normalizeQueueItems(event.steering, "steering");
+    const followUp = normalizeQueueItems(
+      event.followUp ?? event.follow_up,
+      "followUp",
+    );
     return {
       ...state,
       queue: {
@@ -519,7 +540,16 @@ function reduceEvent(
       false,
     );
   }
-  if (event.command === "get_state")
+  if (event.command === "get_state") {
+    const steering = normalizeQueueItems(data?.steering, "steering");
+    const followUp = normalizeQueueItems(
+      data?.followUp ?? data?.follow_up,
+      "followUp",
+    );
+    const hasQueueItems =
+      Array.isArray(data?.steering) ||
+      Array.isArray(data?.followUp) ||
+      Array.isArray(data?.follow_up);
     return {
       ...state,
       status:
@@ -539,12 +569,14 @@ function reduceEvent(
       model: state.model ?? modelValue(data?.model),
       queue: {
         ...state.queue,
+        ...(hasQueueItems ? { steering, followUp } : {}),
         pendingCount:
           typeof data?.pendingMessageCount === "number"
             ? data.pendingMessageCount
             : state.queue.pendingCount,
       },
     };
+  }
   if (event.command === "clear_queue") return state;
   if (event.command === "get_session_stats") {
     const usage = objectValue(data?.contextUsage);

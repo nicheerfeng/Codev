@@ -591,12 +591,95 @@ pub(super) fn append_session_entry(request: PiSessionAppendRequest) -> Result<()
     writeln!(file, "{entry}").map_err(|error| error.to_string())
 }
 
+/// 截断末轮输入，保留原会话文件身份。
+pub(super) fn truncate_session_file(path: &Path, entry_id: &str) -> Result<(), String> {
+    let source = resolve_session_file(path)?;
+    truncate_last_user(&source, entry_id)
+}
+
+/// Validate the native cursor before atomically replacing the JSONL tail.
+fn truncate_last_user(source: &Path, entry_id: &str) -> Result<(), String> {
+    if entry_id.trim().is_empty() {
+        return Err("缺少要截断的会话记录 ID".into());
+    }
+    let content = fs::read_to_string(source).map_err(|error| error.to_string())?;
+    let header: Value = serde_json::from_str(content.lines().next().unwrap_or(""))
+        .map_err(|error| error.to_string())?;
+    if header.get("type").and_then(Value::as_str) != Some("session") {
+        return Err("会话头无效".into());
+    }
+    let mut cutoff = None;
+    let mut offset = 0;
+    let mut parent = Value::Null;
+    let mut settings = std::collections::BTreeMap::new();
+    for line in content.split_inclusive('\n') {
+        if line.trim().is_empty() {
+            offset += line.len();
+            continue;
+        }
+        let value: Value = serde_json::from_str(line).map_err(|error| error.to_string())?;
+        let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
+        let user = kind == "message"
+            && value.pointer("/message/role").and_then(Value::as_str) == Some("user");
+        if value.get("id").and_then(Value::as_str) == Some(entry_id) {
+            if !user || cutoff.is_some() {
+                return Err("只能从用户消息记录开始截断会话".into());
+            }
+            cutoff = Some(offset);
+            parent = value.get("parentId").cloned().unwrap_or(Value::Null);
+        } else if cutoff.is_some() && user {
+            return Err("会话已有新的用户输入，请刷新后编辑最后一条消息".into());
+        }
+        if cutoff.is_some()
+            && matches!(
+                kind,
+                "session_info" | "model_change" | "thinking_level_change"
+            )
+        {
+            settings.insert(kind.to_string(), value);
+        }
+        offset += line.len();
+    }
+    let cutoff = cutoff.ok_or("找不到要截断的会话记录")?;
+    let mut output = content[..cutoff].to_string();
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+    for (_, mut setting) in settings {
+        setting["id"] = json!(new_entry_id());
+        setting["parentId"] = parent;
+        setting["timestamp"] = json!(utc_timestamp());
+        parent = setting["id"].clone();
+        output.push_str(&setting.to_string());
+        output.push('\n');
+    }
+    let mut temporary = tempfile::NamedTempFile::new_in(source.parent().ok_or("会话目录不存在")?)
+        .map_err(|error| error.to_string())?;
+    temporary
+        .write_all(output.as_bytes())
+        .map_err(|error| error.to_string())?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| error.to_string())?;
+    if fs::read_to_string(source).map_err(|error| error.to_string())? != content {
+        return Err("会话文件已发生变化，请刷新后重试".into());
+    }
+    temporary
+        .persist(source)
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 /// 按 Pi 原生规则定位指定项目的会话目录，不遍历其他项目。
 pub(super) fn project_sessions_dir(cwd: &str) -> Option<PathBuf> {
     let normalized = cwd.replace('\\', "/");
     let normalized = normalized.strip_prefix("//?/").unwrap_or(&normalized);
     let normalized = normalized.strip_prefix('/').unwrap_or(normalized);
-    let safe: String = normalized.chars().map(|c| if c == '/' || c == ':' { '-' } else { c }).collect();
+    let safe: String = normalized
+        .chars()
+        .map(|c| if c == '/' || c == ':' { '-' } else { c })
+        .collect();
     Some(pi_sessions_dir()?.join(format!("--{safe}--")))
 }
 
@@ -616,7 +699,8 @@ pub(super) fn list_sessions(cwd: &str, limit: usize) -> Vec<PiSessionSummary> {
             if path.is_dir() {
                 // pi-subagents 的子会话由 mission 观测器挂到父线程下，不能作为平级 Pi 线程扫描。
                 if path.file_name().and_then(|value| value.to_str()) == Some("subagent")
-                    || path.with_extension("jsonl").is_file() {
+                    || path.with_extension("jsonl").is_file()
+                {
                     continue;
                 }
                 pending.push(path);
@@ -650,4 +734,73 @@ pub(super) fn delete_session_file(root: &Path, target: &Path) -> Result<(), Stri
         return Err("仅允许删除 Pi 会话目录中的会话文件".into());
     }
     std::fs::remove_file(resolved).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod edit_tests {
+    use super::*;
+
+    #[test]
+    fn edit_last_user_preserves_identity_and_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("same.jsonl");
+        let prefix = concat!(
+            "{\"type\":\"session\",\"id\":\"same\",\"cwd\":\"D:/demo\"}\r\n",
+            "{\"type\":\"message\",\"id\":\"u1\",\"parentId\":null,\"message\":{\"role\":\"user\",\"content\":\"第一轮\"}}\r\n",
+            "{\"type\":\"message\",\"id\":\"a1\",\"parentId\":\"u1\",\"message\":{\"role\":\"assistant\",\"content\":\"保留\"}}\r\n"
+        );
+        let tail = [
+            json!({"type":"message","id":"u2","parentId":"a1","message":{"role":"user","content":"撤回"}}),
+            json!({"type":"message","id":"tool","parentId":"u2","message":{"role":"toolResult","content":"旧工具结果"}}),
+            json!({"type":"compaction","id":"c1","parentId":"tool","summary":"旧轮摘要"}),
+            json!({"type":"session_info","id":"s2","parentId":"c1","name":"新名称"}),
+            json!({"type":"model_change","id":"m2","parentId":"s2","provider":"p","modelId":"m"}),
+            json!({"type":"thinking_level_change","id":"t2","parentId":"m2","thinkingLevel":"high"}),
+        ];
+        fs::write(
+            &path,
+            format!(
+                "{prefix}{}\n",
+                tail.iter()
+                    .map(Value::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+        )
+        .unwrap();
+        truncate_last_user(&path, "u2").unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with(prefix));
+        assert!(
+            !text.contains("撤回") && !text.contains("旧工具结果") && !text.contains("旧轮摘要")
+        );
+        let records: Vec<Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(records[0]["id"], "same");
+        assert_eq!(records.len(), 6);
+        assert_eq!(records[3]["parentId"], "a1");
+        assert_eq!(records[4]["parentId"], records[3]["id"]);
+        assert_eq!(records[5]["parentId"], records[4]["id"]);
+        assert!(text.contains("新名称") && text.contains("high"));
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn edit_last_user_rejects_stale_target_and_handles_first_turn() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("same.jsonl");
+        let header = "{\"type\":\"session\",\"id\":\"same\"}\n";
+        let first = "{\"type\":\"message\",\"id\":\"u1\",\"parentId\":null,\"message\":{\"role\":\"user\"}}\n";
+        let second = "{\"type\":\"message\",\"id\":\"u2\",\"parentId\":\"u1\",\"message\":{\"role\":\"user\"}}\n";
+        let original = format!("{header}{first}{second}");
+        fs::write(&path, &original).unwrap();
+        assert!(truncate_last_user(&path, "u1").is_err());
+        assert!(truncate_last_user(&path, "missing").is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        fs::write(&path, format!("{header}{first}")).unwrap();
+        truncate_last_user(&path, "u1").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), header);
+    }
 }

@@ -84,6 +84,7 @@ export type PiMessageItem = {
 export type PiImage = { type: "image"; data: string; mimeType: string };
 
 export type PiQueueItem = {
+  id?: string;
   text: string;
   images?: PiImage[];
 };

@@ -382,6 +382,9 @@ async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     let builder = builder.decorations(false);
 
     let window = builder.build().map_err(|e| e.to_string())?;
+    // Tauri's unstable child-webview path skips the Windows resize handler.
+    #[cfg(target_os = "windows")]
+    window.set_resizable(true).map_err(|e| e.to_string())?;
     let _ = window.center();
 
     // Some Linux compositors (GNOME/Mutter with CSD-by-default) ignore the
@@ -450,9 +453,12 @@ pub fn run() {
             }
             if let Some(main) = _app.get_webview_window("main") {
                 #[cfg(target_os = "windows")]
-                let _ = disable_browser_accelerator_keys(&main);
-                #[cfg(target_os = "windows")]
-                let _ = guard_webview_navigation(&main);
+                {
+                    // Reinstall native resize borders after the child webview is created.
+                    main.set_resizable(true)?;
+                    let _ = disable_browser_accelerator_keys(&main);
+                    let _ = guard_webview_navigation(&main);
+                }
             }
             Ok(())
         })
@@ -575,6 +581,7 @@ pub fn run() {
             pi_agent::pi_agent_read_session,
             pi_agent::pi_agent_clone_session,
             pi_agent::pi_agent_append_session,
+            pi_agent::pi_agent_truncate_session,
             pi_agent::pi_agent_list_models,
             pi_agent::pi_agent_list_subagent_runs,
             pi_agent::pi_agent_start,

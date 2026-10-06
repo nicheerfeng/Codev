@@ -128,7 +128,12 @@ import { PiTranscript } from "./PiTranscript";
 import { ResizableViewportGrid } from "@/components/ResizableViewportGrid";
 import { PiSettings } from "./PiSettings";
 import { plainStatusText } from "./statusText";
-import type { PiMessageItem, PiModel, PiSessionSummary } from "./types";
+import type {
+  PiImage,
+  PiMessageItem,
+  PiModel,
+  PiSessionSummary,
+} from "./types";
 import { localCommand } from "./commands";
 import { editableLastUser } from "./editLastUser";
 import { toast } from "sonner";
@@ -856,14 +861,14 @@ export function PiAgentPane({
     await operate(thread, "正在停止…", async () => {
       const key = thread.key;
       /** 保留停止期间输入的新草稿，并恢复取回的文字和附件。 */
-      const restore = (texts: string[]) => {
+      const restore = (texts: string[], images: PiImage[] = []) => {
         setDrafts((value) => {
           const current = value[key] ?? EMPTY_DRAFT;
           return {
             ...value,
             [key]: {
               text: [...texts, current.text].filter(Boolean).join("\n\n"),
-              images: current.images,
+              images: [...images, ...current.images],
               files: current.files,
             },
           };
@@ -878,7 +883,7 @@ export function PiAgentPane({
       else throw new Error("只有运行中的回复可以停止");
     });
   };
-  /** 原位编辑已结束或主动终止的最后一轮，并通过 Pi 分叉重新执行。 */
+  /** 原位撤回最后一轮并重发，原线程身份不变。 */
   const editLastUser = async (
     thread: PiThread,
     item: PiMessageItem,
@@ -904,6 +909,16 @@ export function PiAgentPane({
         await refreshSessions();
       }
       return accepted;
+    } catch (error) {
+      setDrafts((current) => ({
+        ...current,
+        [key]: {
+          ...(current[key] ?? EMPTY_DRAFT),
+          text,
+          images: item.images ?? [],
+        },
+      }));
+      throw error;
     } finally {
       operationKeys.current.delete(key);
       setOperations((value) => ({ ...value, [key]: "" }));
@@ -1301,7 +1316,10 @@ export function PiAgentPane({
                     <div className="flex h-7 shrink-0 items-center gap-1 border-b border-border/60 bg-muted/30 px-2 text-[11px]">
                       {viewportRename?.thread.key === paneKey ? (
                         <input
-                          autoFocus
+                          ref={(node) => {
+                            node?.focus();
+                            node?.select();
+                          }}
                           aria-label="重命名 Pi 视口"
                           className="h-5 min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-[11px] outline-none focus:border-primary/60"
                           value={viewportRename.name}
@@ -1534,7 +1552,7 @@ export function PiAgentPane({
                             index,
                             text,
                             action,
-                            (texts) => {
+                            (texts, images = []) => {
                               setDrafts((value) => {
                                 const current =
                                   value[thread.key] ?? EMPTY_DRAFT;
@@ -1545,6 +1563,7 @@ export function PiAgentPane({
                                     text: [...texts, current.text]
                                       .filter(Boolean)
                                       .join("\n\n"),
+                                    images: [...images, ...current.images],
                                   },
                                 };
                               });
@@ -1679,7 +1698,7 @@ export function PiAgentPane({
           >
             <Input
               aria-label="线程名称"
-              autoFocus
+              ref={(node) => node?.focus()}
               value={rename?.name ?? ""}
               onChange={(event) =>
                 setRename((value) =>

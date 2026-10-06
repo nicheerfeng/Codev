@@ -44,6 +44,7 @@ import {
   isTool,
   processLabel,
   toolOutput,
+  turnBlocks,
 } from "./timeline";
 
 const remarkPlugins = [...Object.values(defaultRemarkPlugins), localFileLinks];
@@ -586,23 +587,7 @@ function TurnView({
   onEdit?: (text: string) => Promise<void>;
   editableId?: string;
 }) {
-  const last = [...turn.items]
-    .reverse()
-    .find((item) => item.type === "agentMessage");
-  const blocks: Array<{ id: string; process: boolean; items: Item[] }> = [];
-  for (const item of turn.items) {
-    if (isCompaction(item)) continue;
-    const message =
-      item.type === "userMessage" ||
-      (item.type === "agentMessage" &&
-        (item.phase === "final_answer" ||
-          (!running && item.phase == null && item.id === last?.id)));
-    const previous = blocks[blocks.length - 1];
-    if (!message && previous?.process) previous.items.push(item);
-    else blocks.push({ id: item.id, process: !message, items: [item] });
-  }
-  if (!blocks.some((block) => block.process))
-    blocks.unshift({ id: `process-${turn.id}`, process: true, items: [] });
+  const blocks = turnBlocks(turn, running);
   return (
     <>
       {blocks.map((block) =>
@@ -636,9 +621,6 @@ function TurnView({
             forkDisabled={forkDisabled || running}
           />
         ),
-      )}
-      {running && !blocks.some((block) => block.process) && (
-        <Process items={[]} turn={turn} running query={query} />
       )}
     </>
   );

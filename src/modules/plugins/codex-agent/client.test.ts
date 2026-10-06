@@ -12,7 +12,7 @@ const transport = vi.hoisted(() => ({
   fail: "",
   hold: "",
   connection: 0,
-  resource: "native",
+  resource: "初始资源",
   switchError: "",
   catalogPages: false,
 }));
@@ -38,21 +38,25 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (command, args) => {
-    if (command === "codex_agent_start") {
-      transport.resource = args.resourceId ?? "native";
-      return ++transport.connection;
-    }
+    if (command === "codex_agent_start") return ++transport.connection;
     if (command === "codex_agent_ready")
       return {
-        resourceId: transport.resource,
+        resourceAlias: transport.resource,
         provider: "test",
-        lastModel: { model: "selected-model", effort: "" },
       };
-    if (command === "codex_resources_models") return [{ id: "selected-model" }];
+    if (command === "codex_resources_models") {
+      if (args.alias !== transport.resource)
+        throw new Error("missing or incorrect alias");
+      return [{ id: "selected-model" }];
+    }
     if (command === "codex_agent_prepare_switch") {
       if (transport.switchError) throw new Error(transport.switchError);
+      if (typeof args.resourceAlias !== "string")
+        throw new Error("missing resourceAlias");
+      transport.resource = args.resourceAlias;
       return;
     }
+    if (command === "codex_resources_model") throw new Error("unknown command");
     if (command !== "codex_agent_send") return;
     const message = args.message as Message;
     transport.sent.push(message);
@@ -202,6 +206,176 @@ describe("Codex native client", () => {
     expect(session.queue).toHaveLength(0);
     expect(session.focusRevision).toBeGreaterThan(0);
   });
+  it("keeps a steered queue item visible until the user message appears", async () => {
+    client.patch("one", { draft: "first" });
+    await client.submit("one");
+    client.patch("one", { draft: "插入这句" });
+    await client.submit("one");
+    const queuedId = client.getSnapshot().sessions.one.queue[0].id;
+    await client.queueAction("one", queuedId, "steer");
+    expect(transport.sent.some((m) => m.method === "turn/steer")).toBe(true);
+    expect(
+      client.getSnapshot().sessions.one.queue.map((item) => item.draft),
+    ).toEqual(["插入这句"]);
+    expect(client.getSnapshot().sessions.one.queueSendingId).toBe(queuedId);
+    await client.queueAction("one", queuedId, "steer");
+    await client.queueAction("one", queuedId, "delete");
+    expect(
+      transport.sent.filter((m) => m.method === "turn/steer"),
+    ).toHaveLength(1);
+    event({
+      method: "item/started",
+      params: {
+        threadId: "one",
+        turnId: "turn",
+        item: {
+          id: "user-inserted",
+          type: "userMessage",
+          content: [{ type: "text", text: "插入这句" }],
+        },
+      },
+    });
+    expect(client.getSnapshot().sessions.one.queue).toHaveLength(0);
+    expect(client.getSnapshot().sessions.one.queueSendingId).toBeUndefined();
+  });
+  it("blocks another steer while an insertion is unconfirmed and accepts native IDs", async () => {
+    client.patch("one", { draft: "first" });
+    await client.submit("one");
+    client.patch("one", {
+      thread: { ...client.getSnapshot().sessions.one.thread, id: "native-one" },
+      draft: "insert",
+    });
+    await client.submit("one");
+    const entry = client.getSnapshot().sessions.one.queue[0];
+    await client.queueAction("native-one", entry.id, "steer");
+    client.patch("one", { draft: "another" });
+    await client.submit("one");
+    const another = client.getSnapshot().sessions.one.queue[1];
+    await expect(
+      client.queueAction("native-one", another.id, "steer"),
+    ).rejects.toThrow("等待原生确认");
+    event({
+      method: "item/completed",
+      params: {
+        threadId: "native-one",
+        turnId: "turn",
+        item: {
+          id: "inserted",
+          type: "userMessage",
+          content: [{ type: "text", text: "insert" }],
+        },
+      },
+    });
+    expect(
+      client.getSnapshot().sessions.one.queue.map((item) => item.draft),
+    ).toEqual(["another"]);
+    expect(client.getSnapshot().sessions.one.queueSendingId).toBeUndefined();
+  });
+  it("restores unconfirmed input and attachments when interruption completes before its acknowledgement", async () => {
+    client.patch("one", { draft: "first" });
+    await client.submit("one");
+    const images = ["data:image/png;base64,AA=="];
+    client.patch("one", {
+      draft: "insert",
+      images,
+      attachments: ["D:/a"],
+      directories: ["D:/a"],
+    });
+    await client.submit("one");
+    const entry = client.getSnapshot().sessions.one.queue[0];
+    await client.queueAction("one", entry.id, "steer");
+    client.patch("one", { draft: "new draft" });
+    vi.spyOn(client, "interrupt").mockImplementationOnce(async () => {
+      event({
+        method: "turn/completed",
+        params: {
+          threadId: "one",
+          turn: { id: "turn", status: "interrupted", items: [] },
+        },
+      });
+    });
+    await client.stopAndRestore("one");
+    const session = client.getSnapshot().sessions.one;
+    expect(session.draft).toBe("insert\n\nnew draft");
+    expect(session.images).toEqual(images);
+    expect(session.attachments).toEqual(["D:/a"]);
+    expect(session.directories).toEqual(["D:/a"]);
+    expect(session.queue).toEqual([]);
+    expect(session.queueSendingId).toBeUndefined();
+  });
+  it("does not restore an insertion already confirmed by a native user message", async () => {
+    client.patch("one", { draft: "first" });
+    await client.submit("one");
+    client.patch("one", { draft: "insert" });
+    await client.submit("one");
+    await client.queueAction(
+      "one",
+      client.getSnapshot().sessions.one.queue[0].id,
+      "steer",
+    );
+    event({
+      method: "item/started",
+      params: {
+        threadId: "one",
+        turnId: "turn",
+        item: {
+          id: "inserted",
+          type: "userMessage",
+          content: [{ type: "text", text: "insert" }],
+        },
+      },
+    });
+    client.patch("one", { draft: "new draft" });
+    await client.stopAndRestore("one");
+    expect(client.getSnapshot().sessions.one.draft).toBe("new draft");
+  });
+  it("returns an unconfirmed insertion to the draft at turn end instead of replaying it", async () => {
+    client.patch("one", { draft: "first" });
+    await client.submit("one");
+    client.patch("one", { draft: "insert" });
+    await client.submit("one");
+    await client.queueAction(
+      "one",
+      client.getSnapshot().sessions.one.queue[0].id,
+      "steer",
+    );
+    event({
+      method: "turn/completed",
+      params: {
+        threadId: "one",
+        turn: { id: "turn", status: "completed", items: [] },
+      },
+    });
+    const session = client.getSnapshot().sessions.one;
+    expect(session.draft).toBe("insert");
+    expect(session.queue).toEqual([]);
+    expect(session.queueSendingId).toBeUndefined();
+    expect(session.queueError).toContain("退回输入框");
+    expect(
+      transport.sent.filter((m) => m.method === "turn/start"),
+    ).toHaveLength(1);
+  });
+  it("retains the queue when steer fails and restores unconfirmed input on disconnect", async () => {
+    client.patch("one", { draft: "first" });
+    await client.submit("one");
+    const images = ["data:image/png;base64,AA=="];
+    client.patch("one", { draft: "insert", images });
+    await client.submit("one");
+    const entry = client.getSnapshot().sessions.one.queue[0];
+    transport.fail = "turn/steer";
+    await client.queueAction("one", entry.id, "steer");
+    expect(client.getSnapshot().sessions.one.queue).toEqual([entry]);
+    expect(client.getSnapshot().sessions.one.queueSendingId).toBeUndefined();
+    transport.fail = "";
+    await client.queueAction("one", entry.id, "steer");
+    event({ method: "bridge/closed" });
+    const session = client.getSnapshot().sessions.one;
+    expect(session.draft).toBe("insert");
+    expect(session.images).toEqual(images);
+    expect(session.queue).toEqual([]);
+    expect(session.queueSendingId).toBeUndefined();
+    expect(client.getSnapshot().connected).toBe(false);
+  });
   it("forks before the last turn for edit and keeps the original history", async () => {
     const turns = [
       {
@@ -348,7 +522,7 @@ describe("Codex native client", () => {
     });
     client.patch("one", { draft: "keep draft", resumed: true });
     await client.switchResource("b");
-    expect(client.getSnapshot().resourceId).toBe("b");
+    expect(client.getSnapshot().resourceAlias).toBe("b");
     expect(client.getSnapshot().sessions.one.draft).toBe("keep draft");
     expect(client.getSnapshot().sessions.one.resumed).toBe(false);
   });

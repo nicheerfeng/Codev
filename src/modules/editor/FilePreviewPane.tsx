@@ -1,5 +1,6 @@
 import { bindFileScroll } from "@/modules/reader/fileScroll";
 import { ImageViewport } from "@/modules/reader/ImageViewport";
+import { PdfPreview } from "@/modules/reader/pdf/PdfPreview";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
@@ -233,7 +234,9 @@ const TextWindowPreview = forwardRef<
   const truncatedRef = useRef(false);
   const currentMatchRef = useRef(-1);
   const searchBusyRef = useRef(false);
-  const currentLocationRef = useRef<{ line: number; column: number } | null>(null);
+  const currentLocationRef = useRef<{ line: number; column: number } | null>(
+    null,
+  );
   const searchGenerationRef = useRef(0);
   const searchListenersRef = useRef<Set<(status: TextSearchStatus) => void>>(
     new Set(),
@@ -563,7 +566,8 @@ const TextWindowPreview = forwardRef<
           <div className="flex h-8 shrink-0 items-center gap-3 border-b border-border/60 px-2 text-[11px] text-muted-foreground">
             {currentLocationRef.current ? (
               <span className="rounded-sm bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
-                当前命中：第 {currentLocationRef.current.line.toLocaleString()} 行 · 第 {currentLocationRef.current.column.toLocaleString()} 列
+                当前命中：第 {currentLocationRef.current.line.toLocaleString()}{" "}
+                行 · 第 {currentLocationRef.current.column.toLocaleString()} 列
               </span>
             ) : null}
             <span className="ml-auto tabular-nums">
@@ -587,7 +591,8 @@ const TextWindowPreview = forwardRef<
                     key={item.key}
                     data-line-index={item.index}
                     data-search-current={
-                      matchesRef.current[currentMatchRef.current]?.line === item.index + 1
+                      matchesRef.current[currentMatchRef.current]?.line ===
+                      item.index + 1
                         ? "true"
                         : undefined
                     }
@@ -682,7 +687,6 @@ export function AssetPreview({
     };
   }, [extension, isImage, path]);
 
-
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <div
@@ -734,6 +738,16 @@ export function AssetPreview({
 /** 提供只读文件预览，并保留普通文本预览的编辑器句柄。 */
 export const FilePreviewPane = memo(
   forwardRef<EditorPaneHandle, Props>(function FilePreviewPane(props, ref) {
+    if (!props.textOnly && props.path.toLowerCase().endsWith(".pdf")) {
+      return (
+        <PdfPreview
+          key={props.path}
+          ref={ref}
+          path={props.path}
+          onDirtyChange={props.onDirtyChange}
+        />
+      );
+    }
     return <MediaOrTextPreviewPane ref={ref} {...props} />;
   }),
 );
@@ -791,7 +805,11 @@ const MediaOrTextPreviewPane = memo(
     return (
       <div ref={rootRef} className="h-full outline-none" tabIndex={-1}>
         {previewKind === "asset" && (
-          <AssetPreview key={`${path}:${reloadKey}`} path={path} active={active} />
+          <AssetPreview
+            key={`${path}:${reloadKey}`}
+            path={path}
+            active={active}
+          />
         )}
         {previewKind === "text" && (
           <TextWindowPreview

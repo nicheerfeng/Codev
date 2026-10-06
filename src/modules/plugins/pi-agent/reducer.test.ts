@@ -227,11 +227,57 @@ describe("piViewReducer", () => {
         followUp: [{ text: "完成后总结" }, { text: "完成后测试" }],
       }),
     });
-    expect(state.queue).toEqual({
-      steering: [{ text: "先修复这个" }],
-      followUp: [{ text: "完成后总结" }, { text: "完成后测试" }],
-      pendingCount: 3,
+    expect(state.queue.steering.map((item) => item.text)).toEqual([
+      "先修复这个",
+    ]);
+    expect(state.queue.followUp.map((item) => item.text)).toEqual([
+      "完成后总结",
+      "完成后测试",
+    ]);
+    expect(state.queue.pendingCount).toBe(3);
+  });
+
+  it("normalizes string queues and image payloads from older Pi runtimes", () => {
+    const state = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "event",
+      payload: rpc({
+        type: "queue_update",
+        steering: ["文字排队"],
+        follow_up: [
+          {
+            message: "图片排队",
+            images: [{ data: "AA==", mime_type: "image/png" }],
+          },
+        ],
+      }),
     });
+    expect(state.queue.steering.map((item) => item.text)).toEqual(["文字排队"]);
+    expect(state.queue.followUp[0]).toMatchObject({
+      text: "图片排队",
+      images: [{ type: "image", data: "AA==", mimeType: "image/png" }],
+    });
+    expect(state.queue.pendingCount).toBe(2);
+  });
+
+  it("hydrates compatible queue items from get_state without replacing thinking", () => {
+    const state = piViewReducer(INITIAL_PI_VIEW_STATE, {
+      type: "event",
+      payload: rpc({
+        type: "response",
+        command: "get_state",
+        success: true,
+        data: {
+          steering: ["文字排队"],
+          follow_up: [{ message: "后续输入" }],
+          pendingMessageCount: 2,
+          thinkingLevel: "max",
+        },
+      }),
+    });
+    expect(state.queue.steering[0].text).toBe("文字排队");
+    expect(state.queue.followUp[0].text).toBe("后续输入");
+    expect(state.queue.pendingCount).toBe(2);
+    expect(state.thinkingLevel).toBe("high");
   });
 
   it("keeps the displayed queue after native clear_queue until queue_update arrives", () => {

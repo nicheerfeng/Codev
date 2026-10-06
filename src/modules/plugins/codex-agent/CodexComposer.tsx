@@ -92,7 +92,7 @@ export function CodexComposer({
   const [skills, setSkills] = useState<Skill[]>([]);
   const [skillsError, setSkillsError] = useState("");
   const [skillsLoading, setSkillsLoading] = useState(false);
-  const { skillsRevision, resourceId } = useSyncExternalStore(
+  const { skillsRevision, resourceAlias } = useSyncExternalStore(
     client.subscribe,
     client.getSnapshot,
   );
@@ -107,7 +107,7 @@ export function CodexComposer({
     void listResources()
       .then((catalog) => {
         const resource = catalog.resources.find(
-          (item) => item.alias === resourceId,
+          (item) => item.alias === resourceAlias,
         );
         if (!cancelled && resource)
           setResourceName({ id: resource.alias, alias: resource.alias });
@@ -116,7 +116,7 @@ export function CodexComposer({
     return () => {
       cancelled = true;
     };
-  }, [modelOpen, resourceId]);
+  }, [modelOpen, resourceAlias]);
   useEffect(() => {
     if (!session.compacting) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -301,7 +301,11 @@ export function CodexComposer({
             </p>
           )}
           {session.queue.map((entry) => (
-            <div key={entry.id} className="flex items-center gap-2 py-1">
+            <div
+              key={entry.id}
+              aria-busy={session.queueSendingId === entry.id}
+              className={`flex items-center gap-2 py-1${session.queueSendingId === entry.id ? " opacity-60" : ""}`}
+            >
               {entry.images.length > 0 && (
                 <div className="flex shrink-0 gap-1">
                   {entry.images.slice(0, 3).map((src, index) => (
@@ -334,7 +338,11 @@ export function CodexComposer({
                   size="icon-xs"
                   title="安排到当前步骤之后"
                   aria-label="安排到当前步骤之后"
-                  disabled={session.sending}
+                  disabled={
+                    session.sending ||
+                    session.stopping ||
+                    !!session.queueSendingId
+                  }
                   onClick={() =>
                     void client
                       .queueAction(id, entry.id, "steer")
@@ -348,7 +356,11 @@ export function CodexComposer({
                   size="icon-xs"
                   title="退回输入框编辑"
                   aria-label="退回编辑"
-                  disabled={session.sending}
+                  disabled={
+                    session.sending ||
+                    session.stopping ||
+                    session.queueSendingId === entry.id
+                  }
                   onClick={() =>
                     void client
                       .queueAction(id, entry.id, "edit")
@@ -362,7 +374,11 @@ export function CodexComposer({
                   size="icon-xs"
                   title="删除排队消息"
                   aria-label="删除排队消息"
-                  disabled={session.sending}
+                  disabled={
+                    session.sending ||
+                    session.stopping ||
+                    session.queueSendingId === entry.id
+                  }
                   onClick={() =>
                     void client
                       .queueAction(id, entry.id, "delete")
@@ -751,7 +767,7 @@ export function CodexComposer({
               <div className="reader-scrollbar max-h-60 overflow-auto">
                 <div className="px-3 py-2 text-xs text-muted-foreground break-words">
                   资源方：
-                  {resourceName?.id === resourceId
+                  {resourceName?.id === resourceAlias
                     ? resourceName.alias
                     : "读取中…"}
                 </div>

@@ -3,7 +3,7 @@ mod history;
 mod paths;
 use history::{
     append_session_entry, clone_session_file, delete_session_file, list_sessions,
-    parse_session_history,
+    parse_session_history, truncate_session_file,
 };
 
 use crate::modules::proc::hide_console;
@@ -791,6 +791,12 @@ pub fn pi_agent_clone_session(path: String) -> Result<PiClonedSession, String> {
 #[tauri::command]
 pub fn pi_agent_append_session(request: PiSessionAppendRequest) -> Result<(), String> {
     append_session_entry(request)
+}
+
+/// 原位截断最后一轮，不创建 fork 文件。
+#[tauri::command]
+pub fn pi_agent_truncate_session(path: String, entry_id: String) -> Result<(), String> {
+    truncate_session_file(Path::new(&path), &entry_id)
 }
 
 /// 从 models.json 列出可选模型，不启动 Pi runtime。

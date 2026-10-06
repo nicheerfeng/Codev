@@ -437,10 +437,6 @@ export default function App() {
   );
 
   const activeTab = tabs.find((t) => t.id === activeId);
-  const activePdfTab =
-    activeTab?.kind === "editor" &&
-    activeTab.path.toLowerCase().endsWith(".pdf");
-
   // Terminal tabs live in the right-side dock panel; file tabs are assigned to
   // one of the two fixed editor groups in the central workspace.
   const fileTabs = useMemo(
@@ -1023,10 +1019,7 @@ export default function App() {
       "terminal.clear": () => {
         clearFocusedTerminal();
       },
-      // PDF 搜索由内嵌的原生阅读器处理，避免 Ctrl+F 转入应用全局搜索。
-      "search.focus": () => {
-        if (!activePdfTab) searchInlineRef.current?.focus();
-      },
+      "search.focus": () => searchInlineRef.current?.focus(),
       "settings.open": () => void openSettingsWindow(),
       "sidebar.toggle": toggleSidebar,
       "explorer.focus": toggleExplorerFocus,
@@ -1049,7 +1042,6 @@ export default function App() {
       zoomIn,
       zoomOut,
       zoomReset,
-      activePdfTab,
     ],
   );
 
@@ -1170,7 +1162,6 @@ export default function App() {
     );
 
   const searchTarget = useMemo<SearchTarget>(() => {
-    if (activePdfTab) return null;
     if (isTerminalTab && activeLeafId !== null && activeSearchAddon)
       return {
         kind: "terminal",
@@ -1187,7 +1178,6 @@ export default function App() {
     return null;
   }, [
     isTerminalTab,
-    activePdfTab,
     isSearchableDocumentTab,
     activeLeafId,
     activeSearchAddon,

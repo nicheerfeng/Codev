@@ -98,7 +98,7 @@ export function CodexResources({
     void listResources()
       .then(setCatalog)
       .catch((failure) => setError(String(failure)));
-  }, [state.resourceId, open, active]);
+  }, [state.resourceAlias, open, active]);
   useEffect(() => {
     if (open)
       void readCodexInstructions()

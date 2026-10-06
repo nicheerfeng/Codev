@@ -12,6 +12,7 @@ import { GitHistoryView } from "@/modules/git/GitHistoryView";
 import { ReaderContextMenu } from "@/modules/editor/ReaderContextMenu";
 import { TabBar } from "@/modules/tabs";
 import type { Tab } from "@/modules/tabs";
+import { useCallback, useRef } from "react";
 
 type EditorGroupId = "primary" | "secondary";
 
@@ -74,6 +75,21 @@ function EditorGroup({
     activeTab?.kind === "html" && activeTab.viewMode === "rendered";
   const showGitDiff = activeTab?.kind === "git-diff";
   const showGitHistory = activeTab?.kind === "git-history";
+  const htmlHandles = useRef(new Map<number, EditorPaneHandle>());
+  const registerGroupHandle = useCallback(
+    (
+      id: number,
+      handle: EditorPaneHandle | null,
+      owner: "editor" | "markdown" | "html",
+    ) => {
+      registerEditorHandle(id, handle, owner);
+      if (owner === "html") {
+        if (handle) htmlHandles.current.set(id, handle);
+        else htmlHandles.current.delete(id);
+      }
+    },
+    [registerEditorHandle],
+  );
 
   return (
     <div
@@ -104,7 +120,9 @@ function EditorGroup({
           />
         </div>
       )}
-      <ReaderContextMenu>
+      <ReaderContextMenu
+        onRefreshHtml={() => htmlHandles.current.get(activeId)?.reload()}
+      >
         <div
           className="absolute inset-0"
           onFocusCapture={() => {
@@ -135,7 +153,7 @@ function EditorGroup({
             <HtmlStack
               tabs={tabs}
               activeId={activeId}
-              registerHandle={registerEditorHandle}
+              registerHandle={registerGroupHandle}
               onSetHtmlView={onSetHtmlView}
               onFocusSearch={onFocusSearch}
             />

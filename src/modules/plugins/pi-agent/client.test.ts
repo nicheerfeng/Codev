@@ -4,10 +4,12 @@ import type { PiEventEnvelope } from "./types";
 const mock = vi.hoisted(() => ({
   receive: (_event: PiEventEnvelope) => {},
   next: 0,
+  sessionFiles: new Map<number, string>(),
   stop: vi.fn(),
   close: vi.fn(),
   closeAll: vi.fn(),
   rejectPrompt: false,
+  forkText: "原始输入",
   cancelBranch: false,
 }));
 vi.mock("./native", () => ({
@@ -15,7 +17,11 @@ vi.mock("./native", () => ({
     mock.receive = receive;
     return mock.stop;
   }),
-  startPiAgent: vi.fn(async () => ({ sessionId: ++mock.next, processId: 1 })),
+  startPiAgent: vi.fn(async (_cwd: string, path?: string) => {
+    const sessionId = ++mock.next;
+    mock.sessionFiles.set(sessionId, path ?? `session-${sessionId}.jsonl`);
+    return { sessionId, processId: 1 };
+  }),
   closePiAgent: (...args: unknown[]) => {
     mock.close(...args);
     return Promise.resolve(true);
@@ -44,6 +50,7 @@ vi.mock("./native", () => ({
     name: null,
   })),
   appendPiSession: vi.fn(async () => undefined),
+  truncatePiSession: vi.fn(async () => undefined),
   sendPiCommand: vi.fn(async (runtimeId, command) => {
     queueMicrotask(() =>
       mock.receive({
@@ -67,7 +74,11 @@ vi.mock("./native", () => ({
                     text: command.type === "fork" ? "原始输入" : "",
                   }
                 : command.type === "get_fork_messages"
-                  ? { messages: [{ entryId: "entry-last", text: "原始输入" }] }
+                  ? {
+                      messages: [
+                        { entryId: "entry-last", text: mock.forkText },
+                      ],
+                    }
                   : command.type === "get_messages"
                     ? { messages: [] }
                     : command.type === "get_available_models"
@@ -81,7 +92,11 @@ vi.mock("./native", () => ({
                           ],
                         }
                       : command.type === "get_state"
-                        ? { sessionFile: `session-${runtimeId}.jsonl` }
+                        ? {
+                            sessionFile:
+                              mock.sessionFiles.get(runtimeId) ??
+                              `session-${runtimeId}.jsonl`,
+                          }
                         : {},
         },
       }),
@@ -216,13 +231,28 @@ describe("Pi RPC workspace", () => {
         );
       expect(flushed.map(([, cmd]) => [cmd.type, cmd.message])).toEqual([
         ["prompt", "one"],
-        ["prompt", "two"],
       ]);
       expect(flushed[0][1].images).toEqual(images);
-      expect(flushed[1][1].streamingBehavior).toBe("steer");
-      expect(thread.view.localQueue).toEqual([]);
+      expect(flushed[0][1].streamingBehavior).toBe("followUp");
+      expect(thread.view.localQueue?.map((entry) => entry.text)).toEqual([
+        "two",
+      ]);
       expect(thread.view.compaction?.status).toBe("done");
       expect(thread.view.items).toBe(items);
+      mock.receive({
+        sessionId: thread.runtimeId!,
+        stream: "stdout",
+        event: { type: "agent_settled" },
+      });
+      await vi.waitFor(() => expect(thread.view.localQueue).toEqual([]));
+      expect(native.sendPiCommand).toHaveBeenCalledWith(
+        thread.runtimeId,
+        expect.objectContaining({
+          type: "prompt",
+          message: "two",
+          streamingBehavior: "steer",
+        }),
+      );
       client.beginPrompt(thread, "下一轮");
       await client.request(thread, { type: "prompt", message: "下一轮" });
       expect(thread.view.compaction).toBeUndefined();
@@ -274,6 +304,196 @@ describe("Pi RPC workspace", () => {
       expect(thread.view.localQueue![0].behavior).toBe("steer");
       expect(client.removeQueued(thread, queuedId)?.images).toHaveLength(1);
       expect(thread.view.localQueue).toEqual([]);
+    } finally {
+      vi.mocked(native.sendPiCommand).mockImplementation(original);
+      client.dispose();
+    }
+  });
+  it("keeps running follow-ups in the local queue until the turn settles", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("queue-idle", "D:/one");
+      await client.request(thread, { type: "get_state" });
+      client.beginPrompt(thread, "进行中");
+      const images = [
+        { type: "image" as const, data: "png", mimeType: "image/png" },
+      ];
+      vi.mocked(native.sendPiCommand).mockClear();
+      client.enqueue(thread, "随后看图", images, "followUp");
+      await client.drainQueue(thread);
+      expect(
+        vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.some(([, cmd]) =>
+            ["prompt", "steer", "follow_up"].includes(String(cmd.type)),
+          ),
+      ).toBe(false);
+      expect(thread.view.localQueue).toHaveLength(1);
+      mock.receive({
+        sessionId: thread.runtimeId!,
+        stream: "stdout",
+        event: { type: "agent_settled" },
+      });
+      await vi.waitFor(() => expect(thread.view.localQueue).toEqual([]));
+      expect(native.sendPiCommand).toHaveBeenCalledWith(
+        thread.runtimeId,
+        expect.objectContaining({
+          type: "prompt",
+          message: "随后看图",
+          images,
+        }),
+      );
+    } finally {
+      client.dispose();
+    }
+  });
+  it("keeps a steered queue item visible until native consumption completes", async () => {
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("steer-hold", "D:/one");
+      await client.request(thread, { type: "get_state" });
+      client.beginPrompt(thread, "进行中");
+      const queuedId = client.enqueue(thread, "插入这句", [], "followUp");
+      await client.sendQueued(thread, queuedId);
+      expect(thread.view.localQueue?.map((item) => item.text)).toEqual([
+        "插入这句",
+      ]);
+      expect(thread.view.queueSendingId).toBe(queuedId);
+      mock.receive({
+        sessionId: thread.runtimeId!,
+        stream: "stdout",
+        event: {
+          type: "queue_update",
+          steering: ["插入这句"],
+          followUp: [],
+        },
+      });
+      expect(thread.view.localQueue).toHaveLength(1);
+      mock.receive({
+        sessionId: thread.runtimeId!,
+        stream: "stdout",
+        event: {
+          type: "queue_update",
+          steering: [],
+          followUp: [],
+        },
+      });
+      expect(thread.view.localQueue).toEqual([]);
+      expect(thread.view.queueSendingId).toBeUndefined();
+    } finally {
+      client.dispose();
+    }
+  });
+  it("does not submit the next queued prompt after the first acknowledgement or while stopping", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("stop-drain", "D:/one");
+      await client.request(thread, { type: "get_state" });
+      client.enqueue(thread, "first", [], "followUp");
+      client.enqueue(thread, "second", [], "followUp");
+      vi.mocked(native.sendPiCommand).mockClear();
+      await client.drainQueue(thread);
+      expect(
+        vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.filter(([, cmd]) => cmd.type === "prompt")
+          .map(([, cmd]) => cmd.message),
+      ).toEqual(["first"]);
+      thread.view = { ...thread.view, status: "stopping" };
+      await client.drainQueue(thread);
+      expect(thread.view.localQueue?.map((item) => item.text)).toEqual([
+        "second",
+      ]);
+      expect(
+        vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.filter(([, cmd]) => cmd.type === "prompt"),
+      ).toHaveLength(1);
+    } finally {
+      client.dispose();
+    }
+  });
+  it("restores local queued images when stopping alongside the native queue", async () => {
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("stop-images", "D:/one");
+      await client.request(thread, { type: "get_state" });
+      client.beginPrompt(thread, "进行中");
+      const images = [
+        { type: "image" as const, data: "png", mimeType: "image/png" },
+      ];
+      client.enqueue(thread, "待发送图片", images, "followUp");
+      const restore = vi.fn();
+      await client.stopAndRestore(thread, restore);
+      expect(restore).toHaveBeenCalledWith(
+        ["排队指令", "后续任务", "待发送图片"],
+        images,
+      );
+      expect(thread.view.localQueue).toEqual([]);
+    } finally {
+      client.dispose();
+    }
+  });
+  it("keeps images when editing and rebuilding a legacy native queue", async () => {
+    const native = await import("./native");
+    const original = vi.mocked(native.sendPiCommand).getMockImplementation()!;
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("edit-images", "D:/one");
+      await client.request(thread, { type: "get_state" });
+      const images = [
+        { type: "image" as const, data: "png", mimeType: "image/png" },
+      ];
+      vi.mocked(native.sendPiCommand).mockImplementation(
+        async (id, command) => {
+          if (command.type === "clear_queue") {
+            queueMicrotask(() =>
+              mock.receive({
+                sessionId: id,
+                stream: "stdout",
+                event: {
+                  type: "response",
+                  id: command.id,
+                  command: "clear_queue",
+                  success: true,
+                  data: {
+                    steering: [],
+                    follow_up: [
+                      {
+                        message: "编辑我",
+                        images: [{ data: "png", mime_type: "image/png" }],
+                      },
+                      { message: "保留我", images },
+                    ],
+                  },
+                },
+              }),
+            );
+            return;
+          }
+          return original(id, command);
+        },
+      );
+      const restore = vi.fn();
+      await client.updateQueuedMessage(
+        thread,
+        "followUp",
+        0,
+        "编辑我",
+        "edit",
+        restore,
+      );
+      expect(restore).toHaveBeenCalledWith(["编辑我"], images);
+      expect(native.sendPiCommand).toHaveBeenCalledWith(
+        thread.runtimeId,
+        expect.objectContaining({
+          type: "follow_up",
+          message: "保留我",
+          images,
+        }),
+      );
     } finally {
       vi.mocked(native.sendPiCommand).mockImplementation(original);
       client.dispose();
@@ -469,10 +689,12 @@ describe("Pi RPC workspace", () => {
   });
   beforeEach(() => {
     mock.next = 0;
+    mock.sessionFiles.clear();
     mock.close.mockClear();
     mock.closeAll.mockClear();
     mock.stop.mockClear();
     mock.rejectPrompt = false;
+    mock.forkText = "原始输入";
     mock.cancelBranch = false;
   });
   it("isolates simultaneous threads and never closes one when opening another", async () => {
@@ -1075,38 +1297,199 @@ describe("Pi RPC workspace", () => {
     });
     client.dispose();
   });
-  it("forks before the last user message and resends the edited text", async () => {
+  it("edits in place and keeps the renamed session identity without a fork", async () => {
     const native = await import("./native");
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
-    const thread = await client.open("source", "D:/one");
-    await client.request(thread, { type: "get_state" });
-    vi.mocked(native.sendPiCommand).mockClear();
-    await expect(client.editLastUser(thread, "修改后的输入")).resolves.toBe(
-      true,
-    );
-    expect(
-      vi
-        .mocked(native.sendPiCommand)
-        .mock.calls.map(([, command]) => command.type),
-    ).toEqual([
-      "get_fork_messages",
-      "fork",
-      "get_messages",
-      "get_state",
-      "get_session_stats",
-      "prompt",
-    ]);
-    expect(
-      vi
-        .mocked(native.sendPiCommand)
-        .mock.calls.find(([, command]) => command.type === "fork")?.[1],
-    ).toMatchObject({ type: "fork", entryId: "entry-last" });
-    expect(
-      vi
-        .mocked(native.sendPiCommand)
-        .mock.calls.find(([, command]) => command.type === "prompt")?.[1],
-    ).toMatchObject({ type: "prompt", message: "修改后的输入" });
-    client.dispose();
+    try {
+      const path = "C:/Users/test/same.jsonl";
+      const thread = await client.open(path, "D:/one", path);
+      await client.request(thread, { type: "get_state" });
+      await client.rename(thread, "Renamed");
+      thread.view.items = [
+        {
+          id: "entry-last",
+          kind: "message",
+          role: "user",
+          text: "原始输入",
+          thinking: "",
+          streaming: false,
+        },
+      ];
+      vi.mocked(native.sendPiCommand).mockClear();
+      vi.mocked(native.truncatePiSession).mockClear();
+      vi.mocked(native.clonePiSession).mockClear();
+      vi.mocked(native.startPiAgent).mockClear();
+      await expect(client.editLastUser(thread, "修改后的输入")).resolves.toBe(
+        true,
+      );
+      expect(native.truncatePiSession).toHaveBeenCalledWith(path, "entry-last");
+      expect(native.clonePiSession).not.toHaveBeenCalled();
+      expect(native.startPiAgent).toHaveBeenLastCalledWith(
+        "D:/one",
+        path,
+        false,
+      );
+      expect(
+        vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.some(
+            ([, command]) =>
+              command.type === "fork" || command.type === "clone",
+          ),
+      ).toBe(false);
+      expect(native.sendPiCommand).toHaveBeenLastCalledWith(
+        thread.runtimeId,
+        expect.objectContaining({ type: "prompt", message: "修改后的输入" }),
+      );
+      expect(thread.key).toBe(path);
+      expect(thread.view.sessionFile).toBe(path);
+      expect(thread.view.sessionName).toBe("Renamed");
+      expect(client.threads.size).toBe(1);
+      expect(
+        await client.open(
+          "reopened",
+          "D:/one",
+          "\\\\?\\C:\\Users\\test\\same.jsonl",
+        ),
+      ).toBe(thread);
+      expect(client.threads.size).toBe(1);
+    } finally {
+      client.dispose();
+    }
+  });
+  it("blocks concurrent requests and another edit while the original session is truncated", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    let release!: () => void;
+    try {
+      const thread = await client.open("same.jsonl", "D:/one", "same.jsonl");
+      await client.request(thread, { type: "get_state" });
+      thread.view.items = [
+        {
+          id: "entry-last",
+          kind: "message",
+          role: "user",
+          text: "原始输入",
+          thinking: "",
+          streaming: false,
+        },
+      ];
+      vi.mocked(native.truncatePiSession).mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+      );
+      const editing = client.editLastUser(thread, "修改后的输入");
+      await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+      await expect(client.editLastUser(thread, "另一条编辑")).rejects.toThrow(
+        "请等待运行结束后再编辑",
+      );
+      await expect(
+        client.request(thread, { type: "prompt", message: "并发输入" }),
+      ).rejects.toThrow("正在重新编辑当前轮");
+      await client.refreshState(thread);
+      expect(thread.runtimeId).toBeNull();
+      release();
+      await editing;
+      expect(thread.view.sessionFile).toBe("same.jsonl");
+      expect(client.threads.size).toBe(1);
+    } finally {
+      release?.();
+      client.dispose();
+    }
+  });
+  it("refuses a stale last-user cursor without closing or changing the session", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("same.jsonl", "D:/one", "same.jsonl");
+      await client.request(thread, { type: "get_state" });
+      thread.view.items = [
+        {
+          id: "entry-last",
+          kind: "message",
+          role: "user",
+          text: "过期输入",
+          thinking: "",
+          streaming: false,
+        },
+      ];
+      const items = thread.view.items;
+      vi.mocked(native.truncatePiSession).mockClear();
+      await expect(client.editLastUser(thread, "修改后的输入")).rejects.toThrow(
+        "最后一条输入已变化",
+      );
+      expect(native.truncatePiSession).not.toHaveBeenCalled();
+      expect(mock.close).not.toHaveBeenCalled();
+      expect(thread.view.items).toBe(items);
+      expect(thread.view.sessionFile).toBe("same.jsonl");
+    } finally {
+      client.dispose();
+    }
+  });
+  it("retains the original identity and releases the edit lock after a failed truncate", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("same.jsonl", "D:/one", "same.jsonl");
+      await client.request(thread, { type: "get_state" });
+      thread.view.items = [
+        {
+          id: "entry-last",
+          kind: "message",
+          role: "user",
+          text: "原始输入",
+          thinking: "",
+          streaming: false,
+        },
+      ];
+      const items = thread.view.items;
+      vi.mocked(native.truncatePiSession).mockRejectedValueOnce(
+        new Error("文件已变化"),
+      );
+      await expect(client.editLastUser(thread, "修改后的输入")).rejects.toThrow(
+        "文件已变化",
+      );
+      expect(thread.view.items).toHaveLength(items.length);
+      expect(thread.view.items[0]).toMatchObject(items[0]);
+      expect(thread.view.sessionFile).toBe("same.jsonl");
+      expect(thread.key).toBe("same.jsonl");
+      await expect(client.editLastUser(thread, "再次编辑")).resolves.toBe(true);
+      expect(client.threads.size).toBe(1);
+    } finally {
+      client.dispose();
+    }
+  });
+  it("keeps wide-image edits in the same session when Pi adds an image size note", async () => {
+    const native = await import("./native");
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      const thread = await client.open("same.jsonl", "D:/one", "same.jsonl");
+      await client.request(thread, { type: "get_state" });
+      thread.view.items = [
+        {
+          id: "entry-last",
+          kind: "message",
+          role: "user",
+          text: "原始输入",
+          thinking: "",
+          streaming: false,
+        },
+      ];
+      mock.forkText =
+        "原始输入\n[Image: original 4000x1000, resized to 2000x500]";
+      await expect(client.editLastUser(thread, "修改后的输入")).resolves.toBe(
+        true,
+      );
+      expect(native.truncatePiSession).toHaveBeenLastCalledWith(
+        "same.jsonl",
+        "entry-last",
+      );
+      expect(thread.view.sessionFile).toBe("same.jsonl");
+    } finally {
+      client.dispose();
+    }
   });
   it("resends an aborted turn with its images after restoring queued text", async () => {
     const native = await import("./native");
@@ -1124,6 +1507,16 @@ describe("Pi RPC workspace", () => {
       event: { type: "agent_settled" },
     });
     expect(restore).toHaveBeenCalledWith(["排队指令", "后续任务"]);
+    thread.view.items = [
+      {
+        id: "entry-last",
+        kind: "message",
+        role: "user",
+        text: "原始输入",
+        thinking: "",
+        streaming: false,
+      },
+    ];
     const images = [
       { type: "image" as const, data: "image-data", mimeType: "image/png" },
     ];

@@ -7,6 +7,7 @@ import { prependPrompt } from "./promptHistory";
 import { parentThread, taskFamily } from "./subagents";
 import { editableLastUser, originalInputs } from "./editLastUser";
 import {
+  itemText,
   reduceNotification,
   sessionFromThread,
   type Input,
@@ -38,7 +39,7 @@ export type Snapshot = {
   models: Model[];
   cursor: string | null;
   archivedCursor: string | null;
-  resourceId: string;
+  resourceAlias: string;
   provider: string;
   switching: boolean;
   multi: boolean;
@@ -68,7 +69,7 @@ export class CodexClient {
     models: [],
     cursor: null,
     archivedCursor: null,
-    resourceId: "native",
+    resourceAlias: "",
     provider: "",
     switching: false,
     multi: false,
@@ -108,8 +109,11 @@ export class CodexClient {
   private startup?: Promise<void>;
   private disposed = false;
   private owner = crypto.randomUUID();
-  private requestedResource: string | undefined;
   private draining = new Set<string>();
+  private inserting = new Map<
+    string,
+    { id: string; text: string; turnId: string | null; userCount: number }
+  >();
   private compactionWaiters = new Map<
     string,
     {
@@ -163,17 +167,12 @@ export class CodexClient {
   setMulti(multi: boolean) {
     if (this.snapshot.multi !== multi) this.update({ multi });
   }
-  /** 当前线程选择立即生效，最近模型按资源记忆供新线程复用。 */
+  /** 当前线程选择立即生效，最近模型在本次连接中供新线程复用。 */
   async selectModel(id: string, model: string, effort: string) {
     effort = effort || "medium";
     this.patch(id, { model, effort });
     const choice = { model, effort };
     this.update({ lastModel: choice });
-    await invoke("codex_resources_model", {
-      id: this.snapshot.resourceId,
-      provider: this.snapshot.provider,
-      choice,
-    });
   }
   /** 汇总隐藏会话和原生事件，始终显示明确的切换阻塞原因。 */
   switchReason(): string {
@@ -196,18 +195,16 @@ export class CodexClient {
     );
   }
   /** 冻结发送后由 Rust 检查全部后台活动，再释放旧连接并初始化新资源。 */
-  async switchResource(id: string) {
+  async switchResource(alias: string) {
     const reason = this.switchReason();
     if (reason) throw new Error(reason);
     this.update({ switching: true, error: null });
-    const previousResource = this.snapshot.resourceId;
     try {
       await invoke("codex_agent_prepare_switch", {
         connectionId: this.connectionId,
-        resourceId: id,
+        resourceAlias: alias,
       });
       this.connectionId = 0;
-      this.requestedResource = id;
       this.update({
         connected: false,
         models: [],
@@ -240,7 +237,6 @@ export class CodexClient {
     } catch (error) {
       await invoke("codex_resources_rollback");
       if (!this.snapshot.connected || !this.connectionId) {
-        this.requestedResource = previousResource;
         await this.connect();
       }
       throw error;
@@ -307,6 +303,7 @@ export class CodexClient {
       pending.reject(new Error(message));
     }
     this.pending.clear();
+    for (const id of [...this.inserting.keys()]) this.finishInserted(id, true);
     this.connectionId = 0;
     this.update({
       connected: false,
@@ -462,11 +459,13 @@ export class CodexClient {
       const next = reduceNotification(session, method, params);
       if (next !== session) this.patch(id, next);
       this.streaming = false;
-      if (method === "item/completed") {
+      if (method === "item/started" || method === "item/completed") {
         const item = params.item as import("./protocol").Item | undefined;
+        if (item?.type === "userMessage") this.finishInserted(id, false);
         if (
-          item?.type === "contextCompaction" ||
-          item?.type === "context_compaction"
+          method === "item/completed" &&
+          (item?.type === "contextCompaction" ||
+            item?.type === "context_compaction")
         ) {
           const waiter = this.compactionWaiters.get(id);
           if (waiter) {
@@ -476,9 +475,19 @@ export class CodexClient {
           }
         }
       }
+      if (
+        method === "thread/closed" ||
+        (method === "thread/status/changed" &&
+          ["idle", "notLoaded", "systemError"].includes(
+            String((params.status as { type?: string } | undefined)?.type),
+          ))
+      )
+        this.finishInserted(id, true);
       if (method === "turn/completed") {
-        void this.readAgentMetadata(this.threadId(id));
         const turn = params.turn as Turn;
+        if (this.inserting.get(id)?.turnId === turn?.id)
+          this.finishInserted(id, true);
+        void this.readAgentMetadata(this.threadId(id));
         if (turn?.status === "completed")
           codexTurnListeners.forEach((listener) => listener(id, turn));
         if (
@@ -558,7 +567,6 @@ export class CodexClient {
         });
         this.connectionId = await invoke<number>("codex_agent_start", {
           owner: this.owner,
-          resourceId: this.requestedResource ?? null,
         });
         if (this.disposed) return;
         await this.request("initialize", {
@@ -567,14 +575,13 @@ export class CodexClient {
         });
         await this.write({ method: "initialized" });
         const ready = await invoke<{
-          resourceId: string;
+          resourceAlias: string;
           provider: string;
-          lastModel: Snapshot["lastModel"];
         }>("codex_agent_ready", { connectionId: this.connectionId });
         this.update({
           connected: false,
           stateUnknown: false,
-          resourceId: ready.resourceId,
+          resourceAlias: ready.resourceAlias,
           provider: ready.provider,
           // 每次连接都以当前资源的实时目录重建，不沿用旧渠道模型缓存。
           lastModel: null,
@@ -583,7 +590,7 @@ export class CodexClient {
         try {
           const upstream = await invoke<Array<{ id: string; name?: string }>>(
             "codex_resources_models",
-            { id: "native" },
+            { alias: ready.resourceAlias },
           );
           const available = mergeModels([], upstream ?? []);
           if (!available.length) throw new Error("当前资源没有返回可用模型");
@@ -596,11 +603,6 @@ export class CodexClient {
               model: available[0].model,
               effort: available[0].defaultReasoningEffort || "",
             };
-            await invoke("codex_resources_model", {
-              id: ready.resourceId,
-              provider: ready.provider,
-              choice,
-            });
           }
           const selectedChoice = choice;
           await invoke("codex_agent_ready", {
@@ -963,6 +965,7 @@ export class CodexClient {
     for (const id of removed) {
       delete sessions[id];
       this.scrollPositions.delete(id);
+      this.inserting.delete(id);
     }
     this.update({
       sessions,
@@ -1169,9 +1172,54 @@ export class CodexClient {
       void this.drain(id);
     } else await this.send(id);
   }
+  private userMessageCount(
+    session: Session,
+    draft: string,
+    turnId: string | null,
+  ) {
+    const cleaned = draft.replace(/\s+$/u, "");
+    return session.thread.turns
+      .filter((turn) => turn.id === turnId)
+      .flatMap((turn) => turn.items)
+      .filter((item) => {
+        if (item.type !== "userMessage") return false;
+        const text = itemText(item).replace(/\s+$/u, "");
+        return text === cleaned || text.startsWith(`${cleaned}\n`);
+      }).length;
+  }
+
+  /** ACK 不代表消费；终轮或断线仍未确认的完整输入退回草稿，避免自动重发。 */
+  private finishInserted(id: string, ended: boolean) {
+    const pending = this.inserting.get(id);
+    if (!pending) return;
+    const session = this.snapshot.sessions[id];
+    if (!session) {
+      this.inserting.delete(id);
+      return;
+    }
+    const appeared =
+      this.userMessageCount(session, pending.text, pending.turnId) >
+      pending.userCount;
+    if (!ended && !appeared) return;
+    this.inserting.delete(id);
+    const entry = session.queue.find((item) => item.id === pending.id);
+    if (!appeared && entry) this.restoreDraft(id, [entry]);
+    this.patch(id, {
+      queueSendingId: undefined,
+      queue: session.queue.filter((item) => item.id !== pending.id),
+      ...(!appeared && entry
+        ? { queueError: "插队消息尚未在时间线确认，已退回输入框，请核对后重发" }
+        : {}),
+    });
+  }
+
   /** 上一轮完成后串行发送一条；失败保留原队列，避免重复提交。 */
   private async drain(id: string) {
     const session = this.snapshot.sessions[id];
+    const insertingId = this.inserting.get(id)?.id;
+    const queue = (session?.queue ?? []).filter(
+      (item) => item.id !== insertingId,
+    );
     if (
       !session ||
       session.compacting ||
@@ -1179,14 +1227,14 @@ export class CodexClient {
       session.sending ||
       session.stopping ||
       session.queueError ||
-      !session.queue.length ||
+      !queue.length ||
       this.draining.has(id) ||
       !this.snapshot.connected ||
       this.snapshot.switching
     )
       return;
     this.draining.add(id);
-    const entry = session.queue[0];
+    const entry = queue[0];
     try {
       if (await this.send(id, entry))
         this.patch(id, {
@@ -1243,13 +1291,45 @@ export class CodexClient {
     entryId: string,
     action: "edit" | "delete" | "steer",
   ) {
-    if (this.draining.has(id) || this.snapshot.sessions[id].sending)
-      throw new Error("队列正在提交，请稍后操作");
-    const entry = this.snapshot.sessions[id].queue.find(
-      (item) => item.id === entryId,
-    );
+    id = this.sessionKey(id);
+    const session = this.snapshot.sessions[id];
+    if (!session) return;
+    if (this.draining.has(id) || session.sending || session.stopping)
+      throw new Error("队列正在提交或停止，请稍后操作");
+    if (session.queueSendingId === entryId) return;
+    const entry = session.queue.find((item) => item.id === entryId);
     if (!entry) return;
-    if (action === "steer" && !(await this.send(id, entry))) return;
+    if (action === "steer") {
+      if (this.inserting.has(id))
+        throw new Error("上一条插队消息正在等待原生确认，请稍候");
+      if (!session.busy && !session.turnId) {
+        this.patch(id, {
+          queue: [
+            entry,
+            ...session.queue.filter((item) => item.id !== entryId),
+          ],
+          queueError: null,
+        });
+        await this.drain(id);
+        return;
+      }
+      this.inserting.set(id, {
+        id: entryId,
+        text: entry.draft,
+        turnId: session.turnId,
+        userCount: this.userMessageCount(session, entry.draft, session.turnId),
+      });
+      this.patch(id, { queueSendingId: entryId, queueError: null });
+      if (!(await this.send(id, entry))) {
+        if (this.inserting.get(id)?.id === entryId) {
+          this.inserting.delete(id);
+          this.patch(id, { queueSendingId: undefined });
+        }
+        return;
+      }
+      this.finishInserted(id, false);
+      return;
+    }
     if (action === "edit") this.restoreDraft(id, [entry]);
     this.patch(id, {
       queue: this.snapshot.sessions[id].queue.filter(
@@ -1267,6 +1347,7 @@ export class CodexClient {
   }
   /** 停止确认后恢复尚未提交的队列，不丢失新草稿。 */
   async stopAndRestore(id: string) {
+    id = this.sessionKey(id);
     if (this.snapshot.sessions[id].sending)
       throw new Error("正在提交消息，请稍后停止");
     this.patch(id, { stopping: true });
@@ -1281,8 +1362,13 @@ export class CodexClient {
       );
       const failure = results.find((result) => result.status === "rejected");
       if (failure?.status === "rejected") throw failure.reason;
+      this.inserting.delete(id);
       this.restoreDraft(id, this.snapshot.sessions[id].queue);
-      this.patch(id, { queue: [], queueError: null });
+      this.patch(id, {
+        queue: [],
+        queueError: null,
+        queueSendingId: undefined,
+      });
     } finally {
       this.patch(id, { stopping: false });
     }
@@ -1532,6 +1618,7 @@ export class CodexClient {
   /** 卸载插件时取消监听与本插件进程。 */
   async dispose() {
     this.disposed = true;
+    this.inserting.clear();
     clearTimeout(this.streamTimer);
     for (const [id, waiter] of this.compactionWaiters) {
       clearTimeout(waiter.timer);
