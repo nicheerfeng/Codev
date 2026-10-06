@@ -57,6 +57,7 @@ let restoringWindowSize = false;
 async function restoreInvalidWindowSize() {
   if (restoringWindowSize) return;
   const window = getCurrentWindow();
+  if (await window.isMinimized()) return;
   const size = await window.innerSize();
   if (size.width >= 420 && size.height >= 280) return;
 

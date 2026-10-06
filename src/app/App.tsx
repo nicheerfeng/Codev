@@ -412,6 +412,16 @@ export default function App() {
   ]);
 
   const workspaceTabs = tabs;
+  const panelGroupElementRef = useRef<HTMLDivElement | null>(null);
+  const hasMeasurablePanelLayout = useCallback(() => {
+    const element = panelGroupElementRef.current;
+    return (
+      !document.hidden &&
+      !!element &&
+      element.clientWidth > 0 &&
+      element.clientHeight > 0
+    );
+  }, []);
 
   const {
     sidebarRef,
@@ -1334,12 +1344,14 @@ export default function App() {
 
           <main className="zoom-content flex min-h-0 flex-1 flex-col">
             <ResizablePanelGroup
+              elementRef={panelGroupElementRef}
               orientation="horizontal"
               className="min-h-0 flex-1"
               onLayoutChanged={(
                 _: Layout,
                 { isUserInteraction }: LayoutChangedMeta,
               ) => {
+                if (!hasMeasurablePanelLayout()) return;
                 const width = sidebarRef.current?.getSize().inPixels ?? 0;
                 persistSidebarWidth(width, isUserInteraction);
                 const terminalWidth =
@@ -1361,6 +1373,7 @@ export default function App() {
                 collapsible
                 collapsedSize={0}
                 onResize={(size) => {
+                  if (!hasMeasurablePanelLayout()) return;
                   persistSidebarCollapsed(size.inPixels <= 0);
                 }}
               >
@@ -1445,6 +1458,7 @@ export default function App() {
                 collapsible
                 collapsedSize={0}
                 onResize={(size) => {
+                  if (!hasMeasurablePanelLayout()) return;
                   persistTerminalCollapsed(size.inPixels <= 1);
                 }}
               >
