@@ -613,6 +613,7 @@ pub fn run() {
             browser::browser_reload,
             browser::browser_inspect,
             browser::browser_hide,
+            browser::browser_close,
             pi_agent::pi_agent_list_sessions,
             pi_agent::pi_agent_delete_session,
             pi_agent::pi_agent_read_models,

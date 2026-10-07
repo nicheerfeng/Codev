@@ -1,3 +1,5 @@
+import { WorkbenchContent } from "@/modules/plugins/workbench/WorkbenchContent";
+import { useWorkbench } from "@/modules/plugins/workbench/store";
 import type { Tab } from "@/modules/tabs";
 import type { SearchAddon } from "@xterm/addon-search";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -76,6 +78,7 @@ export function TerminalStack({
     onRename(rename.id, rename.text.trim());
     setRename(null);
   };
+  const workbench = useWorkbench();
   const terminals = useMemo(() => selectLiveTerminals(tabs), [tabs]);
   const multi = viewSlots.length > 1;
   useEffect(() => {
@@ -170,7 +173,9 @@ export function TerminalStack({
     >
       {terminals.map((t) => {
         const position = grid.slots.indexOf(t.id);
-        const tabVisible = visible && position >= 0;
+        const collected =
+          workbench.visible && !!workbench.targets[`terminal:${t.id}`];
+        const tabVisible = (visible && position >= 0) || collected;
         return (
           <div
             key={t.id}
@@ -277,13 +282,21 @@ export function TerminalStack({
               </div>
             )}
             <div className="min-h-0 flex-1">
-              <PaneTreeView
-                node={t.paneTree}
-                tabVisible={tabVisible}
-                activeLeafId={t.id === activeId ? t.activeLeafId : -1}
-                onFocusLeaf={(leafId) => onFocusLeaf(t.id, leafId)}
-                getBundle={getBundle}
-              />
+              <WorkbenchContent
+                source={{
+                  kind: "terminal",
+                  id: String(t.id),
+                  title: labelFor(t),
+                }}
+              >
+                <PaneTreeView
+                  node={t.paneTree}
+                  tabVisible={tabVisible}
+                  activeLeafId={t.id === activeId ? t.activeLeafId : -1}
+                  onFocusLeaf={(leafId) => onFocusLeaf(t.id, leafId)}
+                  getBundle={getBundle}
+                />
+              </WorkbenchContent>
             </div>
           </div>
         );

@@ -273,6 +273,7 @@ export function ResizableViewportGrid({
               <button
                 key={`row-${row}-divider-${boundary}`}
                 type="button"
+                data-viewport-resize=""
                 aria-label={`调整第 ${row + 1} 行第 ${boundary + 1} 与第 ${boundary + 2} 个视口宽度`}
                 title="拖动调整本行视口宽度"
                 className="group absolute z-20 w-2 -translate-x-1/2 cursor-col-resize touch-none bg-transparent outline-none"
@@ -294,6 +295,7 @@ export function ResizableViewportGrid({
             <button
               key={`horizontal-divider-${boundary}`}
               type="button"
+              data-viewport-resize=""
               aria-label={`调整第 ${boundary + 1} 行和第 ${boundary + 2} 行的高度`}
               title="拖动调整上下行高度"
               className="group absolute inset-x-0 z-30 h-2 -translate-y-1/2 cursor-row-resize touch-none bg-transparent outline-none"

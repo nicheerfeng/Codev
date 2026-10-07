@@ -40,6 +40,8 @@ import {
 } from "./projectActivity";
 import { itemText } from "./protocol";
 import { watchHistory } from "./historyWatch";
+import { WorkbenchContent } from "../workbench/WorkbenchContent";
+import { useWorkbench } from "../workbench/store";
 import { ResizableViewportGrid } from "@/components/ResizableViewportGrid";
 
 /** 只恢复视口数量；启动不读取旧会话，等待用户选择。 */
@@ -164,6 +166,15 @@ function Workspace({
   const [creating, setCreating] = useState(false);
   const [hover, setHover] = useState<number | null>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
+  const workbenchSlots = useWorkbench((state) => state.slots);
+  const workbenchTargets = useWorkbench((state) => state.targets);
+  const collected = workbenchSlots
+    .filter((source) => source?.kind === "codex")
+    .map((source) => source!.id);
+  const renderSlots = [
+    ...slots,
+    ...collected.filter((id) => !slots.includes(id)),
+  ];
   const selected = slots[focused] ?? null;
   const current = selected ? state.sessions[selected] : undefined;
   const multi = slots.length > 1;
@@ -187,6 +198,7 @@ function Workspace({
       [...knownSessions.current].filter((id) => !state.sessions[id]),
     );
     knownSessions.current = new Set(Object.keys(state.sessions));
+    for (const id of removed) useWorkbench.getState().release("codex", id);
     setSlots((currentSlots) =>
       currentSlots.some((id) => id && removed.has(id))
         ? currentSlots.map((id) => (id && removed.has(id) ? null : id))
@@ -434,8 +446,9 @@ function Workspace({
           className={`min-h-0 min-w-0 flex-1 !overflow-auto ${multi ? "codex-multi" : ""}`}
           columns={viewportColumns}
           rows={viewportRows}
-          positions={slots.map((_, index) =>
-            maximizedViewport !== null && index !== maximizedViewport
+          positions={renderSlots.map((_, index) =>
+            index >= slots.length ||
+            (maximizedViewport !== null && index !== maximizedViewport)
               ? null
               : {
                   column:
@@ -448,7 +461,7 @@ function Workspace({
           )}
           onWidthChange={setViewportWidth}
         >
-          {slots.map((id, index) => {
+          {renderSlots.map((id, index) => {
             const session = id ? state.sessions[id] : null;
             return (
               <section
@@ -456,74 +469,86 @@ function Workspace({
                 data-codex-slot={index}
                 data-codex-viewport-key={id ?? ""}
                 className={`codex-slot ${focused === index ? "codex-focused" : ""} ${hover === index ? "codex-drop-target" : ""}`}
-                onPointerDown={() => setFocused(index)}
-                onFocusCapture={() => setFocused(index)}
+                onPointerDown={() => {
+                  if (index < slots.length) setFocused(index);
+                }}
+                onFocusCapture={() => {
+                  if (index < slots.length) setFocused(index);
+                }}
               >
                 {session ? (
-                  <div className="codex-viewport">
-                    {multi && (
-                      <header className="codex-viewport-header">
-                        <Title session={session} client={client} />
-                        <Tool
-                          icon={
-                            maximizedViewport === index
-                              ? Minimize01Icon
-                              : Maximize01Icon
-                          }
-                          label={
-                            maximizedViewport === index
-                              ? "还原视口"
-                              : "放大视口"
-                          }
-                          onClick={() =>
-                            setMaximizedViewport(
-                              maximizedViewport === index ? null : index,
-                            )
-                          }
-                        />
-                        <Tool
-                          icon={Cancel01Icon}
-                          label="关闭视口"
-                          onClick={() => close(index)}
-                        />
-                      </header>
-                    )}
-                    <CodexTranscript
-                      active={active}
-                      onFork={place}
-                      session={session}
-                      client={client}
-                      search={focused === index && searchOpen ? search : ""}
-                      onOpenFile={onOpenFile}
-                      onOpenDiff={onOpenDiff}
-                    />
-                    {!!session.requests.length && (
-                      <div className="codex-approvals reader-scrollbar">
-                        {session.requests.map((request) => (
-                          <Approval
-                            key={request.id}
-                            request={request}
-                            sessionId={session.thread.id}
-                            client={client}
+                  <WorkbenchContent
+                    source={{ kind: "codex", id: id!, title: "Codex" }}
+                  >
+                    <div className="codex-viewport">
+                      {multi && index < slots.length && (
+                        <header className="codex-viewport-header">
+                          <Title session={session} client={client} />
+                          <Tool
+                            icon={
+                              maximizedViewport === index
+                                ? Minimize01Icon
+                                : Maximize01Icon
+                            }
+                            label={
+                              maximizedViewport === index
+                                ? "还原视口"
+                                : "放大视口"
+                            }
+                            onClick={() =>
+                              setMaximizedViewport(
+                                maximizedViewport === index ? null : index,
+                              )
+                            }
                           />
-                        ))}
-                      </div>
-                    )}
-                    {parentThread(session.thread) ? (
-                      <p className="px-3 py-3 text-center text-xs text-muted-foreground">
-                        子代理由主线程调度，无法直接输入
-                      </p>
-                    ) : (
-                      <CodexComposer
-                        onSelect={place}
-                        onNew={create}
+                          <Tool
+                            icon={Cancel01Icon}
+                            label="关闭视口"
+                            onClick={() => close(index)}
+                          />
+                        </header>
+                      )}
+                      <CodexTranscript
+                        active={
+                          active &&
+                          (index < slots.length ||
+                            !!workbenchTargets[`codex:${id}`])
+                        }
+                        onFork={place}
                         session={session}
                         client={client}
-                        models={state.models}
-                        connected={state.connected && !state.switching}
+                        search={focused === index && searchOpen ? search : ""}
+                        onOpenFile={onOpenFile}
+                        onOpenDiff={onOpenDiff}
                       />
-                    )}
-                  </div>
+                      {!!session.requests.length && (
+                        <div className="codex-approvals reader-scrollbar">
+                          {session.requests.map((request) => (
+                            <Approval
+                              key={request.id}
+                              request={request}
+                              sessionId={session.thread.id}
+                              client={client}
+                            />
+                          ))}
+                        </div>
+                      )}
+                      {parentThread(session.thread) ? (
+                        <p className="px-3 py-3 text-center text-xs text-muted-foreground">
+                          子代理由主线程调度，无法直接输入
+                        </p>
+                      ) : (
+                        <CodexComposer
+                          onSelect={place}
+                          onNew={create}
+                          session={session}
+                          client={client}
+                          models={state.models}
+                          connected={state.connected && !state.switching}
+                        />
+                      )}
+                    </div>
+                  </WorkbenchContent>
                 ) : (
                   <div className="codex-empty">
                     {multi && (

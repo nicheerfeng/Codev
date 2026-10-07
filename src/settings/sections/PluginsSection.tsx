@@ -81,8 +81,8 @@ export function PluginsSection() {
         />
       </SettingRow>
       <SettingRow
-        title="浏览器"
-        description="在右侧插件区打开网页，与文件阅读区分开。默认关闭。"
+        title="工作台"
+        description="网页、终端、Pi 与 Codex 的混合视口。默认关闭。"
       >
         <Switch
           checked={browserEnabled}

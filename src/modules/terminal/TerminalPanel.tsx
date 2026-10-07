@@ -32,6 +32,8 @@ import {
   terminalGrid,
   MAX_TERMINAL_VIEWS,
 } from "./lib/terminalGrid";
+import { usePluginStore } from "@/modules/plugins/store";
+import { useWorkbench } from "@/modules/plugins/workbench/store";
 import { toast } from "sonner";
 
 type Props = {
@@ -82,6 +84,7 @@ export function TerminalPanel({
   onFocusLeaf,
 }: Props) {
   const t = useT();
+  const workbenchEnabled = usePluginStore((state) => state.enabled.browser);
   const handles = useRef(new Map<number, TerminalPaneHandle>());
   /** 保留句柄供右侧列表点击后直接聚焦，同时维持主窗口的搜索和输入注册。 */
   const registerPane = useCallback(
@@ -102,7 +105,7 @@ export function TerminalPanel({
             ? "视口已满，请拖拽终端到目标视口进行替换。"
             : "建议拖拽覆盖已有视口或者增加视口。",
           {
-          id: "terminal-viewport-full",
+            id: "terminal-viewport-full",
           },
         );
         return;
@@ -128,16 +131,33 @@ export function TerminalPanel({
   const multi = viewSlots.length > 1;
   const displaySlots = multi
     ? viewSlots
-    : [tabs.some((tab) => tab.id === activeId) ? activeId : (tabs[0]?.id ?? null)];
+    : [
+        tabs.some((tab) => tab.id === activeId)
+          ? activeId
+          : (tabs[0]?.id ?? null),
+      ];
   const grid = terminalGrid(displaySlots);
-  const visibleKey = grid.visibleIds.join(",");
+  const workbenchSlots = useWorkbench((state) => state.slots);
+  const workbenchVisible = useWorkbench((state) => state.visible);
+  const workbenchIds = workbenchVisible
+    ? workbenchSlots
+        .filter((source) => source?.kind === "terminal")
+        .map((source) => Number(source!.id))
+    : [];
+  const visibleKey = [
+    ...new Set([...(visible ? grid.visibleIds : []), ...workbenchIds]),
+  ].join(",");
   const tabIdsKey = tabs.map((tab) => tab.id).join(",");
   useEffect(() => {
-    if (!visible) return;
+    if (!visible && !workbenchVisible) return;
     onShowTerminals(visibleKey ? visibleKey.split(",").map(Number) : []);
-  }, [visibleKey, onShowTerminals, visible]);
+  }, [visibleKey, onShowTerminals, visible, workbenchVisible]);
   useEffect(() => {
     const live = new Set(tabIdsKey ? tabIdsKey.split(",").map(Number) : []);
+    for (const source of useWorkbench.getState().slots) {
+      if (source?.kind === "terminal" && !live.has(Number(source.id)))
+        useWorkbench.getState().release("terminal", source.id);
+    }
     setViewSlots((slots) =>
       slots.some((id) => id !== null && !live.has(id))
         ? slots.map((id) => (id !== null && !live.has(id) ? null : id))
@@ -589,6 +609,20 @@ export function TerminalPanel({
                       </div>
                     </ContextMenuTrigger>
                     <ContextMenuContent className={COMPACT_CONTENT}>
+                      {workbenchEnabled && (
+                        <ContextMenuItem
+                          className={COMPACT_ITEM}
+                          onSelect={() =>
+                            useWorkbench.getState().add({
+                              kind: "terminal",
+                              id: String(tab.id),
+                              title: labelFor(tab),
+                            })
+                          }
+                        >
+                          添加到工作台
+                        </ContextMenuItem>
+                      )}
                       <ContextMenuItem
                         className={COMPACT_ITEM}
                         onSelect={() => beginRename(tab)}

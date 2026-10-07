@@ -7,6 +7,7 @@ import {
   usePluginStore,
 } from "./store";
 import { clearUnreadPrefix } from "./taskbar-unread/unreadTasks";
+import { useWorkbench } from "./workbench/store";
 const CodexPane = lazy(() =>
   import("./codex-agent/CodexPane").then((module) => ({
     default: module.CodexPane,
@@ -18,8 +19,8 @@ const PiAgentPane = lazy(() =>
   })),
 );
 const BrowserPane = lazy(() =>
-  import("./browser/BrowserPane").then((module) => ({
-    default: module.BrowserPane,
+  import("./workbench/WorkbenchPane").then((module) => ({
+    default: module.WorkbenchPane,
   })),
 );
 
@@ -76,6 +77,15 @@ export function ToolPanel({
   workspaceRoots?: string[];
   onAddWorkspaceRoot?: (path: string) => void;
 }) {
+  const browserEnabled = usePluginStore((state) => state.enabled.browser);
+  const workbenchPi = useWorkbench(
+    (state) =>
+      state.visible && state.slots.some((source) => source?.kind === "pi"),
+  );
+  const workbenchCodex = useWorkbench(
+    (state) =>
+      state.visible && state.slots.some((source) => source?.kind === "codex"),
+  );
   const piEnabled = usePluginStore(
     (state) => state.enabled[PI_AGENT_PLUGIN_ID],
   );
@@ -93,12 +103,14 @@ export function ToolPanel({
   useEffect(() => {
     if (!piEnabled) {
       setPiVisited(false);
+      useWorkbench.getState().release("pi");
       clearUnreadPrefix("pi:");
     }
   }, [piEnabled]);
   useEffect(() => {
     if (!codexEnabled) {
       setCodexVisited(false);
+      useWorkbench.getState().release("codex");
       clearUnreadPrefix("codex:");
     }
   }, [codexEnabled]);
@@ -118,7 +130,7 @@ export function ToolPanel({
             }
           >
             <CodexPane
-              active={active && tool === "codex"}
+              active={active && (tool === "codex" || workbenchCodex)}
               onOpenFile={onOpenFile}
               onOpenDiff={onOpenDiff}
               workspaceRoots={workspaceRoots}
@@ -155,7 +167,7 @@ export function ToolPanel({
             }
           >
             <PiAgentPane
-              active={active && tool === "pi"}
+              active={active && (tool === "pi" || workbenchPi)}
               onOpenFile={onOpenFile}
               onOpenDiff={onOpenDiff}
               workspaceRoots={workspaceRoots}
@@ -176,7 +188,9 @@ export function ToolPanel({
             </div>
           }
         >
-          <BrowserPane visible={active && tool === "browser"} />
+          {browserEnabled && (
+            <BrowserPane visible={active && tool === "browser"} />
+          )}
         </Suspense>
       </div>
     </div>

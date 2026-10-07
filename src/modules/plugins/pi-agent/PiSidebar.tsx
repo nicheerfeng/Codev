@@ -1,3 +1,4 @@
+import { usePluginStore } from "../store";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -94,6 +95,7 @@ type Props = {
   onRename: (thread: SidebarThread) => void;
   onCommitRename: (thread: SidebarThread, name: string) => void;
   onFork: (thread: SidebarThread) => void;
+  onWorkbench?: (thread: SidebarThread) => void;
   onExport: (thread: SidebarThread) => void;
   onClose: (thread: SidebarThread) => void;
   onCopyPath: (path: string) => void;
@@ -121,6 +123,7 @@ function DropLine() {
 
 /** 复用 mcode 左栏的组→项目→线程与底部归档收纳，使用 Codev 菜单和控件。 */
 export function PiSidebar(props: Props) {
+  const workbenchEnabled = usePluginStore((state) => state.enabled.browser);
   const { width, onWidthChange: setWidth } = props;
   const previousTaskStatus = useRef(new Map<string, string>());
   const [unreadRevision, setUnreadRevision] = useState(0);
@@ -570,6 +573,11 @@ export function PiSidebar(props: Props) {
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="rounded-xl">
+        {workbenchEnabled && props.onWorkbench && (
+          <ContextMenuItem onSelect={() => props.onWorkbench?.(thread)}>
+            添加到工作台
+          </ContextMenuItem>
+        )}
         <ContextMenuItem onSelect={() => props.onRename(thread)}>
           重命名
         </ContextMenuItem>

@@ -136,6 +136,8 @@ import { editableLastUser } from "./editLastUser";
 import { toast } from "sonner";
 import { onPiAgentSettled } from "./client";
 import { speakFinalIfEnabled } from "@/modules/plugins/pi-agent/voice/output";
+import { WorkbenchContent } from "../workbench/WorkbenchContent";
+import { useWorkbench } from "../workbench/store";
 import { MAX_PI_VIEWPORTS, placePiSession } from "./viewportLayout";
 import "./pi-agent.css";
 
@@ -620,20 +622,24 @@ export function PiAgentPane({
     setProject(cwd);
     await refreshSessions(cwd);
   };
+  /** 点击与工作台收集共用历史准备，不改变原插件的选中态。 */
+  const prepareThread = async (thread: SidebarThread) => {
+    const target = await ensure(thread);
+    if (
+      target.runtimeId === null &&
+      !target.loadingHistory &&
+      target.view.historyOffset === null &&
+      target.view.items.length === 0
+    )
+      await client.current!.hydrateFromDisk(target, lastModel);
+    return target;
+  };
   /** 首次选择读取历史，后续复用内存中的会话和已加载分页。 */
   const select = async (thread: SidebarThread, targetIndex?: number) => {
     if (!activateThread(thread.key, targetIndex)) return;
     setProject(thread.cwd);
     setSearchOpen(false);
-    const target = await ensure(thread);
-    if (
-      target.runtimeId !== null ||
-      target.loadingHistory ||
-      target.view.historyOffset !== null ||
-      target.view.items.length > 0
-    )
-      return;
-    await client.current!.hydrateFromDisk(target, lastModel);
+    await prepareThread(thread);
   };
   /** 添加原生目录并选择项目，空文件夹也可直接开始任务。 */
   const addProject = async () => {
@@ -949,6 +955,7 @@ export function PiAgentPane({
         target.key,
         ...matches.map((thread) => thread.key),
       ]);
+      for (const key of keys) useWorkbench.getState().release("pi", key);
       setDrafts((value) =>
         Object.fromEntries(
           Object.entries(value).filter(([key]) => !keys.has(key)),
@@ -1047,6 +1054,16 @@ export function PiAgentPane({
     setRequests((value) => value.filter((item) => item !== request));
   };
   const [viewportWidth, setViewportWidth] = useState(0);
+  const workbenchSlots = useWorkbench((state) => state.slots);
+  const workbenchTargets = useWorkbench((state) => state.targets);
+  const collectedKeys = workbenchSlots
+    .filter((source) => source?.kind === "pi")
+    .map((source) => source!.id);
+  const localKeys = viewportKeys.length ? viewportKeys : [selected];
+  const renderKeys = [
+    ...localKeys,
+    ...collectedKeys.filter((key) => !localKeys.includes(key)),
+  ];
   const selectedKey = selected;
   const viewportCount = viewportKeys.length || 1;
   const viewportColumns =
@@ -1181,6 +1198,22 @@ export function PiAgentPane({
               setRename({ thread, name: thread.name || thread.preview || "" })
             }
             onFork={(thread) => run(forkThread(thread), thread.key)}
+            onWorkbench={(row) =>
+              run(
+                (async () => {
+                  const thread = await prepareThread(row);
+                  useWorkbench.getState().add({
+                    kind: "pi",
+                    id: thread.key,
+                    title: row.name || row.preview || "Pi Agent",
+                  });
+                })().catch((error) => {
+                  toast.error(String(error));
+                  throw error;
+                }),
+                row.key,
+              )
+            }
             onExport={(thread) => run(exportThread(thread), thread.key)}
             onClose={setDeleteTarget}
             onCopyPath={(path) => run(writeText(path))}
@@ -1197,8 +1230,9 @@ export function PiAgentPane({
           className="order-first min-h-0 min-w-0 flex-1"
           columns={viewportColumns}
           rows={viewportRows}
-          positions={Array.from({ length: viewportCount }, (_, index) =>
-            maximizedViewport !== null && index !== maximizedViewport
+          positions={renderKeys.map((_, index) =>
+            index >= viewportCount ||
+            (maximizedViewport !== null && index !== maximizedViewport)
               ? null
               : {
                   column:
@@ -1211,116 +1245,116 @@ export function PiAgentPane({
           )}
           onWidthChange={setViewportWidth}
         >
-          {(viewportKeys.length ? viewportKeys : [selected]).map(
-            (paneKey, paneIndex) => {
-              const selected = paneKey;
-              const draftKey = paneKey ?? "";
-              const activeThread = threads.find(
-                (thread) => thread.key === paneKey,
-              );
-              const view = activeThread?.view ?? idlePiView(lastThinkingLevel);
-              const activeCwd =
-                activeThread?.cwd ??
-                rows.find((row) => row.key === paneKey)?.cwd ??
-                project;
-              const draft = drafts[draftKey] ?? EMPTY_DRAFT;
-              const notice = notices[draftKey] ?? "";
-              const canEditLastUser =
-                !!activeThread &&
-                !operations[draftKey] &&
-                !!editableLastUser(view);
-              /** 将当前视口的异步错误写回对应会话。 */
-              const run = (operation: Promise<unknown>, key = draftKey) => {
-                void operation.catch((error) => setNotice(String(error), key));
-              };
-              if (viewportKeys.length && !paneKey)
-                return (
-                  <div
-                    key={`empty-${paneIndex}`}
-                    data-pi-viewport-index={paneIndex}
-                    className={`flex min-h-0 flex-col rounded-md border border-dashed ${dropViewport === paneIndex ? "border-primary bg-accent/40" : "border-border"}`}
-                  >
-                    <div className="flex h-7 items-center gap-1 px-2 text-[11px] text-muted-foreground">
-                      <span className="min-w-0 flex-1">
-                        视口 {paneIndex + 1}
-                      </span>
-                      <button
-                        type="button"
-                        className="size-5 shrink-0 rounded hover:bg-accent"
-                        aria-label={
-                          maximizedViewport === paneIndex
-                            ? "还原视口"
-                            : "放大视口"
-                        }
-                        title={
-                          maximizedViewport === paneIndex
-                            ? "还原到分组视图"
-                            : "放大视口"
-                        }
-                        onClick={() =>
-                          setMaximizedViewport(
-                            maximizedViewport === paneIndex ? null : paneIndex,
-                          )
-                        }
-                      >
-                        <HugeiconsIcon
-                          icon={
-                            maximizedViewport === paneIndex
-                              ? Minimize01Icon
-                              : Maximize01Icon
-                          }
-                          size={12}
-                        />
-                      </button>
-                      <button
-                        type="button"
-                        className="size-5 shrink-0 rounded hover:bg-accent"
-                        aria-label={`关闭视口 ${paneIndex + 1}`}
-                        onClick={() => closeViewport(paneIndex)}
-                      >
-                        ×
-                      </button>
-                    </div>
+          {renderKeys.map((paneKey, paneIndex) => {
+            const selected = paneKey;
+            const draftKey = paneKey ?? "";
+            const activeThread = threads.find(
+              (thread) => thread.key === paneKey,
+            );
+            const view = activeThread?.view ?? idlePiView(lastThinkingLevel);
+            const activeCwd =
+              activeThread?.cwd ??
+              rows.find((row) => row.key === paneKey)?.cwd ??
+              project;
+            const draft = drafts[draftKey] ?? EMPTY_DRAFT;
+            const notice = notices[draftKey] ?? "";
+            const canEditLastUser =
+              !!activeThread &&
+              !operations[draftKey] &&
+              !!editableLastUser(view);
+            /** 将当前视口的异步错误写回对应会话。 */
+            const run = (operation: Promise<unknown>, key = draftKey) => {
+              void operation.catch((error) => setNotice(String(error), key));
+            };
+            if (viewportKeys.length && !paneKey)
+              return (
+                <div
+                  key={`empty-${paneIndex}`}
+                  data-pi-viewport-index={paneIndex}
+                  className={`flex min-h-0 flex-col rounded-md border border-dashed ${dropViewport === paneIndex ? "border-primary bg-accent/40" : "border-border"}`}
+                >
+                  <div className="flex h-7 items-center gap-1 px-2 text-[11px] text-muted-foreground">
+                    <span className="min-w-0 flex-1">视口 {paneIndex + 1}</span>
                     <button
                       type="button"
-                      className="min-h-0 flex-1 px-3 text-xs text-muted-foreground"
-                      onClick={() => {
-                        setActiveViewport(paneIndex);
-                        setSelected(null);
-                      }}
+                      className="size-5 shrink-0 rounded hover:bg-accent"
+                      aria-label={
+                        maximizedViewport === paneIndex
+                          ? "还原视口"
+                          : "放大视口"
+                      }
+                      title={
+                        maximizedViewport === paneIndex
+                          ? "还原到分组视图"
+                          : "放大视口"
+                      }
+                      onClick={() =>
+                        setMaximizedViewport(
+                          maximizedViewport === paneIndex ? null : paneIndex,
+                        )
+                      }
                     >
-                      从右侧拖入会话
-                      <br />
-                      或点击此处后在侧栏选择
+                      <HugeiconsIcon
+                        icon={
+                          maximizedViewport === paneIndex
+                            ? Minimize01Icon
+                            : Maximize01Icon
+                        }
+                        size={12}
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      className="size-5 shrink-0 rounded hover:bg-accent"
+                      aria-label={`关闭视口 ${paneIndex + 1}`}
+                      onClick={() => closeViewport(paneIndex)}
+                    >
+                      ×
                     </button>
                   </div>
-                );
-              return (
-                <main
-                  key={
-                    viewportKeys.length
-                      ? (paneKey ?? `empty-${paneIndex}`)
-                      : "single"
-                  }
-                  data-pi-viewport-key={paneKey ?? ""}
-                  data-pi-viewport-index={
-                    viewportKeys.length ? paneIndex : undefined
-                  }
-                  className={`@container relative flex min-h-0 min-w-0 flex-col overflow-hidden ${viewportKeys.length ? "rounded-md border" : ""} ${dropViewport === paneIndex ? "border-primary ring-2 ring-primary/40" : paneKey === selectedKey ? "border-primary/50" : "border-border"}`}
-                  onPointerDownCapture={() => {
-                    if (paneKey !== selectedKey) {
+                  <button
+                    type="button"
+                    className="min-h-0 flex-1 px-3 text-xs text-muted-foreground"
+                    onClick={() => {
                       setActiveViewport(paneIndex);
-                      setSelected(paneKey);
-                    }
-                  }}
-                  onFocusCapture={() => {
-                    if (paneKey !== selectedKey) {
-                      setActiveViewport(paneIndex);
-                      setSelected(paneKey);
-                    }
+                      setSelected(null);
+                    }}
+                  >
+                    从右侧拖入会话
+                    <br />
+                    或点击此处后在侧栏选择
+                  </button>
+                </div>
+              );
+            return (
+              <main
+                key={paneKey ?? `empty-${paneIndex}`}
+                data-pi-viewport-key={paneKey ?? ""}
+                data-pi-viewport-index={
+                  viewportKeys.length ? paneIndex : undefined
+                }
+                className={`@container relative flex min-h-0 min-w-0 flex-col overflow-hidden ${viewportKeys.length ? "rounded-md border" : ""} ${dropViewport === paneIndex ? "border-primary ring-2 ring-primary/40" : paneKey === selectedKey ? "border-primary/50" : "border-border"}`}
+                onPointerDownCapture={() => {
+                  if (paneKey !== selectedKey) {
+                    if (paneIndex < viewportCount) setActiveViewport(paneIndex);
+                    setSelected(paneKey);
+                  }
+                }}
+                onFocusCapture={() => {
+                  if (paneKey !== selectedKey) {
+                    if (paneIndex < viewportCount) setActiveViewport(paneIndex);
+                    setSelected(paneKey);
+                  }
+                }}
+              >
+                <WorkbenchContent
+                  source={{
+                    kind: "pi",
+                    id: paneKey ?? "draft",
+                    title: "Pi Agent",
                   }}
                 >
-                  {viewportKeys.length > 0 && (
+                  {viewportKeys.length > 0 && paneIndex < viewportCount && (
                     <div className="flex h-7 shrink-0 items-center gap-1 border-b border-border/60 bg-muted/30 px-2 text-[11px]">
                       {viewportRename?.thread.key === paneKey ? (
                         <input
@@ -1418,7 +1452,11 @@ export function PiAgentPane({
                     sendRevision={sendRevisions[draftKey] ?? 0}
                     loading={activeThread?.loadingHistory ?? false}
                     threadKey={draftKey}
-                    active={active}
+                    active={
+                      active &&
+                      (paneIndex < viewportCount ||
+                        !!workbenchTargets[`pi:${paneKey}`])
+                    }
                     searchOpen={searchOpen && paneKey === selectedKey}
                     onCloseSearch={() => setSearchOpen(false)}
                     onOpenFile={onOpenFile}
@@ -1642,10 +1680,10 @@ export function PiAgentPane({
                     catalogModel={lastModel}
                     catalogModels={catalog}
                   />
-                </main>
-              );
-            },
-          )}
+                </WorkbenchContent>
+              </main>
+            );
+          })}
         </ResizableViewportGrid>
       </div>
       <PiSettings

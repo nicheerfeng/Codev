@@ -583,6 +583,16 @@ export default function App() {
     persistTerminalWidth,
     expandTerminalPanel,
   } = useTerminalPanelLayout();
+  useEffect(() => {
+    const openWorkbench = () => {
+      selectDockTab("browser");
+      expandTerminalPanel();
+    };
+    window.addEventListener("codev:open-workbench", openWorkbench);
+    return () =>
+      window.removeEventListener("codev:open-workbench", openWorkbench);
+  }, [selectDockTab, expandTerminalPanel]);
+
   if (needsInitialLayout && !seededFirstLayout.current) {
     seededFirstLayout.current = true;
     sidebarWidthRef.current = initialFirstSizes.sidebar;
@@ -1483,7 +1493,7 @@ export default function App() {
                                 : tab === "codex"
                                   ? "Codex"
                                   : tab === "browser"
-                                    ? "浏览器"
+                                    ? "工作台"
                                     : "Pi";
                         return (
                           <Fragment key={tab}>

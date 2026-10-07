@@ -1,3 +1,5 @@
+import { usePluginStore } from "../store";
+import { useWorkbench } from "../workbench/store";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { parentThread } from "./subagents";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -117,6 +119,7 @@ export function CodexSidebar({
   workspaceRoots: string[];
   onAddWorkspaceRoot?: (path: string) => void;
 }) {
+  const workbenchEnabled = usePluginStore((state) => state.enabled.browser);
   const [layout, setLayout] = useState(readLayout);
   const [filter, setFilter] = useState("");
   const [counts, setCounts] = useState<Record<string, number>>({});
@@ -459,6 +462,25 @@ export function CodexSidebar({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent className="rounded-xl">
+          {workbenchEnabled && (
+            <ContextMenuItem
+              onSelect={() => {
+                const key = client.sessionKey(thread.id);
+                void client
+                  .load(key)
+                  .then(() => {
+                    useWorkbench.getState().add({
+                      kind: "codex",
+                      id: key,
+                      title,
+                    });
+                  })
+                  .catch((error) => toast.error(String(error)));
+              }}
+            >
+              添加到工作台
+            </ContextMenuItem>
+          )}
           <ContextMenuItem
             onSelect={() => setEditing({ id: thread.id, name: title })}
           >
