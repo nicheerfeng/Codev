@@ -76,7 +76,7 @@ type MessageActions = {
     item: PiMessageItem,
     text: string,
   ) => boolean | undefined | Promise<boolean | undefined>;
-  onFork?: () => void;
+  onFork?: (item: PiMessageItem) => void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string, diff: string) => void;
   canEditLastUser?: boolean;
@@ -363,7 +363,7 @@ const TranscriptItem = memo(function TranscriptItem({
               size="icon-xs"
               title="从此线程分叉"
               aria-label="从此线程分叉"
-              onClick={actions.onFork}
+              onClick={() => actions.onFork?.(item)}
             >
               <HugeiconsIcon icon={GitForkIcon} size={13} />
             </Button>

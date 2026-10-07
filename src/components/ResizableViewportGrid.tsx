@@ -19,6 +19,7 @@ type Props = {
   rows: number;
   positions: ({ column: number; row: number } | null)[];
   className?: string;
+  onWidthChange?: (width: number) => void;
 };
 
 /** 根据当前可见视口位置计算有效网格尺寸，隐藏视口不再占用布局空间。 */
@@ -28,7 +29,8 @@ function visibleGridSize(
   fallbackRows: number,
 ) {
   const visible = positions.filter(
-    (position): position is { column: number; row: number } => position !== null,
+    (position): position is { column: number; row: number } =>
+      position !== null,
   );
   return {
     columns: visible.length
@@ -47,9 +49,20 @@ export function ResizableViewportGrid({
   rows,
   positions,
   className = "",
+  onWidthChange,
 }: Props) {
-  const items = Children.toArray(children);
   const gridRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!onWidthChange || !gridRef.current) return;
+    const update = () => onWidthChange(gridRef.current?.clientWidth ?? 0);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(gridRef.current);
+    return () => observer.disconnect();
+  }, [onWidthChange]);
+
+  const items = Children.toArray(children);
   const visibleSize = useMemo(
     () => visibleGridSize(positions, columns, rows),
     [columns, positions, rows],
@@ -88,8 +101,11 @@ export function ResizableViewportGrid({
     setRowHeights(nextHeights);
   }, [initialWeights, visibleSize.rows]);
   const minWidth =
-    Math.max(1, visibleSize.columns, ...rowIndexes.map((indexes) => indexes.length)) *
-    MIN_VIEWPORT_WIDTH;
+    Math.max(
+      1,
+      visibleSize.columns,
+      ...rowIndexes.map((indexes) => indexes.length),
+    ) * MIN_VIEWPORT_WIDTH;
   const minHeight = visibleSize.rows * MIN_VIEWPORT_HEIGHT;
   const totalHeight =
     rowHeights.reduce((sum, part) => sum + part, 0) || visibleSize.rows;

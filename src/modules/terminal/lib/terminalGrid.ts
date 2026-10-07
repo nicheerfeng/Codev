@@ -1,10 +1,11 @@
 export const MAX_TERMINAL_VIEWS = 6;
 
 /** 计算用户显式创建的终端视口布局，不自动填入其他终端。 */
-export function terminalGrid(slots: (number | null)[]) {
+export function terminalGrid(slots: (number | null)[], wide = false) {
   const viewSlots = slots.slice(0, MAX_TERMINAL_VIEWS);
   const count = Math.max(1, viewSlots.length);
-  const columns = count <= 3 ? count : count === 4 ? 2 : 3;
+  const columns =
+    count === 4 && wide ? 3 : count <= 3 ? count : count === 4 ? 2 : 3;
   return {
     slots: viewSlots,
     visibleIds: viewSlots.filter((id): id is number => id !== null),

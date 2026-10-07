@@ -205,6 +205,7 @@ export function PiAgentPane({
   };
   /** 退出并行模式保留当前会话，隐藏视口不停止后台任务。 */
   const toggleViewports = () => {
+    setMaximizedViewport(null);
     setViewportKeys(viewportKeys.length ? [] : [selected, null]);
     setActiveViewport(0);
     setDropViewport(null);
@@ -219,6 +220,7 @@ export function PiAgentPane({
   };
   /** 仅关闭展示卡片；移除当前卡片后聚焦仍保留的会话。 */
   const closeViewport = (index: number) => {
+    setMaximizedViewport(null);
     const next = viewportKeys.filter((_, position) => position !== index);
     const focus =
       index < activeViewport
@@ -970,8 +972,8 @@ export function PiAgentPane({
       setDeleting(false);
     }
   };
-  /** 无确认创建同名序号分叉，复制会话文件，不启动 runtime。 */
-  const forkThread = async (target: SidebarThread) => {
+  /** 无确认创建同名序号分叉；气泡传入助手消息时截到该轮。 */
+  const forkThread = async (target: SidebarThread, until?: PiMessageItem) => {
     const source = await ensure(target);
     const base = target.name || target.preview || projectName(target.cwd);
     const used = new Set(
@@ -982,7 +984,7 @@ export function PiAgentPane({
     let index = 1;
     let name = `${base} · 分叉 ${index}`;
     while (used.has(name)) name = `${base} · 分叉 ${++index}`;
-    const result = await client.current!.branch(source, name);
+    const result = await client.current!.branch(source, name, until);
     const identity = sessionIdentity(
       result.thread.view.sessionFile ?? "",
       result.thread.key,
@@ -1044,9 +1046,17 @@ export function PiAgentPane({
     });
     setRequests((value) => value.filter((item) => item !== request));
   };
+  const [viewportWidth, setViewportWidth] = useState(0);
   const selectedKey = selected;
   const viewportCount = viewportKeys.length || 1;
-  const viewportColumns = viewportCount > 4 ? 3 : viewportCount > 1 ? 2 : 1;
+  const viewportColumns =
+    viewportWidth >= 1200 && viewportCount > 1
+      ? Math.min(3, viewportCount)
+      : viewportCount > 4
+        ? 3
+        : viewportCount > 1
+          ? 2
+          : 1;
   const viewportRows = Math.ceil(viewportCount / viewportColumns);
   return (
     <section
@@ -1199,6 +1209,7 @@ export function PiAgentPane({
                       : Math.floor(index / viewportColumns),
                 },
           )}
+          onWidthChange={setViewportWidth}
         >
           {(viewportKeys.length ? viewportKeys : [selected]).map(
             (paneKey, paneIndex) => {
@@ -1422,9 +1433,9 @@ export function PiAgentPane({
                         throw error;
                       }
                     }}
-                    onFork={() => {
+                    onFork={(item) => {
                       const target = rows.find((row) => row.key === selected);
-                      if (target) run(forkThread(target), target.key);
+                      if (target) run(forkThread(target, item), target.key);
                     }}
                     canEditLastUser={canEditLastUser}
                     onLoadOlder={() => {

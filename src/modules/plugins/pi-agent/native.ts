@@ -139,9 +139,15 @@ export function truncatePiSession(
   return invoke("pi_agent_truncate_session", { path, entryId });
 }
 
-/** 复制会话 JSONL 为新线程，不启动 runtime。 */
-export function clonePiSession(path: string): Promise<PiClonedSession> {
-  return invoke<PiClonedSession>("pi_agent_clone_session", { path });
+/** 复制会话 JSONL 为新线程，不启动 runtime。传入 untilEntryId 时只保留到该助手轮次。 */
+export function clonePiSession(
+  path: string,
+  untilEntryId?: string,
+): Promise<PiClonedSession> {
+  return invoke<PiClonedSession>("pi_agent_clone_session", {
+    path,
+    untilEntryId: untilEntryId || null,
+  });
 }
 
 /** 启动新建或恢复的 Pi RPC 会话。 */

@@ -66,6 +66,7 @@ export function TerminalStack({
   const [rename, setRename] = useState<{ id: number; text: string } | null>(
     null,
   );
+  const [viewportWidth, setViewportWidth] = useState(0);
   const [maximizedViewport, setMaximizedViewport] = useState<number | null>(
     null,
   );
@@ -77,8 +78,12 @@ export function TerminalStack({
   };
   const terminals = useMemo(() => selectLiveTerminals(tabs), [tabs]);
   const multi = viewSlots.length > 1;
+  useEffect(() => {
+    if (maximizedViewport !== null) setMaximizedViewport(null);
+  }, [viewSlots]);
+
   const displaySlots = multi
-    ? maximizedViewport !== null
+    ? maximizedViewport !== null && maximizedViewport < viewSlots.length
       ? [viewSlots[maximizedViewport]]
       : viewSlots
     : [
@@ -86,7 +91,7 @@ export function TerminalStack({
           ? activeId
           : (tabs[0]?.id ?? null),
       ];
-  const grid = terminalGrid(displaySlots);
+  const grid = terminalGrid(displaySlots, viewportWidth >= 1200);
   const positions = [
     ...terminals.map((terminal) => {
       const position = grid.slots.indexOf(terminal.id);
@@ -161,6 +166,7 @@ export function TerminalStack({
       columns={grid.columns}
       rows={grid.rows}
       positions={positions}
+      onWidthChange={setViewportWidth}
     >
       {terminals.map((t) => {
         const position = grid.slots.indexOf(t.id);

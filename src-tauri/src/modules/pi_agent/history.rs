@@ -5,6 +5,7 @@ use super::{
     PiSessionHistory, PiSessionSummary,
 };
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -520,7 +521,10 @@ pub(super) fn parse_session_history(
     })
 }
 
-pub(super) fn clone_session_file(path: &Path) -> Result<PiClonedSession, String> {
+pub(super) fn clone_session_file(
+    path: &Path,
+    until_entry_id: Option<&str>,
+) -> Result<PiClonedSession, String> {
     let source = resolve_session_file(path)?;
     let content = fs::read_to_string(&source).map_err(|error| error.to_string())?;
     let mut lines = content.lines();
@@ -537,21 +541,165 @@ pub(super) fn clone_session_file(path: &Path) -> Result<PiClonedSession, String>
     let directory = source.parent().ok_or("会话目录不存在")?;
     let file_stamp = timestamp.replace(':', "-");
     let dest = directory.join(format!("{file_stamp}_{new_id}.jsonl"));
-    let mut output = header.to_string();
-    output.push('\n');
-    for line in lines {
-        if line.trim().is_empty() {
-            continue;
-        }
-        output.push_str(line);
+    let rest: Vec<&str> = lines.filter(|line| !line.trim().is_empty()).collect();
+    let output = if let Some(until_id) = until_entry_id.map(str::trim).filter(|id| !id.is_empty()) {
+        let entries = parse_clone_entries(&rest)?;
+        write_cloned_session(&header, &clone_path_until(&entries, until_id)?)
+    } else {
+        let mut output = header.to_string();
         output.push('\n');
-    }
+        for line in rest {
+            output.push_str(line);
+            output.push('\n');
+        }
+        output
+    };
     fs::write(&dest, output).map_err(|error| error.to_string())?;
     Ok(PiClonedSession {
         path: canonical_display(&dest),
         id: new_id,
         name: None,
     })
+}
+
+fn parse_clone_entries(lines: &[&str]) -> Result<Vec<Value>, String> {
+    lines
+        .iter()
+        .map(|line| serde_json::from_str(line).map_err(|error| error.to_string()))
+        .collect()
+}
+
+fn entry_id(value: &Value) -> Option<&str> {
+    value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+}
+
+fn parent_id(value: &Value) -> Option<&str> {
+    value
+        .get("parentId")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+}
+
+fn is_label_entry(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("label")
+}
+
+fn is_user_message_entry(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("message")
+        && value
+            .get("message")
+            .and_then(|message| message.get("role"))
+            .and_then(Value::as_str)
+            == Some("user")
+}
+
+fn clone_index(entries: &[Value]) -> HashMap<String, usize> {
+    let mut index = HashMap::new();
+    for (offset, entry) in entries.iter().enumerate() {
+        if let Some(id) = entry_id(entry) {
+            index.insert(id.to_string(), offset);
+        }
+    }
+    index
+}
+
+fn clone_leaf_id(entries: &[Value]) -> Result<String, String> {
+    entries
+        .iter()
+        .rev()
+        .find_map(entry_id)
+        .map(str::to_string)
+        .ok_or_else(|| "会话没有可分叉条目".into())
+}
+
+fn branch_to(
+    entries: &[Value],
+    index: &HashMap<String, usize>,
+    start: &str,
+) -> Result<Vec<Value>, String> {
+    let mut current = Some(start.to_string());
+    let mut chain = Vec::new();
+    let mut seen = HashSet::new();
+    while let Some(id) = current {
+        if !seen.insert(id.clone()) {
+            return Err("会话树存在循环".into());
+        }
+        let Some(&offset) = index.get(&id) else {
+            break;
+        };
+        let entry = &entries[offset];
+        chain.push(entry.clone());
+        current = parent_id(entry).map(str::to_string);
+    }
+    chain.reverse();
+    if chain.is_empty() {
+        return Err("找不到分叉位置，请等本轮写入后再试".into());
+    }
+    Ok(chain)
+}
+
+fn extend_clone_turn(branch: &[Value], until_at: usize) -> Vec<Value> {
+    let mut end = until_at;
+    for (offset, entry) in branch.iter().enumerate().skip(until_at + 1) {
+        if is_user_message_entry(entry) {
+            break;
+        }
+        end = offset;
+    }
+    branch[..=end].to_vec()
+}
+
+fn clone_path_until(entries: &[Value], until_id: &str) -> Result<Vec<Value>, String> {
+    let index = clone_index(entries);
+    let leaf = clone_leaf_id(entries)?;
+    let leaf_branch = branch_to(entries, &index, &leaf)?;
+    let branch = if let Some(until_at) = leaf_branch
+        .iter()
+        .position(|entry| entry_id(entry) == Some(until_id))
+    {
+        extend_clone_turn(&leaf_branch, until_at)
+    } else {
+        let until_branch = branch_to(entries, &index, until_id)?;
+        extend_clone_turn(&until_branch, until_branch.len().saturating_sub(1))
+    };
+    let path: Vec<Value> = branch
+        .into_iter()
+        .filter(|entry| !is_label_entry(entry))
+        .collect();
+    if path.is_empty() {
+        return Err("找不到分叉位置，请等本轮写入后再试".into());
+    }
+    Ok(path)
+}
+
+fn write_cloned_session(header: &Value, path: &[Value]) -> String {
+    let kept: HashSet<String> = path
+        .iter()
+        .filter_map(|entry| entry_id(entry).map(str::to_string))
+        .collect();
+    let mut output = header.to_string();
+    output.push('\n');
+    let mut parent = Value::Null;
+    for entry in path {
+        let mut next = entry.clone();
+        next["parentId"] = parent.clone();
+        if next.get("type").and_then(Value::as_str) == Some("compaction") {
+            if let Some(first_kept) = next.get("firstKeptEntryId").and_then(Value::as_str) {
+                if !kept.contains(first_kept) {
+                    if let Some(id) = entry_id(&next) {
+                        next["firstKeptEntryId"] = json!(id);
+                    }
+                }
+            }
+        }
+        parent = next.get("id").cloned().unwrap_or(Value::Null);
+        output.push_str(&next.to_string());
+        output.push('\n');
+    }
+    output
 }
 
 pub(super) fn append_session_entry(request: PiSessionAppendRequest) -> Result<(), String> {
@@ -802,5 +950,41 @@ mod edit_tests {
         fs::write(&path, format!("{header}{first}")).unwrap();
         truncate_last_user(&path, "u1").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), header);
+    }
+
+    #[test]
+    fn clone_until_assistant_keeps_turn_and_drops_later_user() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.jsonl");
+        fs::write(
+            &path,
+            [
+                json!({"type":"session","id":"s1","cwd":"D:/demo"}),
+                json!({"type":"message","id":"u1","parentId":null,"message":{"role":"user","content":"A"}}),
+                json!({"type":"message","id":"a1","parentId":"u1","message":{"role":"assistant","content":"A1"}}),
+                json!({"type":"message","id":"t1","parentId":"a1","message":{"role":"toolResult","content":"tool"}}),
+                json!({"type":"message","id":"u2","parentId":"t1","message":{"role":"user","content":"B"}}),
+                json!({"type":"message","id":"a2","parentId":"u2","message":{"role":"assistant","content":"B1"}}),
+            ]
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+                + "\n",
+        )
+        .unwrap();
+        let cloned = clone_session_file(&path, Some("a1"), None).unwrap();
+        let records: Vec<Value> = fs::read_to_string(&cloned.path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let ids: Vec<&str> = records
+            .iter()
+            .skip(1)
+            .filter_map(|value| value.get("id").and_then(Value::as_str))
+            .collect();
+        assert_eq!(ids, ["u1", "a1", "t1"]);
+        assert!(!fs::read_to_string(&cloned.path).unwrap().contains("\"B\""));
     }
 }

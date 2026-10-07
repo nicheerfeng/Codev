@@ -17,7 +17,13 @@ import {
   objectValue,
   piViewReducer,
 } from "./reducer";
-import type { PiEventEnvelope, PiImage, PiModel, PiViewState } from "./types";
+import type {
+  PiEventEnvelope,
+  PiImage,
+  PiMessageItem,
+  PiModel,
+  PiViewState,
+} from "./types";
 import {
   capturePiRuntimeConfig,
   planPiRuntimeConfig,
@@ -67,6 +73,18 @@ function runtimeThreadKey(key: string, path?: string | null): string {
     .replace(/^\/\/?\?\//, "")
     .replace(/\/$/, "")
     .toLowerCase();
+}
+
+function forkEntryId(id: string): string {
+  const entryId = id.split(":")[0];
+  if (
+    !entryId ||
+    entryId.startsWith("local-user-") ||
+    entryId.startsWith("history-") ||
+    entryId.startsWith("message-")
+  )
+    throw new Error("找不到分叉位置，请等本轮写入后再试");
+  return entryId;
 }
 
 /** 管理 Pi 原生进程与请求关联，切换界面不会停止其他线程。 */
@@ -1325,8 +1343,8 @@ export class PiWorkspaceClient {
     }
   }
 
-  /** 复制会话文件为新线程，不启动 runtime。 */
-  async branch(thread: PiThread, name?: string) {
+  /** 复制会话文件为新线程，不启动 runtime。传入助手消息时截到该轮。 */
+  async branch(thread: PiThread, name?: string, until?: PiMessageItem) {
     if (
       thread.view.status === "running" ||
       thread.view.status === "stopping" ||
@@ -1340,7 +1358,10 @@ export class PiWorkspaceClient {
       );
     const source = thread.view.sessionFile;
     if (!source) throw new Error("当前线程尚未写入会话文件");
-    const cloned = await clonePiSession(source);
+    const cloned = await clonePiSession(
+      source,
+      until ? forkEntryId(until.id) : undefined,
+    );
     if (name) {
       await appendPiSession({
         path: cloned.path,

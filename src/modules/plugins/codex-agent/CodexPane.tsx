@@ -163,10 +163,18 @@ function Workspace({
   const [search, setSearch] = useState("");
   const [creating, setCreating] = useState(false);
   const [hover, setHover] = useState<number | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(0);
   const selected = slots[focused] ?? null;
   const current = selected ? state.sessions[selected] : undefined;
   const multi = slots.length > 1;
-  const viewportColumns = slots.length > 4 ? 3 : multi ? 2 : 1;
+  const viewportColumns =
+    viewportWidth >= 1200 && slots.length > 1
+      ? Math.min(3, slots.length)
+      : slots.length > 4
+        ? 3
+        : multi
+          ? 2
+          : 1;
   const viewportRows = Math.ceil(slots.length / viewportColumns);
   // biome-ignore lint/correctness/useExhaustiveDependencies: 切换线程或提交输入后退出旧的搜索定位。
   useEffect(() => {
@@ -297,6 +305,7 @@ function Workspace({
   };
   /** 关闭展示位置保留线程运行，统计跟随实际视口更新。 */
   const close = (index: number) => {
+    setMaximizedViewport(null);
     const closing = slots[index];
     if (closing) client.discardDraft(closing);
     setSlots((currentSlots) =>
@@ -348,6 +357,7 @@ function Workspace({
               aria-pressed={multi}
               disabled={state.switching}
               onClick={() => {
+                setMaximizedViewport(null);
                 setSlots(multi ? [selected] : [selected, null]);
                 setFocused(0);
               }}
@@ -436,6 +446,7 @@ function Workspace({
                       : Math.floor(index / viewportColumns),
                 },
           )}
+          onWidthChange={setViewportWidth}
         >
           {slots.map((id, index) => {
             const session = id ? state.sessions[id] : null;

@@ -65,6 +65,46 @@ fn open_external_browser(uri: &str) {
     }
 }
 
+/// unstable 下主 WebView 按比例跟随窗口。无边框窗口最小化时客户区不是 0×0，
+/// 而是约 160×28 的系统图标尺寸，低于左右栏最小宽度后会被当成真实折叠。
+/// 已最小化，或尺寸小于窗口最小限制时不同步主 WebView，恢复后再按真实尺寸铺满。
+#[cfg(target_os = "windows")]
+fn keep_main_webview_on_minimize(
+    app: &tauri::AppHandle,
+    main: &tauri::WebviewWindow<tauri::Wry>,
+) {
+    let Some(webview) = app.get_webview(main.label()) else {
+        return;
+    };
+    if let Err(error) = webview.set_auto_resize(false) {
+        log::warn!("[Codev] disable main webview auto resize failed: {error}");
+        return;
+    }
+    let window = main.clone();
+    main.on_window_event(move |event| {
+        if let tauri::WindowEvent::Resized(size) = event {
+            let minimized = window.is_minimized().unwrap_or(false);
+            let scale = window.scale_factor().unwrap_or(1.0);
+            let min_width = (420.0 * scale).round() as u32;
+            let min_height = (280.0 * scale).round() as u32;
+            let too_small = size.width < min_width || size.height < min_height;
+            log::info!(
+                "[Codev] main webview resize {}x{} scale={scale:.2} minimized={minimized} skip={}",
+                size.width,
+                size.height,
+                minimized || too_small
+            );
+            if minimized || too_small {
+                return;
+            }
+            let _ = webview.set_bounds(tauri::Rect {
+                position: tauri::PhysicalPosition::new(0, 0).into(),
+                size: (*size).into(),
+            });
+        }
+    });
+}
+
 /// 关闭 WebView2 原生菜单与浏览器快捷键，覆盖阅读器和所有 iframe。
 #[cfg(target_os = "windows")]
 fn disable_browser_accelerator_keys(
@@ -458,6 +498,7 @@ pub fn run() {
                     main.set_resizable(true)?;
                     let _ = disable_browser_accelerator_keys(&main);
                     let _ = guard_webview_navigation(&main);
+                    keep_main_webview_on_minimize(_app.handle(), &main);
                 }
             }
             Ok(())

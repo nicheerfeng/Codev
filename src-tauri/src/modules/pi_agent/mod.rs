@@ -787,10 +787,16 @@ pub fn pi_agent_read_session(
     parse_session_history(Path::new(&path), before, limit.unwrap_or(HISTORY_PAGE_SIZE))
 }
 
-/// 复制会话 JSONL 为新线程，不启动 Pi runtime。
+/// 复制会话 JSONL 为新线程，不启动 Pi runtime。传入 until 时只保留到该助手轮次。
 #[tauri::command]
-pub fn pi_agent_clone_session(path: String) -> Result<PiClonedSession, String> {
-    clone_session_file(Path::new(&path))
+pub fn pi_agent_clone_session(
+    path: String,
+    until_entry_id: Option<String>,
+) -> Result<PiClonedSession, String> {
+    clone_session_file(
+        Path::new(&path),
+        until_entry_id.as_deref().filter(|id| !id.trim().is_empty()),
+    )
 }
 
 /// 向会话文件追加名称、模型或思考等级，不启动 Pi runtime。
@@ -1011,7 +1017,7 @@ mod tests {
         std::env::set_var("PI_CODING_AGENT_DIR", directory.path());
         let history = parse_session_history(&path, None, 20).expect("history");
         let older = parse_session_history(&path, Some(history.oldest_offset), 20).expect("older");
-        let cloned = clone_session_file(&path).expect("clone");
+        let cloned = clone_session_file(&path, None).expect("clone");
         append_session_entry(PiSessionAppendRequest {
             path: cloned.path.clone(),
             kind: "session_info".into(),
