@@ -60,7 +60,8 @@ type Pending = {
   runtimeId: number;
   resolve: (data: unknown) => void;
   reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  command: unknown;
+  timer: ReturnType<typeof setTimeout> | undefined;
   observedModel: PiRuntimeConfig["model"] | undefined;
 };
 
@@ -197,9 +198,16 @@ export class PiWorkspaceClient {
     payload: PiEventEnvelope,
     streaming = false,
   ) {
+    const event = payload.event;
+    // 原生结束事件可能先于 RPC 回复到达，已收尾的压缩回复不再覆盖界面。
+    if (
+      event.type === "response" &&
+      event.command === "compact" &&
+      !this.pending.has(String(event.id))
+    )
+      return;
     thread.view = piViewReducer(thread.view, { type: "event", payload });
     this.touchRuntime(thread);
-    const event = payload.event;
     if (event.type === "agent_start") beginPiTurn(thread.key);
     if (event.type === "queue_update" || event.type === "message_end")
       this.finishInserted(thread, false);
@@ -228,12 +236,44 @@ export class PiWorkspaceClient {
     if (
       (event.type === "auto_compaction_end" ||
         event.type === "compaction_end") &&
+      this.manualCompactions.has(thread.key)
+    ) {
+      for (const [id, request] of this.pending) {
+        if (
+          request.runtimeId !== payload.sessionId ||
+          request.command !== "compact"
+        )
+          continue;
+        clearTimeout(request.timer);
+        this.pending.delete(id);
+        if (event.aborted || event.errorMessage || !event.result)
+          request.reject(
+            new Error(
+              String(
+                event.errorMessage ||
+                  (event.aborted ? "压缩已停止" : "压缩未完成"),
+              ),
+            ),
+          );
+        else request.resolve(event.result);
+      }
+    }
+    if (
+      (event.type === "auto_compaction_end" ||
+        event.type === "compaction_end") &&
       !this.manualCompactions.has(thread.key)
     ) {
       const success = !event.aborted && !event.errorMessage && !!event.result;
       const running =
         thread.view.status === "running" || thread.view.status === "stopping";
       this.finishCompaction(thread, success);
+      if (!success)
+        thread.view = {
+          ...thread.view,
+          error: String(
+            event.errorMessage || (event.aborted ? "压缩已停止" : "压缩未完成"),
+          ),
+        };
       if (success && event.willRetry) this.compactionResume.add(thread.key);
       else this.compactionResume.delete(thread.key);
       void this.refreshState(thread)
@@ -288,7 +328,10 @@ export class PiWorkspaceClient {
       const resumeQueue = this.compactionResume.delete(thread.key);
       void this.refreshState(thread)
         .then(async () => {
-          if (resumeQueue || thread.view.localQueue?.length)
+          if (
+            thread.view.compaction?.status !== "failed" &&
+            (resumeQueue || thread.view.localQueue?.length)
+          )
             await this.drainQueue(thread);
         })
         .catch((error) => this.error(thread.key, error));
@@ -483,14 +526,18 @@ export class PiWorkspaceClient {
     this.touchRuntime(thread);
     const runtimeId = thread.runtimeId;
     const id = crypto.randomUUID();
-    const timeoutMs = command.type === "compact" ? 180_000 : 120_000;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Pi ${command.type} 响应超时`));
-      }, timeoutMs);
+      // 压缩由 Pi 原生结束事件或 RPC 回复收尾，不设前端执行期限。
+      const timer =
+        command.type === "compact"
+          ? undefined
+          : setTimeout(() => {
+              this.pending.delete(id);
+              reject(new Error(`Pi ${command.type} 响应超时`));
+            }, 120_000);
       this.pending.set(id, {
         runtimeId,
+        command: command.type,
         resolve,
         reject,
         timer,
@@ -1226,6 +1273,16 @@ export class PiWorkspaceClient {
     thread: PiThread,
     restore: (texts: string[], images?: PiImage[]) => void,
   ) {
+    if (thread.view.compaction?.status === "running") {
+      if (thread.view.status === "stopping") return;
+      this.compactionResume.delete(thread.key);
+      thread.view = piViewReducer(thread.view, { type: "stopping" });
+      this.publish();
+      await this.request(thread, { type: "abort" });
+      thread.view = { ...thread.view, status: "idle", phase: "" };
+      this.publish();
+      return;
+    }
     const queued = await this.clearQueue(thread);
     const nativeQueue = this.normalizeNativeQueue(queued);
     const steering = nativeQueue.steering.length

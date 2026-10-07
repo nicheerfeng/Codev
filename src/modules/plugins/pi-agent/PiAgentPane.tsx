@@ -863,6 +863,11 @@ export function PiAgentPane({
   };
   /** 停止运行并将未执行的队列文字恢复到原线程草稿。 */
   const stopThread = async (thread: PiThread) => {
+    // /compact 持有会话操作锁，停止压缩必须能直接穿过该锁。
+    if (thread.view.compaction?.status === "running") {
+      await client.current!.stopAndRestore(thread, () => {});
+      return;
+    }
     await operate(thread, "正在停止…", async () => {
       const key = thread.key;
       /** 保留停止期间输入的新草稿，并恢复取回的文字和附件。 */

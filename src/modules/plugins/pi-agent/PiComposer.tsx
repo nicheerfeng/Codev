@@ -307,7 +307,9 @@ export function PiComposer(props: Props) {
           className="mx-auto mb-2 max-w-3xl text-center text-xs text-muted-foreground"
         >
           {compacting
-            ? "正在压缩上下文"
+            ? props.view.status === "stopping"
+              ? "正在停止压缩"
+              : "正在压缩上下文"
             : props.view.compaction.status === "done"
               ? "上下文已压缩"
               : "压缩未完成，待发送消息已保留"}
@@ -786,13 +788,14 @@ export function PiComposer(props: Props) {
                 {`${Math.round(props.view.contextPercent)}%`}
               </span>
             )}
-            {running && !compacting && (
+            {running && (
               <Button
                 variant="secondary"
                 size="icon-sm"
                 className="rounded-full pi-stop-pulse"
-                title="停止生成"
-                aria-label="停止生成"
+                title={compacting ? "停止压缩" : "停止生成"}
+                aria-label={compacting ? "停止压缩" : "停止生成"}
+                disabled={props.view.status === "stopping"}
                 onClick={props.onStop}
               >
                 <span className="size-2.5 rounded-xs bg-current" />
