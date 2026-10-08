@@ -97,7 +97,7 @@ export function codevInstallStamp(): Promise<string | null> {
 export function listPiSessions(cwd: string): Promise<PiSessionSummary[]> {
   return invoke<PiSessionSummary[]>("pi_agent_list_sessions", {
     cwd,
-    limit: 100,
+    limit: 1000,
   });
 }
 

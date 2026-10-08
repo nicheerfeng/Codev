@@ -1415,10 +1415,9 @@ export class PiWorkspaceClient {
       );
     const source = thread.view.sessionFile;
     if (!source) throw new Error("当前线程尚未写入会话文件");
-    const cloned = await clonePiSession(
-      source,
-      until ? forkEntryId(until.id) : undefined,
-    );
+    const cloned = until
+      ? await clonePiSession(source, forkEntryId(until.id))
+      : await clonePiSession(source);
     if (name) {
       await appendPiSession({
         path: cloned.path,
