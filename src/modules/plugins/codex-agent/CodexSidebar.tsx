@@ -788,21 +788,7 @@ export function CodexSidebar({
           };
         }}
       />
-      <div className="flex px-2 pt-3 pb-2">
-        <Button
-          variant="secondary"
-          size="sm"
-          className="flex-1 justify-start rounded-lg text-xs"
-          disabled={!state.connected}
-          onClick={() =>
-            onNew((selected && state.sessions[selected]?.thread.cwd) || home)
-          }
-        >
-          <HugeiconsIcon icon={PlusSignIcon} size={14} />
-          新建线程
-        </Button>
-      </div>
-      <div className="relative mx-2 mb-2">
+      <div className="relative mx-2 mt-3 mb-2">
         <HugeiconsIcon
           icon={Search01Icon}
           size={13}

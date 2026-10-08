@@ -925,24 +925,7 @@ export function PiSidebar(props: Props) {
         }}
         onDoubleClick={() => setWidth(236)}
       />
-      <div className="flex shrink-0 items-center gap-1 px-2 pt-3 pb-2">
-        <Button
-          variant="secondary"
-          size="sm"
-          className="min-w-0 flex-1 justify-start rounded-lg text-xs"
-          onClick={() => {
-            const selected = props.selectedProject;
-            if (selected && !isTemporaryCwd(selected, props.temporaryHome))
-              props.onNew(selected);
-            else if (props.temporaryHome) props.onNew(props.temporaryHome);
-            else props.onAddProject();
-          }}
-        >
-          <HugeiconsIcon icon={PlusSignIcon} size={14} />
-          新建线程
-        </Button>
-      </div>
-      <div className="relative mx-2 mb-2">
+      <div className="relative mx-2 mt-3 mb-2">
         <HugeiconsIcon
           icon={Search01Icon}
           size={13}

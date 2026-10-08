@@ -85,6 +85,8 @@ export function VoiceInputButton({
     };
   }, []);
 
+  if (!config?.enabled || !config.asr.enabled || !config.hasKey) return null;
+
   const stop = () => {
     const current = capture.current;
     capture.current = null;

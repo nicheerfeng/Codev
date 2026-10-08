@@ -183,6 +183,25 @@ const TranscriptItem = memo(function TranscriptItem({
     element.style.height = `${Math.min(180, Math.max(40, element.scrollHeight))}px`;
     element.style.overflowY = element.scrollHeight > 180 ? "auto" : "hidden";
   }, [editText, editing]);
+  const submitEdit = async () => {
+    if (
+      item.kind !== "message" ||
+      item.role !== "user" ||
+      !actions.onEdit ||
+      editSubmitting ||
+      !editText.trim()
+    )
+      return;
+    setEditSubmitting(true);
+    try {
+      const accepted = await actions.onEdit(item, editText.trim());
+      if (accepted !== false) setEditing(false);
+    } catch {
+      // 保留编辑态，父层负责展示原生操作错误。
+    } finally {
+      setEditSubmitting(false);
+    }
+  };
   if (item.kind === "tool")
     return (
       <details
@@ -261,6 +280,11 @@ const TranscriptItem = memo(function TranscriptItem({
               disabled={editSubmitting}
               className="pi-user-edit-input min-h-10 w-full resize-none overflow-hidden rounded-lg border-0 bg-transparent px-0 py-0 text-[13px] shadow-none focus-visible:ring-0"
               onChange={(event) => setEditText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" || event.shiftKey) return;
+                event.preventDefault();
+                void submitEdit();
+              }}
             />
           ) : item.kind === "message" && item.role === "user" ? (
             <UserMessageText text={item.text} onOpenFile={actions.onOpenFile} />
@@ -299,18 +323,7 @@ const TranscriptItem = memo(function TranscriptItem({
           <Button
             size="xs"
             disabled={editSubmitting || !editText.trim()}
-            onClick={async () => {
-              if (!actions.onEdit || editSubmitting) return;
-              setEditSubmitting(true);
-              try {
-                const accepted = await actions.onEdit(item, editText.trim());
-                if (accepted !== false) setEditing(false);
-              } catch {
-                // 保留编辑态，父层负责展示原生操作错误。
-              } finally {
-                setEditSubmitting(false);
-              }
-            }}
+            onClick={() => void submitEdit()}
           >
             发送
           </Button>

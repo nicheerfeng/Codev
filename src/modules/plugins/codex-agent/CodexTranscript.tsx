@@ -151,6 +151,18 @@ function Message({
     element.style.height = `${Math.min(180, Math.max(40, element.scrollHeight))}px`;
     element.style.overflowY = element.scrollHeight > 180 ? "auto" : "hidden";
   }, [draft, editing]);
+  const submitEdit = async () => {
+    if (!onEdit || saving || !draft.trim()) return;
+    setSaving(true);
+    try {
+      await onEdit(draft.trim());
+      setEditing(false);
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
   const images = user
     ? (
         (item.content as Array<{
@@ -178,6 +190,11 @@ function Message({
                   disabled={saving}
                   className="min-h-10 w-full resize-none overflow-hidden rounded-lg border-0 bg-transparent px-0 py-0 text-[13px] shadow-none focus-visible:ring-0"
                   onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" || event.shiftKey) return;
+                    event.preventDefault();
+                    void submitEdit();
+                  }}
                 />
               </>
             ) : (
@@ -233,14 +250,7 @@ function Message({
           <Button
             size="xs"
             disabled={saving || !canEdit || !draft.trim()}
-            onClick={() => {
-              if (!onEdit || saving) return;
-              setSaving(true);
-              void onEdit(draft.trim())
-                .then(() => setEditing(false))
-                .catch((error) => toast.error(String(error)))
-                .finally(() => setSaving(false));
-            }}
+            onClick={() => void submitEdit()}
           >
             发送
           </Button>
