@@ -241,6 +241,7 @@ export function PiSidebar(props: Props) {
   const [editingName, setEditingName] = useState("");
   const { position, ghost, itemProps } = usePiSidebarReorder(
     (kind, source, gap, group) => {
+      if (filter) return;
       if (kind === "project") {
         const visible = applySavedOrder(
           projects.filter(
@@ -407,7 +408,7 @@ export function PiSidebar(props: Props) {
               list,
             ) && <DropLine />}
           <div
-            {...(!isArchived && !filter && editingKey !== thread.key
+            {...(!isArchived && editingKey !== thread.key
               ? itemProps(
                   "session",
                   sessionIdentity(thread.path, thread.key),

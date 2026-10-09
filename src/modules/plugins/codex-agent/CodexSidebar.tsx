@@ -315,6 +315,7 @@ export function CodexSidebar({
       : projects.filter((id) => (layout.projectGroups[id] ?? "") === group);
   const { position, ghost, itemProps } = useCodexSidebarReorder(
     (kind, source, gap, group) => {
+      if (filter) return;
       const values = visibleIds(kind, group);
       const from = values.indexOf(source);
       if (from < 0) return;
@@ -384,7 +385,7 @@ export function CodexSidebar({
             data-codex-id={thread.id}
             data-dragging={ghost?.source === thread.id ? "true" : undefined}
             data-drop-position={dropMark(thread.id, "session")}
-            {...(!filter && !session.archived
+            {...(!session.archived && inline?.id !== thread.id
               ? itemProps("session", thread.id, pathKey(thread.cwd), title)
               : {})}
             className={`codex-session group ${selected === client.sessionKey(thread.id) ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}

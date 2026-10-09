@@ -6,14 +6,10 @@ import {
   type TextSearchOptions,
   type TextSearchStatus,
 } from "@/modules/editor/lib/textSearch";
-import {
-  bindFileScroll,
-  recallFileScroll,
-  scheduleWhenTallEnough,
-} from "@/modules/reader/fileScroll";
 import { invoke } from "@tauri-apps/api/core";
 import {
   forwardRef,
+  memo,
   type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
   useEffect,
@@ -146,6 +142,30 @@ const components = {
   img: ZoomableImage,
   table: MarkdownTable,
 };
+
+const MarkdownDocument = memo(function MarkdownDocument({
+  content,
+  outlineCollapsed,
+}: {
+  content: string;
+  outlineCollapsed: boolean;
+}) {
+  return (
+    <Streamdown
+      className={cn(
+        "markdown-rendered select-text [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        outlineCollapsed &&
+          "[&>:not(h1):not(h2):not(h3):not(h4):not(h5):not(h6)]:hidden",
+      )}
+      components={components}
+      mode="static"
+      parseIncompleteMarkdown={false}
+      controls={{ code: { copy: true, download: false }, table: false }}
+    >
+      {content}
+    </Streamdown>
+  );
+});
 
 export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
   function MarkdownPreviewPane({ path, visible, onSetView }, ref) {
@@ -351,19 +371,6 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
     useEffect(() => {
       void loadContent();
     }, [loadContent, reloadKey]);
-    useEffect(
-      () =>
-        bindFileScroll(scrollRootRef.current, path, {
-          ready: status.kind === "ready",
-          schedule: (apply) =>
-            scheduleWhenTallEnough(
-              () => scrollRootRef.current,
-              recallFileScroll(path),
-              apply,
-            ),
-        }),
-      [path, status.kind],
-    );
 
     /** 更新 Markdown 当前搜索条件并计算原文命中位置。 */
     const setSearchQuery = useCallback(
@@ -546,22 +553,10 @@ export const MarkdownPreviewPane = forwardRef<EditorPaneHandle, Props>(
               </p>
             )}
             {status.kind === "ready" && (
-              <Streamdown
-                className={cn(
-                  "markdown-rendered select-text [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-                  outlineCollapsed &&
-                    "[&>:not(h1):not(h2):not(h3):not(h4):not(h5):not(h6)]:hidden",
-                )}
-                components={components}
-                mode="static"
-                parseIncompleteMarkdown={false}
-                controls={{
-                  code: { copy: true, download: false },
-                  table: false,
-                }}
-              >
-                {status.content}
-              </Streamdown>
+              <MarkdownDocument
+                content={status.content}
+                outlineCollapsed={outlineCollapsed}
+              />
             )}
           </div>
         </div>

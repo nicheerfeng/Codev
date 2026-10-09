@@ -228,8 +228,19 @@ export function usePiSidebarReorder(
     onDragStart: (event) => event.preventDefault(),
     onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => {
       if (event.button !== 0) return;
-      if ((event.target as HTMLElement).closest("[data-no-drag]")) return;
       suppressClick.current = false;
+      if (
+        (event.target as HTMLElement).closest(
+          "[data-no-drag], input, textarea, [contenteditable=true]",
+        )
+      ) {
+        return;
+      }
+      // Capture immediately, on the button so a non-drag click still reaches it.
+      const target =
+        (event.target as HTMLElement).closest<HTMLElement>("button") ??
+        event.currentTarget;
+      target.setPointerCapture(event.pointerId);
       drag.current = {
         kind,
         source,
@@ -240,7 +251,7 @@ export function usePiSidebarReorder(
         startX: event.clientX,
         x: event.clientX,
         y: event.clientY,
-        target: event.currentTarget,
+        target,
         active: false,
         gap: null,
         width: event.currentTarget.getBoundingClientRect().width,
