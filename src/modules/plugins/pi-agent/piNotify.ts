@@ -4,13 +4,13 @@ import {
   requestPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
-import { pathKey, projectName } from "./organization";
+import { projectName } from "./organization";
 import {
   finishNotificationCopy,
   shouldSkipFinishNotification,
   type ActivityThread,
-  type ProjectActivity,
 } from "./projectActivity";
+import type { PiTurnOutcome } from "./types";
 
 let permissionAsked = false;
 
@@ -44,34 +44,25 @@ async function piPanelIsForeground(piActive: boolean): Promise<boolean> {
   }
 }
 
-/** 项目从 live 变为全 idle 时弹一条 Windows 通知。 */
-export async function notifyFinishedProjects(input: {
-  previous: Map<string, ProjectActivity>;
-  current: Map<string, ProjectActivity>;
-  threads: ActivityThread[];
+/** Only a native terminal outcome can produce a completion notification. */
+export async function notifyFinishedThread(input: {
+  thread: ActivityThread;
+  outcome: PiTurnOutcome;
   piActive: boolean;
 }): Promise<void> {
+  if (input.outcome === "interrupted") return;
   if (await piPanelIsForeground(input.piActive)) return;
   if (!(await ensurePermission())) return;
-  for (const [cwd, previous] of input.previous) {
-    if (previous.liveCount <= 0) continue;
-    const current = input.current.get(cwd);
-    if ((current?.liveCount ?? 0) > 0) continue;
-    const sample =
-      input.threads.find(
-        (thread) => pathKey(thread.cwd) === cwd && thread.summary?.trim(),
-      ) ?? input.threads.find((thread) => pathKey(thread.cwd) === cwd);
-    const copy = finishNotificationCopy({
-      name: sample ? projectName(sample.cwd) : cwd.split("/").pop() || cwd,
-      threadName: sample?.name,
-      summary: sample?.summary,
-      count: previous.liveCount,
-      failed: current?.failed ?? previous.failed,
-    });
-    try {
-      sendNotification({ title: copy.title, body: copy.body });
-    } catch {
-      // 系统拒绝通知时不影响线程运行。
-    }
+  const copy = finishNotificationCopy({
+    name: projectName(input.thread.cwd),
+    threadName: input.thread.name,
+    summary: input.thread.summary,
+    count: 1,
+    failed: input.outcome === "failed",
+  });
+  try {
+    sendNotification({ title: copy.title, body: copy.body });
+  } catch {
+    // 系统拒绝通知时不影响线程运行。
   }
 }

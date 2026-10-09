@@ -214,10 +214,11 @@ export function CodexComposer({
   };
   /** 发送成功前保留草稿，恢复输入焦点。 */
   const send = async (mode: "followUp" | "steer" = "followUp") => {
-    if (disabled || commandBusy) return;
+    if (disabled) return;
     recall.current = -1;
     const command = parseCommand(session.draft);
     if (command) {
+      if (commandBusy) return;
       if (!CODEX_COMMANDS.some((item) => item.name === command.name)) {
         toast.error(`暂不支持 /${command.name}，输入 / 查看可用命令`);
         return;
@@ -236,9 +237,9 @@ export function CodexComposer({
         return;
       }
       setCommandBusy(true);
+      client.patch(id, { draft: "" });
       try {
         if (command.name === "compact") {
-          client.patch(id, { draft: "" });
           await client.compact(id);
         }
         if (command.name === "fork") onSelect(await client.fork(id));
@@ -246,9 +247,8 @@ export function CodexComposer({
           return;
         if (command.name === "model") setModelOpen(true);
         if (command.name === "stop") {
-          client.patch(id, { draft: "" });
           await client.stopAndRestore(id);
-        } else client.patch(id, { draft: "" });
+        }
         setCommandDismissed(true);
       } catch (error) {
         toast.error(String(error));
@@ -918,7 +918,7 @@ export function CodexComposer({
                 <span className="size-2.5 rounded-xs bg-current" />
               </Button>
             )}
-            {session.busy && (
+            {session.busy && !session.compacting && (
               <Button
                 size="icon-sm"
                 className="rounded-full"
@@ -934,15 +934,31 @@ export function CodexComposer({
             <Button
               size="icon-sm"
               className="rounded-full"
-              title={session.busy ? "追加消息" : "发送"}
-              aria-label={session.busy ? "追加消息" : "发送"}
+              title={
+                session.compacting
+                  ? "排队发送"
+                  : session.busy
+                    ? "追加消息"
+                    : "发送"
+              }
+              aria-label={
+                session.compacting
+                  ? "排队发送"
+                  : session.busy
+                    ? "追加消息"
+                    : "发送"
+              }
               disabled={
                 disabled ||
                 session.sending ||
-                (session.busy && !session.turnId) ||
+                (!session.compacting && session.busy && !session.turnId) ||
                 !payload
               }
-              onClick={() => void send(session.busy ? "steer" : "followUp")}
+              onClick={() =>
+                void send(
+                  session.busy && !session.compacting ? "steer" : "followUp",
+                )
+              }
             >
               <HugeiconsIcon icon={ArrowUp01Icon} size={17} />
             </Button>
@@ -955,8 +971,12 @@ export function CodexComposer({
         </span>
         {session.busy && <span className="shrink-0">运行中</span>}
         <span className="shrink-0">
-          {session.busy ? "Enter 排队 · Ctrl/⌘ + Enter 追加" : "Enter 发送"} ·
-          Shift + Enter 换行
+          {session.compacting
+            ? "压缩中 · Enter 排队"
+            : session.busy
+              ? "Enter 排队 · Ctrl/⌘ + Enter 追加"
+              : "Enter 发送"}{" "}
+          · Shift + Enter 换行
         </span>
         {session.effectiveSandbox && (
           <span className="shrink-0" title="服务端生效的沙箱等级">

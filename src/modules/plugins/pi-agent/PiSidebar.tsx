@@ -55,7 +55,8 @@ import {
 } from "./sidebarOrder";
 import type { PiSessionSummary, PiViewStatus } from "./types";
 import type { PiSubagentRun } from "./native";
-import { cwdIsLive } from "./projectActivity";
+import { cwdIsLive, threadIsLive } from "./projectActivity";
+import { prioritizeActive, moveDisplayedItem } from "../sidebarOrder";
 import { usePiSidebarReorder } from "./usePiSidebarReorder";
 import {
   applyUnreadStatusChanges,
@@ -237,6 +238,16 @@ export function PiSidebar(props: Props) {
     adoptOrderIds(props.sessionOrder, identities),
     identities.map(([, id]) => id),
   );
+  /** 用同一显示顺序渲染线程和计算拖拽落点。 */
+  const orderedThreads = (rows: SidebarThread[], archived = false) => {
+    const ordered = applySavedOrder(
+      rows.map((row) => sessionIdentity(row.path, row.key)),
+      sessionOrder,
+    ).map(
+      (id) => rows.find((row) => sessionIdentity(row.path, row.key) === id)!,
+    );
+    return archived ? ordered : prioritizeActive(ordered, threadIsLive);
+  };
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const { position, ghost, itemProps } = usePiSidebarReorder(
@@ -254,20 +265,27 @@ export function PiSidebar(props: Props) {
         );
         return;
       }
-      const visible = applySavedOrder(
-        props.threads
-          .filter(
-            (thread) =>
-              (group === TEMPORARY_GROUP_ID
-                ? isTemporaryCwd(thread.cwd, props.temporaryHome)
-                : pathKey(thread.cwd) === pathKey(group)) &&
-              !isArchivedPath(thread.path, archived),
-          )
-          .map((thread) => sessionIdentity(thread.path, thread.key)),
-        sessionOrder,
+      const rows = props.threads.filter(
+        (thread) =>
+          (group === TEMPORARY_GROUP_ID
+            ? isTemporaryCwd(thread.cwd, props.temporaryHome)
+            : pathKey(thread.cwd) === pathKey(group)) &&
+          !isArchivedPath(thread.path, archived),
       );
+      const nodeKey =
+        group === TEMPORARY_GROUP_ID
+          ? `group:${TEMPORARY_GROUP_ID}`
+          : `project:${pathKey(group)}`;
+      const visible = orderedThreads(rows)
+        .slice(0, counts[nodeKey] ?? SESSION_PAGE)
+        .map((thread) => sessionIdentity(thread.path, thread.key));
       props.onSessionOrder((current) =>
-        mergeOrder(current, moveByGap(visible, source, gap)),
+        moveDisplayedItem(
+          pinSessionOrder(current, sessionOrder),
+          visible,
+          source,
+          gap,
+        ),
       );
     },
     props.viewportDrop
@@ -624,14 +642,7 @@ export function PiSidebar(props: Props) {
           .includes(filter.toLocaleLowerCase()),
     );
     if (isArchived && !rows.length) return null;
-    const ordered = applySavedOrder(
-      rows.map((row) => sessionIdentity(row.path, row.key)),
-      sessionOrder,
-    )
-      .map(
-        (id) => rows.find((row) => sessionIdentity(row.path, row.key) === id)!,
-      )
-      .filter(Boolean);
+    const ordered = orderedThreads(rows, isArchived);
     const visible = ordered.slice(
       0,
       filter ? ordered.length : (counts[nodeKey] ?? SESSION_PAGE),
@@ -693,14 +704,7 @@ export function PiSidebar(props: Props) {
     const projectIndex = groupProjects.findIndex(
       (path) => pathKey(path) === key,
     );
-    const ordered = applySavedOrder(
-      rows.map((row) => sessionIdentity(row.path, row.key)),
-      sessionOrder,
-    )
-      .map(
-        (id) => rows.find((row) => sessionIdentity(row.path, row.key) === id)!,
-      )
-      .filter(Boolean);
+    const ordered = orderedThreads(rows, isArchived);
     const visible = ordered.slice(
       0,
       filter ? ordered.length : (counts[nodeKey] ?? SESSION_PAGE),

@@ -1,4 +1,4 @@
-# 复制为 config.toml（已 gitignore）后，日常 cargo / tauri dev 会写到仓库外。
-# Windows 建议放到 LOCALAPPDATA，避免 D: 上堆积 debug 增量缓存。
-[build]
-target-dir = "C:\\Users\\Administrator\\AppData\\Local\\codev-cargo-target"
+# 不填写用户名或固定盘符，也不要把本机生成的 config.toml 同步到其他电脑。
+# 使用 pnpm tauri / pnpm cargo；启动入口自动解析缓存并生成 config.toml。
+# 默认复用当前用户的平台缓存目录下的 codev-cargo-target。
+# 如需指定仓库外缓存，设置 CODEV_CARGO_TARGET_DIR 或 CARGO_TARGET_DIR。

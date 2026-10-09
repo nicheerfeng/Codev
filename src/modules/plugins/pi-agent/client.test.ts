@@ -138,7 +138,7 @@ vi.mock("./native", () => ({
     );
   }),
 }));
-import { PiWorkspaceClient } from "./client";
+import { PiWorkspaceClient, onPiAgentSettled } from "./client";
 import { DEFAULT_PI_THINKING_LEVELS, piViewReducer } from "./reducer";
 import * as nativeMocks from "./native";
 const defaultNative = {
@@ -149,6 +149,17 @@ const defaultNative = {
 };
 
 describe("Pi RPC workspace", () => {
+  it("rejects an empty thread ID before opening a runtime", async () => {
+    const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+    try {
+      await expect(client.open("", "D:/new-project")).rejects.toThrow(
+        "Pi 线程 ID 不能为空",
+      );
+      expect(client.threads.size).toBe(0);
+    } finally {
+      client.dispose();
+    }
+  });
   // 同一个 JSONL 的普通路径与 Windows 长路径必须复用同一内存线程。
   it("reuses one thread across Windows session path spellings", async () => {
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
@@ -1186,6 +1197,66 @@ describe("Pi RPC workspace", () => {
       client.dispose();
     }
   });
+  it.each(["before", "after"] as const)(
+    "does not notify, resume queues or change models when settled arrives %s abort acknowledgement",
+    async (order) => {
+      const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+      const settled = vi.fn();
+      const unsubscribe = onPiAgentSettled(settled);
+      try {
+        const thread = await client.open("stop-race", "D:/one");
+        await client.request(thread, { type: "get_state" });
+        client.beginPrompt(thread, "当前任务");
+        client.enqueue(thread, "不应续发", [], "followUp");
+        const model = thread.view.model;
+        const thinking = thread.view.thinkingLevel;
+        const runtime = thread.runtimeConfig;
+        const native = vi.mocked(nativeMocks.sendPiCommand);
+        const original = native.getMockImplementation()!;
+        const emitSettled = () =>
+          mock.receive({
+            sessionId: thread.runtimeId!,
+            stream: "stdout",
+            event: { type: "agent_settled" },
+          });
+        native.mockClear();
+        native.mockImplementation(async (id, command) => {
+          if (command.type === "clear_queue" && order === "before") {
+            emitSettled();
+            expect(thread.view.status).toBe("stopping");
+            await Promise.resolve();
+          }
+          return original(id, command);
+        });
+        const restore = vi.fn();
+        await client.stopAndRestore(thread, restore);
+        if (order === "after") emitSettled();
+        await Promise.resolve();
+        expect(thread.view.status).toBe("idle");
+        expect(thread.view.turnOutcome).toBe("interrupted");
+        expect(settled).toHaveBeenCalledWith(thread, "", "interrupted");
+        expect(restore).toHaveBeenCalledWith([
+          "排队指令",
+          "后续任务",
+          "不应续发",
+        ]);
+        expect(native.mock.calls.map(([, command]) => command.type)).toEqual([
+          "clear_queue",
+          "abort",
+        ]);
+        expect(thread.view.model).toBe(model);
+        expect(thread.view.thinkingLevel).toBe(thinking);
+        expect(thread.runtimeConfig).toBe(runtime);
+        // A new turn must no longer inherit the preceding interruption.
+        client.beginPrompt(thread, "继续");
+        emitSettled();
+        expect(settled).toHaveBeenLastCalledWith(thread, "", "completed");
+      } finally {
+        unsubscribe();
+        client.dispose();
+      }
+    },
+  );
   it("restores queue before abort and leaves other threads untouched", async () => {
     const native = await import("./native");
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());
@@ -1375,6 +1446,49 @@ describe("Pi RPC workspace", () => {
     });
     client.dispose();
   });
+  it.each(["remove-all", "keep-one", "image-only"])(
+    "编辑图片 %s 不补回已删除图片",
+    async (mode) => {
+      const native = await import("./native");
+      const client = new PiWorkspaceClient(vi.fn(), vi.fn());
+      try {
+        const thread = await client.open(
+          "image-edit",
+          "D:/one",
+          "history.jsonl",
+        );
+        await client.request(thread, { type: "get_state" });
+        const images = [
+          { type: "image" as const, data: "first", mimeType: "image/png" },
+          { type: "image" as const, data: "second", mimeType: "image/png" },
+        ];
+        thread.view.items = [
+          {
+            id: "entry-last",
+            kind: "message",
+            role: "user",
+            text: "原始输入",
+            thinking: "",
+            streaming: false,
+            images,
+          },
+        ];
+        const retained = mode === "remove-all" ? [] : [images[1]];
+        vi.mocked(native.sendPiCommand).mockClear();
+        await client.editLastUser(
+          thread,
+          mode === "image-only" ? "" : "修改文字",
+          retained,
+        );
+        const prompt = vi
+          .mocked(native.sendPiCommand)
+          .mock.calls.find(([, command]) => command.type === "prompt")?.[1];
+        expect(prompt?.images ?? []).toEqual(retained);
+      } finally {
+        client.dispose();
+      }
+    },
+  );
   it("edits in place and keeps the renamed session identity without a fork", async () => {
     const native = await import("./native");
     const client = new PiWorkspaceClient(vi.fn(), vi.fn());

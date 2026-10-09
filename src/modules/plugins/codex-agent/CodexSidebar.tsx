@@ -33,6 +33,7 @@ import type { CodexClient, Snapshot } from "./client";
 import type { Session } from "./protocol";
 import { Tool } from "./controls";
 import { useCodexSidebarReorder } from "./useCodexSidebarReorder";
+import { prioritizeActive, moveDisplayedItem } from "../sidebarOrder";
 import { exportMarkdown } from "./export";
 import { homeDir } from "@tauri-apps/api/path";
 import {
@@ -91,6 +92,18 @@ function ordered(ids: string[], order: string[], prependUnseen = false) {
     ...order.filter((id) => ids.includes(id)),
     ...(!prependUnseen ? unseen : []),
   ];
+}
+
+/** 侧栏活跃排序包含压缩、发送、停止及等待确认的线程。 */
+function sessionIsActive(session: Session): boolean {
+  return (
+    session.busy ||
+    session.sending ||
+    session.compacting ||
+    session.stopping ||
+    session.requests.length > 0 ||
+    session.queue.length > 0
+  );
 }
 
 /** 以 Pi 相同的组、项目、线程层级提供搜索、重命名、归档和 pointer 拖放。 */
@@ -206,7 +219,11 @@ export function CodexSidebar({
         string,
         (typeof state.sessions)[string][]
       >();
-      const sessionIds = ordered(state.order, layout.sessionOrder, true);
+      const sessionIds = prioritizeActive(
+        ordered(state.order, layout.sessionOrder, true),
+        (id) =>
+          !state.sessions[id].archived && sessionIsActive(state.sessions[id]),
+      );
       for (const cwd of [...layout.projects, ...(state.historyProjects ?? [])])
         if (!layout.hidden.includes(pathKey(cwd)))
           projectMap.set(pathKey(cwd), cwd);
@@ -309,6 +326,7 @@ export function CodexSidebar({
           .filter(
             (id) =>
               !state.sessions[id].archived &&
+              !parentThread(state.sessions[id].thread) &&
               pathKey(state.sessions[id].thread.cwd) === group,
           )
           .slice(0, counts[group] ?? 5)
@@ -317,14 +335,19 @@ export function CodexSidebar({
     (kind, source, gap, group) => {
       if (filter) return;
       const values = visibleIds(kind, group);
-      const from = values.indexOf(source);
-      if (from < 0) return;
-      const next = values.filter((id) => id !== source);
-      next.splice(gap > from ? gap - 1 : gap, 0, source);
       const key = kind === "session" ? "sessionOrder" : "projectOrder";
       setLayout((current) => ({
         ...current,
-        [key]: [...next, ...current[key].filter((id) => !next.includes(id))],
+        [key]: moveDisplayedItem(
+          ordered(
+            kind === "session" ? state.order : projects,
+            current[key],
+            kind === "session",
+          ),
+          values,
+          source,
+          gap,
+        ),
       }));
     },
     {
@@ -588,7 +611,7 @@ export function CodexSidebar({
     const closed =
       (!openedProjects.has(key) && !rows.length) ||
       (!query && layout.collapsed.includes(nodeKey));
-    const live = rows.some((session) => session.busy);
+    const live = rows.some(sessionIsActive);
     return (
       <div key={key} className="mb-1 min-w-0">
         <ContextMenu>

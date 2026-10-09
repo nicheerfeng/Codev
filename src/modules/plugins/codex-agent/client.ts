@@ -5,7 +5,11 @@ import { resourceSwitchReason } from "./resources";
 import { canonicalModel, mergeModels } from "./models";
 import { prependPrompt } from "./promptHistory";
 import { parentThread, taskFamily } from "./subagents";
-import { editableLastUser, originalInputs } from "./editLastUser";
+import {
+  editableLastUser,
+  originalInputs,
+  type UserImageInput,
+} from "./editLastUser";
 import {
   itemText,
   reduceNotification,
@@ -24,7 +28,7 @@ import {
 export type CodexTurnListener = (sessionId: string, turn: Turn) => void;
 const codexTurnListeners = new Set<CodexTurnListener>();
 
-export function onCodexTurnCompleted(listener: CodexTurnListener): () => void {
+export function onCodexTurnFinished(listener: CodexTurnListener): () => void {
   codexTurnListeners.add(listener);
   return () => codexTurnListeners.delete(listener);
 }
@@ -298,6 +302,8 @@ export class CodexClient {
   }
   /** 断开时立即释放等待中的请求，避免界面永远处于运行态。 */
   private disconnected(message: string) {
+    for (const id of this.compactionWaiters.keys())
+      this.finishCompaction(id, new Error(message));
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(new Error(message));
@@ -316,6 +322,15 @@ export class CodexClient {
             resumed: false,
             busy: false,
             sending: false,
+            compacting: false,
+            compactionNotice:
+              session.compacting && session.compactionNotice
+                ? {
+                    ...session.compactionNotice,
+                    status: "failed" as const,
+                    finishedAt: Date.now(),
+                  }
+                : session.compactionNotice,
             turnId: null,
             requests: [],
           },
@@ -459,21 +474,21 @@ export class CodexClient {
       const next = reduceNotification(session, method, params);
       if (next !== session) this.patch(id, next);
       this.streaming = false;
+      if (next.compactionNotice?.manual) {
+        if (next.compactionNotice.status === "done") {
+          this.finishCompaction(id);
+          void this.drain(id);
+        } else if (next.compactionNotice.status === "failed")
+          this.finishCompaction(
+            id,
+            new Error(
+              next.error || "上下文压缩未正常完成，请重试队列或退回编辑",
+            ),
+          );
+      }
       if (method === "item/started" || method === "item/completed") {
         const item = params.item as import("./protocol").Item | undefined;
         if (item?.type === "userMessage") this.finishInserted(id, false);
-        if (
-          method === "item/completed" &&
-          (item?.type === "contextCompaction" ||
-            item?.type === "context_compaction")
-        ) {
-          const waiter = this.compactionWaiters.get(id);
-          if (waiter) {
-            clearTimeout(waiter.timer);
-            this.compactionWaiters.delete(id);
-            waiter.resolve();
-          }
-        }
       }
       if (
         method === "thread/closed" ||
@@ -484,11 +499,14 @@ export class CodexClient {
       )
         this.finishInserted(id, true);
       if (method === "turn/completed") {
-        const turn = params.turn as Turn;
-        if (this.inserting.get(id)?.turnId === turn?.id)
+        const turn = this.snapshot.sessions[id].thread.turns.find(
+          (item) => item.id === (params.turn as Turn)?.id,
+        );
+        if (!turn) return;
+        if (this.inserting.get(id)?.turnId === turn.id)
           this.finishInserted(id, true);
         void this.readAgentMetadata(this.threadId(id));
-        if (turn?.status === "completed")
+        if (!session.stopping)
           codexTurnListeners.forEach((listener) => listener(id, turn));
         if (
           turn.status !== "completed" &&
@@ -622,6 +640,9 @@ export class CodexClient {
                     session.model || session.thread.model || "",
                     available,
                   ),
+                  // 重连后清除过时的 turnId，避免显示已失效的"进行中"状态
+                  turnId: null,
+                  busy: false,
                 },
               ]),
             ),
@@ -1079,13 +1100,37 @@ export class CodexClient {
         initial.thread.cwd,
         this.snapshot.sessions[id].effectiveSandbox,
       );
-      if (initial.turnId)
-        await this.request("turn/steer", {
-          threadId: this.threadId(id),
-          expectedTurnId: initial.turnId,
-          input,
-        });
-      else
+      // resume 后用实时状态决定 steer/start，避免对已结束的回合发送
+      const current = this.snapshot.sessions[id];
+      const activeTurnId =
+        current.busy && current.turnId ? current.turnId : null;
+      let started = false;
+      if (activeTurnId) {
+        try {
+          await this.request("turn/steer", {
+            threadId: this.threadId(id),
+            expectedTurnId: activeTurnId,
+            input,
+          });
+        } catch (error) {
+          const message = String(error).toLowerCase();
+          // 回合已结束或不可 steer，清理残留状态并启动新回合
+          if (
+            message.includes("no active turn") ||
+            message.includes("cannot steer")
+          ) {
+            this.patch(id, { busy: false, turnId: null });
+            await this.request("turn/start", {
+              threadId: this.threadId(id),
+              input,
+              ...(initial.model ? { model: initial.model } : {}),
+              effort: initial.effort || "medium",
+              sandboxPolicy: policy,
+            });
+            started = true;
+          } else throw error;
+        }
+      } else {
         await this.request("turn/start", {
           threadId: this.threadId(id),
           input,
@@ -1093,10 +1138,12 @@ export class CodexClient {
           effort: initial.effort || "medium",
           sandboxPolicy: policy,
         });
+        started = true;
+      }
       const latest = this.snapshot.sessions[id];
       this.patch(id, {
-        ...(!initial.turnId ? { effectiveSandbox: policy } : {}),
-        ...(!initial.turnId && initial.model
+        ...(!activeTurnId || started ? { effectiveSandbox: policy } : {}),
+        ...((!activeTurnId || started) && initial.model
           ? { thread: { ...latest.thread, model: initial.model } }
           : {}),
         sendRevision: latest.sendRevision + 1,
@@ -1136,7 +1183,7 @@ export class CodexClient {
   async submit(id: string, mode: "followUp" | "steer" = "followUp") {
     const session = this.snapshot.sessions[id];
     if (
-      mode === "followUp" &&
+      (mode === "followUp" || session.compacting) &&
       (session.busy ||
         session.sending ||
         session.compacting ||
@@ -1302,7 +1349,7 @@ export class CodexClient {
     if (action === "steer") {
       if (this.inserting.has(id))
         throw new Error("上一条插队消息正在等待原生确认，请稍候");
-      if (!session.busy && !session.turnId) {
+      if (session.compacting || (!session.busy && !session.turnId)) {
         this.patch(id, {
           queue: [
             entry,
@@ -1342,35 +1389,61 @@ export class CodexClient {
   }
   /** 用户明确重试后继续队列。 */
   retryQueue(id: string) {
-    this.patch(id, { queueError: null });
+    const session = this.snapshot.sessions[id];
+    // 若已 idle 或队列错误来自过期 steer，清理残留状态
+    if (session && session.queueError) {
+      const message = session.queueError.toLowerCase();
+      if (
+        message.includes("no active turn") ||
+        message.includes("cannot steer")
+      ) {
+        this.patch(id, { busy: false, turnId: null, queueError: null });
+      } else {
+        this.patch(id, { queueError: null });
+      }
+    } else {
+      this.patch(id, { queueError: null });
+    }
     void this.drain(id);
   }
-  /** 停止确认后恢复尚未提交的队列，不丢失新草稿。 */
+  /** 先退回队列，再中断任务族；停止操作收尾前不放行自动续发。 */
   async stopAndRestore(id: string) {
     id = this.sessionKey(id);
+    if (this.snapshot.sessions[id].stopping) return;
     if (this.snapshot.sessions[id].sending)
       throw new Error("正在提交消息，请稍后停止");
-    this.patch(id, { stopping: true });
+    const targets = taskFamily(this.snapshot.sessions, id).filter(
+      (key) =>
+        this.snapshot.sessions[key].busy ||
+        this.snapshot.activeThreads.includes(key),
+    );
+    const affected = [...new Set([id, ...targets])];
+    // Mark every interrupted task before any request can emit a terminal event.
+    this.update({
+      sessions: Object.fromEntries(
+        Object.entries(this.snapshot.sessions).map(([key, session]) => [
+          key,
+          affected.includes(key) ? { ...session, stopping: true } : session,
+        ]),
+      ),
+    });
     try {
-      const targets = taskFamily(this.snapshot.sessions, id).filter(
-        (key) =>
-          this.snapshot.sessions[key].busy ||
-          this.snapshot.activeThreads.includes(key),
-      );
+      for (const key of affected) {
+        this.inserting.delete(key);
+        this.restoreDraft(key, this.snapshot.sessions[key].queue);
+        this.patch(key, {
+          queue: [],
+          queueError: null,
+          queueSendingId: undefined,
+        });
+      }
       const results = await Promise.allSettled(
         targets.map((key) => this.interrupt(key)),
       );
       const failure = results.find((result) => result.status === "rejected");
       if (failure?.status === "rejected") throw failure.reason;
-      this.inserting.delete(id);
-      this.restoreDraft(id, this.snapshot.sessions[id].queue);
-      this.patch(id, {
-        queue: [],
-        queueError: null,
-        queueSendingId: undefined,
-      });
     } finally {
-      this.patch(id, { stopping: false });
+      for (const key of affected) this.patch(key, { stopping: false });
     }
   }
   /** 在最后一轮之前原生分叉，保留旧线程及文件修改。 */
@@ -1378,6 +1451,7 @@ export class CodexClient {
     id: string,
     text: string,
     expectedItemId: string,
+    images: UserImageInput[],
   ): Promise<string> {
     const session = this.snapshot.sessions[id];
     const target = editableLastUser(session);
@@ -1388,7 +1462,7 @@ export class CodexClient {
       target.item.id !== expectedItemId
     )
       throw new Error("当前输入已不可编辑，请等待任务结束后编辑最后一条输入");
-    if (!text.trim()) throw new Error("编辑内容不能为空");
+    if (!text.trim() && !images.length) throw new Error("编辑内容不能为空");
     const { turn: last, item: user } = target;
     const earlierInputs = last.items
       .slice(0, last.items.indexOf(user))
@@ -1418,12 +1492,12 @@ export class CodexClient {
         model: session.model,
         effort: session.effort,
         sandbox: session.sandbox,
-        images: parts
-          .filter((part) => part.type === "image" && part.url)
-          .map((part) => part.url!),
-        attachments: parts
-          .filter((part) => part.type === "localImage" && part.path)
-          .map((part) => part.path!),
+        images: images.flatMap((part) =>
+          part.type === "image" ? [part.url] : [],
+        ),
+        attachments: images.flatMap((part) =>
+          part.type === "localImage" ? [part.path] : [],
+        ),
         skills: parts
           .filter((part) => part.type === "skill" && part.path)
           .map((part) => ({
@@ -1442,6 +1516,17 @@ export class CodexClient {
       this.patch(id, { sending: false });
     }
   }
+  /** 根据原生轮次终态结束压缩等待，压缩项完成不会提前放行队列。 */
+  private finishCompaction(id: string, error?: Error) {
+    const waiter = this.compactionWaiters.get(id);
+    if (!waiter) return;
+    clearTimeout(waiter.timer);
+    this.compactionWaiters.delete(id);
+    if (error) waiter.reject(error);
+    else waiter.resolve();
+  }
+
+  /** 等待整个手动压缩轮次结束，为较大的上下文保留充分执行时间。 */
   private waitForCompactionCompletion(id: string) {
     const existing = this.compactionWaiters.get(id);
     if (existing) return Promise.reject(new Error("压缩任务已在等待完成"));
@@ -1451,7 +1536,7 @@ export class CodexClient {
       const timer = setTimeout(() => {
         this.compactionWaiters.delete(id);
         reject(new Error("等待上下文压缩完成超时"));
-      }, 60_000);
+      }, 10 * 60_000);
       this.compactionWaiters.set(id, { resolve, reject, timer });
     });
   }
@@ -1470,7 +1555,11 @@ export class CodexClient {
     this.patch(id, {
       error: null,
       compacting: true,
-      compactionNotice: { status: "running", startedAt: Date.now() },
+      compactionNotice: {
+        status: "running",
+        startedAt: Date.now(),
+        manual: true,
+      },
     });
     try {
       if (!session.resumed) {
@@ -1497,28 +1586,25 @@ export class CodexClient {
       await this.request("thread/compact/start", { threadId: id });
       await completion;
     } catch (error) {
-      const waiter = this.compactionWaiters.get(id);
-      if (waiter) {
-        clearTimeout(waiter.timer);
-        this.compactionWaiters.delete(id);
-        waiter.reject(
-          error instanceof Error ? error : new Error(String(error)),
-        );
-      }
+      this.finishCompaction(
+        id,
+        error instanceof Error ? error : new Error(String(error)),
+      );
+      const current = this.snapshot.sessions[id];
       this.patch(id, {
-        busy: false,
-        compacting: false,
+        compacting: Boolean(current.turnId),
+        queueError: current.queue.length
+          ? (current.queueError ?? String(error))
+          : current.queueError,
         compactionNotice: {
+          ...current.compactionNotice,
           status: "failed",
-          startedAt:
-            this.snapshot.sessions[id]?.compactionNotice?.startedAt ??
-            Date.now(),
+          startedAt: current.compactionNotice?.startedAt ?? Date.now(),
           finishedAt: Date.now(),
         },
       });
       throw error;
     } finally {
-      this.patch(id, { busy: false, sending: false });
       void this.drain(id);
     }
   }
@@ -1536,7 +1622,7 @@ export class CodexClient {
         !turnId &&
         ["idle", "notLoaded"].includes(thread.status?.type ?? "")
       ) {
-        this.patch(id, { busy: false, turnId: null, stopping: false });
+        this.patch(id, { busy: false, turnId: null });
         this.update({
           activeThreads: this.snapshot.activeThreads.filter(
             (key) => key !== id,

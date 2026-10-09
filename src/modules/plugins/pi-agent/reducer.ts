@@ -1,6 +1,7 @@
 import type {
   PiEventEnvelope,
   PiImage,
+  PiMessageItem,
   PiModel,
   PiQueueItem,
   PiStopReason,
@@ -320,6 +321,19 @@ function eventTimestamp(event: Record<string, unknown>): number {
   return timestampValue(event.timestamp) ?? Date.now();
 }
 
+/** Ignore assistant replies from older turns when the current turn has no reply. */
+export function lastPiTurnAssistant(
+  items: PiTranscriptItem[],
+): PiMessageItem | undefined {
+  for (let index = items.length - 1; index >= 0; index--) {
+    const item = items[index];
+    if (item.kind !== "message") continue;
+    if (item.role === "user") return undefined;
+    if (item.role === "assistant") return item;
+  }
+  return undefined;
+}
+
 /** 根据 RPC 事件更新一个线程，保留工具调用与内容块的相对位置。 */
 function reduceEvent(
   state: PiViewState,
@@ -360,7 +374,8 @@ function reduceEvent(
       state.status === "running" && state.processFinishedAt == null;
     return {
       ...state,
-      status: "running",
+      status: state.status === "stopping" ? "stopping" : "running",
+      turnOutcome: state.status === "stopping" ? state.turnOutcome : undefined,
       phase: "思考中",
       error: null,
       processStartedAt: continuing
@@ -371,9 +386,19 @@ function reduceEvent(
   }
   if (type === "agent_settled") {
     const finishedAt = Date.now();
+    const reason = lastPiTurnAssistant(state.items)?.stopReason;
+    const interrupted =
+      state.status === "stopping" ||
+      state.turnOutcome === "interrupted" ||
+      reason === "aborted";
     return {
       ...state,
-      status: "idle",
+      status: state.status === "stopping" ? "stopping" : "idle",
+      turnOutcome: interrupted
+        ? "interrupted"
+        : reason === "error" || state.error
+          ? "failed"
+          : "completed",
       phase: "",
       processFinishedAt: finishedAt,
       items: stampTurnTiming(
@@ -742,6 +767,7 @@ function beginPrompt(
         ? state.compaction
         : undefined,
     status: "running",
+    turnOutcome: undefined,
     phase: queued ? state.phase || "处理中" : "处理中",
     error: null,
     processStartedAt:

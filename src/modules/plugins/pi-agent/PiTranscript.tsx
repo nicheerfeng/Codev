@@ -43,6 +43,7 @@ import {
   type PiTimelineStep,
 } from "./timeline";
 import type {
+  PiImage,
   PiMessageItem,
   PiThinkingItem,
   PiTranscriptItem,
@@ -75,6 +76,7 @@ type MessageActions = {
   onEdit?: (
     item: PiMessageItem,
     text: string,
+    images: PiImage[],
   ) => boolean | undefined | Promise<boolean | undefined>;
   onFork?: (item: PiMessageItem) => void;
   onOpenFile?: (path: string) => void;
@@ -168,6 +170,7 @@ const TranscriptItem = memo(function TranscriptItem({
     item.kind === "message" && item.role === "user" ? item.text : "",
   );
   const [editSubmitting, setEditSubmitting] = useState(false);
+  const [editImages, setEditImages] = useState<PiImage[]>([]);
   const editInput = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (openForSearch) setExpanded(true);
@@ -183,18 +186,19 @@ const TranscriptItem = memo(function TranscriptItem({
     element.style.height = `${Math.min(180, Math.max(40, element.scrollHeight))}px`;
     element.style.overflowY = element.scrollHeight > 180 ? "auto" : "hidden";
   }, [editText, editing]);
+  /** 提交当前编辑的文字和保留图片。 */
   const submitEdit = async () => {
     if (
       item.kind !== "message" ||
       item.role !== "user" ||
       !actions.onEdit ||
       editSubmitting ||
-      !editText.trim()
+      (!editText.trim() && !editImages.length)
     )
       return;
     setEditSubmitting(true);
     try {
-      const accepted = await actions.onEdit(item, editText.trim());
+      const accepted = await actions.onEdit(item, editText.trim(), editImages);
       if (accepted !== false) setEditing(false);
     } catch {
       // 保留编辑态，父层负责展示原生操作错误。
@@ -298,13 +302,34 @@ const TranscriptItem = memo(function TranscriptItem({
           )}
         </div>
         {item.kind === "message" &&
-          item.images?.map((image, index) => (
-            <ZoomableImage
+          (editing ? editImages : item.images)?.map((image, index) => (
+            <div
               key={`${item.id}-${index}`}
-              className="mt-2 max-h-60 max-w-full rounded-lg"
-              src={`data:${image.mimeType};base64,${image.data}`}
-              alt="用户附件"
-            />
+              className="relative mt-2 min-h-8 min-w-8 w-fit max-w-full"
+            >
+              <ZoomableImage
+                className="max-h-60 max-w-full rounded-lg"
+                src={`data:${image.mimeType};base64,${image.data}`}
+                alt="用户附件"
+              />
+              {editing && (
+                <Button
+                  size="icon-xs"
+                  variant="secondary"
+                  className="absolute right-1 top-1 rounded-full"
+                  aria-label={`删除图片 ${index + 1}`}
+                  title="删除图片"
+                  disabled={editSubmitting}
+                  onClick={() =>
+                    setEditImages((images) =>
+                      images.filter((_, i) => i !== index),
+                    )
+                  }
+                >
+                  <HugeiconsIcon icon={Cancel01Icon} size={13} />
+                </Button>
+              )}
+            </div>
           ))}
       </div>
       {item.kind === "message" && item.role === "user" && editing && (
@@ -322,7 +347,9 @@ const TranscriptItem = memo(function TranscriptItem({
           </Button>
           <Button
             size="xs"
-            disabled={editSubmitting || !editText.trim()}
+            disabled={
+              editSubmitting || (!editText.trim() && !editImages.length)
+            }
             onClick={() => void submitEdit()}
           >
             发送
@@ -364,6 +391,7 @@ const TranscriptItem = memo(function TranscriptItem({
                 aria-label="编辑最后一条输入"
                 onClick={() => {
                   setEditText(item.text);
+                  setEditImages(item.images ?? []);
                   setEditing(true);
                 }}
               >

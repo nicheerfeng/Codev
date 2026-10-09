@@ -7,6 +7,7 @@ import { Streamdown, defaultRemarkPlugins } from "streamdown";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowDown01Icon,
+  Cancel01Icon,
   Copy01Icon,
   GitForkIcon,
   PencilEdit01Icon,
@@ -33,7 +34,12 @@ import {
   useVoiceScopeConfig,
 } from "@/modules/plugins/codex-agent/voice/output";
 import { codexTurnDiffEnabled, codexTurnFiles } from "./turnDiff";
-import { editableLastUser } from "./editLastUser";
+import {
+  editableLastUser,
+  userImageInputs,
+  originalInputs,
+  type UserImageInput,
+} from "./editLastUser";
 import { Tool } from "./controls";
 import { WebSearchDetails } from "./WebSearchDetails";
 import {
@@ -131,13 +137,19 @@ function Message({
   timestamp?: number | null;
   onFork: () => void;
   forkDisabled: boolean;
-  onEdit?: (text: string) => Promise<void>;
+  onEdit?: (text: string, images: UserImageInput[]) => Promise<void>;
   onOpenFile?: (path: string) => void;
 }) {
   const text = itemText(item);
   const user = item.type === "userMessage";
+  const editableText = user
+    ? originalInputs(item)
+        .flatMap((part) => (part.type === "text" ? [part.text] : []))
+        .join("\n")
+    : text;
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(text);
+  const [draft, setDraft] = useState(editableText);
+  const [editImages, setEditImages] = useState<UserImageInput[]>([]);
   const [saving, setSaving] = useState(false);
   const editInput = useRef<HTMLTextAreaElement>(null);
   const canEdit = Boolean(onEdit) && !forkDisabled;
@@ -151,11 +163,12 @@ function Message({
     element.style.height = `${Math.min(180, Math.max(40, element.scrollHeight))}px`;
     element.style.overflowY = element.scrollHeight > 180 ? "auto" : "hidden";
   }, [draft, editing]);
+  /** 提交编辑后的文字与图片，不从历史消息补回已删除图片。 */
   const submitEdit = async () => {
-    if (!onEdit || saving || !draft.trim()) return;
+    if (!onEdit || saving || (!draft.trim() && !editImages.length)) return;
     setSaving(true);
     try {
-      await onEdit(draft.trim());
+      await onEdit(draft.trim(), editImages);
       setEditing(false);
     } catch (error) {
       toast.error(String(error));
@@ -163,15 +176,7 @@ function Message({
       setSaving(false);
     }
   };
-  const images = user
-    ? (
-        (item.content as Array<{
-          type: string;
-          path?: string;
-          url?: string;
-        }>) ?? []
-      ).filter((part) => part.type === "localImage" || part.type === "image")
-    : [];
+  const images = user ? (editing ? editImages : userImageInputs(item)) : [];
   return (
     <div
       data-codex-item={item.id}
@@ -222,12 +227,37 @@ function Message({
               </span>
             )}
             {images.map((part, index) => (
-              <ZoomableImage
-                key={part.path ?? part.url ?? index}
-                src={part.path ? convertFileSrc(part.path) : part.url}
-                alt="会话图片"
-                className="max-h-48 max-w-full rounded-lg"
-              />
+              <div
+                key={index}
+                className="relative min-h-8 min-w-8 w-fit max-w-full"
+              >
+                <ZoomableImage
+                  src={
+                    part.type === "localImage"
+                      ? convertFileSrc(part.path)
+                      : part.url
+                  }
+                  alt="会话图片"
+                  className="max-h-48 max-w-full rounded-lg"
+                />
+                {editing && (
+                  <Button
+                    size="icon-xs"
+                    variant="secondary"
+                    className="absolute right-1 top-1 rounded-full"
+                    aria-label={`删除图片 ${index + 1}`}
+                    title="删除图片"
+                    disabled={saving}
+                    onClick={() =>
+                      setEditImages((images) =>
+                        images.filter((_, i) => i !== index),
+                      )
+                    }
+                  >
+                    <HugeiconsIcon icon={Cancel01Icon} size={13} />
+                  </Button>
+                )}
+              </div>
             ))}
           </>
         ) : (
@@ -241,7 +271,7 @@ function Message({
             size="xs"
             disabled={saving}
             onClick={() => {
-              setDraft(text);
+              setDraft(editableText);
               setEditing(false);
             }}
           >
@@ -249,7 +279,9 @@ function Message({
           </Button>
           <Button
             size="xs"
-            disabled={saving || !canEdit || !draft.trim()}
+            disabled={
+              saving || !canEdit || (!draft.trim() && !editImages.length)
+            }
             onClick={() => void submitEdit()}
           >
             发送
@@ -294,7 +326,8 @@ function Message({
               title="编辑最后一条输入"
               aria-label="编辑最后一条输入"
               onClick={() => {
-                setDraft(text);
+                setDraft(editableText);
+                setEditImages(userImageInputs(item));
                 setEditing(true);
               }}
             >
@@ -594,7 +627,7 @@ function TurnView({
   onOpenDiff?: (path: string, diff: string) => void;
   onFork: () => void;
   forkDisabled: boolean;
-  onEdit?: (text: string) => Promise<void>;
+  onEdit?: (text: string, images: UserImageInput[]) => Promise<void>;
   editableId?: string;
 }) {
   const blocks = turnBlocks(turn, running);
@@ -952,12 +985,13 @@ export function CodexTranscript({
                     }
                     onEdit={
                       editable?.turn.id === turn.id
-                        ? async (text) => {
+                        ? async (text, images) => {
                             onFork(
                               await client.editLast(
                                 session.thread.id,
                                 text,
                                 editable.item.id,
+                                images,
                               ),
                             );
                           }

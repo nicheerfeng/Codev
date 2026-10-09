@@ -13,6 +13,7 @@ import {
 import {
   DEFAULT_PI_THINKING_LEVELS,
   INITIAL_PI_VIEW_STATE,
+  lastPiTurnAssistant,
   comparableUserText,
   objectValue,
   piViewReducer,
@@ -22,6 +23,7 @@ import type {
   PiImage,
   PiMessageItem,
   PiModel,
+  PiTurnOutcome,
   PiViewState,
 } from "./types";
 import {
@@ -39,7 +41,11 @@ import {
   refreshPiTurn,
 } from "./turnDiff";
 
-export type PiSettledListener = (thread: PiThread, text: string) => void;
+export type PiSettledListener = (
+  thread: PiThread,
+  text: string,
+  outcome: PiTurnOutcome,
+) => void;
 const piSettledListeners = new Set<PiSettledListener>();
 
 export function onPiAgentSettled(listener: PiSettledListener): () => void {
@@ -324,7 +330,11 @@ export class PiWorkspaceClient {
       thread.runtimeId = null;
       thread.runtimeConfig = null;
     }
-    if (event.type === "agent_settled" && thread.runtimeId !== null) {
+    if (
+      event.type === "agent_settled" &&
+      thread.runtimeId !== null &&
+      thread.view.turnOutcome === "completed"
+    ) {
       const resumeQueue = this.compactionResume.delete(thread.key);
       void this.refreshState(thread)
         .then(async () => {
@@ -353,16 +363,11 @@ export class PiWorkspaceClient {
       );
     }
     if (event.type === "agent_settled") {
-      const last = [...thread.view.items]
-        .reverse()
-        .find(
-          (item) =>
-            item.kind === "message" &&
-            item.role === "assistant" &&
-            item.text.trim(),
-        );
-      if (last?.kind === "message")
-        piSettledListeners.forEach((listener) => listener(thread, last.text));
+      const last = lastPiTurnAssistant(thread.view.items);
+      const outcome = thread.view.turnOutcome!;
+      piSettledListeners.forEach((listener) =>
+        listener(thread, last?.text ?? "", outcome),
+      );
       const wait = this.snapshotWaiters.get(thread.key) ?? Promise.resolve();
       this.snapshotWaiters.delete(thread.key);
       void wait
@@ -556,6 +561,7 @@ export class PiWorkspaceClient {
 
   /** 新建或恢复指定线程，多次点击同一线程共用启动任务。 */
   open(key: string, cwd: string, path?: string): Promise<PiThread> {
+    if (!key.trim()) return Promise.reject(new Error("Pi 线程 ID 不能为空"));
     const identity = runtimeThreadKey(key, path);
     const existing =
       this.threads.get(key) ??
@@ -1268,51 +1274,67 @@ export class PiWorkspaceClient {
     }
   }
 
-  /** 先取回未执行的队列，再中断运行，恢复操作始终绑定原线程。 */
+  /** 停止态先阻止续发，再退回队列并中断；不触发模型适配。 */
   async stopAndRestore(
     thread: PiThread,
     restore: (texts: string[], images?: PiImage[]) => void,
   ) {
-    if (thread.view.compaction?.status === "running") {
-      if (thread.view.status === "stopping") return;
-      this.compactionResume.delete(thread.key);
-      thread.view = piViewReducer(thread.view, { type: "stopping" });
-      this.publish();
-      await this.request(thread, { type: "abort" });
-      thread.view = { ...thread.view, status: "idle", phase: "" };
-      this.publish();
-      return;
-    }
-    const queued = await this.clearQueue(thread);
-    const nativeQueue = this.normalizeNativeQueue(queued);
-    const steering = nativeQueue.steering.length
-      ? nativeQueue.steering.map((item) => item.text)
-      : thread.view.queue.steering.map((item) => item.text);
-    const followUp = nativeQueue.followUp.length
-      ? nativeQueue.followUp.map((item) => item.text)
-      : thread.view.queue.followUp.map((item) => item.text);
-    const localQueue = thread.view.localQueue ?? [];
-    this.inserting.delete(thread.key);
-    thread.view = { ...thread.view, localQueue: [], queueSendingId: undefined };
-    const images = [...nativeQueue.steering, ...nativeQueue.followUp].flatMap(
-      (item) => item.images,
-    );
-    const restored = [
-      ...steering,
-      ...followUp,
-      ...localQueue.map((entry) => entry.text),
-    ];
-    const restoredImages = [
-      ...images,
-      ...localQueue.flatMap((entry) => entry.images),
-    ];
-    if (restoredImages.length) restore(restored, restoredImages);
-    else restore(restored);
+    if (thread.view.status === "stopping") return;
+    const previousStatus = thread.view.status;
     this.compactionResume.delete(thread.key);
     thread.view = piViewReducer(thread.view, { type: "stopping" });
     this.publish();
-    await this.request(thread, { type: "abort" });
-    await this.refreshState(thread);
+    try {
+      if (thread.view.compaction?.status !== "running") {
+        const queued = await this.clearQueue(thread);
+        const nativeQueue = this.normalizeNativeQueue(queued);
+        const steering = nativeQueue.steering.length
+          ? nativeQueue.steering.map((item) => item.text)
+          : thread.view.queue.steering.map((item) => item.text);
+        const followUp = nativeQueue.followUp.length
+          ? nativeQueue.followUp.map((item) => item.text)
+          : thread.view.queue.followUp.map((item) => item.text);
+        const localQueue = thread.view.localQueue ?? [];
+        this.inserting.delete(thread.key);
+        thread.view = {
+          ...thread.view,
+          localQueue: [],
+          queue: { steering: [], followUp: [], pendingCount: 0 },
+          queueSendingId: undefined,
+        };
+        const images = [
+          ...nativeQueue.steering,
+          ...nativeQueue.followUp,
+        ].flatMap((item) => item.images);
+        const restored = [
+          ...steering,
+          ...followUp,
+          ...localQueue.map((entry) => entry.text),
+        ];
+        const restoredImages = [
+          ...images,
+          ...localQueue.flatMap((entry) => entry.images),
+        ];
+        if (restoredImages.length) restore(restored, restoredImages);
+        else restore(restored);
+      }
+      await this.request(thread, { type: "abort" });
+      thread.view = {
+        ...thread.view,
+        status: "idle",
+        phase: "",
+        turnOutcome: "interrupted",
+      };
+    } catch (error) {
+      // A failed request must not leave the stop button permanently disabled.
+      thread.view = {
+        ...thread.view,
+        status: thread.view.processFinishedAt == null ? previousStatus : "idle",
+      };
+      throw error;
+    } finally {
+      this.publish();
+    }
   }
 
   /** 在原会话中撤回最后一轮，重启同路径 runtime 后发送编辑内容。 */
@@ -1328,7 +1350,7 @@ export class PiWorkspaceClient {
       thread.view.historyLoadingMore
     )
       throw new Error("请等待运行结束后再编辑");
-    if (!text.trim()) throw new Error("编辑内容不能为空");
+    if (!text.trim() && !images.length) throw new Error("编辑内容不能为空");
     const target = [...thread.view.items]
       .reverse()
       .find((item) => item.kind === "message" && item.role === "user");

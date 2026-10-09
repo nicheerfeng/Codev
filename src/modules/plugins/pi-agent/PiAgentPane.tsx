@@ -66,8 +66,7 @@ import {
   visiblePiProjects,
   withArchivedPath,
 } from "./organization";
-import { notifyFinishedProjects } from "./piNotify";
-import { projectActivity, type ProjectActivity } from "./projectActivity";
+import { notifyFinishedThread } from "./piNotify";
 
 /** 规范化并去重 Pi 子任务快照，避免轮询结果反复替换同一行。 */
 function normalizeSubagentRuns(runs: PiSubagentRun[]): PiSubagentRun[] {
@@ -143,20 +142,6 @@ import "./pi-agent.css";
 
 type ExtensionRequest = { key: string; event: Record<string, unknown> };
 
-function latestAssistantSummary(thread?: PiThread): string | null {
-  const items = thread?.view.items ?? [];
-  for (let index = items.length - 1; index >= 0; index--) {
-    const item = items[index];
-    if (
-      item.kind === "message" &&
-      item.role === "assistant" &&
-      item.text.trim()
-    )
-      return item.text;
-  }
-  return null;
-}
-
 /** 插件入口只协调原生会话与 Codev 组件，不接管外部文件树或终端。 */
 export function PiAgentPane({
   active,
@@ -173,7 +158,6 @@ export function PiAgentPane({
 }) {
   const [initialized, setInitialized] = useState(false);
   const client = useRef<PiWorkspaceClient | null>(null);
-  const activityRef = useRef(new Map<string, ProjectActivity>());
   const [threads, setThreads] = useState<PiThread[]>([]);
   const [sessions, setSessions] = useState<PiSessionSummary[]>([]);
   const [subagentRuns, setSubagentRuns] = useState<
@@ -440,7 +424,8 @@ export function PiAgentPane({
       },
     );
     client.current = runtime;
-    const stopVoice = onPiAgentSettled((thread, text) => {
+    const stopVoice = onPiAgentSettled((thread, text, outcome) => {
+      if (outcome !== "completed" || !text.trim()) return;
       void speakFinalIfEnabled(text, `${thread.key}:${text}`).catch((error) =>
         console.error("Pi 语音播放失败", error),
       );
@@ -558,23 +543,19 @@ export function PiAgentPane({
     );
   }, [rows]);
   useEffect(() => {
-    const notificationThreads = rows.map((row) => ({
-      ...row,
-      summary: latestAssistantSummary(
-        threads.find((thread) => thread.key === row.key),
-      ),
-    }));
-    const previous = activityRef.current;
-    const current = projectActivity(notificationThreads);
-    // 先消费状态变化，窗口和权限查询期间的 render 不会重复发送。
-    activityRef.current = current;
-    void notifyFinishedProjects({
-      previous,
-      current,
-      threads: notificationThreads,
-      piActive: active,
+    return onPiAgentSettled((thread, text, outcome) => {
+      if (client.current?.threads.get(thread.key) !== thread) return;
+      void notifyFinishedThread({
+        thread: {
+          cwd: thread.cwd,
+          name: thread.view.sessionName,
+          summary: text,
+        },
+        outcome,
+        piActive: active,
+      });
     });
-  }, [rows, active, threads]);
+  }, [active]);
   /** 用统一提示处理操作异常，避免无响应按钮。 */
   const run = (operation: Promise<unknown>, key = draftKey) => {
     void operation.catch((error) => setNotice(String(error), key));
@@ -585,14 +566,20 @@ export function PiAgentPane({
     key = selected,
   ): Promise<PiThread> => {
     const runtime = client.current;
+    const threadKey = thread?.key ?? key;
     const targetCwd =
       thread?.cwd ??
       runtime?.threads.get(key ?? "")?.cwd ??
       activeCwd ??
       piHome;
     if (!runtime || !targetCwd) throw new Error("请先等待 Pi 初始化");
+    if (!threadKey) {
+      const created = await create(targetCwd);
+      if (!created) throw new Error("请先选择一个空视口再新建 Pi 线程");
+      return created;
+    }
     return runtime.open(
-      thread?.key ?? key ?? "",
+      threadKey,
       targetCwd,
       thread?.path || undefined,
     );
@@ -616,10 +603,15 @@ export function PiAgentPane({
     client.current!.applyCatalogModel(target, lastModel);
     target.view = { ...target.view, thinkingLevel: lastThinkingLevel };
     setThreads([...client.current!.threads.values()]);
+    return target;
   };
-  /** 用户选择项目才读取历史；空项目等待用户点击新建。 */
+  /** 切换项目时解除其他项目的线程选择，让首次发送绑定新项目。 */
   const selectProject = async (cwd: string) => {
     setProject(cwd);
+    const selectedCwd =
+      activeThread?.cwd ?? rows.find((row) => row.key === selected)?.cwd;
+    if (selected && pathKey(selectedCwd ?? "") !== pathKey(cwd))
+      activateThread(null);
     await refreshSessions(cwd);
   };
   /** 点击与工作台收集共用历史准备，不改变原插件的选中态。 */
@@ -768,6 +760,10 @@ export function PiAgentPane({
       return;
     }
     if (!draftHasPayload(draft)) return;
+    if (!selected) {
+      if (operationKeys.current.has(draftKey)) return;
+      operationKeys.current.add(draftKey);
+    }
     const alreadySending = pending.has(draftKey);
     const sourceKey = draftKey;
     let runtimeKey = sourceKey;
@@ -831,11 +827,21 @@ export function PiAgentPane({
     } catch (error) {
       setDrafts((value) => ({
         ...value,
-        [sourceKey]:
-          value[sourceKey] === EMPTY_DRAFT ? draft : value[sourceKey],
+        [runtimeKey]:
+          !value[runtimeKey] || value[runtimeKey] === EMPTY_DRAFT
+            ? draft
+            : {
+                text: [draft.text, value[runtimeKey].text]
+                  .filter(Boolean)
+                  .join("\n\n"),
+                images: [...draft.images, ...value[runtimeKey].images],
+                files: addPathAttachments(draft.files, value[runtimeKey].files),
+              },
       }));
+      setNotice(String(error), runtimeKey);
       throw error;
     } finally {
+      if (!selected) operationKeys.current.delete(draftKey);
       setPending((value) => {
         const next = new Set(value);
         next.delete(sourceKey);
@@ -898,6 +904,7 @@ export function PiAgentPane({
     thread: PiThread,
     item: PiMessageItem,
     text: string,
+    images: PiImage[],
   ): Promise<boolean> => {
     const key = thread.key;
     if (operationKeys.current.has(key)) return false;
@@ -906,11 +913,7 @@ export function PiAgentPane({
     operationKeys.current.add(key);
     setOperations((value) => ({ ...value, [key]: "正在重新执行…" }));
     try {
-      const accepted = await client.current!.editLastUser(
-        thread,
-        text,
-        item.images ?? [],
-      );
+      const accepted = await client.current!.editLastUser(thread, text, images);
       if (accepted) {
         setSendRevisions((value) => ({
           ...value,
@@ -925,7 +928,7 @@ export function PiAgentPane({
         [key]: {
           ...(current[key] ?? EMPTY_DRAFT),
           text,
-          images: item.images ?? [],
+          images,
         },
       }));
       throw error;
@@ -1467,10 +1470,15 @@ export function PiAgentPane({
                     onOpenFile={onOpenFile}
                     onOpenDiff={onOpenDiff}
                     onCopy={(text) => run(writeText(text))}
-                    onEdit={async (item, text) => {
+                    onEdit={async (item, text, images) => {
                       if (!activeThread) throw new Error("当前没有活动线程");
                       try {
-                        return await editLastUser(activeThread, item, text);
+                        return await editLastUser(
+                          activeThread,
+                          item,
+                          text,
+                          images,
+                        );
                       } catch (error) {
                         setNotice(String(error), activeThread.key);
                         throw error;

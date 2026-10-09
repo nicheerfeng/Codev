@@ -4,12 +4,11 @@ import {
   requestPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
-import { pathKey, projectName } from "./paths";
+import { projectName } from "./paths";
 import {
   finishNotificationCopy,
   shouldSkipFinishNotification,
   type ActivityThread,
-  type ProjectActivity,
 } from "./projectActivity";
 
 let permissionAsked = false;
@@ -46,41 +45,25 @@ async function codexPanelIsForeground(codexActive: boolean): Promise<boolean> {
   }
 }
 
-/** 项目从 live 变为全 idle 时弹一条 Windows 通知。 */
-export async function notifyFinishedProjects(input: {
-  previous: Map<string, ProjectActivity>;
-  current: Map<string, ProjectActivity>;
-  threads: ActivityThread[];
+/** Native interrupted turns never produce completion notifications. */
+export async function notifyFinishedThread(input: {
+  thread: ActivityThread;
+  outcome: string;
   codexActive: boolean;
 }): Promise<void> {
-  if (
-    ![...input.previous].some(
-      ([cwd, previous]) =>
-        previous.liveCount > 0 && !input.current.get(cwd)?.liveCount,
-    )
-  )
-    return;
+  if (!["completed", "failed"].includes(input.outcome)) return;
   if (await codexPanelIsForeground(input.codexActive)) return;
   if (!(await ensurePermission())) return;
-  for (const [cwd, previous] of input.previous) {
-    if (previous.liveCount <= 0) continue;
-    const current = input.current.get(cwd);
-    if ((current?.liveCount ?? 0) > 0) continue;
-    const sample =
-      input.threads.find(
-        (thread) => pathKey(thread.cwd) === cwd && thread.summary?.trim(),
-      ) ?? input.threads.find((thread) => pathKey(thread.cwd) === cwd);
-    const copy = finishNotificationCopy({
-      name: sample ? projectName(sample.cwd) : cwd.split("/").pop() || cwd,
-      threadName: sample?.name,
-      summary: sample?.summary,
-      count: previous.liveCount,
-      failed: current?.failed ?? previous.failed,
-    });
-    try {
-      sendNotification({ title: copy.title, body: copy.body });
-    } catch {
-      // 系统拒绝通知时不影响线程运行。
-    }
+  const copy = finishNotificationCopy({
+    name: projectName(input.thread.cwd),
+    threadName: input.thread.name,
+    summary: input.thread.summary,
+    count: 1,
+    failed: input.outcome === "failed",
+  });
+  try {
+    sendNotification({ title: copy.title, body: copy.body });
+  } catch {
+    // 系统拒绝通知时不影响线程运行。
   }
 }

@@ -129,7 +129,10 @@ export type PiViewStatus =
   | "stopped"
   | "failed";
 
+export type PiTurnOutcome = "completed" | "failed" | "interrupted";
+
 export type PiViewState = {
+  turnOutcome?: PiTurnOutcome;
   activityRevision?: number;
   compaction?: {
     status: "running" | "done" | "failed";

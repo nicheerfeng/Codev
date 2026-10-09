@@ -123,6 +123,8 @@ export type Session = {
     status: "running" | "done" | "failed";
     startedAt: number;
     finishedAt?: number;
+    manual?: boolean;
+    turnId?: string;
   } | null;
   historyCursor: string | null;
   historyLoading: boolean;
@@ -218,20 +220,31 @@ export function reduceNotification(
       ["idle", "notLoaded", "systemError"].includes(
         String((params.status as { type?: string })?.type),
       ))
-  )
+  ) {
+    const notice = session.compactionNotice;
+    const endedCompaction =
+      session.compacting && notice?.manual && notice.turnId;
+    const succeeded =
+      method === "thread/status/changed" &&
+      (params.status as { type?: string })?.type === "idle";
     return {
       ...session,
       busy: false,
       turnId: null,
-      stopping: false,
-      compacting: session.compactionNotice?.status === "running",
+      compacting: endedCompaction ? false : notice?.status === "running",
+      compactionNotice: endedCompaction
+        ? {
+            ...notice,
+            status: succeeded ? "done" : "failed",
+            finishedAt: Date.now(),
+          }
+        : notice,
     };
+  }
   if (method === "thread/tokenUsage/updated")
     return {
       ...session,
       tokenUsage: normalizeTokenUsage(params.tokenUsage ?? params.token_usage),
-      compacting: session.compactionNotice?.status === "running",
-      compactionNotice: session.compactionNotice,
     };
   if (method === "thread/name/updated")
     return {
@@ -256,6 +269,10 @@ export function reduceNotification(
       item?.type === "context_compaction"
     ) {
       const turnId = String(params.turnId ?? `compaction-${item.id}`);
+      const notice = session.compactionNotice;
+      const manual = Boolean(
+        notice?.manual && (!notice.turnId || notice.turnId === turnId),
+      );
       const turns = [...session.thread.turns];
       const index = turns.findIndex((turn) => turn.id === turnId);
       const turn =
@@ -270,14 +287,27 @@ export function reduceNotification(
           : { id: turnId, status: "completed", items: [item] };
       if (index >= 0) turns[index] = turn;
       else turns.push(turn);
+      if (
+        (session.busy && session.turnId && session.turnId !== turnId) ||
+        (manual && !session.compacting && notice?.status !== "running")
+      )
+        return { ...session, thread: { ...session.thread, turns } };
       return {
         ...session,
         thread: { ...session.thread, turns },
-        compacting: method === "item/started",
+        ...(manual ? { busy: true, turnId } : {}),
+        compacting: manual || method === "item/started",
         compactionNotice: {
-          status: method === "item/started" ? "running" : "done",
-          startedAt: session.compactionNotice?.startedAt ?? Date.now(),
-          ...(method === "item/completed" ? { finishedAt: Date.now() } : {}),
+          manual,
+          turnId,
+          status: manual || method === "item/started" ? "running" : "done",
+          startedAt:
+            notice?.turnId === turnId || (manual && !notice?.turnId)
+              ? (notice?.startedAt ?? Date.now())
+              : Date.now(),
+          ...(!manual && method === "item/completed"
+            ? { finishedAt: Date.now() }
+            : {}),
         },
       };
     }
@@ -314,7 +344,19 @@ export function reduceNotification(
       items: started.items?.length ? started.items : turn.items,
       startedAt: started.startedAt ?? Date.now() / 1000,
     };
-    next = { ...next, turnId, busy: true, error: null, compactionNotice: null };
+    const notice = session.compactionNotice;
+    next = {
+      ...next,
+      turnId,
+      busy: true,
+      error: null,
+      compactionNotice:
+        session.compacting &&
+        notice?.manual &&
+        (!notice.turnId || notice.turnId === turnId)
+          ? { ...notice, turnId }
+          : null,
+    };
   }
   if (method === "turn/completed") {
     const completed = params.turn as Turn;
@@ -326,10 +368,22 @@ export function reduceNotification(
     };
     next = {
       ...next,
-      turnId: null,
-      busy: false,
-      compacting: false,
-      stopping: false,
+      ...(!session.turnId || session.turnId === turnId
+        ? { turnId: null, busy: false, compacting: false }
+        : {}),
+      ...(session.compactionNotice?.manual &&
+      session.compactionNotice.turnId === turnId
+        ? {
+            compactionNotice: {
+              ...session.compactionNotice,
+              status:
+                completed.status === "completed" && !completed.error
+                  ? ("done" as const)
+                  : ("failed" as const),
+              finishedAt: Date.now(),
+            },
+          }
+        : {}),
       requests: next.requests.filter((r) => r.params.turnId !== turnId),
       error: completed.error?.message ?? null,
     };

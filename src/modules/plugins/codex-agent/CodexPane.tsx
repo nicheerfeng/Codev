@@ -20,7 +20,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { uiState } from "@/lib/uiState";
-import { CodexClient, onCodexTurnCompleted } from "./client";
+import { CodexClient, onCodexTurnFinished } from "./client";
 import { speakFinalIfEnabled } from "@/modules/plugins/codex-agent/voice/output";
 import { Approval, Title, Tool } from "./controls";
 import { CodexComposer } from "./CodexComposer";
@@ -32,12 +32,7 @@ import "./codex.css";
 import { useCodexComposerDropStore } from "./codexComposerDropStore";
 import { useCodexComposerNativeDrop } from "./codexComposerDrop";
 import { ingestPaths } from "./attachments";
-import { notifyFinishedProjects } from "./codexNotify";
-import {
-  projectActivity,
-  type ProjectActivity,
-  type ActivityThread,
-} from "./projectActivity";
+import { notifyFinishedThread } from "./codexNotify";
 import { itemText } from "./protocol";
 import { watchHistory } from "./historyWatch";
 import { WorkbenchContent } from "../workbench/WorkbenchContent";
@@ -120,36 +115,24 @@ function Workspace({
       console.error("Codex 历史监听", error),
     );
   }, [client, hasSelectedHistory]);
-  const activity = useRef(new Map<string, ProjectActivity>());
   useEffect(() => {
-    const threads: ActivityThread[] = Object.values(state.sessions).map(
-      (session) => ({
-        cwd: session.thread.cwd,
-        name: session.thread.name,
-        status: session.stopping
-          ? "stopping"
-          : session.busy || session.sending || session.queue.length
-            ? "running"
-            : session.error
-              ? "failed"
-              : "idle",
-        waiting: !!session.requests.length,
-        summary: session.thread.turns[session.thread.turns.length - 1]?.items
-          .filter((item) => item.type === "agentMessage")
-          .map(itemText)
-          .join("\n"),
-      }),
-    );
-    const current = projectActivity(threads);
-    if (state.connected)
-      void notifyFinishedProjects({
-        previous: activity.current,
-        current,
-        threads,
+    return onCodexTurnFinished((sessionId, turn) => {
+      const session = client.getSnapshot().sessions[sessionId];
+      if (!session) return;
+      void notifyFinishedThread({
+        thread: {
+          cwd: session.thread.cwd,
+          name: session.thread.name,
+          summary: turn.items
+            .filter((item) => item.type === "agentMessage")
+            .map(itemText)
+            .join("\n"),
+        },
+        outcome: turn.status,
         codexActive: active,
       });
-    activity.current = current;
-  }, [state.sessions, state.connected, active]);
+    });
+  }, [client, active]);
   const [slots, setSlots] = useState(readSlots);
   const [focused, setFocused] = useState(0);
   const [maximizedViewport, setMaximizedViewport] = useState<number | null>(
@@ -232,7 +215,8 @@ function Workspace({
       useCodexComposerDropStore.getState().setHover(hover, id),
   });
   useEffect(() => {
-    return onCodexTurnCompleted((sessionId, turn) => {
+    return onCodexTurnFinished((sessionId, turn) => {
+      if (turn.status !== "completed") return;
       const text = turn.items
         .filter((item) => item.type === "agentMessage")
         .map(itemText)

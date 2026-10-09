@@ -1,5 +1,15 @@
 import type { Input, Item, Session } from "./protocol";
 
+export type UserImageInput = Extract<Input, { type: "image" | "localImage" }>;
+
+/** 提取可在末轮编辑中保留或删除的原生图片输入。 */
+export function userImageInputs(item: Item): UserImageInput[] {
+  return originalInputs(item).filter(
+    (part): part is UserImageInput =>
+      part.type === "image" || part.type === "localImage",
+  );
+}
+
 /** 空闲时仅定位全会话最后一条用户输入，忽略尾部压缩等系统轮次。 */
 export function editableLastUser(session: Session) {
   if (

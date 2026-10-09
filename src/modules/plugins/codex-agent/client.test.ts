@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Message, Thread } from "./protocol";
-import { CodexClient } from "./client";
+import { CodexClient, onCodexTurnFinished } from "./client";
 
 const transport = vi.hoisted(() => ({
   listener: null as
@@ -15,6 +15,7 @@ const transport = vi.hoisted(() => ({
   resource: "初始资源",
   switchError: "",
   catalogPages: false,
+  steerError: "",
 }));
 const thread: Thread = {
   id: "one",
@@ -27,6 +28,47 @@ const thread: Thread = {
 /** 在测试中发出原生形状通知，不启动真实模型。 */
 function event(message: Message, connectionId = transport.connection) {
   transport.listener?.({ payload: { connectionId, message } });
+}
+/** 模拟服务端手动压缩的轮次开始与压缩项开始事件。 */
+function startCompactionTurn(turnId = "compact") {
+  event({
+    method: "turn/started",
+    params: {
+      threadId: "one",
+      turn: { id: turnId, status: "inProgress", items: [] },
+    },
+  });
+  event({
+    method: "item/started",
+    params: {
+      threadId: "one",
+      turnId,
+      item: { id: `${turnId}-item`, type: "contextCompaction" },
+    },
+  });
+}
+
+/** 模拟压缩项完成，轮次终态仍由独立的 turn/completed 事件确认。 */
+function completeCompactionItem(turnId = "compact") {
+  event({
+    method: "item/completed",
+    params: {
+      threadId: "one",
+      turnId,
+      item: { id: `${turnId}-item`, type: "contextCompaction" },
+    },
+  });
+}
+
+/** 发出指定压缩轮次的成功终态，保留客户端已收到的压缩项。 */
+function completeCompactionTurn(turnId = "compact") {
+  event({
+    method: "turn/completed",
+    params: {
+      threadId: "one",
+      turn: { id: turnId, status: "completed", items: [] },
+    },
+  });
 }
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async (_name, callback) => {
@@ -60,6 +102,15 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (command !== "codex_agent_send") return;
     const message = args.message as Message;
     transport.sent.push(message);
+    if (message.method === "turn/steer" && transport.steerError) {
+      queueMicrotask(() =>
+        event({
+          id: message.id,
+          error: { code: -32600, message: transport.steerError },
+        }),
+      );
+      return;
+    }
     if (message.method === transport.fail) throw new Error("send failed");
     if (
       !message.method ||
@@ -111,6 +162,7 @@ beforeEach(async () => {
   transport.hold = "";
   transport.switchError = "";
   transport.catalogPages = false;
+  transport.steerError = "";
   client = new CodexClient();
   await client.connect();
   await client.refreshProject("D:/project");
@@ -120,6 +172,444 @@ afterEach(async () => {
 });
 
 describe("Codex native client", () => {
+  it("starts a new turn when the old turn ends during resume", async () => {
+    client.patch("one", { busy: true, turnId: "old", draft: "continue" });
+    transport.hold = "thread/resume";
+    const sending = client.send("one");
+    await vi.waitFor(() => expect(transport.sent.some((m) => m.method === "thread/resume")).toBe(true));
+    event({ method: "turn/completed", params: { threadId: "one", turn: { id: "old", status: "completed", items: [] } } });
+    const resume = transport.sent.find((m) => m.method === "thread/resume");
+    event({ id: resume?.id, result: { thread } });
+    expect(await sending).toBe(true);
+    expect(transport.sent.some((m) => m.method === "turn/steer")).toBe(false);
+    expect(transport.sent.filter((m) => m.method === "turn/start")).toHaveLength(1);
+  });
+  it("starts rejected steer input exactly once after the native turn has ended", async () => {
+    client.patch("one", { resumed: true, busy: true, turnId: "old", draft: "continue", images: ["data:image/png;base64,AA=="] });
+    transport.steerError = "no active turn to steer";
+    expect(await client.send("one")).toBe(true);
+    expect(transport.sent.filter((m) => m.method === "turn/steer")).toHaveLength(1);
+    expect(transport.sent.filter((m) => m.method === "turn/start")).toHaveLength(1);
+    expect(transport.sent.find((m) => m.method === "turn/start")?.params?.input).toContainEqual({ type: "image", url: "data:image/png;base64,AA==" });
+    expect(client.getSnapshot().sessions.one).toMatchObject({ draft: "", images: [], error: null });
+  });
+  it("recovers a stale failed queue from native idle without steering", async () => {
+    client.patch("one", { resumed: true, busy: true, turnId: "old", queueError: "Error: no active turn to steer", queue: [{ id: "queued", draft: "next", images: [], attachments: [], directories: [], skills: [] }] });
+    await client.retryQueue("one");
+    await vi.waitFor(() => expect(client.getSnapshot().sessions.one.queue).toEqual([]));
+    expect(transport.sent.some((m) => m.method === "turn/steer")).toBe(false);
+    expect(transport.sent.filter((m) => m.method === "turn/start")).toHaveLength(1);
+  });
+  it.each(["followUp", "steer"] as const)(
+    "压缩期间 %s 进入队列并保留新草稿",
+    async (mode) => {
+      client.patch("one", { loaded: true, resumed: true });
+      const compacting = client.compact("one");
+      await vi.waitFor(() =>
+        expect(
+          transport.sent.some((m) => m.method === "thread/compact/start"),
+        ).toBe(true),
+      );
+      startCompactionTurn();
+      client.patch("one", {
+        draft: "压缩后执行",
+        images: ["data:image/png;base64,AA=="],
+      });
+      await client.submit("one", mode);
+      expect(client.getSnapshot().sessions.one.queue).toHaveLength(1);
+      expect(
+        transport.sent.some(
+          (m) => m.method === "turn/start" || m.method === "turn/steer",
+        ),
+      ).toBe(false);
+      client.patch("one", { draft: "尚未发送的新草稿" });
+      completeCompactionItem();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(client.getSnapshot().sessions.one).toMatchObject({
+        busy: true,
+        turnId: "compact",
+        compacting: true,
+        compactionNotice: { status: "running" },
+      });
+      expect(client.getSnapshot().sessions.one.queue).toHaveLength(1);
+      expect(
+        transport.sent.some(
+          (m) => m.method === "turn/start" || m.method === "turn/steer",
+        ),
+      ).toBe(false);
+      if (mode === "steer") {
+        const queuedId = client.getSnapshot().sessions.one.queue[0].id;
+        await client.queueAction("one", queuedId, "steer");
+        expect(
+          client.getSnapshot().sessions.one.queueSendingId,
+        ).toBeUndefined();
+        expect(transport.sent.some((m) => m.method === "turn/steer")).toBe(
+          false,
+        );
+      }
+      completeCompactionTurn();
+      await compacting;
+      await vi.waitFor(() =>
+        expect(client.getSnapshot().sessions.one.queue).toHaveLength(0),
+      );
+      expect(client.getSnapshot().sessions.one.draft).toBe("尚未发送的新草稿");
+      expect(
+        transport.sent.filter((m) => m.method === "turn/start"),
+      ).toHaveLength(1);
+      expect(
+        transport.sent.find((m) => m.method === "turn/start")?.params?.input,
+      ).toContainEqual({ type: "image", url: "data:image/png;base64,AA==" });
+    },
+  );
+  it("keeps an ordinary turn active after automatic compaction and permits steering", async () => {
+    client.patch("one", { loaded: true, resumed: true, draft: "first" });
+    await client.submit("one");
+    startCompactionTurn("turn");
+    client.patch("one", { draft: "follow up" });
+    await client.submit("one");
+    completeCompactionItem("turn");
+    expect(client.getSnapshot().sessions.one).toMatchObject({
+      busy: true,
+      turnId: "turn",
+      compacting: false,
+      compactionNotice: { manual: false, status: "done" },
+    });
+    expect(client.getSnapshot().sessions.one.queue).toHaveLength(1);
+    client.patch("one", { draft: "insert now" });
+    await client.submit("one", "steer");
+    expect(
+      transport.sent.filter((m) => m.method === "turn/steer"),
+    ).toHaveLength(1);
+    expect(
+      transport.sent.find((m) => m.method === "turn/steer")?.params,
+    ).toMatchObject({ expectedTurnId: "turn" });
+    expect(
+      transport.sent.filter((m) => m.method === "turn/start"),
+    ).toHaveLength(1);
+    completeCompactionTurn("turn");
+    await vi.waitFor(() =>
+      expect(client.getSnapshot().sessions.one.queue).toEqual([]),
+    );
+    expect(
+      transport.sent.filter((m) => m.method === "turn/start"),
+    ).toHaveLength(2);
+  });
+  it("does not overwrite the next turn when compaction finishes before its response", async () => {
+    client.patch("one", { loaded: true, resumed: true });
+    transport.hold = "thread/compact/start";
+    const compacting = client.compact("one");
+    startCompactionTurn();
+    client.patch("one", { draft: "next" });
+    await client.submit("one");
+    completeCompactionItem();
+    completeCompactionTurn();
+    await vi.waitFor(() =>
+      expect(client.getSnapshot().sessions.one.queue).toEqual([]),
+    );
+    const request = transport.sent.find(
+      (m) => m.method === "thread/compact/start",
+    );
+    event({ id: request?.id, result: {} });
+    await compacting;
+    expect(client.getSnapshot().sessions.one).toMatchObject({
+      busy: true,
+      turnId: "turn",
+    });
+    expect(transport.sent.some((m) => m.method === "turn/steer")).toBe(false);
+    expect(
+      transport.sent.filter((m) => m.method === "turn/start"),
+    ).toHaveLength(1);
+  });
+  it("preserves queued input and attachments when the compaction turn fails", async () => {
+    client.patch("one", { loaded: true, resumed: true });
+    const compacting = client
+      .compact("one")
+      .catch((error: Error) => error.message);
+    startCompactionTurn();
+    client.patch("one", {
+      draft: "next",
+      images: ["data:image/png;base64,AA=="],
+    });
+    await client.submit("one");
+    event({
+      method: "turn/completed",
+      params: {
+        threadId: "one",
+        turn: {
+          id: "compact",
+          status: "failed",
+          error: { message: "compaction failed" },
+          items: [],
+        },
+      },
+    });
+    expect(await compacting).toBe("compaction failed");
+    expect(client.getSnapshot().sessions.one).toMatchObject({
+      busy: false,
+      compacting: false,
+      compactionNotice: { status: "failed" },
+      queue: [{ draft: "next", images: ["data:image/png;base64,AA=="] }],
+    });
+    expect(client.getSnapshot().sessions.one.queueError).toBeTruthy();
+    expect(
+      transport.sent.some(
+        (m) => m.method === "turn/start" || m.method === "turn/steer",
+      ),
+    ).toBe(false);
+  });
+  it.each(["completion", "request"] as const)(
+    "keeps the native compaction turn busy after a %s timeout",
+    async (timeout) => {
+      client.patch("one", { loaded: true, resumed: true });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      try {
+        if (timeout === "request") transport.hold = "thread/compact/start";
+        const compacting = client
+          .compact("one")
+          .catch((error: Error) => error.message);
+        startCompactionTurn();
+        client.patch("one", { draft: "wait for compaction" });
+        await client.submit("one");
+        await vi.advanceTimersByTimeAsync(60_001);
+        if (timeout === "completion") {
+          expect(
+            client.getSnapshot().sessions.one.compactionNotice?.status,
+          ).toBe("running");
+          await vi.advanceTimersByTimeAsync(9 * 60_000);
+        }
+        expect(await compacting).toContain("超时");
+        expect(client.getSnapshot().sessions.one).toMatchObject({
+          busy: true,
+          turnId: "compact",
+          compacting: true,
+        });
+        client.retryQueue("one");
+        client.patch("one", { draft: "another" });
+        await client.submit("one", "steer");
+        expect(client.getSnapshot().sessions.one.queue).toHaveLength(2);
+        expect(
+          transport.sent.some(
+            (m) => m.method === "turn/start" || m.method === "turn/steer",
+          ),
+        ).toBe(false);
+        completeCompactionTurn();
+        await Promise.resolve();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+  it("settles manual compaction from authoritative idle when turn completion is absent", async () => {
+    client.patch("one", { loaded: true, resumed: true });
+    const compacting = client.compact("one");
+    startCompactionTurn();
+    client.patch("one", { draft: "next" });
+    await client.submit("one");
+    completeCompactionItem();
+    event({
+      method: "thread/status/changed",
+      params: { threadId: "one", status: { type: "idle" } },
+    });
+    await compacting;
+    await vi.waitFor(() =>
+      expect(client.getSnapshot().sessions.one.queue).toEqual([]),
+    );
+    expect(
+      transport.sent.filter((m) => m.method === "turn/start"),
+    ).toHaveLength(1);
+    expect(transport.sent.some((m) => m.method === "turn/steer")).toBe(false);
+  });
+  it("waits for each repeated manual compaction and resets the previous notice", async () => {
+    client.patch("one", { loaded: true, resumed: true });
+    for (const turnId of ["first-compact", "second-compact"]) {
+      const compacting = client.compact("one");
+      startCompactionTurn(turnId);
+      completeCompactionItem(turnId);
+      expect(client.getSnapshot().sessions.one.compactionNotice).toMatchObject({
+        status: "running",
+        turnId,
+      });
+      completeCompactionTurn(turnId);
+      await compacting;
+      expect(client.getSnapshot().sessions.one).toMatchObject({
+        busy: false,
+        turnId: null,
+        compactionNotice: { status: "done" },
+      });
+    }
+    expect(
+      transport.sent.filter((m) => m.method === "thread/compact/start"),
+    ).toHaveLength(2);
+  });
+  it("ends compaction waiting on disconnect and retains the queued images", async () => {
+    client.patch("one", { loaded: true, resumed: true });
+    const compacting = client
+      .compact("one")
+      .catch((error: Error) => error.message);
+    startCompactionTurn();
+    client.patch("one", {
+      draft: "next",
+      images: ["data:image/png;base64,AA=="],
+    });
+    await client.submit("one");
+    event({ method: "bridge/closed", params: {} });
+    expect(await compacting).toContain("连接已结束");
+    expect(client.getSnapshot().sessions.one).toMatchObject({
+      busy: false,
+      turnId: null,
+      compacting: false,
+      compactionNotice: { status: "failed" },
+      queue: [{ draft: "next", images: ["data:image/png;base64,AA=="] }],
+    });
+    expect(
+      transport.sent.some(
+        (m) => m.method === "turn/start" || m.method === "turn/steer",
+      ),
+    ).toBe(false);
+  });
+  it("keeps the failed compaction notice after the final idle event", async () => {
+    client.patch("one", { loaded: true, resumed: true });
+    const compacting = client
+      .compact("one")
+      .catch((error: Error) => error.message);
+    startCompactionTurn();
+    event({
+      method: "turn/completed",
+      params: {
+        threadId: "one",
+        turn: {
+          id: "compact",
+          status: "failed",
+          error: { message: "failed" },
+          items: [],
+        },
+      },
+    });
+    event({
+      method: "thread/status/changed",
+      params: { threadId: "one", status: { type: "idle" } },
+    });
+    expect(await compacting).toBe("failed");
+    expect(client.getSnapshot().sessions.one.compactionNotice?.status).toBe(
+      "failed",
+    );
+  });
+  it("settles manual compaction even when only the item carries its turn ID", async () => {
+    client.patch("one", { loaded: true, resumed: true });
+    const compacting = client.compact("one");
+    event({
+      method: "item/started",
+      params: {
+        threadId: "one",
+        turnId: "compact",
+        item: { id: "compact-item", type: "contextCompaction" },
+      },
+    });
+    client.patch("one", { draft: "next" });
+    await client.submit("one");
+    completeCompactionItem();
+    expect(client.getSnapshot().sessions.one).toMatchObject({
+      busy: true,
+      turnId: "compact",
+      compacting: true,
+    });
+    completeCompactionTurn();
+    await compacting;
+    await vi.waitFor(() =>
+      expect(client.getSnapshot().sessions.one.queue).toEqual([]),
+    );
+    expect(
+      transport.sent.filter((m) => m.method === "turn/start"),
+    ).toHaveLength(1);
+    expect(transport.sent.some((m) => m.method === "turn/steer")).toBe(false);
+  });
+  it("ignores late compaction item completion after the turn has already ended", async () => {
+    client.patch("one", { loaded: true, resumed: true });
+    const compacting = client.compact("one");
+    startCompactionTurn();
+    completeCompactionTurn();
+    await compacting;
+    completeCompactionItem();
+    expect(client.getSnapshot().sessions.one).toMatchObject({
+      busy: false,
+      turnId: null,
+      compacting: false,
+      compactionNotice: { status: "done" },
+    });
+    client.patch("one", { draft: "next" });
+    await client.submit("one");
+    completeCompactionItem();
+    expect(client.getSnapshot().sessions.one).toMatchObject({
+      busy: true,
+      turnId: "turn",
+      compacting: false,
+    });
+    expect(
+      transport.sent.filter((m) => m.method === "turn/start"),
+    ).toHaveLength(1);
+  });
+  it.each(["remove-all", "keep-local", "image-only"])(
+    "编辑图片 %s 按保留列表重发",
+    async (mode) => {
+      const images = [
+        { type: "image" as const, url: "data:image/png;base64,AA==" },
+        { type: "localImage" as const, path: "C:/test/keep.png" },
+      ];
+      const turns = [
+        {
+          id: "last",
+          status: "completed",
+          items: [
+            {
+              id: "user",
+              type: "userMessage",
+              content: [{ type: "text", text: "原始输入" }, ...images],
+            },
+          ],
+        },
+      ];
+      client.patch("one", { loaded: true, thread: { ...thread, turns } });
+      await client.editLast(
+        "one",
+        mode === "image-only" ? "" : "修改文字",
+        "user",
+        mode === "remove-all" ? [] : [images[1]],
+      );
+      const input = transport.sent.find((m) => m.method === "turn/start")
+        ?.params?.input as Array<{ type: string }>;
+      expect(
+        input.filter(
+          (part) => part.type === "image" || part.type === "localImage",
+        ),
+      ).toEqual(mode === "remove-all" ? [] : [images[1]]);
+      expect(client.getSnapshot().sessions.one.thread.turns).toEqual(turns);
+    },
+  );
+  it("编辑内容全部清空时不分叉", async () => {
+    client.patch("one", {
+      loaded: true,
+      thread: {
+        ...thread,
+        turns: [
+          {
+            id: "last",
+            status: "completed",
+            items: [
+              {
+                id: "user",
+                type: "userMessage",
+                content: [{ type: "text", text: "old" }],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    await expect(client.editLast("one", "", "user", [])).rejects.toThrow(
+      "不能为空",
+    );
+    expect(transport.sent.some((m) => m.method === "thread/fork")).toBe(false);
+  });
   it("reads history pages only for the explicitly selected project", async () => {
     transport.catalogPages = true;
     await client.refresh();
@@ -188,6 +678,60 @@ describe("Codex native client", () => {
     await vi.waitFor(() =>
       expect(client.getSnapshot().sessions.one.queue).toHaveLength(0),
     );
+  });
+  it("keeps stopping through early terminal events without notifying, resending or changing the model", async () => {
+    client.patch("one", { draft: "first" });
+    await client.submit("one");
+    client.patch("one", { draft: "queued" });
+    await client.submit("one");
+    await client.selectModel("one", "next-model", "high");
+    const finished = vi.fn();
+    const unsubscribe = onCodexTurnFinished(finished);
+    try {
+      vi.spyOn(client, "interrupt").mockImplementationOnce(async () => {
+        expect(client.getSnapshot().sessions.one.queue).toEqual([]);
+        expect(client.getSnapshot().sessions.one.draft).toBe("queued");
+        event({
+          method: "thread/status/changed",
+          params: { threadId: "one", status: { type: "idle" } },
+        });
+        expect(client.getSnapshot().sessions.one.stopping).toBe(true);
+        // Natural completion can race with the interrupt request.
+        event({
+          method: "turn/completed",
+          params: {
+            threadId: "one",
+            turn: { id: "turn", status: "completed", items: [] },
+          },
+        });
+        expect(client.getSnapshot().sessions.one.stopping).toBe(true);
+        expect(finished).not.toHaveBeenCalled();
+        event({
+          method: "turn/completed",
+          params: {
+            threadId: "two",
+            turn: { id: "other", status: "completed", items: [] },
+          },
+        });
+        expect(finished).toHaveBeenCalledWith(
+          "two",
+          expect.objectContaining({ status: "completed" }),
+        );
+      });
+      await client.stopAndRestore("one");
+      expect(client.getSnapshot().sessions.one).toMatchObject({
+        stopping: false,
+        queue: [],
+        model: "next-model",
+        effort: "high",
+        draft: "queued",
+      });
+      expect(
+        transport.sent.filter((message) => message.method === "turn/start"),
+      ).toHaveLength(1);
+    } finally {
+      unsubscribe();
+    }
   });
   it("restores stopped follow-ups and attachments alongside newer draft", async () => {
     client.patch("one", { draft: "first" });
@@ -394,7 +938,9 @@ describe("Codex native client", () => {
       },
     ];
     client.patch("one", { loaded: true, thread: { ...thread, turns } });
-    const id = await client.editLast("one", "edited", "user");
+    const id = await client.editLast("one", "edited", "user", [
+      { type: "image", url: "data:image/png;base64,AA==" },
+    ]);
     expect(id).toBe("fork");
     expect(
       transport.sent.find((m) => m.method === "thread/fork")?.params,
@@ -467,13 +1013,13 @@ describe("Codex native client", () => {
         ],
       },
     });
-    await expect(client.editLast("one", "edited", "earlier")).rejects.toThrow(
-      "最后一条",
-    );
+    await expect(
+      client.editLast("one", "edited", "earlier", []),
+    ).rejects.toThrow("最后一条");
     expect(
       transport.sent.some((message) => message.method === "thread/fork"),
     ).toBe(false);
-    await client.editLast("one", "edited", "latest");
+    await client.editLast("one", "edited", "latest", []);
     expect(
       transport.sent.find((message) => message.method === "turn/start")?.params
         ?.input,
