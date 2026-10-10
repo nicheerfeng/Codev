@@ -598,7 +598,6 @@ pub fn run() {
             voice::voice_config_copy_to_codex,
             voice::voice_asr_start,
             voice::voice_tts_start,
-            git::git_discover,
             git::git_snapshot,
             git::git_diff,
             git::git_stage,

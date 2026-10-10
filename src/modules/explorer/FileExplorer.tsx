@@ -29,6 +29,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { RootGitButton } from "@/modules/git/RootGitButton";
 import { useT } from "@/lib/i18n";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { copyToClipboard } from "./lib/contextActions";
@@ -80,6 +81,7 @@ type Props = Omit<
   onRenameRoot: (from: string, to: string) => void | Promise<void>;
   onReorderRoot: (source: string, gap: number) => void | Promise<void>;
   onSetActiveRoot: (path: string | null) => void;
+  onOpenGit?: (root: string) => void;
 };
 
 type ClipboardKind = "files" | "directories" | "mixed";
@@ -173,6 +175,7 @@ function RootSection({
   onRevealPath,
   onActivate,
   onSelectRoot,
+  onOpenGit,
   onRemove,
   onCopy,
   onRename,
@@ -195,6 +198,7 @@ function RootSection({
   onRevealPath: (root: string, path: string) => void;
   onActivate: () => void;
   onSelectRoot: () => void;
+  onOpenGit?: (root: string) => void;
   onRemove: () => void;
   onCopy: () => void;
   onRename: (name: string) => void;
@@ -310,6 +314,7 @@ function RootSection({
                 {basename(root) || root}
               </span>
             )}
+            {onOpenGit && <RootGitButton root={root} onOpen={onOpenGit} />}
             <button
               type="button"
               data-root-remove=""
@@ -406,6 +411,7 @@ export const FileExplorer = memo(
       onRenameRoot,
       onReorderRoot,
       onSetActiveRoot,
+      onOpenGit,
       ...treeProps
     },
     ref,
@@ -1097,6 +1103,7 @@ export const FileExplorer = memo(
                       onRevealPath={revealRootPath}
                       onActivate={() => onSetActiveRoot(root)}
                       onSelectRoot={() => selectRoot(root)}
+                      onOpenGit={onOpenGit}
                       onRemove={() => removeRoot(root)}
                       onCopy={() => void copyToClipboard(root)}
                       onRename={(name) => void renameRoot(root, name)}

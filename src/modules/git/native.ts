@@ -16,6 +16,7 @@ export type GitChange = {
 export type GitSnapshot = {
   repo: GitRepo;
   changes: GitChange[];
+  empty: boolean;
 };
 
 export type GitCommit = {
@@ -33,12 +34,8 @@ export type GitTracking = {
   behind: number;
 };
 
-export function discoverGitRepos(roots: string[]): Promise<GitRepo[]> {
-  return invoke<GitRepo[]>("git_discover", { roots });
-}
-
-export function gitSnapshot(root: string): Promise<GitSnapshot> {
-  return invoke<GitSnapshot>("git_snapshot", { root });
+export function gitSnapshot(root: string): Promise<GitSnapshot | null> {
+  return invoke<GitSnapshot | null>("git_snapshot", { root });
 }
 
 export function gitDiff(

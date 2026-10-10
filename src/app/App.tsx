@@ -129,6 +129,7 @@ export default function App() {
   useTaskbarUnreadBadge(taskbarUnreadEnabled);
   const [installStamp, setInstallStamp] = useState<string | null>(null);
   const [sidebarMode, setSidebarMode] = useState<"files" | "git">("files");
+  const gitEnabled = usePreferencesStore((state) => state.gitEnabled);
   const [showWelcome, setShowWelcome] = useState(() => shouldShowWelcome(null));
   const [needsInitialLayout] = useState(() => needsFirstLayout());
   const [initialFirstSizes] = useState(() =>
@@ -1317,26 +1318,6 @@ export default function App() {
           {!zenMode && (
             <Header
               onToggleSidebar={toggleSidebar}
-              sidebarMode={sidebarMode}
-              gitEnabled={usePreferencesStore((state) => state.gitEnabled)}
-              onShowFiles={() => {
-                const collapsed = sidebarRef.current?.getSize().inPixels === 0;
-                if (sidebarMode === "files" && !collapsed) {
-                  toggleSidebar();
-                  return;
-                }
-                setSidebarMode("files");
-                if (collapsed) toggleSidebar();
-              }}
-              onShowGit={() => {
-                const collapsed = sidebarRef.current?.getSize().inPixels === 0;
-                if (sidebarMode === "git" && !collapsed) {
-                  toggleSidebar();
-                  return;
-                }
-                setSidebarMode("git");
-                if (collapsed) toggleSidebar();
-              }}
               onOpenSettings={() => void openSettingsWindow()}
               terminalPanelCollapsed={terminalPanelCollapsed}
               onToggleTerminalPanel={() => {
@@ -1389,9 +1370,11 @@ export default function App() {
               >
                 <div className="flex h-full min-h-0 flex-col border-r border-border/60 bg-card">
                   <div className="min-h-0 flex-1 codev-panel-in">
-                    {sidebarMode === "git" ? (
+                    {sidebarMode === "git" && gitEnabled ? (
                       <GitPanel
-                        roots={workspaceRoots}
+                        key={activeRoot}
+                        root={activeRoot}
+                        onBack={() => setSidebarMode("files")}
                         onOpenDiff={(repo, change, diff) =>
                           openGitDiffTab({
                             repoRoot: repo.root,
@@ -1413,6 +1396,14 @@ export default function App() {
                         onRenameRoot={renameWorkspaceRoot}
                         onReorderRoot={reorderRoot}
                         onSetActiveRoot={(p) => void setActiveRoot(p)}
+                        onOpenGit={
+                          gitEnabled
+                            ? (root) => {
+                                void setActiveRoot(root);
+                                setSidebarMode("git");
+                              }
+                            : undefined
+                        }
                         activeFilePath={explorerActiveFilePath}
                         onOpenFile={handleOpenFile}
                         onOpenFileToSide={handleOpenFileToSide}

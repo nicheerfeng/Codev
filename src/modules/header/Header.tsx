@@ -16,9 +16,7 @@ import { labelFor } from "@/modules/tabs/lib/tabLabel";
 import {
   Files01Icon,
   FolderTreeIcon,
-  GitBranchIcon,
   Settings01Icon,
-  SidebarLeftIcon,
   TerminalIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -31,10 +29,6 @@ import {
 
 type Props = {
   onToggleSidebar: () => void;
-  sidebarMode: "files" | "git";
-  gitEnabled: boolean;
-  onShowFiles: () => void;
-  onShowGit: () => void;
   onOpenSettings: () => void;
   terminalPanelCollapsed: boolean;
   onToggleTerminalPanel: () => void;
@@ -167,10 +161,6 @@ function OpenFilePicker({
 
 export function Header({
   onToggleSidebar,
-  sidebarMode,
-  gitEnabled,
-  onShowFiles,
-  onShowGit,
   onOpenSettings,
   terminalPanelCollapsed,
   onToggleTerminalPanel,
@@ -219,50 +209,13 @@ export function Header({
           <Button
             onClick={onToggleSidebar}
             title={t("Toggle sidebar")}
+            aria-label={t("Toggle sidebar")}
             variant="ghost"
             size="icon-sm"
             className="shrink-0 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
           >
-            <HugeiconsIcon
-              icon={SidebarLeftIcon}
-              size={18}
-              strokeWidth={1.75}
-            />
+            <HugeiconsIcon icon={FolderTreeIcon} size={16} strokeWidth={1.75} />
           </Button>
-          {gitEnabled && (
-            <Button
-              onClick={onShowFiles}
-              title="文件树"
-              aria-label="文件树"
-              aria-pressed={sidebarMode === "files"}
-              variant="ghost"
-              size="icon-sm"
-              className={`shrink-0 rounded-md hover:bg-accent hover:text-foreground ${sidebarMode === "files" ? "text-foreground" : "text-muted-foreground"}`}
-            >
-              <HugeiconsIcon
-                icon={FolderTreeIcon}
-                size={16}
-                strokeWidth={1.75}
-              />
-            </Button>
-          )}
-          {gitEnabled && (
-            <Button
-              onClick={onShowGit}
-              title="Git"
-              aria-label="Git"
-              aria-pressed={sidebarMode === "git"}
-              variant="ghost"
-              size="icon-sm"
-              className={`shrink-0 rounded-md hover:bg-accent hover:text-foreground ${sidebarMode === "git" ? "text-foreground" : "text-muted-foreground"}`}
-            >
-              <HugeiconsIcon
-                icon={GitBranchIcon}
-                size={16}
-                strokeWidth={1.75}
-              />
-            </Button>
-          )}
         </div>
 
         <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
