@@ -85,6 +85,7 @@ export type Preferences = {
   markdownDefaultView: MarkdownDefaultView;
   showHidden: boolean;
   gitEnabled: boolean;
+  notepadEnabled: boolean;
   /** Multi-root workspace: imported folder roots (forward-slash paths). */
   workspaceRoots: string[];
   activeWorkspaceRoot: string | null;
@@ -120,6 +121,7 @@ const KEY_EDITOR_WORD_WRAP_COLUMN = "editorWordWrapColumn";
 const KEY_MARKDOWN_DEFAULT_VIEW = "markdownDefaultView";
 const KEY_SHOW_HIDDEN = "showHidden";
 const KEY_GIT_ENABLED = "gitEnabled";
+const KEY_NOTEPAD_ENABLED = "notepadEnabled";
 const LEGACY_KEY_SHOW_HIDDEN_DIRS = "showHiddenDirectories";
 const KEY_WORKSPACE_ROOTS = "workspaceRoots";
 const KEY_ACTIVE_WORKSPACE_ROOT = "activeWorkspaceRoot";
@@ -183,6 +185,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   markdownDefaultView: "rendered",
   showHidden: true,
   gitEnabled: false,
+  notepadEnabled: true,
   workspaceRoots: [],
   activeWorkspaceRoot: null,
   terminalCursorBlink: false,
@@ -312,6 +315,8 @@ export async function loadPreferences(): Promise<Preferences> {
       get<boolean>(LEGACY_KEY_SHOW_HIDDEN_DIRS) ??
       DEFAULT_PREFERENCES.showHidden,
     gitEnabled: get<boolean>(KEY_GIT_ENABLED) ?? DEFAULT_PREFERENCES.gitEnabled,
+    notepadEnabled:
+      get<boolean>(KEY_NOTEPAD_ENABLED) ?? DEFAULT_PREFERENCES.notepadEnabled,
     workspaceRoots,
     activeWorkspaceRoot,
     terminalCursorBlink:
@@ -510,6 +515,10 @@ export async function setGitEnabled(value: boolean): Promise<void> {
   await writePref(KEY_GIT_ENABLED, value);
 }
 
+export async function setNotepadEnabled(value: boolean): Promise<void> {
+  await writePref(KEY_NOTEPAD_ENABLED, value);
+}
+
 export async function setTerminalCursorBlink(value: boolean): Promise<void> {
   await writePref(KEY_TERMINAL_CURSOR_BLINK, value);
 }
@@ -638,6 +647,7 @@ export async function onPreferencesChange(
     [KEY_MARKDOWN_DEFAULT_VIEW]: "markdownDefaultView",
     [KEY_SHOW_HIDDEN]: "showHidden",
     [KEY_GIT_ENABLED]: "gitEnabled",
+    [KEY_NOTEPAD_ENABLED]: "notepadEnabled",
     [KEY_WORKSPACE_ROOTS]: "workspaceRoots",
     [KEY_ACTIVE_WORKSPACE_ROOT]: "activeWorkspaceRoot",
     [KEY_TERMINAL_CURSOR_BLINK]: "terminalCursorBlink",

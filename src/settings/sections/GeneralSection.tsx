@@ -14,6 +14,7 @@ import { usePreferencesStore } from "@/modules/settings/preferences";
 import type { ThemePref } from "@/modules/settings/store";
 import {
   setGitEnabled,
+  setNotepadEnabled,
   setLocale,
   setShowHidden,
   setZoomLevel,
@@ -48,6 +49,7 @@ export function GeneralSection() {
   const locale = usePreferencesStore((s) => s.locale);
   const showHidden = usePreferencesStore((s) => s.showHidden);
   const gitEnabled = usePreferencesStore((s) => s.gitEnabled);
+  const notepadEnabled = usePreferencesStore((s) => s.notepadEnabled);
   const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
 
   return (
@@ -122,6 +124,12 @@ export function GeneralSection() {
         <Switch
           checked={gitEnabled}
           onCheckedChange={(value) => void setGitEnabled(value)}
+        />
+      </SettingRow>
+      <SettingRow title="记事本" description="在右侧插件栏随时记录待办。">
+        <Switch
+          checked={notepadEnabled}
+          onCheckedChange={(value) => void setNotepadEnabled(value)}
         />
       </SettingRow>
     </section>

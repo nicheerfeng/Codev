@@ -28,6 +28,7 @@ import {
 } from "@/modules/editor";
 import { FileExplorer, type FileExplorerHandle } from "@/modules/explorer";
 import { GitPanel } from "@/modules/git/GitPanel";
+import { NotepadPopover } from "@/modules/notepad/NotepadPopover";
 import {
   Header,
   type SearchInlineHandle,
@@ -130,6 +131,7 @@ export default function App() {
   const [installStamp, setInstallStamp] = useState<string | null>(null);
   const [sidebarMode, setSidebarMode] = useState<"files" | "git">("files");
   const gitEnabled = usePreferencesStore((state) => state.gitEnabled);
+  const notepadEnabled = usePreferencesStore((state) => state.notepadEnabled);
   const [showWelcome, setShowWelcome] = useState(() => shouldShowWelcome(null));
   const [needsInitialLayout] = useState(() => needsFirstLayout());
   const [initialFirstSizes] = useState(() =>
@@ -1613,6 +1615,7 @@ export default function App() {
             onCreated={(path) => handleOpenFile(path)}
           />
 
+          {notepadEnabled && <NotepadPopover />}
           <ImageLightbox />
           <CloseDialogs
             tabs={tabs}
