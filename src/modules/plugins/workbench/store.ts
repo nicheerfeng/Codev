@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { usePluginStore } from "../store";
 
 function openWorkbench() {
+  if (typeof window === "undefined") return;
   window.dispatchEvent(new Event("codev:open-workbench"));
 }
 
@@ -42,16 +43,18 @@ export const useWorkbench = create<State>((set, get) => ({
     }
     const empty = slots.indexOf(null);
     if (empty >= 0) slots[empty] = source;
-    else if (slots.length < 6) slots.push(source);
     else {
-      toast.info("工作台最多支持 6 个视口");
+      toast.info("请先增加一个空视口，再放入内容");
       return false;
     }
     set({ slots });
     if (source.kind !== "browser") openWorkbench();
     return true;
   },
-  remove: (index) => set({ slots: get().slots.filter((_, i) => i !== index) }),
+  remove: (index) =>
+    set({
+      slots: get().slots.map((source, i) => (i === index ? null : source)),
+    }),
   swap: (from, to) => {
     const slots = [...get().slots];
     if (

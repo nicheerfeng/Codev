@@ -793,6 +793,8 @@ export default function App() {
 
   const cdInNewTab = useCallback(
     (path: string) => {
+      selectDockTab("terminal");
+      expandTerminalPanel();
       const tabId = newTab(path);
       setTimeout(() => {
         const tab = tabsRef.current.find((x) => x.id === tabId);
@@ -803,7 +805,7 @@ export default function App() {
         t.focus();
       }, 80);
     },
-    [newTab],
+    [expandTerminalPanel, newTab, selectDockTab],
   );
 
   const handleOpenFile = useCallback(

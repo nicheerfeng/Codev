@@ -15,6 +15,8 @@ import {
   Cancel01Icon,
   Maximize01Icon,
   Minimize01Icon,
+  MinusSignIcon,
+  PlusSignIcon,
 } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -299,21 +301,13 @@ function Workspace({
     }
     return false;
   };
-  /** 关闭展示位置保留线程运行，统计跟随实际视口更新。 */
+  /** 清空单个视口内容，格子数量不变。 */
   const close = (index: number) => {
     setMaximizedViewport(null);
     const closing = slots[index];
     if (closing) client.discardDraft(closing);
     setSlots((currentSlots) =>
-      currentSlots.length === 1
-        ? [null]
-        : currentSlots.filter((_, i) => i !== index),
-    );
-    setFocused((current) =>
-      Math.max(
-        0,
-        index < current ? current - 1 : Math.min(current, slots.length - 2),
-      ),
+      currentSlots.map((id, i) => (i === index ? null : id)),
     );
   };
   return (
@@ -361,23 +355,47 @@ function Workspace({
               <HugeiconsIcon icon={GridViewIcon} size={14} />
             </Button>
             {multi && (
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-label="增加视口"
-                title="增加 Codex 视口"
-                className="h-6 px-2.5 text-xs font-normal text-foreground"
-                onClick={() => {
-                  if (slots.length >= 6) {
-                    toast.info("最多支持 6 个视口");
-                    return;
-                  }
-                  setSlots([...slots, null]);
-                  setFocused(slots.length);
-                }}
-              >
-                + {slots.length}/6
-              </Button>
+              <div className="flex shrink-0 items-center">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="size-5"
+                  aria-label="减少视口"
+                  title="减少最后一个视口"
+                  disabled={slots.length <= 2}
+                  onClick={() => {
+                    if (slots.length <= 2) return;
+                    setMaximizedViewport(null);
+                    setSlots(slots.slice(0, -1));
+                    setFocused((current) =>
+                      Math.min(current, slots.length - 2),
+                    );
+                  }}
+                >
+                  <HugeiconsIcon icon={MinusSignIcon} size={12} />
+                </Button>
+                <span className="w-6 text-center text-[10px] leading-none text-muted-foreground">
+                  {slots.length}/6
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="size-5"
+                  aria-label="增加视口"
+                  title="增加 Codex 视口"
+                  disabled={slots.length >= 6}
+                  onClick={() => {
+                    if (slots.length >= 6) {
+                      toast.info("最多支持 6 个视口");
+                      return;
+                    }
+                    setSlots([...slots, null]);
+                    setFocused(slots.length);
+                  }}
+                >
+                  <HugeiconsIcon icon={PlusSignIcon} size={12} />
+                </Button>
+              </div>
             )}
             <Button
               variant="ghost"

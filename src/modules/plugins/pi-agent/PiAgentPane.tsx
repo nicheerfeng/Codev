@@ -9,6 +9,8 @@ import {
   GridViewIcon,
   Maximize01Icon,
   Minimize01Icon,
+  MinusSignIcon,
+  PlusSignIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -204,17 +206,19 @@ export function PiAgentPane({
     }
     setViewportKeys((slots) => [...slots, null]);
   };
-  /** 仅关闭展示卡片；移除当前卡片后聚焦仍保留的会话。 */
+  /** 清空单个视口内容，格子数量不变。 */
   const closeViewport = (index: number) => {
     setMaximizedViewport(null);
-    const next = viewportKeys.filter((_, position) => position !== index);
-    const focus =
-      index < activeViewport
-        ? activeViewport - 1
-        : Math.min(activeViewport, next.length - 1);
-    setSelected(next[focus] ?? null);
-    setActiveViewport(Math.max(0, focus));
-    setViewportKeys(next.length > 1 ? next : []);
+    setViewportKeys((slots) =>
+      slots.map((key, position) => (position === index ? null : key)),
+    );
+  };
+  /** 减少最后一个视口，其中的会话只退出展示。 */
+  const removeViewport = () => {
+    if (viewportKeys.length <= 2) return;
+    setMaximizedViewport(null);
+    setViewportKeys((slots) => slots.slice(0, -1));
+    setActiveViewport((index) => Math.min(index, viewportKeys.length - 2));
   };
   /** 根据指针命中读取视口序号，供侧栏 pointer 拖拽使用。 */
   const viewportAtPoint = (x: number, y: number): number | null => {
@@ -578,11 +582,7 @@ export function PiAgentPane({
       if (!created) throw new Error("请先选择一个空视口再新建 Pi 线程");
       return created;
     }
-    return runtime.open(
-      threadKey,
-      targetCwd,
-      thread?.path || undefined,
-    );
+    return runtime.open(threadKey, targetCwd, thread?.path || undefined);
   };
   /** 新线程建立后绑定该项目，其他线程的进程继续运行。 */
   const create = async (path: string) => {
@@ -1111,16 +1111,33 @@ export function PiAgentPane({
             <HugeiconsIcon icon={GridViewIcon} size={14} />
           </Button>
           {viewportKeys.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-label="增加 Pi 视口"
-              title="增加 Pi 视口"
-              className="h-6 px-2.5 text-xs font-normal text-foreground"
-              onClick={addViewport}
-            >
-              + {viewportKeys.length}/6
-            </Button>
+            <div className="flex shrink-0 items-center">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="size-5"
+                aria-label="减少 Pi 视口"
+                title="减少最后一个视口"
+                disabled={viewportKeys.length <= 2}
+                onClick={removeViewport}
+              >
+                <HugeiconsIcon icon={MinusSignIcon} size={12} />
+              </Button>
+              <span className="w-6 text-center text-[10px] leading-none text-muted-foreground">
+                {viewportKeys.length}/6
+              </span>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="size-5"
+                aria-label="增加 Pi 视口"
+                title="增加 Pi 视口"
+                disabled={viewportKeys.length >= MAX_PI_VIEWPORTS}
+                onClick={addViewport}
+              >
+                <HugeiconsIcon icon={PlusSignIcon} size={12} />
+              </Button>
+            </div>
           )}
           <Button
             variant="ghost"

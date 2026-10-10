@@ -17,6 +17,7 @@ import { labelFor, TabIcon } from "@/modules/tabs";
 import type { SearchAddon } from "@xterm/addon-search";
 import {
   Cancel01Icon,
+  MinusSignIcon,
   PlusSignIcon,
   GridViewIcon,
 } from "@hugeicons/core-free-icons";
@@ -174,17 +175,11 @@ export function TerminalPanel({
     );
   };
 
-  /** 关闭单个视口但保留其中的终端会话。 */
+  /** 清空单个视口内容，格子数量不变。 */
   const closeViewport = (index: number) => {
-    const next = viewSlots.filter((_, position) => position !== index);
-    if (next.length > 1) setViewSlots(next);
-    else {
-      setViewSlots([]);
-      const fallback =
-        next[0] ??
-        (tabs.some((tab) => tab.id === activeId) ? activeId : tabs[0]?.id);
-      if (fallback !== undefined && fallback !== null) onSelect(fallback);
-    }
+    setViewSlots((slots) =>
+      slots.map((id, position) => (position === index ? null : id)),
+    );
     setDropViewport(null);
   };
 
@@ -384,24 +379,43 @@ export function TerminalPanel({
                     <HugeiconsIcon icon={GridViewIcon} size={14} />
                   </button>
                   {multi && (
-                    <button
-                      type="button"
-                      aria-label="增加终端视口"
-                      title="增加终端视口"
-                      className="h-[22px] shrink-0 rounded-sm px-2 text-[10px] font-normal text-muted-foreground hover:bg-muted hover:text-foreground"
-                      onClick={() => {
-                        if (viewSlots.length >= MAX_TERMINAL_VIEWS) {
-                          toast.info(
-                            "最多支持 6 个终端视口，请关闭不需要的视口。",
-                            { id: "terminal-view-limit" },
-                          );
-                          return;
-                        }
-                        setViewSlots((slots) => [...slots, null]);
-                      }}
-                    >
-                      + {viewSlots.length}/6
-                    </button>
+                    <div className="flex shrink-0 items-center">
+                      <button
+                        type="button"
+                        aria-label="减少终端视口"
+                        title="减少最后一个视口"
+                        disabled={viewSlots.length <= 2}
+                        className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+                        onClick={() => {
+                          if (viewSlots.length <= 2) return;
+                          setViewSlots((slots) => slots.slice(0, -1));
+                          setDropViewport(null);
+                        }}
+                      >
+                        <HugeiconsIcon icon={MinusSignIcon} size={11} />
+                      </button>
+                      <span className="w-6 text-center text-[10px] leading-none text-muted-foreground">
+                        {viewSlots.length}/6
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="增加终端视口"
+                        title="增加终端视口"
+                        disabled={viewSlots.length >= MAX_TERMINAL_VIEWS}
+                        className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+                        onClick={() => {
+                          if (viewSlots.length >= MAX_TERMINAL_VIEWS) {
+                            toast.info("最多支持 6 个终端视口", {
+                              id: "terminal-view-limit",
+                            });
+                            return;
+                          }
+                          setViewSlots((slots) => [...slots, null]);
+                        }}
+                      >
+                        <HugeiconsIcon icon={PlusSignIcon} size={11} />
+                      </button>
+                    </div>
                   )}
                 </>
               )}

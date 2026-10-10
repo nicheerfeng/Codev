@@ -9,6 +9,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Cancel01Icon,
   GridViewIcon,
+  MinusSignIcon,
   PlusSignIcon,
   Maximize01Icon,
   Minimize01Icon,
@@ -125,16 +126,37 @@ export function WorkbenchPane({ visible }: { visible: boolean }) {
           <HugeiconsIcon icon={PlusSignIcon} size={13} />
           网页
         </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          title="增加空视口"
-          aria-label="增加空视口"
-          onClick={append}
-        >
-          <HugeiconsIcon icon={PlusSignIcon} size={13} />
-        </Button>
-        <span className="text-xs text-muted-foreground">{slots.length}/6</span>
+        <div className="flex shrink-0 items-center">
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            className="size-5"
+            title="减少最后一个视口"
+            aria-label="减少视口"
+            disabled={slots.length <= 1}
+            onClick={() => {
+              if (slots.length <= 1) return;
+              setMaximized(null);
+              useWorkbench.setState({ slots: slots.slice(0, -1) });
+            }}
+          >
+            <HugeiconsIcon icon={MinusSignIcon} size={12} />
+          </Button>
+          <span className="w-6 text-center text-[10px] leading-none text-muted-foreground">
+            {slots.length}/6
+          </span>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            className="size-5"
+            title="增加空视口"
+            aria-label="增加空视口"
+            disabled={slots.length >= 6}
+            onClick={append}
+          >
+            <HugeiconsIcon icon={PlusSignIcon} size={12} />
+          </Button>
+        </div>
       </header>
       <div data-workbench-body="" className="min-h-0 flex-1 overflow-hidden">
         <ResizableViewportGrid
