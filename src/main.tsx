@@ -2,7 +2,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./styles/globals.css";
 
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import ReactDOM from "react-dom/client";
 import App from "./app/App";
@@ -12,6 +12,28 @@ import { IS_WINDOWS, USE_CUSTOM_WINDOW_CONTROLS } from "./lib/platform";
 
 const OPAQUE_WINDOW =
   IS_WINDOWS || import.meta.env.VITE_CODEV_OPAQUE_WINDOW === "1";
+const DEFAULT_WINDOW_WIDTH = 1280;
+const DEFAULT_WINDOW_HEIGHT = 800;
+const WINDOW_SCREEN_MARGIN = 0.9;
+
+async function getStartupWindowSize() {
+  const monitor = await currentMonitor();
+  if (!monitor) {
+    return new LogicalSize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT);
+  }
+
+  const workArea = monitor.workArea.size.toLogical(monitor.scaleFactor);
+  return new LogicalSize(
+    Math.max(
+      420,
+      Math.min(DEFAULT_WINDOW_WIDTH, workArea.width * WINDOW_SCREEN_MARGIN),
+    ),
+    Math.max(
+      280,
+      Math.min(DEFAULT_WINDOW_HEIGHT, workArea.height * WINDOW_SCREEN_MARGIN),
+    ),
+  );
+}
 
 if (USE_CUSTOM_WINDOW_CONTROLS) {
   document.documentElement.dataset.chrome = "borderless";
@@ -63,7 +85,7 @@ async function restoreInvalidWindowSize() {
 
   restoringWindowSize = true;
   try {
-    await window.setSize(new LogicalSize(800, 600));
+    await window.setSize(await getStartupWindowSize());
     await window.center();
   } finally {
     restoringWindowSize = false;
@@ -82,7 +104,10 @@ void currentWindow.onResized(() => {
 // shadow-only frame before React paints. Use setTimeout — rAF is throttled
 // while the window is hidden and would never fire.
 const showWindow = () => {
-  restoreInvalidWindowSize()
+  getStartupWindowSize()
+    .then((size) => currentWindow.setSize(size))
+    .then(() => currentWindow.center())
+    .then(() => restoreInvalidWindowSize())
     .then(() => currentWindow.show())
     .catch((e) => console.error("window.show failed:", e));
 };

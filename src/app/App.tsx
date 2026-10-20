@@ -1366,6 +1366,7 @@ export default function App() {
               <ResizablePanel
                 id="sidebar"
                 panelRef={sidebarRef}
+                groupResizeBehavior="preserve-pixel-size"
                 defaultSize={
                   needsInitialLayout
                     ? `${initialFirstSizes.sidebar}px`
@@ -1461,6 +1462,7 @@ export default function App() {
               <ResizablePanel
                 id="terminal-panel"
                 panelRef={terminalPanelRef}
+                groupResizeBehavior="preserve-pixel-size"
                 defaultSize={
                   needsInitialLayout
                     ? `${initialFirstSizes.terminal}px`
