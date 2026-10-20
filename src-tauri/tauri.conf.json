@@ -14,8 +14,9 @@
     "windows": [
       {
         "title": "Codev",
-        "width": 800,
-        "height": 600,
+        "width": 1280,
+        "height": 800,
+        "center": true,
         "minWidth": 420,
         "minHeight": 280,
         "resizable": true,
