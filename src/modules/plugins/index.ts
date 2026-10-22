@@ -5,6 +5,7 @@ export {
   BROWSER_PLUGIN_ID,
   TEXT_DIFF_PLUGIN_ID,
   TASKBAR_UNREAD_PLUGIN_ID,
+  PI_SCROLL_FOLLOW_PLUGIN_ID,
   setPluginEnabled,
   usePluginStore,
 } from "./store";

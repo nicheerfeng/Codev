@@ -47,6 +47,11 @@ import { testSavedModel } from "./modelTest";
 import { PiAssetsPanel } from "./PiAssetsPanel";
 import { PiVersionPanel } from "./PiVersionPanel";
 import { VoiceSettingsPanel } from "@/modules/plugins/pi-agent/voice/VoiceSettingsPanel";
+import {
+  PI_SCROLL_FOLLOW_PLUGIN_ID,
+  setPluginEnabled,
+  usePluginStore,
+} from "../store";
 
 /** 检查公共配置卡片，错误就地展示且不覆盖用户输入。 */
 function providerError(text: string): string {
@@ -88,6 +93,9 @@ export function PiSettings({
   const [testing, setTesting] = useState(false);
   const [turnDiff, setTurnDiff] = useState(
     () => localStorage.getItem("codev.pi.turn-diff") === "1",
+  );
+  const scrollFollow = usePluginStore(
+    (state) => state.enabled[PI_SCROLL_FOLLOW_PLUGIN_ID],
   );
   const [testResults, setTestResults] = useState<Record<string, string>>({});
   const testAbort = useRef<AbortController | null>(null);
@@ -522,6 +530,22 @@ export function PiSettings({
                         value ? "1" : "0",
                       );
                     }}
+                  />
+                </div>
+                <div className="flex items-center gap-3 rounded-lg border border-border/70 p-3">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-xs font-medium">长回答停住跟随</h3>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      回答第一行被顶到顶部时停住，视野不再一路跟随到底部；
+                      流式中仍会跟到第一行出现。
+                    </p>
+                  </div>
+                  <Switch
+                    checked={scrollFollow}
+                    aria-label="开启长回答停住跟随"
+                    onCheckedChange={(value) =>
+                      void setPluginEnabled(PI_SCROLL_FOLLOW_PLUGIN_ID, value)
+                    }
                   />
                 </div>
                 <VoiceSettingsPanel embedded />

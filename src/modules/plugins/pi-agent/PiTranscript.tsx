@@ -10,10 +10,12 @@ import { usePiTranscriptScroll } from "./usePiTranscriptScroll";
 import {
   PiExpansionContext,
   usePiExpansion,
+  followCapBlockIndex,
   type PiScrollMemory,
 } from "./transcriptScroll";
 import { Streamdown } from "streamdown";
 import { PiFileOperations } from "./PiFileOperations";
+import { PI_SCROLL_FOLLOW_PLUGIN_ID, usePluginStore } from "../store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -761,6 +763,9 @@ export function PiTranscript({
   const revealPending = useRef(false);
 
   const running = view.status === "running" || view.status === "stopping";
+  const scrollFollowCapped = usePluginStore(
+    (state) => state.enabled[PI_SCROLL_FOLLOW_PLUGIN_ID],
+  );
   const blocks = useMemo(
     () =>
       buildTimelineBlocks(view.items, running, {
@@ -829,6 +834,10 @@ export function PiTranscript({
     sendRevision,
     historyLoadingMore: !!view.historyLoadingMore,
     historyHasMore: !!view.historyHasMore,
+    followCap: scrollFollowCapped,
+    followCapIndex: scrollFollowCapped
+      ? followCapBlockIndex(blocks, running)
+      : undefined,
     onLoadOlder,
   });
   useLayoutEffect(() => {
