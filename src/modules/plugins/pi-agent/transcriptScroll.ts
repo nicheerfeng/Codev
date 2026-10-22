@@ -17,7 +17,46 @@ export type PiScrollMemory = PiReadingPosition & {
   width?: number;
   measurements?: VirtualItem[];
   expanded?: Map<string, boolean>;
+  /** 本轮已经停住过跟随，重新发送或点「回到最新」才解除。 */
+  capped?: boolean;
 };
+
+export type PiFollowGeometry = {
+  /** 回答顶部相对视口顶部的偏移，负值表示首行已滑出视口。 */
+  top: number;
+  /** 回答块已渲染的高度。 */
+  height: number;
+  /** 视口高度。 */
+  viewport: number;
+};
+
+/**
+ * 首行被顶到视口顶部、且回答已能填满一屏时停住。
+ * 未测量的行被虚拟列表摆在内容顶端，只靠偏移会误触，所以必须同时看高度。
+ */
+export function capFollow({ top, height, viewport }: PiFollowGeometry) {
+  return height >= viewport && top <= 0;
+}
+
+/** 停住时首行上方留出的呼吸空间（行本身还有 8px 内边距）。 */
+export const FOLLOW_FREEZE_GAP = 16;
+
+/** 跟随预算只挂在正在生成的回答块上，用户消息和纯工具块不触发停住。 */
+export function followCapBlockIndex(
+  blocks: PiTimelineBlock[],
+  running: boolean,
+) {
+  if (!running) return undefined;
+  const index = blocks.length - 1;
+  const block = blocks[index];
+  if (!block) return undefined;
+  const items = block.kind === "process" ? block.items : [block.item];
+  return items.some(
+    (item) => item.kind === "message" && item.role === "assistant",
+  )
+    ? index
+    : undefined;
+}
 
 /** 贴底则跟随；只有用户正在滚动且离开底部才暂停，程序滚动不能改跟随。 */
 export function followAfterScroll(

@@ -2,7 +2,9 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { PiTimelineBlock } from "./timeline";
 import {
+  capFollow,
   followAfterScroll,
+  FOLLOW_FREEZE_GAP,
   isNearBottom,
   readingBlockIndex,
   readingMeasurements,
@@ -20,6 +22,8 @@ export function usePiTranscriptScroll({
   sendRevision,
   historyLoadingMore,
   historyHasMore,
+  followCap,
+  followCapIndex,
   onLoadOlder,
 }: {
   threadKey: string;
@@ -30,6 +34,9 @@ export function usePiTranscriptScroll({
   sendRevision: number;
   historyLoadingMore: boolean;
   historyHasMore: boolean;
+  /** 停住跟随插件是否开启。 */
+  followCap: boolean;
+  followCapIndex?: number;
   onLoadOlder?: () => void;
 }) {
   const viewport = useRef<HTMLDivElement>(null);
@@ -42,6 +49,7 @@ export function usePiTranscriptScroll({
   );
   const follow = useRef(memory.follow);
   const [following, setFollowing] = useState(memory.follow);
+  const capped = useRef(memory.capped ?? false);
   const restoring = useRef<PiReadingPosition | null>(null);
   const userUntil = useRef(0);
   const loadingOlder = useRef(false);
@@ -54,6 +62,7 @@ export function usePiTranscriptScroll({
     blocks,
     historyLoadingMore,
     historyHasMore,
+    followCapIndex,
     onLoadOlder,
   });
   live.current = {
@@ -62,6 +71,7 @@ export function usePiTranscriptScroll({
     blocks,
     historyLoadingMore,
     historyHasMore,
+    followCapIndex,
     onLoadOlder,
   };
   const [initialMeasurements] = useState(() =>
@@ -80,6 +90,13 @@ export function usePiTranscriptScroll({
     useAnimationFrameWithResizeObserver: true,
     useFlushSync: false,
   });
+  // 只在「停住跟随」插件开启时接管：本轮结束会换块 key，首帧只有估算高度，
+  // 按估算尺寸补偿会把停住的视野推到底。插件关闭时保留虚拟列表默认行为。
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = followCap
+    ? (item, _delta, instance) =>
+        instance.itemSizeCache.has(item.key) &&
+        item.end <= (instance.scrollOffset ?? 0)
+    : undefined;
 
   /** measure() 只清缓存；正文宽度未变时 RO 不会再报尺寸，必须补测已挂载行。 */
   const remeasureVisibleRows = () => {
@@ -172,6 +189,8 @@ export function usePiTranscriptScroll({
   const bottom = () => {
     restoring.current = null;
     userUntil.current = 0;
+    capped.current = false;
+    memory.capped = false;
     follow.current = true;
     setFollowing(true);
     memory.follow = true;
@@ -179,6 +198,51 @@ export function usePiTranscriptScroll({
     memory.anchor = undefined;
     positions.set(threadKey, memory);
     pinBottom();
+  };
+  /** 回答块几何：首行偏移与自身高度，都按容器缩放换算。 */
+  const answerGeometry = () => {
+    const index = live.current.followCapIndex;
+    const node = viewport.current;
+    if (index === undefined || !node) return undefined;
+    const element = content.current?.querySelector<HTMLElement>(
+      `[data-index="${index}"]`,
+    );
+    if (!element) return undefined;
+    const rect = node.getBoundingClientRect();
+    const scale = rect.height / node.offsetHeight || 1;
+    const box = element.getBoundingClientRect();
+    return {
+      top: (box.top - rect.top) / scale,
+      height: box.height / scale,
+      viewport: node.clientHeight,
+    };
+  };
+  /**
+   * 只在真正贴底的那一帧判定停住：pinBottom 的滚动下一帧才落地，
+   * 同一帧量几何会拿到「还没滚动」的位置，导致在顶部就提前停住。
+   */
+  const capGeometry = () => {
+    const node = viewport.current;
+    if (!node || !isNearBottom(node)) return undefined;
+    const geometry = answerGeometry();
+    return geometry && capFollow(geometry) ? geometry : undefined;
+  };
+  /** 首行刚被顶出就停住，并对齐到视口顶部下方一点，让读者从第一行开始。 */
+  const holdFollow = (offset: number) => {
+    capped.current = true;
+    memory.capped = true;
+    follow.current = false;
+    setFollowing(false);
+    const node = viewport.current;
+    if (node) {
+      const max = Math.max(0, node.scrollHeight - node.clientHeight);
+      const target = Math.max(
+        0,
+        Math.min(node.scrollTop + offset - FOLLOW_FREEZE_GAP, max),
+      );
+      virtualizer.scrollToOffset(target);
+    }
+    remember();
   };
   /** A gesture, not a programmatic scroll event, gives control back to the reader. */
   const interact = () => {
@@ -368,7 +432,11 @@ export function usePiTranscriptScroll({
     }
     wake.current();
     if (loading || restoring.current || !wasVisible.current) return;
-    if (follow.current) pinBottom();
+    if (follow.current) {
+      pinBottom();
+      const geometry = capGeometry();
+      if (geometry) holdFollow(geometry.top);
+    }
     remember();
   });
   useLayoutEffect(() => {
