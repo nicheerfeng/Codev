@@ -1,3 +1,27 @@
+/* 对比层：用前景色混出三档浅底，深浅主题与玻璃感都自然跟随。 */
+.pi-agent {
+  --pi-layer-1: color-mix(in srgb, var(--foreground) 5%, transparent);
+  --pi-layer-2: color-mix(in srgb, var(--foreground) 9%, transparent);
+  --pi-layer-3: color-mix(in srgb, var(--foreground) 14%, transparent);
+  --pi-rule: color-mix(in srgb, var(--foreground) 13%, transparent);
+  --pi-rule-weak: color-mix(in srgb, var(--foreground) 8%, transparent);
+  --pi-danger: color-mix(in srgb, var(--destructive) 88%, var(--foreground));
+  /* 链接与焦点环：淡底 4.8:1，淡灰蓝 #8eacc9 在淡色下只有 2:1，不能直接用。 */
+  --pi-accent: #3670a3;
+  --pi-live: color-mix(in srgb, #8eacc9 45%, var(--foreground));
+}
+.dark .pi-agent { --pi-accent: #82b0d8; }
+.pi-agent .pi-conversation { background: var(--pi-layer-1); }
+/* 键盘落点：会话区是 outline-none 的滚动容器，折叠项也只做了 hover，Tab 进来要看得见。 */
+.pi-agent .pi-conversation:focus-visible {
+  outline: 2px solid var(--pi-accent);
+  outline-offset: -2px;
+}
+.pi-agent :is(.pi-process > summary, .pi-record-summary, .pi-activity-summary):focus-visible {
+  border-radius: 5px;
+  outline: 2px solid var(--pi-accent);
+  outline-offset: 1px;
+}
 .pi-agent ::selection { background: rgb(112 149 184 / 48%); }
 .pi-agent ::highlight(codev-pi-search) { color: #201a09; background: #ffe681; }
 .pi-agent ::highlight(codev-pi-search-current) { color: #171004; background: #ffc94d; }
@@ -37,6 +61,46 @@
   background: transparent;
   padding: 0;
   gap: 0;
+}
+.pi-agent .pi-markdown [data-streamdown="code-block-body"] {
+  border: 1px solid var(--pi-rule);
+  background: var(--pi-layer-1);
+  padding: 10px 12px;
+  line-height: 1.6;
+}
+.pi-agent .pi-markdown [data-streamdown="inline-code"] {
+  background: var(--pi-layer-2);
+  font-size: 0.92em;
+}
+.pi-agent .pi-markdown pre [data-streamdown="inline-code"],
+.pi-agent .pi-markdown pre code {
+  background: transparent;
+}
+.pi-agent .pi-markdown blockquote {
+  border-left: 2px solid var(--pi-rule);
+  padding-left: 10px;
+  color: var(--muted-foreground);
+}
+.pi-agent .pi-markdown [data-streamdown="table-wrapper"] table {
+  border: 1px solid var(--pi-rule);
+}
+/* 表格自带 bg-sidebar / bg-background，放进分层会话里会像挖了个洞，统一改走对比层。 */
+.pi-agent .pi-markdown [data-streamdown="table-wrapper"] {
+  border-color: var(--pi-rule);
+  background: var(--pi-layer-1);
+}
+.pi-agent .pi-markdown [data-streamdown="table-wrapper"] > div:has(table) {
+  border-color: var(--pi-rule);
+  background: transparent;
+}
+.pi-agent .pi-markdown [data-streamdown="table-wrapper"] :is(th, td) {
+  border-color: var(--pi-rule);
+}
+.pi-agent .pi-markdown [data-streamdown="table-wrapper"] thead th {
+  background: var(--pi-layer-2);
+  color: color-mix(in srgb, var(--foreground) 92%, transparent);
+  font-weight: 600;
+  text-align: left;
 }
 .pi-agent .pi-markdown [data-streamdown="code-block-header"],
 .pi-agent .pi-markdown [data-streamdown="mermaid-block"] > div:first-child:not(:has([data-streamdown="mermaid"])) {
@@ -78,20 +142,55 @@
   opacity: 1;
   pointer-events: auto;
 }
+/* 标题、分隔线、链接、加粗补齐：否则正文 13px，h1 用浏览器默认 2em，长回答里直接散架。 */
+.pi-agent .pi-markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.05em 0 0.45em;
+  color: color-mix(in srgb, var(--foreground) 96%, transparent);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.006em;
+}
+.pi-agent .pi-markdown h1 { font-size: 1.16em; }
+.pi-agent .pi-markdown h2 { font-size: 1.09em; }
+.pi-agent .pi-markdown h3 { font-size: 1.02em; }
+.pi-agent .pi-markdown :is(h4, h5, h6) {
+  font-size: 1em;
+  color: color-mix(in srgb, var(--foreground) 88%, transparent);
+}
+.pi-agent .pi-markdown strong {
+  color: color-mix(in srgb, var(--foreground) 98%, transparent);
+  font-weight: 600;
+}
+.pi-agent .pi-markdown hr {
+  height: 0;
+  margin: 1.15em 0;
+  border: 0;
+  border-top: 1px solid var(--pi-rule);
+}
+.pi-agent .pi-markdown a {
+  color: var(--pi-accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
 .pi-agent .pi-markdown :first-child { margin-top: 0; }
 .pi-agent .pi-markdown :last-child { margin-bottom: 0; }
 .pi-agent .pi-user-turn { display: flex; flex-direction: column; align-items: flex-end; }
-.pi-agent .pi-user-message { position: relative; }
+.pi-agent .pi-user-message {
+  position: relative;
+  border: 1px solid var(--pi-rule);
+  background: var(--pi-layer-2);
+}
 .pi-agent .pi-user-file-chip {
   display: inline-flex;
   max-width: 100%;
   align-items: center;
   gap: 3px;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border: 1px solid var(--pi-rule);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--background) 55%, transparent);
+  background: var(--pi-layer-3);
   padding: 1px 6px 1px 5px;
-  color: var(--muted-foreground);
+  color: var(--foreground);
   font-size: 10px;
   line-height: 1.3;
 }
@@ -102,7 +201,6 @@
   gap: 4px;
   margin-top: 4px;
   opacity: 0;
-  visibility: hidden;
   pointer-events: none;
   transition: opacity 120ms ease;
 }
@@ -112,7 +210,6 @@
 .pi-agent .pi-assistant-message:hover .pi-message-actions,
 .pi-agent .pi-assistant-message:focus-within .pi-message-actions {
   opacity: 1;
-  visibility: visible;
   pointer-events: auto;
 }
 .pi-agent .pi-user-edit-input { width: 100%; }
@@ -125,18 +222,49 @@
 .pi-agent .pi-process-summary { min-width: 0; max-width: 100%; min-height: 28px; overflow-wrap: anywhere; }
 .pi-agent .pi-process-title { min-width: 0; overflow-wrap: anywhere; }
 .pi-agent .pi-process-meta { min-width: 0; overflow-wrap: anywhere; }
-.pi-agent .pi-process-live { color: #8eacc9; }
+.pi-agent .pi-process-title { color: color-mix(in srgb, var(--foreground) 88%, transparent); }
+.pi-agent .pi-process-live { color: var(--pi-live); }
 .pi-agent .pi-process[open] > summary > svg,
 .pi-agent .pi-file-operations[open] > summary > svg { transform: rotate(180deg); }
 .pi-agent .pi-process-body { min-width: 0; max-width: 100%; margin-top: 4px; overflow-wrap: anywhere; }
 .pi-agent .pi-process-step { padding: 2px 0; }
-.pi-agent .pi-process-step-body { padding: 4px 0 8px; color: var(--muted-foreground); font-size: 12px; }
+.pi-agent .pi-process-step-body {
+  margin-left: 1px;
+  border-left: 1px solid var(--pi-rule);
+  padding: 4px 0 8px 9px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+/* 第三层缩进用更淡的规则线，避免窄视口下一串竖线抢注意力。 */
+.pi-agent .pi-process-step-body :is(.pi-tool-body, .pi-process-step-body) {
+  border-left-color: var(--pi-rule-weak);
+}
 .pi-agent .pi-tool { margin: 2px 0; }
 .pi-agent .pi-tool-summary { display: flex; min-width: 0; align-items: flex-start; gap: 6px; padding: 3px 0; user-select: none; }
 .pi-agent .pi-tool-status { flex: 0 0 auto; }
 .pi-agent .pi-tool-summary:hover { color: var(--foreground); }
-.pi-agent .pi-tool-body { padding: 4px 0 8px; }
-.pi-agent .pi-tool-command { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pi-agent .pi-tool-status-error { color: var(--pi-danger); }
+.pi-agent .pi-tool[data-pi-status="error"] .pi-tool-summary { color: color-mix(in srgb, var(--pi-danger) 45%, var(--muted-foreground)); }
+.pi-agent .pi-tool-body {
+  margin-left: 1px;
+  border-left: 1px solid var(--pi-rule);
+  padding: 2px 0 8px 9px;
+}
+.pi-agent .pi-tool[data-pi-status="error"] .pi-tool-body {
+  border-left-color: color-mix(in srgb, var(--pi-danger) 52%, var(--pi-rule));
+}
+.pi-agent .pi-tool-command {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--foreground) 80%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.pi-agent .pi-tool-output {
+  color: var(--muted-foreground);
+  line-height: 1.55;
+}
 .pi-agent .pi-record-summary { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 0; list-style: none; }
 .pi-agent .pi-record-summary::-webkit-details-marker { display: none; }
 .pi-agent .pi-record-summary:hover { color: var(--foreground); }
@@ -149,7 +277,9 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .pi-agent .pi-summary-transition,
-  .pi-agent .pi-stop-pulse > span { animation: none; }
+  .pi-agent .pi-stop-pulse > span,
+  .pi-agent .pi-running-dot::after,
+  .pi-agent .pi-project-live { animation: none; }
 }
 
 .pi-agent .pi-markdown ul, .pi-agent .pi-markdown ol { padding-inline-start: 1.5rem; list-style-position: outside; }
