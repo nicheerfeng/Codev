@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  capFollow,
   followAfterScroll,
+  followCapBlockIndex,
   isNearBottom,
   readingBlockIndex,
   readingMeasurements,
+  shouldHoldFollow,
 } from "./transcriptScroll";
 import type { PiTimelineBlock } from "./timeline";
 const message = (id: string): PiTimelineBlock => ({
@@ -105,5 +108,114 @@ describe("Pi reading anchor", () => {
       { key: "b", index: 1, start: 110, size: 60 },
       { key: "a", index: 2, start: 170, size: 700 },
     ]);
+  });
+});
+
+describe("follow cap", () => {
+  const block = (
+    id: string,
+    role: "user" | "assistant" = "assistant",
+  ): PiTimelineBlock => ({
+    id,
+    kind: "item",
+    item: {
+      id,
+      kind: "message",
+      role,
+      text: id,
+      thinking: "",
+      streaming: role === "assistant",
+    },
+  });
+  const toolBlock = (id: string): PiTimelineBlock => ({
+    id,
+    kind: "process",
+    items: [
+      {
+        id: `${id}-tool`,
+        kind: "tool",
+        toolCallId: `${id}-call`,
+        name: "bash",
+        status: "running",
+        args: { command: "ls" },
+        output: "",
+      },
+    ],
+    steps: [],
+    running: true,
+    label: "运行中",
+  });
+
+  it("keeps following while the first line is still below the viewport top", () => {
+    expect(capFollow({ top: 320, height: 1200, viewport: 900 })).toBe(false);
+    expect(capFollow({ top: 1, height: 901, viewport: 900 })).toBe(false);
+  });
+  it("stops the moment the first line reaches the viewport top", () => {
+    expect(capFollow({ top: 0, height: 900, viewport: 900 })).toBe(true);
+    expect(capFollow({ top: -240, height: 1400, viewport: 900 })).toBe(true);
+  });
+  it("ignores a row the virtualizer has not measured yet", () => {
+    expect(capFollow({ top: 0, height: 0, viewport: 900 })).toBe(false);
+    expect(capFollow({ top: 0, height: 110, viewport: 900 })).toBe(false);
+  });
+  it("caps the live answer block only while the turn is running", () => {
+    const blocks = [block("question", "user"), block("answer")];
+    expect(followCapBlockIndex(blocks, true)).toBe(1);
+    expect(followCapBlockIndex(blocks, false)).toBeUndefined();
+  });
+  it("does not cap a tool-only tail", () => {
+    expect(
+      followCapBlockIndex([block("answer"), toolBlock("process")], true),
+    ).toBeUndefined();
+  });
+  it("does not cap while only the question is on screen", () => {
+    expect(
+      followCapBlockIndex([block("question", "user")], true),
+    ).toBeUndefined();
+  });
+});
+
+describe("hold follow gating", () => {
+  const geometry = { top: -120, height: 1400, viewport: 900 };
+
+  it("holds when following, not capped yet and pinned to the bottom", () => {
+    expect(
+      shouldHoldFollow({
+        follow: true,
+        capped: false,
+        atBottom: true,
+        geometry,
+      }),
+    ).toBe(true);
+  });
+  it("does not hold again after this turn already stopped", () => {
+    expect(
+      shouldHoldFollow({
+        follow: true,
+        capped: true,
+        atBottom: true,
+        geometry,
+      }),
+    ).toBe(false);
+  });
+  it("does not hold while the reader is away from the bottom", () => {
+    expect(
+      shouldHoldFollow({
+        follow: false,
+        capped: false,
+        atBottom: false,
+        geometry,
+      }),
+    ).toBe(false);
+  });
+  it("does not hold before the first line reaches the top", () => {
+    expect(
+      shouldHoldFollow({
+        follow: true,
+        capped: false,
+        atBottom: true,
+        geometry: { top: 40, height: 1400, viewport: 900 },
+      }),
+    ).toBe(false);
   });
 });
