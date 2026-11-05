@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Spinner } from "@/components/ui/spinner";
+import { cn } from "@/lib/utils";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowDown01Icon,
@@ -223,6 +224,7 @@ const TranscriptItem = memo(function TranscriptItem({
       <details
         data-pi-text={item.id}
         data-pi-expansion={`item:${item.id}`}
+        data-pi-status={item.status}
         className="pi-tool"
         open={expanded}
         onToggle={(event) => setExpanded(event.currentTarget.open)}
@@ -230,7 +232,11 @@ const TranscriptItem = memo(function TranscriptItem({
         <summary className="pi-tool-summary pi-record-summary cursor-pointer text-xs text-muted-foreground">
           <HugeiconsIcon icon={File01Icon} size={13} className="shrink-0" />
           <span
-            className={`pi-tool-status ${item.status === "running" ? "pi-process-live" : ""}`}
+            className={cn(
+              "pi-tool-status",
+              item.status === "running" && "pi-process-live",
+              item.status === "error" && "pi-tool-status-error",
+            )}
           >
             {item.status === "running"
               ? "执行中"
@@ -258,7 +264,7 @@ const TranscriptItem = memo(function TranscriptItem({
             <div className="mb-1 text-[10px] text-muted-foreground">
               执行结果
             </div>
-            <pre className="whitespace-pre-wrap break-all font-mono text-xs">
+            <pre className="pi-tool-output whitespace-pre-wrap break-all font-mono text-xs">
               {item.output || "等待工具结果…"}
             </pre>
           </div>
@@ -281,7 +287,7 @@ const TranscriptItem = memo(function TranscriptItem({
     >
       <div
         className={
-          isUser ? "pi-user-message rounded-2xl bg-muted px-3 py-2" : undefined
+          isUser ? "pi-user-message rounded-2xl px-3 py-2" : undefined
         }
       >
         <div
@@ -617,7 +623,7 @@ function TimelineBlock({
             {elapsedText}
           </span>
         </summary>
-        <div className="pi-process-body pl-5">
+        <div className="pi-process-body pl-4">
           {block.steps.map((step) => (
             <ProcessStep
               key={step.id}
@@ -966,7 +972,7 @@ export function PiTranscript({
           ref={viewport}
           tabIndex={0}
           data-testid="pi-transcript"
-          className="reader-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden outline-none [overflow-anchor:none] [scrollbar-gutter:stable]"
+          className="pi-conversation reader-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden outline-none [overflow-anchor:none] [scrollbar-gutter:stable]"
           onWheel={(event) => {
             if (event.deltaY < 0) {
               pauseFollow();
