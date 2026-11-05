@@ -38,6 +38,24 @@ export function capFollow({ top, height, viewport }: PiFollowGeometry) {
   return height >= viewport && top <= 0;
 }
 
+/**
+ * 何时停住：仍在跟随、本轮没停过、现在确实贴底，且首行已到顶。
+ * 本轮停过就不再重复触发，避免用户手动回到底部后被再次拉回回答开头。
+ */
+export function shouldHoldFollow({
+  follow,
+  capped,
+  atBottom,
+  geometry,
+}: {
+  follow: boolean;
+  capped: boolean;
+  atBottom: boolean;
+  geometry: PiFollowGeometry;
+}) {
+  return follow && !capped && atBottom && capFollow(geometry);
+}
+
 /** 停住时首行上方留出的呼吸空间（行本身还有 8px 内边距）。 */
 export const FOLLOW_FREEZE_GAP = 16;
 

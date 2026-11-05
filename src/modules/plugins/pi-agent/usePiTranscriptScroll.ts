@@ -2,12 +2,12 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { PiTimelineBlock } from "./timeline";
 import {
-  capFollow,
   followAfterScroll,
   FOLLOW_FREEZE_GAP,
   isNearBottom,
   readingBlockIndex,
   readingMeasurements,
+  shouldHoldFollow,
   type PiReadingPosition,
   type PiScrollMemory,
 } from "./transcriptScroll";
@@ -199,6 +199,20 @@ export function usePiTranscriptScroll({
     positions.set(threadKey, memory);
     pinBottom();
   };
+  /** 用户主动回到最新：本轮不再自动停住，之后一直跟到底。 */
+  const resume = () => {
+    restoring.current = null;
+    userUntil.current = 0;
+    capped.current = true;
+    memory.capped = true;
+    follow.current = true;
+    setFollowing(true);
+    memory.follow = true;
+    memory.top = 0;
+    memory.anchor = undefined;
+    positions.set(threadKey, memory);
+    pinBottom();
+  };
   /** 回答块几何：首行偏移与自身高度，都按容器缩放换算。 */
   const answerGeometry = () => {
     const index = live.current.followCapIndex;
@@ -220,12 +234,21 @@ export function usePiTranscriptScroll({
   /**
    * 只在真正贴底的那一帧判定停住：pinBottom 的滚动下一帧才落地，
    * 同一帧量几何会拿到「还没滚动」的位置，导致在顶部就提前停住。
+   * 本轮已经停过（capped）就不再触发，用户手动回到底部后不再被拉回去。
    */
   const capGeometry = () => {
     const node = viewport.current;
-    if (!node || !isNearBottom(node)) return undefined;
+    if (!node) return undefined;
     const geometry = answerGeometry();
-    return geometry && capFollow(geometry) ? geometry : undefined;
+    if (!geometry) return undefined;
+    return shouldHoldFollow({
+      follow: follow.current,
+      capped: capped.current,
+      atBottom: isNearBottom(node),
+      geometry,
+    })
+      ? geometry
+      : undefined;
   };
   /** 首行刚被顶出就停住，并对齐到视口顶部下方一点，让读者从第一行开始。 */
   const holdFollow = (offset: number) => {
@@ -476,6 +499,7 @@ export function usePiTranscriptScroll({
     following,
     expanded,
     bottom,
+    resume,
     interact,
     armUserScroll,
     loadEarlier,

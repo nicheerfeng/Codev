@@ -6,6 +6,7 @@ import {
   isNearBottom,
   readingBlockIndex,
   readingMeasurements,
+  shouldHoldFollow,
 } from "./transcriptScroll";
 import type { PiTimelineBlock } from "./timeline";
 const message = (id: string): PiTimelineBlock => ({
@@ -171,5 +172,50 @@ describe("follow cap", () => {
     expect(
       followCapBlockIndex([block("question", "user")], true),
     ).toBeUndefined();
+  });
+});
+
+describe("hold follow gating", () => {
+  const geometry = { top: -120, height: 1400, viewport: 900 };
+
+  it("holds when following, not capped yet and pinned to the bottom", () => {
+    expect(
+      shouldHoldFollow({
+        follow: true,
+        capped: false,
+        atBottom: true,
+        geometry,
+      }),
+    ).toBe(true);
+  });
+  it("does not hold again after this turn already stopped", () => {
+    expect(
+      shouldHoldFollow({
+        follow: true,
+        capped: true,
+        atBottom: true,
+        geometry,
+      }),
+    ).toBe(false);
+  });
+  it("does not hold while the reader is away from the bottom", () => {
+    expect(
+      shouldHoldFollow({
+        follow: false,
+        capped: false,
+        atBottom: false,
+        geometry,
+      }),
+    ).toBe(false);
+  });
+  it("does not hold before the first line reaches the top", () => {
+    expect(
+      shouldHoldFollow({
+        follow: true,
+        capped: false,
+        atBottom: true,
+        geometry: { top: 40, height: 1400, viewport: 900 },
+      }),
+    ).toBe(false);
   });
 });

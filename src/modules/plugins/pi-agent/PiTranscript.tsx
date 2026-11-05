@@ -820,7 +820,7 @@ export function PiTranscript({
     virtualizer,
     following,
     expanded,
-    bottom: scrollBottom,
+    resume: scrollBottom,
     interact: pauseFollow,
     armUserScroll,
     loadEarlier,
