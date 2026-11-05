@@ -2,7 +2,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./styles/globals.css";
 
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import ReactDOM from "react-dom/client";
 import App from "./app/App";
@@ -12,6 +12,28 @@ import { IS_WINDOWS, USE_CUSTOM_WINDOW_CONTROLS } from "./lib/platform";
 
 const OPAQUE_WINDOW =
   IS_WINDOWS || import.meta.env.VITE_CODEV_OPAQUE_WINDOW === "1";
+const DEFAULT_WINDOW_WIDTH = 1280;
+const DEFAULT_WINDOW_HEIGHT = 800;
+const WINDOW_SCREEN_MARGIN = 0.9;
+
+async function getStartupWindowSize() {
+  const monitor = await currentMonitor();
+  if (!monitor) {
+    return new LogicalSize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT);
+  }
+
+  const workArea = monitor.workArea.size.toLogical(monitor.scaleFactor);
+  return new LogicalSize(
+    Math.max(
+      420,
+      Math.min(DEFAULT_WINDOW_WIDTH, workArea.width * WINDOW_SCREEN_MARGIN),
+    ),
+    Math.max(
+      280,
+      Math.min(DEFAULT_WINDOW_HEIGHT, workArea.height * WINDOW_SCREEN_MARGIN),
+    ),
+  );
+}
 
 if (USE_CUSTOM_WINDOW_CONTROLS) {
   document.documentElement.dataset.chrome = "borderless";
@@ -63,7 +85,7 @@ async function restoreInvalidWindowSize() {
 
   restoringWindowSize = true;
   try {
-    await window.setSize(new LogicalSize(800, 600));
+    await window.setSize(await getStartupWindowSize());
     await window.center();
   } finally {
     restoringWindowSize = false;
@@ -81,11 +103,21 @@ void currentWindow.onResized(() => {
 // Window starts hidden (per tauri.conf.json) so users never see a transparent
 // shadow-only frame before React paints. Use setTimeout — rAF is throttled
 // while the window is hidden and would never fire.
+// 只初始化一次：500ms 的兜底只在首次 show 失败时补跑，否则会覆盖用户刚拖动/
+// 缩放过的窗口（第二次 setSize + center 是无条件的）。
+let windowShown = false;
 const showWindow = () => {
-  restoreInvalidWindowSize()
+  if (windowShown) return;
+  getStartupWindowSize()
+    .then((size) => currentWindow.setSize(size))
+    .then(() => currentWindow.center())
+    .then(() => restoreInvalidWindowSize())
     .then(() => currentWindow.show())
+    .then(() => {
+      windowShown = true;
+    })
     .catch((e) => console.error("window.show failed:", e));
 };
 setTimeout(showWindow, 50);
-// Safety net: if the first show somehow fails to take effect, force again.
+// Safety net: only if the first attempt never got as far as showing the window.
 setTimeout(showWindow, 500);
