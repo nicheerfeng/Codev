@@ -103,14 +103,21 @@ void currentWindow.onResized(() => {
 // Window starts hidden (per tauri.conf.json) so users never see a transparent
 // shadow-only frame before React paints. Use setTimeout — rAF is throttled
 // while the window is hidden and would never fire.
+// 只初始化一次：500ms 的兜底只在首次 show 失败时补跑，否则会覆盖用户刚拖动/
+// 缩放过的窗口（第二次 setSize + center 是无条件的）。
+let windowShown = false;
 const showWindow = () => {
+  if (windowShown) return;
   getStartupWindowSize()
     .then((size) => currentWindow.setSize(size))
     .then(() => currentWindow.center())
     .then(() => restoreInvalidWindowSize())
     .then(() => currentWindow.show())
+    .then(() => {
+      windowShown = true;
+    })
     .catch((e) => console.error("window.show failed:", e));
 };
 setTimeout(showWindow, 50);
-// Safety net: if the first show somehow fails to take effect, force again.
+// Safety net: only if the first attempt never got as far as showing the window.
 setTimeout(showWindow, 500);
