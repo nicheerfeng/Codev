@@ -9,6 +9,7 @@ lerna-debug.log*
 
 node_modules
 dist
+dist-agent-host/
 dist-ssr
 *.local
 stats.html
@@ -39,6 +40,9 @@ artifacts/
 # Read-only upstream snapshots used during feature design; never shipped.
 .reference-cache/
 output/
+.tmp/
+nul
+server.pid
 
 # Local notes, vendor snapshots and reference code; never shipped.
 # Keep docs README files and images used by them.
@@ -50,6 +54,8 @@ docs/**
 !docs/**/readme.md
 !docs/Codev-版本发布说明/
 !docs/Codev-版本发布说明/**
+!docs/agent-harness-rebuild/
+!docs/agent-harness-rebuild/**
 !docs/readme-main.png
 !docs/**/*.png
 !docs/**/*.jpg
@@ -57,3 +63,5 @@ docs/**
 !docs/**/*.gif
 !docs/**/*.webp
 !docs/**/*.svg
+docs/references/
+docs/references/**

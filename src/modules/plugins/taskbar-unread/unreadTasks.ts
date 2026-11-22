@@ -5,7 +5,7 @@ function emit() {
   for (const listener of listeners) listener();
 }
 
-export function unreadTaskId(scope: "pi" | "codex", key: string) {
+export function unreadTaskId(scope: "pi" | "codex" | "agent", key: string) {
   return `${scope}:${key}`;
 }
 

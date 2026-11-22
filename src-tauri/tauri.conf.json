@@ -7,7 +7,7 @@
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build",
-    "frontendDist": "../dist",
+    "frontendDist": "../dist-agent-host",
     "removeUnusedCommands": true
   },
   "app": {
@@ -26,7 +26,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' asset: http://asset.localhost https://asset.localhost; style-src 'self' 'unsafe-inline' asset: http://asset.localhost https://asset.localhost; img-src 'self' data: asset: http://asset.localhost https://asset.localhost blob:; media-src 'self' asset: http://asset.localhost https://asset.localhost blob:; font-src 'self' data: blob: asset: http://asset.localhost https://asset.localhost; connect-src 'self' ipc: http://ipc.localhost asset: http://asset.localhost https://asset.localhost https: http://localhost:* http://127.0.0.1:*; frame-src 'self' http: https: asset: http://asset.localhost https://asset.localhost; worker-src 'self' blob:; object-src 'none'; base-uri 'self' about: asset: http://asset.localhost https://asset.localhost; form-action 'self'",
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' asset: http://asset.localhost https://asset.localhost; style-src 'self' 'unsafe-inline' asset: http://asset.localhost https://asset.localhost; img-src 'self' data: asset: http://asset.localhost https://asset.localhost blob:; media-src 'self' asset: http://asset.localhost https://asset.localhost blob:; font-src 'self' data: blob: asset: http://asset.localhost https://asset.localhost; connect-src 'self' ipc: http://ipc.localhost asset: http://asset.localhost https://asset.localhost https: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; frame-src 'self' http: https: asset: http://asset.localhost https://asset.localhost; worker-src 'self' blob:; object-src 'none'; base-uri 'self' about: asset: http://asset.localhost https://asset.localhost; form-action 'self'",
       "assetProtocol": {
         "enable": true,
         "scope": ["**"]
@@ -35,6 +35,7 @@
   },
   "bundle": {
     "active": true,
+    "resources": { "../dist-agent-host": "web", "../THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md" },
     "targets": "all",
     "copyright": "Copyright 2026 Teague Codev",
     "license": "Apache-2.0",

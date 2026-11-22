@@ -115,11 +115,24 @@ fn is_executable(entry: &std::fs::DirEntry) -> bool {
     }
 }
 
-fn ensure(state: &HistoryState) -> std::sync::MutexGuard<'_, Option<Index>> {
+fn ensure<'a>(
+    state: &'a HistoryState,
+    db: Option<&super::app_db::AppDbState>,
+) -> std::sync::MutexGuard<'a, Option<Index>> {
     let mut guard = state.inner.lock().unwrap();
     if guard.is_none() {
+        let mut raw = read_histories();
+        if let Some(db_state) = db {
+            if let Some(rows) = db_state.with_opened_db(|d| d.load_shell_commands(2000)) {
+                for row in rows {
+                    for _ in 0..row.hit_count.clamp(1, 50) {
+                        raw.push((row.command.clone(), row.last_used_at));
+                    }
+                }
+            }
+        }
         *guard = Some(Index {
-            entries: build_index(read_histories()),
+            entries: build_index(raw),
             path_cmds: scan_path(),
         });
     }
@@ -127,18 +140,23 @@ fn ensure(state: &HistoryState) -> std::sync::MutexGuard<'_, Option<Index>> {
 }
 
 #[tauri::command]
-pub fn history_suggest(state: tauri::State<'_, HistoryState>, line: String) -> Option<String> {
-    let guard = ensure(&state);
+pub fn history_suggest(
+    state: tauri::State<'_, HistoryState>,
+    db: tauri::State<'_, super::app_db::AppDbState>,
+    line: String,
+) -> Option<String> {
+    let guard = ensure(&state, Some(&db));
     suggest(&guard.as_ref()?.entries, &line)
 }
 
 #[tauri::command]
 pub fn history_commands(
     state: tauri::State<'_, HistoryState>,
+    db: tauri::State<'_, super::app_db::AppDbState>,
     prefix: String,
     limit: Option<usize>,
 ) -> Vec<String> {
-    let guard = ensure(&state);
+    let guard = ensure(&state, Some(&db));
     match guard.as_ref() {
         Some(idx) => complete_commands(&idx.entries, &idx.path_cmds, &prefix, limit.unwrap_or(50)),
         None => Vec::new(),
@@ -148,10 +166,11 @@ pub fn history_commands(
 #[tauri::command]
 pub fn history_list(
     state: tauri::State<'_, HistoryState>,
+    db: tauri::State<'_, super::app_db::AppDbState>,
     query: String,
     limit: Option<usize>,
 ) -> Vec<String> {
-    let guard = ensure(&state);
+    let guard = ensure(&state, Some(&db));
     match guard.as_ref() {
         Some(idx) => list(&idx.entries, &query, limit.unwrap_or(200)),
         None => Vec::new(),
@@ -162,12 +181,17 @@ pub fn history_list(
 // re-read. Only ever fed prompt-mode commands, never raw running-mode input,
 // so passwords typed into a running command never enter history.
 #[tauri::command]
-pub fn history_record(state: tauri::State<'_, HistoryState>, command: String) {
+pub fn history_record(
+    state: tauri::State<'_, HistoryState>,
+    db: tauri::State<'_, super::app_db::AppDbState>,
+    command: String,
+) {
     let cmd = command.trim();
     if cmd.is_empty() {
         return;
     }
-    let mut guard = ensure(&state);
+    let _ = db.with_opened_db(|d| d.record_shell_command("codev", "", cmd));
+    let mut guard = ensure(&state, Some(&db));
     if let Some(idx) = guard.as_mut() {
         let n = now();
         match idx.entries.iter_mut().find(|e| e.cmd == cmd) {

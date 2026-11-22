@@ -5,44 +5,33 @@ import {
   type DockTab,
 } from "./dockTabs";
 
-const all: DockTab[] = ["terminal", "json", "diff", "pi"];
+const all: DockTab[] = ["terminal", "json", "diff", "agent"];
 
-it("restores order including hidden tabs and appends missing entries", () => {
-  expect(normalizeDockOrder(["pi", "pi", "removed", "terminal"])).toEqual([
-    "pi",
-    "terminal",
-    "json",
-    "diff",
-    "codex",
-    "browser",
-  ]);
-  expect(normalizeDockOrder(null)).toEqual([...all, "codex", "browser"]);
+it("restores order including hidden tabs and migrates legacy agent tabs", () => {
+  expect(
+    normalizeDockOrder(["pi", "pi", "removed", "terminal", "codex", "browser"]),
+  ).toEqual(["agent", "terminal", "json", "diff"]);
+  expect(normalizeDockOrder(null)).toEqual(all);
 });
 
 describe("reorderDockTabsAtGap", () => {
   it("moves the first visible tab after the last visible tab", () => {
     expect(
-      reorderDockTabsAtGap(all, ["terminal", "pi"], "terminal", 2),
-    ).toEqual(["json", "diff", "pi", "terminal"]);
+      reorderDockTabsAtGap(all, ["terminal", "agent"], "terminal", 2),
+    ).toEqual(["json", "diff", "agent", "terminal"]);
   });
-
   it("moves the last visible tab before the first visible tab", () => {
-    expect(reorderDockTabsAtGap(all, ["terminal", "pi"], "pi", 0)).toEqual([
-      "pi",
-      "terminal",
-      "json",
-      "diff",
-    ]);
+    expect(
+      reorderDockTabsAtGap(all, ["terminal", "agent"], "agent", 0),
+    ).toEqual(["agent", "terminal", "json", "diff"]);
   });
-
   it("keeps hidden plugin tabs in the stored order", () => {
     expect(
-      reorderDockTabsAtGap(all, ["terminal", "json", "pi"], "pi", 1),
-    ).toEqual(["terminal", "pi", "json", "diff"]);
+      reorderDockTabsAtGap(all, ["terminal", "json", "agent"], "agent", 1),
+    ).toEqual(["terminal", "agent", "json", "diff"]);
   });
-
   it("ignores a source that is not currently visible", () => {
-    expect(reorderDockTabsAtGap(all, ["terminal", "pi"], "json", 1)).toEqual(
+    expect(reorderDockTabsAtGap(all, ["terminal", "agent"], "json", 1)).toEqual(
       all,
     );
   });

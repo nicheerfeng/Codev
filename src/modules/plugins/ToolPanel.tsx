@@ -1,69 +1,40 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { JsonFormatterPane } from "./json-formatter/JsonFormatterPane";
 import { TextDiffPane } from "./text-diff/TextDiffPane";
-import {
-  CODEX_AGENT_PLUGIN_ID,
-  PI_AGENT_PLUGIN_ID,
-  usePluginStore,
-} from "./store";
-import { clearUnreadPrefix } from "./taskbar-unread/unreadTasks";
-import { useWorkbench } from "./workbench/store";
-const CodexPane = lazy(() =>
-  import("./codex-agent/CodexPane").then((module) => ({
-    default: module.CodexPane,
+import { AGENT_HOST_PLUGIN_ID, usePluginStore } from "./store";
+const AgentPane = lazy(() =>
+  import("@/modules/agent/AgentPane").then((module) => ({
+    default: module.AgentPane,
   })),
 );
-const PiAgentPane = lazy(() =>
-  import("./pi-agent/PiAgentPane").then((module) => ({
-    default: module.PiAgentPane,
-  })),
-);
-const BrowserPane = lazy(() =>
-  import("./workbench/WorkbenchPane").then((module) => ({
-    default: module.WorkbenchPane,
-  })),
-);
+export type ToolId = "json" | "diff" | "agent";
 
-const MAX_FORMATTER_PANES = 2;
-
-export type ToolId = "json" | "diff" | "pi" | "codex" | "browser";
-
-/** 渲染最多两个横向 JSON 格式化页面。 */
 function JsonFormatterTool() {
-  const [paneIds, setPaneIds] = useState([1]);
-
-  /** 创建第二个独立格式化页，不超过工具页上限。 */
-  const addPane = () => {
-    setPaneIds((ids) =>
-      ids.length >= MAX_FORMATTER_PANES ? ids : [...ids, Math.max(...ids) + 1],
-    );
-  };
-
-  /** 关闭格式化页并保留至少一个可用工具页。 */
-  const closePane = (id: number) => {
-    setPaneIds((ids) =>
-      ids.length === 1 ? ids : ids.filter((item) => item !== id),
-    );
-  };
-
+  const [ids, setIds] = useState([1]);
   return (
-    <div className="flex h-full min-h-0 min-w-0 max-w-full overflow-hidden bg-card">
-      <div className="flex min-h-0 min-w-0 max-w-full flex-1 gap-px overflow-hidden">
-        {paneIds.map((id) => (
+    <div className="flex h-full min-h-0 min-w-0 overflow-hidden bg-card">
+      <div className="flex min-h-0 min-w-0 flex-1 gap-px overflow-hidden">
+        {ids.map((id) => (
           <JsonFormatterPane
             key={id}
-            onAdd={paneIds.length === 1 ? addPane : undefined}
-            onClose={paneIds.length === 2 ? () => closePane(id) : undefined}
+            onAdd={
+              ids.length === 1
+                ? () => setIds((ids) => [...ids, Math.max(...ids) + 1])
+                : undefined
+            }
+            onClose={
+              ids.length === 2
+                ? () => setIds((ids) => ids.filter((i) => i !== id))
+                : undefined
+            }
           />
         ))}
       </div>
     </div>
   );
 }
-
-/** 渲染互相隔离的内置插件页面，并在切换时保留各自状态。 */
 export function ToolPanel({
-  tool = "json",
+  tool = "agent",
   active = true,
   onOpenFile,
   onOpenDiff,
@@ -77,68 +48,13 @@ export function ToolPanel({
   workspaceRoots?: string[];
   onAddWorkspaceRoot?: (path: string) => void;
 }) {
-  const browserEnabled = usePluginStore((state) => state.enabled.browser);
-  const workbenchPi = useWorkbench(
-    (state) =>
-      state.visible && state.slots.some((source) => source?.kind === "pi"),
-  );
-  const workbenchCodex = useWorkbench(
-    (state) =>
-      state.visible && state.slots.some((source) => source?.kind === "codex"),
-  );
-  const piEnabled = usePluginStore(
-    (state) => state.enabled[PI_AGENT_PLUGIN_ID],
-  );
-  const [piVisited, setPiVisited] = useState(active && tool === "pi");
-  const codexEnabled = usePluginStore(
-    (state) => state.enabled[CODEX_AGENT_PLUGIN_ID],
-  );
-  const [codexVisited, setCodexVisited] = useState(active && tool === "codex");
+  const enabled = usePluginStore((s) => s.enabled[AGENT_HOST_PLUGIN_ID]);
+  const [visited, setVisited] = useState(active && tool === "agent");
   useEffect(() => {
-    if (active && tool === "codex") setCodexVisited(true);
-  }, [tool, active]);
-  useEffect(() => {
-    if (active && tool === "pi") setPiVisited(true);
-  }, [tool, active]);
-  useEffect(() => {
-    if (!piEnabled) {
-      setPiVisited(false);
-      useWorkbench.getState().release("pi");
-      clearUnreadPrefix("pi:");
-    }
-  }, [piEnabled]);
-  useEffect(() => {
-    if (!codexEnabled) {
-      setCodexVisited(false);
-      useWorkbench.getState().release("codex");
-      clearUnreadPrefix("codex:");
-    }
-  }, [codexEnabled]);
+    if (active && tool === "agent") setVisited(true);
+  }, [active, tool]);
   return (
     <div className="relative h-full min-h-0 min-w-0 overflow-hidden bg-card">
-      <div
-        className={
-          tool === "codex" ? "absolute inset-0" : "hidden absolute inset-0"
-        }
-      >
-        {codexVisited && codexEnabled && (
-          <Suspense
-            fallback={
-              <div className="p-4 text-xs text-muted-foreground">
-                正在加载 Codex...
-              </div>
-            }
-          >
-            <CodexPane
-              active={active && (tool === "codex" || workbenchCodex)}
-              onOpenFile={onOpenFile}
-              onOpenDiff={onOpenDiff}
-              workspaceRoots={workspaceRoots}
-              onAddWorkspaceRoot={onAddWorkspaceRoot}
-            />
-          </Suspense>
-        )}
-      </div>
       <div
         className={
           tool === "json" ? "absolute inset-0" : "hidden absolute inset-0"
@@ -155,19 +71,19 @@ export function ToolPanel({
       </div>
       <div
         className={
-          tool === "pi" ? "absolute inset-0" : "hidden absolute inset-0"
+          tool === "agent" ? "absolute inset-0" : "hidden absolute inset-0"
         }
       >
-        {piVisited && piEnabled && (
+        {visited && enabled && (
           <Suspense
             fallback={
               <div className="p-4 text-xs text-muted-foreground">
-                正在加载 Pi Agent…
+                正在连接 Agent 主机…
               </div>
             }
           >
-            <PiAgentPane
-              active={active && (tool === "pi" || workbenchPi)}
+            <AgentPane
+              active={active && tool === "agent"}
               onOpenFile={onOpenFile}
               onOpenDiff={onOpenDiff}
               workspaceRoots={workspaceRoots}
@@ -175,23 +91,6 @@ export function ToolPanel({
             />
           </Suspense>
         )}
-      </div>
-      <div
-        className={
-          tool === "browser" ? "absolute inset-0" : "hidden absolute inset-0"
-        }
-      >
-        <Suspense
-          fallback={
-            <div className="p-4 text-xs text-muted-foreground">
-              正在加载浏览器…
-            </div>
-          }
-        >
-          {browserEnabled && (
-            <BrowserPane visible={active && tool === "browser"} />
-          )}
-        </Suspense>
       </div>
     </div>
   );

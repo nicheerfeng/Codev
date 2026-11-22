@@ -11,7 +11,7 @@ const rootDir = import.meta.dirname;
 // https://vite.dev/config/
 export default defineConfig({
   // 只预扫描产品入口，参考项目和 UI 核验页面不进入应用依赖图。
-  optimizeDeps: { entries: ["index.html", "settings.html"] },
+  optimizeDeps: { entries: ["index.html", "settings.html", "mobile.html"] },
   plugins: [
     babel({
       presets: [reactCompilerPreset({ target: "19" })],
@@ -26,6 +26,8 @@ export default defineConfig({
     },
   },
   build: {
+    outDir: "dist-agent-host",
+    emptyOutDir: false,
     target:
       process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome120" : "es2022",
     chunkSizeWarningLimit: 1500,
@@ -33,6 +35,7 @@ export default defineConfig({
       input: {
         main: path.resolve(rootDir, "index.html"),
         settings: path.resolve(rootDir, "settings.html"),
+        mobile: path.resolve(rootDir, "mobile.html"),
       },
       // Oxc drops `debugger` by default. These calls return undefined, so
       // marking them pure lets DCE strip them from production builds.

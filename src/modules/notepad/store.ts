@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { create } from "zustand";
 import {
@@ -15,9 +16,24 @@ const DATA_KEY = "notepad";
 const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: false });
 let writes = Promise.resolve();
 
+function isTauriRuntime(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__)
+  );
+}
+
 function persist(pad: NotePad) {
   writes = writes
     .then(async () => {
+      if (isTauriRuntime()) {
+        try {
+          await invoke("app_db_notepad_save", { pad });
+          return;
+        } catch (error) {
+          console.warn("SQLite 保存记事本失败，回落到文件存储", error);
+        }
+      }
       await store.set(DATA_KEY, pad);
       await store.save();
     })
@@ -83,6 +99,26 @@ export const useNotePad = create<NotePadState>((set, get) => ({
   ready: false,
   load: async () => {
     if (get().ready) return;
+    if (isTauriRuntime()) {
+      try {
+        const fromDb = await invoke<{ projects?: unknown[] }>("app_db_notepad_load");
+        if (Array.isArray(fromDb?.projects) && fromDb.projects.length > 0) {
+          set({ ...normalizeNotePad(fromDb), ready: true });
+          return;
+        }
+        const legacy = await store.get<unknown>(DATA_KEY).catch(() => null);
+        if (legacy) {
+          const normalized = normalizeNotePad(legacy);
+          await invoke("app_db_notepad_save", { pad: normalized });
+          set({ ...normalized, ready: true });
+          return;
+        }
+        set({ ...normalizeNotePad(fromDb), ready: true });
+        return;
+      } catch (error) {
+        console.warn("SQLite 读取记事本失败，回落到文件存储", error);
+      }
+    }
     const saved = await store.get<unknown>(DATA_KEY);
     set({ ...normalizeNotePad(saved), ready: true });
   },

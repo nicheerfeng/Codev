@@ -13,7 +13,7 @@ export function WorkbenchContent({
   const home = useRef<HTMLDivElement>(null);
   const [host] = useState(() => {
     const node = document.createElement("div");
-    node.className = `@container flex h-full min-h-0 min-w-0 flex-col overflow-hidden ${source.kind === "pi" ? "pi-agent" : ""}`;
+    node.className = `@container flex h-full min-h-0 min-w-0 flex-col overflow-hidden ${source.kind === "pi" ? "pi-agent" : source.kind === "antigravity" ? "antigravity-agent" : ""}`;
     if (source.kind === "pi") node.dataset.piViewportKey = source.id;
     if (source.kind === "codex") node.dataset.codexViewportKey = source.id;
     return node;

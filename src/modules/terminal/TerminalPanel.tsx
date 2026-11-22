@@ -40,8 +40,6 @@ import {
   shrinkViewportSlots,
   swapViewportSlots,
 } from "@/lib/viewportSlots";
-import { usePluginStore } from "@/modules/plugins/store";
-import { useWorkbench } from "@/modules/plugins/workbench/store";
 import { toast } from "sonner";
 
 type Props = {
@@ -92,7 +90,6 @@ export function TerminalPanel({
   onFocusLeaf,
 }: Props) {
   const t = useT();
-  const workbenchEnabled = usePluginStore((state) => state.enabled.browser);
   const handles = useRef(new Map<number, TerminalPaneHandle>());
   /** 保留句柄供右侧列表点击后直接聚焦，同时维持主窗口的搜索和输入注册。 */
   const registerPane = useCallback(
@@ -145,27 +142,14 @@ export function TerminalPanel({
           : (tabs[0]?.id ?? null),
       ];
   const grid = terminalGrid(displaySlots);
-  const workbenchSlots = useWorkbench((state) => state.slots);
-  const workbenchVisible = useWorkbench((state) => state.visible);
-  const workbenchIds = workbenchVisible
-    ? workbenchSlots
-        .filter((source) => source?.kind === "terminal")
-        .map((source) => Number(source!.id))
-    : [];
-  const visibleKey = [
-    ...new Set([...(visible ? grid.visibleIds : []), ...workbenchIds]),
-  ].join(",");
+  const visibleKey = (visible ? grid.visibleIds : []).join(",");
   const tabIdsKey = tabs.map((tab) => tab.id).join(",");
   useEffect(() => {
-    if (!visible && !workbenchVisible) return;
+    if (!visible) return;
     onShowTerminals(visibleKey ? visibleKey.split(",").map(Number) : []);
-  }, [visibleKey, onShowTerminals, visible, workbenchVisible]);
+  }, [visibleKey, onShowTerminals, visible]);
   useEffect(() => {
     const live = new Set(tabIdsKey ? tabIdsKey.split(",").map(Number) : []);
-    for (const source of useWorkbench.getState().slots) {
-      if (source?.kind === "terminal" && !live.has(Number(source.id)))
-        useWorkbench.getState().release("terminal", source.id);
-    }
     setViewSlots((slots) =>
       slots.some((id) => id !== null && !live.has(id))
         ? slots.map((id) => (id !== null && !live.has(id) ? null : id))
@@ -632,20 +616,6 @@ export function TerminalPanel({
                       </div>
                     </ContextMenuTrigger>
                     <ContextMenuContent className={COMPACT_CONTENT}>
-                      {workbenchEnabled && (
-                        <ContextMenuItem
-                          className={COMPACT_ITEM}
-                          onSelect={() =>
-                            useWorkbench.getState().add({
-                              kind: "terminal",
-                              id: String(tab.id),
-                              title: labelFor(tab),
-                            })
-                          }
-                        >
-                          添加到工作台
-                        </ContextMenuItem>
-                      )}
                       <ContextMenuItem
                         className={COMPACT_ITEM}
                         onSelect={() => beginRename(tab)}

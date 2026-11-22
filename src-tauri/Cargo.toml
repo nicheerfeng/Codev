@@ -68,6 +68,15 @@ notify = "8.2.0"
 trash = "5"
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 sha2 = "0.10"
+# Shared desktop / remote agent host. The host itself has no WebView dependency.
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
+tower-http = { version = "0.6", features = ["fs", "limit"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+subtle = "2"
 
 [dev-dependencies]
 proptest = "1"

@@ -401,6 +401,7 @@ html *::-webkit-scrollbar {
 .markdown-rendered [data-streamdown="code-block"],
 .markdown-rendered [data-streamdown="table-wrapper"],
 .markdown-rendered [data-streamdown="mermaid-block"] {
+  position: relative;
   border: 0;
   background: transparent;
   padding: 0;
@@ -409,6 +410,29 @@ html *::-webkit-scrollbar {
 .markdown-rendered [data-streamdown="code-block-header"],
 .markdown-rendered [data-streamdown="mermaid-block"] > div:first-child:not(:has([data-streamdown="mermaid"])) {
   display: none;
+}
+.markdown-rendered [data-streamdown="code-block"] > div:has(> [data-streamdown="code-block-actions"]),
+.markdown-rendered [data-streamdown="mermaid-block"] > div:has(> [data-streamdown="mermaid-block-actions"]) {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  height: auto;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.markdown-rendered [data-streamdown="code-block"]:hover > div:has(> [data-streamdown="code-block-actions"]),
+.markdown-rendered [data-streamdown="code-block"]:focus-within > div:has(> [data-streamdown="code-block-actions"]),
+.markdown-rendered [data-streamdown="mermaid-block"]:hover > div:has(> [data-streamdown="mermaid-block-actions"]),
+.markdown-rendered [data-streamdown="mermaid-block"]:focus-within > div:has(> [data-streamdown="mermaid-block-actions"]) {
+  opacity: 1;
+  pointer-events: auto;
+}
+.markdown-rendered [data-streamdown="code-block-actions"],
+.markdown-rendered [data-streamdown="mermaid-block-actions"] {
+  pointer-events: auto;
 }
 .markdown-rendered [data-streamdown="table-wrapper"] > div:last-child {
   max-width: 100%;

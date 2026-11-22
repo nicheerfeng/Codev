@@ -2,7 +2,7 @@ pub mod modules;
 #[cfg(target_os = "windows")]
 mod window_material;
 
-use modules::{browser, codex_agent, fs, git, github, history, pi_agent, pty, voice, workspace};
+use modules::{agent_host, app_db, fs, git, github, history, pty, voice, workspace};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -397,8 +397,9 @@ fn show_main_window(app: &tauri::AppHandle) {
 }
 
 fn quit_app(app: &tauri::AppHandle) {
-    let _ = pi_agent::pi_agent_close_all(app.state());
-    let _ = codex_agent::codex_agent_close(app.state(), None);
+    if let Some(state) = app.try_state::<agent_host::AgentHostState>() {
+        state.shutdown();
+    }
     app.exit(0);
 }
 
@@ -562,6 +563,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .setup(move |_app| {
+            if let Ok(dir) = _app.path().app_data_dir() {
+                let _ = _app.state::<app_db::AppDbState>().init_dir(&dir);
+            }
             if let Err(error) = install_tray(_app.handle()) {
                 log::warn!("[Codev] tray icon unavailable: {error}");
             }
@@ -582,8 +586,8 @@ pub fn run() {
         .manage(fs::search::SearchState::default())
         .manage(fs::transfer::TransferState::default())
         .manage(history::HistoryState::default())
-        .manage(pi_agent::PiAgentState::default())
-        .manage(codex_agent::CodexAgentState::default())
+        .manage(app_db::AppDbState::default())
+        .manage(agent_host::AgentHostState::default())
         .manage(voice::VoiceState::default())
         .manage(fs::grep::ContentSearchState::default())
         .manage(PendingOpenTargets::default())
@@ -652,21 +656,12 @@ pub fn run() {
             history::history_commands,
             history::history_record,
             history::history_list,
-            pi_agent::pi_agent_probe,
-            codex_agent::codex_agent_start,
-            codex_agent::codex_agent_send,
-            codex_agent::codex_agent_close,
-            codex_agent::codex_agent_ready,
-            codex_agent::codex_agent_prepare_switch,
-            codex_agent::resources::codex_resources_list,
-            codex_agent::resources::codex_resources_save,
-            codex_agent::resources::codex_resources_delete,
-            codex_agent::resources::codex_resources_models,
-            codex_agent::usage::codex_agent_read_usage,
-            codex_agent::resources::codex_resources_rollback,
-            codex_agent::resources::codex_resources_probe,
-            codex_agent::resources::codex_resources_read_instructions,
-            codex_agent::resources::codex_resources_write_instructions,
+            app_db::app_db_notepad_load,
+            app_db::app_db_notepad_save,
+            app_db::app_db_ui_load_all,
+            app_db::app_db_ui_set,
+            agent_host::agent_host_bootstrap,
+            agent_host::codev_install_stamp,
             voice::voice_config_list,
             voice::voice_config_read_secret,
             voice::voice_config_save,
@@ -682,36 +677,6 @@ pub fn run() {
             git::git_tracking,
             git::git_pull,
             git::git_push,
-            browser::browser_show,
-            browser::browser_set_bounds,
-            browser::browser_reload,
-            browser::browser_inspect,
-            browser::browser_hide,
-            browser::browser_close,
-            pi_agent::pi_agent_list_sessions,
-            pi_agent::pi_agent_delete_session,
-            pi_agent::pi_agent_read_models,
-            pi_agent::pi_agent_write_models,
-            pi_agent::pi_agent_read_prompts,
-            pi_agent::pi_agent_write_prompt,
-            pi_agent::pi_agent_read_session,
-            pi_agent::pi_agent_clone_session,
-            pi_agent::pi_agent_append_session,
-            pi_agent::pi_agent_truncate_session,
-            pi_agent::pi_agent_list_models,
-            pi_agent::pi_agent_list_subagent_runs,
-            pi_agent::pi_agent_start,
-            pi_agent::pi_agent_send,
-            pi_agent::pi_agent_close,
-            pi_agent::pi_agent_close_all,
-            pi_agent::pi_agent_watch_sessions,
-            codex_agent::codex_agent_watch_sessions,
-            codex_agent::codex_agent_export,
-            pi_agent::assets::pi_agent_list_assets,
-            pi_agent::assets::pi_agent_list_package_specs,
-            pi_agent::assets::pi_agent_install_package,
-            pi_agent::pi_agent_home_dir,
-            pi_agent::codev_install_stamp,
             github::github_latest_release,
             codev_quit,
         ])
@@ -741,6 +706,11 @@ pub fn run() {
                         .collect();
                     let target = resolve_launch_target(entries);
                     queue_open_target(_app, target);
+                }
+                tauri::RunEvent::Exit => {
+                    if let Some(state) = _app.try_state::<agent_host::AgentHostState>() {
+                        state.shutdown();
+                    }
                 }
                 _ => {}
             }

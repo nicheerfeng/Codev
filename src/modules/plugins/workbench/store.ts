@@ -15,7 +15,7 @@ function openWorkbench() {
 }
 
 export type WorkbenchSource = {
-  kind: "pi" | "codex" | "terminal" | "browser";
+  kind: "pi" | "codex" | "antigravity" | "terminal" | "browser";
   id: string;
   title: string;
 };

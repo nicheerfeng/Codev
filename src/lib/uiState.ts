@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { LazyStore } from "@tauri-apps/plugin-store";
 
 const store = new LazyStore("codev-ui-state.json", {
@@ -19,10 +20,43 @@ const legacyKeys = [
 ];
 let writes = Promise.resolve();
 
-/** 首次绘制前读取统一布局文件，仅在文件缺项时迁移旧浏览器记忆。 */
+function isTauriRuntime(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__)
+  );
+}
+
+/** 首次绘制前读取统一 SQLite 状态库（非 Tauri 测试环境回落到 LazyStore），仅在缺项时迁移旧记录。 */
 export async function initUiState(
   legacy: Pick<Storage, "getItem"> = localStorage,
 ): Promise<void> {
+  if (isTauriRuntime()) {
+    try {
+      const fromDb = await invoke<Record<string, string>>("app_db_ui_load_all");
+      for (const [key, value] of Object.entries(fromDb)) {
+        if (typeof value === "string") values.set(key, value);
+      }
+      if (values.size === 0) {
+        const entries = await store.entries<unknown>().catch(() => []);
+        for (const [key, value] of entries) {
+          if (typeof value !== "string" || values.has(key)) continue;
+          values.set(key, value);
+          await invoke("app_db_ui_set", { key, value });
+        }
+      }
+      for (const key of legacyKeys) {
+        if (values.has(key)) continue;
+        const value = legacy.getItem(key);
+        if (value === null) continue;
+        values.set(key, value);
+        await invoke("app_db_ui_set", { key, value });
+      }
+      return;
+    } catch (error) {
+      console.warn("SQLite 界面状态读取失败，回落到文件存储", error);
+    }
+  }
   const entries = await store.entries<unknown>();
   for (const [key, value] of entries) {
     if (typeof value === "string") values.set(key, value);
@@ -42,12 +76,20 @@ export const uiState = {
   getItem(key: string): string | null {
     return values.get(key) ?? null;
   },
-  /** 内存立即更新，文件写入串行执行，避免快速拖拽覆盖新值。 */
+  /** 内存立即更新，SQLite 写入串行执行，避免快速拖拽覆盖新值。 */
   setItem(key: string, value: string): void {
     if (values.get(key) === value) return;
     values.set(key, value);
     writes = writes
       .then(async () => {
+        if (isTauriRuntime()) {
+          try {
+            await invoke("app_db_ui_set", { key, value });
+            return;
+          } catch (error) {
+            console.warn("SQLite 保存界面状态失败，回落到文件存储", error);
+          }
+        }
         await store.set(key, value);
         await store.save();
       })

@@ -222,7 +222,7 @@ export function WorkbenchPane({ visible }: { visible: boolean }) {
                   {source
                     ? source.kind === "browser"
                       ? source.title
-                      : `${source.kind === "terminal" ? "终端" : source.kind === "pi" ? "Pi" : "Codex"} · ${source.title}`
+                      : `${source.kind === "terminal" ? "终端" : source.kind === "pi" ? "Pi" : source.kind === "codex" ? "Codex" : "Antigravity"} · ${source.title}`
                     : `视口 ${index + 1}`}
                 </button>
                 <Button

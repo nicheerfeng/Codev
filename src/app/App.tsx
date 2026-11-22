@@ -43,13 +43,8 @@ import {
   usePluginStore,
 } from "@/modules/plugins";
 import { useTaskbarUnreadBadge } from "@/modules/plugins/taskbar-unread/useTaskbarUnreadBadge";
-import {
-  composeExplorerPathDropTargets,
-  createPiComposerPathDropTarget,
-} from "@/modules/plugins/pi-agent/piComposerDrop";
-import { usePiComposerDropStore } from "@/modules/plugins/pi-agent/piComposerDropStore";
-import { createCodexComposerPathDropTarget } from "@/modules/plugins/codex-agent/codexComposerDrop";
-import { useCodexComposerDropStore } from "@/modules/plugins/codex-agent/codexComposerDropStore";
+import { composeExplorerPathDropTargets, createAgentComposerPathDropTarget } from "@/modules/agent/drop";
+import { invoke } from "@tauri-apps/api/core";
 import {
   type ShortcutHandlers,
   type ShortcutId,
@@ -115,7 +110,7 @@ import {
   needsFirstLayout,
   shouldShowWelcome,
 } from "./lib/firstWorkspaceLayout";
-import { codevInstallStamp } from "@/modules/plugins/pi-agent/native";
+const codevInstallStamp = () => invoke<string | null>("codev_install_stamp");
 
 /** 判断文件标签是否对应同一个规范化路径。 */
 function tabPathMatches(tab: Tab, path: string): boolean {
@@ -207,31 +202,10 @@ export default function App() {
   const { zoomIn, zoomOut, zoomReset } = useZoom();
   useApplyEditorFontSize();
   const terminalPathDropTarget = useTerminalFileDrop();
-  const piComposerPathDropTarget = useMemo(
-    () =>
-      createPiComposerPathDropTarget({
-        active: () => usePiComposerDropStore.getState().active,
-        onDrop: (items, key) =>
-          usePiComposerDropStore.getState().drop?.(items, key),
-        onHover: (hover, key) =>
-          usePiComposerDropStore.getState().setHover(hover, key),
-      }),
-    [],
-  );
+  const agentComposerPathDropTarget = useMemo(createAgentComposerPathDropTarget, []);
   const explorerPathDropTarget = useMemo(
-    () =>
-      composeExplorerPathDropTargets(
-        piComposerPathDropTarget,
-        createCodexComposerPathDropTarget({
-          active: () => useCodexComposerDropStore.getState().active,
-          onDrop: (items, key) =>
-            useCodexComposerDropStore.getState().drop?.(items, key),
-          onHover: (hover, key) =>
-            useCodexComposerDropStore.getState().setHover(hover, key),
-        }),
-        terminalPathDropTarget,
-      ),
-    [piComposerPathDropTarget, terminalPathDropTarget],
+    () => composeExplorerPathDropTargets(agentComposerPathDropTarget, terminalPathDropTarget),
+    [agentComposerPathDropTarget, terminalPathDropTarget],
   );
   const explorerRef = useRef<FileExplorerHandle>(null);
   const markdownDefaultView = usePreferencesStore(
@@ -241,24 +215,20 @@ export default function App() {
     (state) =>
       state.enabled["json-formatter"] ||
       state.enabled["text-diff"] ||
-      state.enabled["pi-agent"] ||
-      state.enabled["codex-agent"] ||
-      state.enabled["browser"],
+      state.enabled["agent-host"],
   );
   const jsonFormatterEnabled = usePluginStore(
     (state) => state.enabled["json-formatter"],
   );
   const textDiffEnabled = usePluginStore((state) => state.enabled["text-diff"]);
-  const piAgentEnabled = usePluginStore((state) => state.enabled["pi-agent"]);
-  const codexEnabled = usePluginStore((state) => state.enabled["codex-agent"]);
-  const browserEnabled = usePluginStore((state) => state.enabled["browser"]);
+  const agentEnabled = usePluginStore((state) => state.enabled["agent-host"]);
   const initPlugins = usePluginStore((state) => state.init);
   const [rightDockView, setRightDockView] = useState<"terminal" | "tools">(
     "terminal",
   );
   const [toolView, setToolView] = useState<
-    "json" | "diff" | "pi" | "codex" | "browser"
-  >("pi");
+    "json" | "diff" | "agent"
+  >("agent");
   const [dockOrder, setDockOrder] = useState<DockTab[]>(() => {
     try {
       return normalizeDockOrder(
@@ -277,16 +247,12 @@ export default function App() {
       "terminal",
       ...(jsonFormatterEnabled ? ["json" as const] : []),
       ...(textDiffEnabled ? ["diff" as const] : []),
-      ...(piAgentEnabled ? ["pi" as const] : []),
-      ...(codexEnabled ? ["codex" as const] : []),
-      ...(browserEnabled ? ["browser" as const] : []),
+      ...(agentEnabled ? ["agent" as const] : []),
     ],
     [
       jsonFormatterEnabled,
-      piAgentEnabled,
+      agentEnabled,
       textDiffEnabled,
-      codexEnabled,
-      browserEnabled,
     ],
   );
   const dockTabs = useMemo(
@@ -324,22 +290,14 @@ export default function App() {
     if (toolView === "diff" && !textDiffEnabled && jsonFormatterEnabled) {
       setToolView("json");
     }
-    if (toolView === "codex" && !codexEnabled) {
+    if (toolView === "agent" && !agentEnabled) {
       setRightDockView("terminal");
-    }
-    if (toolView === "browser" && !browserEnabled) {
-      setRightDockView("terminal");
-    }
-    if (toolView === "pi" && !piAgentEnabled) {
-      setToolView(jsonFormatterEnabled ? "json" : "diff");
     }
   }, [
     jsonFormatterEnabled,
-    piAgentEnabled,
+    agentEnabled,
     textDiffEnabled,
     toolView,
-    codexEnabled,
-    browserEnabled,
   ]);
 
   // Drives session disposal off the pane tree, not React lifecycles —
@@ -595,15 +553,6 @@ export default function App() {
   useEffect(() => {
     if (agentProjectRequest) expandTerminalPanel();
   }, [agentProjectRequest, expandTerminalPanel]);
-  useEffect(() => {
-    const openWorkbench = () => {
-      selectDockTab("browser");
-      expandTerminalPanel();
-    };
-    window.addEventListener("codev:open-workbench", openWorkbench);
-    return () =>
-      window.removeEventListener("codev:open-workbench", openWorkbench);
-  }, [selectDockTab, expandTerminalPanel]);
 
   if (needsInitialLayout && !seededFirstLayout.current) {
     seededFirstLayout.current = true;
@@ -1295,7 +1244,7 @@ export default function App() {
               业务生产的高效桌面工作台。
             </p>
             <p className="mb-8 text-sm leading-6 text-muted-foreground">
-              支持文件树、阅读器、终端，以及 Pi Agent 等插件系统。
+              支持文件树、阅读器、终端，以及统一多代理 Agent 工作区。
             </p>
             <button
               type="button"
@@ -1494,11 +1443,7 @@ export default function App() {
                               ? "JSON格式化"
                               : tab === "diff"
                                 ? "文本对照"
-                                : tab === "codex"
-                                  ? "Codex"
-                                  : tab === "browser"
-                                    ? "工作台"
-                                    : "Pi";
+                                : "Agent";
                         return (
                           <Fragment key={tab}>
                             {dockReorder.dropIndex === index && (

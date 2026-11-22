@@ -1,10 +1,9 @@
-pub mod browser;
-pub mod codex_agent;
+pub mod agent_host;
+pub mod app_db;
 pub mod fs;
 pub mod git;
 pub mod github;
 pub mod history;
-pub mod pi_agent;
 pub mod proc;
 pub mod pty;
 pub mod voice;
