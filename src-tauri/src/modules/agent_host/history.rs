@@ -1,9 +1,8 @@
-//! Read-only native history discovery. Never writes CLI configuration or transcript files.
-use super::metadata::{display_path, stable_id};
+//! Read-only access to native session transcripts.
 use super::protocol::*;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 pub fn pi_home() -> Option<PathBuf> {
@@ -337,37 +336,6 @@ pub fn pi_tail_summary(path: &Path) -> (Vec<(String, String, String)>, Option<Va
     (entries, latest_usage)
 }
 
-pub struct Discovered {
-    pub cwd: String,
-    pub binding: SessionBinding,
-}
-fn candidates(root: &Path, depth: usize, out: &mut Vec<PathBuf>) {
-    if depth == 0 || out.len() >= 10000 {
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if p.is_dir() {
-            candidates(&p, depth - 1, out);
-        } else if p.extension().and_then(|s| s.to_str()) == Some("jsonl") {
-            out.push(p);
-        }
-    }
-}
-fn first_records(path: &Path) -> Vec<Value> {
-    let Ok(file) = std::fs::File::open(path) else {
-        return vec![];
-    };
-    BufReader::new(file.take(64 * 1024))
-        .lines()
-        .take(30)
-        .filter_map(Result::ok)
-        .filter_map(|s| serde_json::from_str(&s).ok())
-        .collect()
-}
 fn tail_records(path: &Path) -> Vec<Value> {
     let Ok(mut file) = std::fs::File::open(path) else {
         return vec![];
@@ -379,118 +347,6 @@ fn tail_records(path: &Path) -> Vec<Value> {
         .filter_map(Result::ok)
         .filter_map(|s| serde_json::from_str(&s).ok())
         .collect()
-}
-pub fn discover() -> Vec<Discovered> {
-    let mut found = vec![];
-    let mut files = vec![];
-    if let Some(home) = pi_home() {
-        candidates(&home.join("sessions"), 2, &mut files);
-    }
-    for path in files {
-        let records = first_records(&path);
-        let Some(header) = records.iter().find(|v| text(v, "type") == "session") else {
-            continue;
-        };
-        let cwd = text(header, "cwd");
-        if cwd.is_empty() || !Path::new(&cwd).is_dir() {
-            continue;
-        }
-        let tail = tail_records(&path);
-        let title = tail
-            .iter()
-            .rev()
-            .find(|v| text(v, "type") == "session_info")
-            .map(|v| text(v, "name"))
-            .filter(|s| !s.is_empty())
-            .or_else(|| {
-                records
-                    .iter()
-                    .filter_map(|v| v.get("message"))
-                    .find(|v| text(v, "role") == "user")
-                    .map(|v| {
-                        content_text(v.get("content").unwrap_or(&Value::Null))
-                            .chars()
-                            .take(72)
-                            .collect()
-                    })
-            })
-            .unwrap_or_else(|| "Pi 历史会话".into());
-        let canonical = std::fs::canonicalize(&path).unwrap_or(path);
-        let native_path = display_path(&canonical);
-        found.push(Discovered {
-            cwd,
-            binding: SessionBinding {
-                id: stable_id("pi", &native_path),
-                workspace_id: String::new(),
-                harness_id: "pi".into(),
-                title,
-                native_session_id: header.get("id").and_then(Value::as_str).map(str::to_string),
-                native_session_path: Some(native_path),
-                archived: false,
-                pinned: false,
-                read_only: false,
-                imported: true,
-                updated_at: canonical
-                    .metadata()
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0),
-            },
-        });
-    }
-    // External Codex logs can be displayed without falsely claiming the ACP bridge can resume them.
-    files = vec![];
-    if let Some(home) = dirs::home_dir() {
-        candidates(&home.join(".codex/sessions"), 5, &mut files);
-    }
-    for path in files {
-        let records = first_records(&path);
-        let meta = records
-            .iter()
-            .find(|v| text(v, "type") == "session_meta")
-            .and_then(|v| v.get("payload"));
-        let Some(meta) = meta else { continue };
-        let cwd = text(meta, "cwd");
-        if cwd.is_empty() || !Path::new(&cwd).is_dir() {
-            continue;
-        }
-        let canonical = std::fs::canonicalize(&path).unwrap_or(path);
-        let native_path = display_path(&canonical);
-        let updated_at = canonical
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .filter(|t| *t > 0)
-            .unwrap_or_else(|| parse_timestamp_ms(meta.get("timestamp")) / 1000);
-        found.push(Discovered {
-            cwd,
-            binding: SessionBinding {
-                id: stable_id("codex", &native_path),
-                workspace_id: String::new(),
-                harness_id: "acp:codex".into(),
-                title: records
-                    .iter()
-                    .filter_map(|v| v.get("payload"))
-                    .filter(|v| text(v, "role") == "user")
-                    .map(|v| content_text(v.get("content").unwrap_or(&Value::Null)))
-                    .find(|s| !s.is_empty())
-                    .map(|s| s.chars().take(72).collect())
-                    .unwrap_or_else(|| "Codex 原生历史".into()),
-                native_session_id: meta.get("id").and_then(Value::as_str).map(str::to_string),
-                native_session_path: Some(native_path),
-                archived: false,
-                pinned: false,
-                read_only: true,
-                imported: true,
-                updated_at,
-            },
-        });
-    }
-    found
 }
 pub fn read_codex(path: &Path, before: Option<usize>) -> Result<(Vec<Message>, usize), String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;

@@ -40,16 +40,24 @@ const SCOPE = "pi" as const;
 
 export function VoiceSettingsPanel({
   embedded = false,
+  onDirtyChange,
 }: {
   embedded?: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [value, setValue] = useState<VoiceScopeView | null>(null);
   const [draft, setDraft] = useState<VoiceConfigInput | null>(null);
   const [key, setKey] = useState("");
+  const [savedKey, setSavedKey] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [path, setPath] = useState("");
+  const dirty =
+    !!value &&
+    !!draft &&
+    (JSON.stringify(draft) !== JSON.stringify(cloneInput(value)) ||
+      key !== savedKey);
 
   const load = async () => {
     setBusy(true);
@@ -59,7 +67,9 @@ export function VoiceSettingsPanel({
       setValue(next);
       setDraft(cloneInput(next));
       setPath(all.path);
-      setKey(next.hasKey ? await readVoiceSecret(SCOPE) : "");
+      const secret = next.hasKey ? await readVoiceSecret(SCOPE) : "";
+      setKey(secret);
+      setSavedKey(secret);
       setShowKey(false);
       setMessage("");
     } catch (error) {
@@ -73,6 +83,10 @@ export function VoiceSettingsPanel({
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 
   if (!value || !draft) {
     return (
@@ -99,7 +113,9 @@ export function VoiceSettingsPanel({
       const next = all[SCOPE];
       setValue(next);
       setDraft(cloneInput(next));
-      setKey(next.hasKey ? await readVoiceSecret(SCOPE) : "");
+      const secret = next.hasKey ? await readVoiceSecret(SCOPE) : "";
+      setKey(secret);
+      setSavedKey(secret);
       setShowKey(false);
       setMessage("已保存");
       toast.success("Agent 语音配置已保存");
@@ -279,7 +295,10 @@ export function VoiceSettingsPanel({
           size="sm"
           variant="ghost"
           disabled={busy}
-          onClick={() => void load()}
+          onClick={() => {
+            if (!dirty || window.confirm("有未保存的语音设置，确定刷新？"))
+              void load();
+          }}
         >
           <HugeiconsIcon icon={Refresh01Icon} size={14} />
           刷新

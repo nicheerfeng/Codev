@@ -25,6 +25,7 @@ pub struct Bridge {
     pub wire: Wire,
     outbound: std::sync::mpsc::SyncSender<Value>,
     pending: Mutex<HashMap<String, Reply>>,
+    events: mpsc::Sender<Value>,
     process: Mutex<Option<Child>>,
     diagnostics: Mutex<VecDeque<String>>,
     closed: std::sync::atomic::AtomicBool,
@@ -62,6 +63,7 @@ impl Bridge {
             wire,
             outbound: tx,
             pending: Mutex::new(HashMap::new()),
+            events: events.clone(),
             process: Mutex::new(Some(child)),
             diagnostics: Mutex::new(VecDeque::new()),
             closed: std::sync::atomic::AtomicBool::new(false),
@@ -176,6 +178,27 @@ impl Bridge {
             .try_send(value)
             .map_err(|e| format!("代理写入队列不可用：{e}"))
     }
+    pub async fn drain_events(&self) -> Result<(), String> {
+        let id = new_id();
+        let (tx, rx) = oneshot::channel();
+        lock(&self.pending).insert(id.clone(), tx);
+        if self.events.send(json!({"type":"host_event_barrier","id":id})).await.is_err() {
+            lock(&self.pending).remove(&id);
+            return Err("代理事件流已关闭".into());
+        }
+        match tokio::time::timeout(Duration::from_secs(30), rx).await {
+            Ok(Ok(result)) => result.map(|_| ()),
+            _ => {
+                lock(&self.pending).remove(&id);
+                Err("等待代理历史事件超时".into())
+            }
+        }
+    }
+    pub fn finish_event_barrier(&self, id: &str) {
+        if let Some(reply) = lock(&self.pending).remove(id) {
+            let _ = reply.send(Ok(Value::Null));
+        }
+    }
     pub async fn request(
         &self,
         method: &str,
@@ -210,10 +233,12 @@ impl Bridge {
     #[cfg(test)]
     pub fn for_test(wire: Wire) -> (Arc<Self>, std::sync::mpsc::Receiver<Value>) {
         let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        let (events, _incoming) = mpsc::channel(64);
         let bridge = Arc::new(Self {
             wire,
             outbound: tx,
             pending: Mutex::new(HashMap::new()),
+            events,
             process: Mutex::new(None),
             diagnostics: Mutex::new(VecDeque::new()),
             closed: std::sync::atomic::AtomicBool::new(false),

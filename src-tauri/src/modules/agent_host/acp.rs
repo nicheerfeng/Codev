@@ -1,5 +1,6 @@
 //! ACP lifecycle and message normalization. No model-provider injection into Pi.
 use super::{
+    antigravity_history,
     bridge::lock,
     coordinator::{Host, Runtime},
     history,
@@ -158,11 +159,17 @@ impl Host {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let view = self.view(id)?;
-        let cwd = lock(&self.state)
+        let desktop = antigravity_history::is_desktop(&view.binding);
+        let mut cwd = lock(&self.state)
             .workspaces
             .get(&view.binding.workspace_id)
             .map(|w| w.cwd.clone())
             .ok_or("工作目录不存在")?;
+        if desktop {
+            cwd = super::metadata::display_path(&antigravity_history::desktop_cwd(
+                view.binding.native_session_id.as_deref().ok_or("缺少 Antigravity 会话标识")?,
+            )?);
+        }
         self.update(id, Some(&runtime.instance), |v| {
             v.capabilities = Capabilities {
                 supports_resume: resume,
@@ -181,10 +188,15 @@ impl Host {
             if !resume {
                 return Err("该代理不支持恢复原生会话；请新建会话，原有绑定已保留".into());
             }
-            self.update(id, Some(&runtime.instance), |v| {
-                v.messages.clear();
-                v.history_available = false;
-            });
+            if !desktop {
+                self.update(id, Some(&runtime.instance), |v| {
+                    v.messages.clear();
+                    v.history_available = false;
+                });
+            }
+            if desktop {
+                runtime.loading_desktop_history.store(true, std::sync::atomic::Ordering::Release);
+            }
             let loaded = runtime
                 .bridge
                 .request(
@@ -193,9 +205,14 @@ impl Host {
                     TIMEOUT,
                 )
                 .await;
+            if desktop {
+                let drained = runtime.bridge.drain_events().await;
+                runtime.loading_desktop_history.store(false, std::sync::atomic::Ordering::Release);
+                drained?;
+            }
             match loaded {
                 Ok(value) => value,
-                Err(error) if recoverable_missing_session(&error) => {
+                Err(error) if !desktop && recoverable_missing_session(&error) => {
                     recovered = true;
                     *lock(&runtime.native_id) = None;
                     self.update(id, Some(&runtime.instance), |v| {
@@ -222,6 +239,9 @@ impl Host {
             .map(str::to_string)
             .or_else(|| lock(&runtime.native_id).clone())
             .ok_or("代理没有返回会话标识")?;
+        if desktop && view.binding.native_session_id.as_deref() != Some(native.as_str()) {
+            return Err("Antigravity 返回的会话标识与桌面历史不一致".into());
+        }
         *lock(&runtime.native_id) = Some(native.clone());
         self.update(id, Some(&runtime.instance), |v| {
             v.binding.native_session_id = Some(native);
@@ -255,6 +275,11 @@ impl Host {
             "session/update" => {
                 let update = params.get("update").unwrap_or(&Value::Null);
                 let kind = text(update, "sessionUpdate");
+                if runtime.loading_desktop_history.load(std::sync::atomic::Ordering::Acquire)
+                    && matches!(kind.as_str(), "agent_message_chunk" | "agent_thought_chunk" | "user_message_chunk" | "tool_call" | "tool_call_update" | "plan")
+                {
+                    return;
+                }
                 self.update(id, Some(&runtime.instance), |v| match kind.as_str() {
                     "agent_message_chunk" | "agent_thought_chunk" | "user_message_chunk" => {
                         let role = if kind == "user_message_chunk" {

@@ -27,6 +27,7 @@ fn attach_runtime(host: &Arc<Host>, sid: &str, wire: Wire) -> (Arc<Runtime>, std
         session_auto_write: AtomicBool::new(false),
         cancelled: AtomicBool::new(false),
         closing: AtomicBool::new(false),
+        loading_desktop_history: AtomicBool::new(false),
     });
     lock(&host.runtimes).insert(sid.into(), runtime.clone());
     host.update(sid, None, |v| {
@@ -378,82 +379,3 @@ async fn phase3_and_4_queue_policy_diagnose_and_delete_work() {
     assert!(!host.harnesses().iter().any(|h| h.id == "acp:custom-test1"));
 }
 
-#[test]
-fn metadata_v1_to_v2_prunes_auto_imported_only_workspaces() {
-    let dir = TempDir::new().unwrap();
-    let db_path = dir.path().join("agent-host.sqlite3");
-    {
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE host_workspaces(id TEXT PRIMARY KEY, body TEXT NOT NULL);
-             CREATE TABLE host_sessions(id TEXT PRIMARY KEY, body TEXT NOT NULL);
-             CREATE TABLE host_preferences(key TEXT PRIMARY KEY, body TEXT NOT NULL);
-             CREATE TABLE host_devices(id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, paired_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
-             PRAGMA user_version=1;",
-        )
-        .unwrap();
-        // Auto-imported-only workspace (no pinned, no manual session) -> pruned on upgrade
-        conn.execute(
-            "INSERT INTO host_workspaces VALUES (?1, ?2)",
-            rusqlite::params![
-                "ws-auto",
-                json!({"id": "ws-auto", "cwd": "D:/auto", "title": "auto"}).to_string()
-            ],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO host_sessions VALUES (?1, ?2)",
-            rusqlite::params![
-                "s-auto",
-                json!({
-                    "id": "s-auto",
-                    "workspaceId": "ws-auto",
-                    "harnessId": "acp:codex",
-                    "title": "old codex",
-                    "imported": true,
-                    "pinned": false,
-                    "readOnly": true,
-                    "updatedAt": 1
-                })
-                .to_string()
-            ],
-        )
-        .unwrap();
-        // Manually used workspace (has native session) -> preserved on upgrade
-        conn.execute(
-            "INSERT INTO host_workspaces VALUES (?1, ?2)",
-            rusqlite::params![
-                "ws-keep",
-                json!({"id": "ws-keep", "cwd": "D:/keep", "title": "keep"}).to_string()
-            ],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO host_sessions VALUES (?1, ?2)",
-            rusqlite::params![
-                "s-keep",
-                json!({
-                    "id": "s-keep",
-                    "workspaceId": "ws-keep",
-                    "harnessId": "pi",
-                    "title": "live task",
-                    "imported": false,
-                    "pinned": false,
-                    "updatedAt": 2
-                })
-                .to_string()
-            ],
-        )
-        .unwrap();
-    }
-
-    let host = test_host(&TempDir::new().unwrap());
-    let _ = host;
-    let store = super::metadata::MetadataStore::open(dir.path()).unwrap();
-    let workspaces = store.workspaces().unwrap();
-    assert_eq!(workspaces.len(), 1);
-    assert_eq!(workspaces[0].id, "ws-keep");
-    let sessions = store.sessions().unwrap();
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].id, "s-keep");
-}

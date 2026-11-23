@@ -16,11 +16,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { HugeiconsIcon } from "@hugeicons/react";
-import {
-  ArrowUp01Icon,
-  StopIcon,
-  Image01Icon,
-} from "@hugeicons/core-free-icons";
+import { ArrowUp01Icon, StopIcon } from "@hugeicons/core-free-icons";
 import { useAgentStore } from "./store";
 import { ContextViz } from "./ContextViz";
 import { choices, isBusy, type AgentImage, type SessionView } from "./types";
@@ -31,29 +27,10 @@ const EMPTY = {
   files: [] as Array<{ kind: "file" | "dir"; path: string; name: string }>,
 };
 
-type SlashItem = {
-  name: string;
-  description?: string;
-  source: "local" | "runtime";
-  terminalOnly?: boolean;
-};
-
-type MentionTrigger =
-  | { kind: "slash"; start: number; end: number; query: string }
-  | { kind: "file"; start: number; end: number; query: string };
+type MentionTrigger = { kind: "file"; start: number; end: number; query: string };
 
 function detectTrigger(text: string, cursor: number): MentionTrigger | null {
   const before = text.slice(0, cursor);
-  const slashMatch = before.match(/(?:^|\n)\/([^\s]*)$/);
-  if (slashMatch) {
-    const query = slashMatch[1] ?? "";
-    return {
-      kind: "slash",
-      start: cursor - query.length - 1,
-      end: cursor,
-      query,
-    };
-  }
   const fileMatch = before.match(/(?:^|\s)@([^\s@]*)$/);
   if (fileMatch) {
     const query = fileMatch[1] ?? "";
@@ -67,7 +44,6 @@ function detectTrigger(text: string, cursor: number): MentionTrigger | null {
   return null;
 }
 
-const TERMINAL_ONLY_HINTS = /^(settings|tree|resume|export|share|login|logout|quit|exit|hotkeys)$/i;
 async function readImage(file: File): Promise<AgentImage> {
   if (
     !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
@@ -91,10 +67,8 @@ export function AgentComposer({ session }: { session: SessionView }) {
     (s) => s.workspaces.find((w) => w.id === session.workspaceId)?.cwd ?? "",
   );
   const input = useRef<HTMLTextAreaElement>(null);
-  const file = useRef<HTMLInputElement>(null);
   const [modelOpen, setModelOpen] = useState(false);
   const [filter, setFilter] = useState("");
-  const [commands, setCommands] = useState(false);
   const [sending, setSending] = useState(false);
   const [ime, setIme] = useState(false);
   const [skills, setSkills] = useState<SkillRef[]>([]);
@@ -195,81 +169,13 @@ export function AgentComposer({ session }: { session: SessionView }) {
   const update = (patch: Partial<typeof draft>) =>
     useAgentStore.getState().setDraft(session.id, patch);
   const report = useAgentStore.getState().report;
-  const [pendingRestartHint, setPendingRestartHint] = useState(false);
   const action = (operation: string, payload: unknown = {}) =>
     useAgentStore
       .getState()
       .command(operation, payload, session.id)
-      .then(() => {
-        if (operation === "session.config" && busy) setPendingRestartHint(true);
-        else if (
-          operation === "session.restart" ||
-          operation === "session.connect"
-        ) {
-          setPendingRestartHint(false);
-        }
-      })
       .catch(report);
-  const localCommands: SlashItem[] = [
-    ...(session.capabilities.supportsCompaction
-      ? [{ name: "compact", description: "立即压缩当前会话上下文", source: "local" as const }]
-      : []),
-    ...(session.capabilities.supportsFork && !session.readOnly
-      ? [{ name: "fork", description: "从当前分支克隆一个新会话", source: "local" as const }]
-      : []),
-    { name: "new", description: "在当前工作区新建会话", source: "local" as const },
-    ...(busy
-      ? [{ name: "stop", description: "停止当前正在执行的任务", source: "local" as const }]
-      : []),
-  ];
-  const runtimeCommands: SlashItem[] = session.commands.map((c) => ({
-    name: c.name,
-    description: c.description,
-    source: "runtime",
-    terminalOnly: TERMINAL_ONLY_HINTS.test(c.name),
-  }));
-  const allSlashItems = [
-    ...localCommands,
-    ...runtimeCommands.filter(
-      (rc) => !localCommands.some((lc) => lc.name === rc.name),
-    ),
-  ];
-  const slashQuery =
-    trigger?.kind === "slash" ? trigger.query.toLowerCase() : "";
-  const visibleSlash = (commands || trigger?.kind === "slash")
-    ? allSlashItems.filter((item) =>
-        item.name.toLowerCase().includes(slashQuery),
-      )
-    : [];
   const visibleFiles =
     trigger?.kind === "file" ? workspaceFiles.slice(0, 30) : [];
-
-  const runSlashItem = (item: SlashItem) => {
-    setCommands(false);
-    setTrigger(null);
-    if (item.source === "local") {
-      update({ text: "" });
-      if (item.name === "compact") void action("session.compact");
-      else if (item.name === "fork") {
-        void useAgentStore
-          .getState()
-          .command<SessionView>("session.fork", {}, session.id)
-          .then((view) => useAgentStore.getState().select(view.id))
-          .catch(report);
-      } else if (item.name === "new") {
-        void useAgentStore.getState().createSession().catch(report);
-      } else if (item.name === "stop") {
-        void action("session.cancel");
-      }
-      return;
-    }
-    const nextText =
-      trigger?.kind === "slash"
-        ? `${draft.text.slice(0, trigger.start)}/${item.name} ${draft.text.slice(trigger.end)}`
-        : `/${item.name} `;
-    update({ text: nextText });
-    input.current?.focus();
-  };
 
   const applyFileSuggestion = (item: { path: string; isDir: boolean }) => {
     if (!trigger || trigger.kind !== "file") return;
@@ -304,14 +210,6 @@ export function AgentComposer({ session }: { session: SessionView }) {
     }
   };
   const send = async (steer = false) => {
-    const trimmed = draft.text.trim();
-    if (!steer && trimmed.startsWith("/") && !trimmed.includes(" ") && !draft.images.length && !(draft.files?.length)) {
-      const matchedLocal = localCommands.find((c) => `/${c.name}` === trimmed);
-      if (matchedLocal) {
-        runSlashItem(matchedLocal);
-        return;
-      }
-    }
     if (
       sending ||
       !connected ||
@@ -340,7 +238,6 @@ export function AgentComposer({ session }: { session: SessionView }) {
       recordPrompt(original.text);
       setPasteNotice(null);
       setTrigger(null);
-      setCommands(false);
       const current = useAgentStore.getState().drafts[session.id];
       if (
         current?.text === original.text &&
@@ -506,9 +403,10 @@ export function AgentComposer({ session }: { session: SessionView }) {
             session.readOnly
               ? "这份原生历史当前只读"
               : session.instanceId
-                ? "输入任务；支持 / 命令、@ 文件引用、$ 技能、拖拽文件或粘贴图片…"
+                ? "输入任务；支持 @ 文件引用、$ 技能、拖拽文件或粘贴图片…"
                 : "输入任务，发送时连接原生代理…"
           }
+          className="agent-prompt reader-scrollbar min-h-18 rounded-none border-0! bg-transparent! px-3 py-3 text-[13px]! shadow-none! outline-none! ring-0! focus-visible:border-0! focus-visible:ring-0! [field-sizing:fixed]"
           value={draft.text}
           disabled={session.readOnly || !connected}
           onChange={(e) => {
@@ -518,16 +416,12 @@ export function AgentComposer({ session }: { session: SessionView }) {
             const nextTrigger = detectTrigger(val, pos);
             setTrigger(nextTrigger);
             setMenuIndex(0);
-            if (nextTrigger?.kind !== "slash") setCommands(false);
           }}
           onCompositionStart={() => setIme(true)}
           onCompositionEnd={() => setIme(false)}
           onKeyDown={(e) => {
-            const listCount =
-              trigger?.kind === "file"
-                ? visibleFiles.length
-                : visibleSlash.length;
-            if (listCount > 0 && (commands || trigger)) {
+            const listCount = trigger?.kind === "file" ? visibleFiles.length : 0;
+            if (listCount > 0 && trigger?.kind === "file") {
               if (e.key === "ArrowDown") {
                 e.preventDefault();
                 setMenuIndex((i) => (i + 1) % listCount);
@@ -541,18 +435,12 @@ export function AgentComposer({ session }: { session: SessionView }) {
               if (e.key === "Escape") {
                 e.preventDefault();
                 setTrigger(null);
-                setCommands(false);
                 return;
               }
               if ((e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) && !ime && !e.nativeEvent.isComposing) {
                 e.preventDefault();
-                if (trigger?.kind === "file") {
-                  const chosen = visibleFiles[menuIndex % listCount];
-                  if (chosen) applyFileSuggestion(chosen);
-                } else {
-                  const chosen = visibleSlash[menuIndex % listCount];
-                  if (chosen) runSlashItem(chosen);
-                }
+                const chosen = visibleFiles[menuIndex % listCount];
+                if (chosen) applyFileSuggestion(chosen);
                 return;
               }
             }
@@ -605,31 +493,6 @@ export function AgentComposer({ session }: { session: SessionView }) {
                   <span className="agent-cmd-tag">{item.isDir ? "目录" : "文件"}</span>
                   <span>{item.path}</span>
                 </span>
-              </button>
-            ))}
-          </div>
-        )}
-        {visibleSlash.length > 0 && (commands || trigger?.kind === "slash") && (
-          <div className="agent-command-list reader-scrollbar">
-            {visibleSlash.map((command, idx) => (
-              <button
-                type="button"
-                key={`${command.source}:${command.name}`}
-                className={idx === menuIndex % visibleSlash.length ? "is-active" : ""}
-                onClick={() => runSlashItem(command)}
-              >
-                <span className="flex w-full items-center gap-2">
-                  <span>/{command.name}</span>
-                  <span className="agent-cmd-tag">
-                    {command.source === "local" ? "本地快捷" : "代理命令"}
-                  </span>
-                  {command.terminalOnly && (
-                    <span className="ml-auto text-[9px] text-amber-500">
-                      建议终端执行
-                    </span>
-                  )}
-                </span>
-                {command.description && <small>{command.description}</small>}
               </button>
             ))}
           </div>
@@ -777,40 +640,6 @@ export function AgentComposer({ session }: { session: SessionView }) {
                 </label>
               );
             })}
-          {session.capabilities.supportsImages && (
-            <>
-              <Button
-                title="添加图片"
-                aria-label="添加图片"
-                size="icon-xs"
-                variant="ghost"
-                onClick={() => file.current?.click()}
-              >
-                <HugeiconsIcon icon={Image01Icon} size={15} />
-              </Button>
-              <input
-                ref={file}
-                hidden
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                multiple
-                onChange={(e) => {
-                  void addImages(Array.from(e.target.files ?? []));
-                  e.target.value = "";
-                }}
-              />
-            </>
-          )}
-          {allSlashItems.length > 0 && (
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              title="斜杠命令菜单 (/)"
-              onClick={() => setCommands(!commands)}
-            >
-              /
-            </Button>
-          )}
           {!mobile && (
             <VoiceInputButton
               disabled={!connected || session.readOnly}
@@ -829,11 +658,6 @@ export function AgentComposer({ session }: { session: SessionView }) {
             session={session}
             onCompact={() => void action("session.compact")}
           />
-          {pendingRestartHint && (
-            <span className="text-[10px] text-amber-500">
-              配置待下次重连生效
-            </span>
-          )}
           {busy && (
             <Button
               size="icon-sm"
@@ -875,7 +699,7 @@ export function AgentComposer({ session }: { session: SessionView }) {
               ? "点击箭头发送"
               : busy
                 ? "Enter 排队 · Ctrl+Enter 插队 · 顶边可调高"
-                : "Shift+Enter 换行 · / 命令 · @ 文件 · 顶边可调高"}
+                : "Shift+Enter 换行 · @ 文件 · 顶边可调高"}
         </span>
       </div>
     </footer>

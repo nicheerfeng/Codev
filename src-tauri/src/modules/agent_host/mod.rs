@@ -1,15 +1,18 @@
 //! Shared Rust agent host: desktop and remote clients use the same service.
 mod acp;
+mod antigravity_history;
 mod auth;
 mod bridge;
 mod commands;
 mod coordinator;
 mod history;
 mod metadata;
-mod migration;
 mod native_pi;
+mod native_history;
+mod pi_settings;
 pub mod protocol;
 mod registry;
+mod usage;
 pub mod server;
 #[cfg(test)]
 mod tests;
@@ -46,24 +49,8 @@ pub async fn agent_host_bootstrap(
             let directory = app
                 .path()
                 .app_data_dir()
-                .map_err(|e| e.to_string())?
-                .join("agent-host");
-            let host = Host::open(directory.clone(), server::find_web_directory())?;
-            // Import application project/session bindings only; never CLI credentials.
-            let legacy = directory.parent().map(|p| p.join("codev-plugins.json"));
-            if bridge::lock(&host.store)
-                .preference("legacyMetadataImported")
-                .is_none()
-            {
-                if let Some(path) = legacy {
-                    if let Ok(content) = tokio::fs::read_to_string(path).await {
-                        if let Ok(config) = serde_json::from_str::<Value>(&content) {
-                            host.import_legacy_preferences(&config)?;
-                        }
-                    }
-                }
-                bridge::lock(&host.store).set_preference("legacyMetadataImported", &json!(true))?;
-            }
+                .map_err(|e| e.to_string())?;
+            let host = Host::open(directory, server::find_web_directory())?;
             host.start_background();
             let port = server::start_local(host.clone()).await?;
             Ok::<_, String>(HostService { host, port })

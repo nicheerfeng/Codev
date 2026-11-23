@@ -391,7 +391,9 @@ pub async fn run_standalone() -> Result<(), String> {
     for path in workspaces {
         host.workspace(&path)?;
     }
-    host.import_history().await?;
+    if let Err(error) = host.refresh_native_history().await {
+        log::warn!("原生会话刷新失败：{error}");
+    }
     let listener = TcpListener::bind(format!("{bind}:{port}"))
         .await
         .map_err(|e| e.to_string())?;

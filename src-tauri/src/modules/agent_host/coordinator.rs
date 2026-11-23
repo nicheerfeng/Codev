@@ -1,8 +1,10 @@
 //! Host-owned state, ordered snapshots and one supervised runtime per session.
 use super::{
+    antigravity_history,
     bridge::{lock, Bridge, Wire},
     history,
     metadata::{self, MetadataStore},
+    native_history::NativeHistory,
     protocol::*,
     registry,
 };
@@ -24,6 +26,7 @@ pub struct Runtime {
     pub session_auto_write: std::sync::atomic::AtomicBool,
     pub cancelled: std::sync::atomic::AtomicBool,
     pub closing: std::sync::atomic::AtomicBool,
+    pub loading_desktop_history: std::sync::atomic::AtomicBool,
 }
 pub struct State {
     pub sequence: u64,
@@ -56,6 +59,12 @@ pub struct Host {
     pub web_directory: PathBuf,
     pub directory: PathBuf,
     pub shutdown: tokio::sync::Notify,
+    native_history: Mutex<NativeHistory>,
+    pub(super) native_refresh: tokio::sync::Mutex<()>,
+    pub(super) usage_sync: tokio::sync::Mutex<()>,
+}
+pub(super) fn native_session_key(binding: &SessionBinding) -> String {
+    format!("{}:{}", binding.harness_id, binding.native_session_id.as_deref().unwrap_or_default())
 }
 impl Host {
     pub fn open(directory: PathBuf, web_directory: PathBuf) -> Result<Arc<Self>, String> {
@@ -72,7 +81,8 @@ impl Host {
                 binding
                     .native_session_path
                     .as_ref()
-                    .map_or(true, |path| PathBuf::from(path).is_file())
+                    .map_or(true, |path| !std::fs::metadata(path)
+                        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound))
             })
             .map(|b| (b.id.clone(), SessionView::new(b)))
             .collect();
@@ -100,6 +110,9 @@ impl Host {
             web_directory,
             directory,
             shutdown: tokio::sync::Notify::new(),
+            native_history: Mutex::new(NativeHistory::default()),
+            native_refresh: tokio::sync::Mutex::new(()),
+            usage_sync: tokio::sync::Mutex::new(()),
         }))
     }
     pub fn remote_active(&self) -> bool {
@@ -114,6 +127,28 @@ impl Host {
             .unwrap_or_default()
     }
     pub fn start_background(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(600));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                let Some(host) = weak.upgrade() else { break };
+                let _guard = host.usage_sync.lock().await;
+                let directory = host.directory.clone();
+                match tokio::task::spawn_blocking(move || super::usage::sync(&directory)).await {
+                    Ok(Ok(_)) => {},
+                    Ok(Err(error)) => log::warn!("用量同步失败：{error}"),
+                    Err(error) => log::warn!("用量同步任务失败：{error}"),
+                }
+            }
+        });
+        let host = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = host.refresh_native_history().await {
+                log::warn!("原生会话刷新失败：{error}");
+            }
+        });
         let weak = Arc::downgrade(self);
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_millis(60));
@@ -301,6 +336,100 @@ impl Host {
         state.global_dirty = true;
         Ok(workspace)
     }
+    pub async fn refresh_native_history(self: &Arc<Self>) -> Result<(), String> {
+        let _gate = self.native_refresh.lock().await;
+        let workspaces: Vec<Workspace> = lock(&self.state).workspaces.values().cloned().collect();
+        if workspaces.is_empty() { return Ok(()); }
+        let host = self.clone();
+        let (discovered, errors) = tokio::task::spawn_blocking(move || {
+            lock(&host.native_history).scan(&workspaces)
+        }).await.map_err(|error| error.to_string())?;
+        self.apply_native_history(discovered)?;
+        if errors.is_empty() { Ok(()) } else { Err(errors.join("\n")) }
+    }
+    pub(super) fn apply_native_history(&self, discovered: Vec<(PathBuf, SessionBinding)>) -> Result<(), String> {
+        let (hidden, saved_sessions) = {
+            let store = lock(&self.store);
+            let hidden = store.preference("hiddenNativeSessions")
+                .and_then(|value| serde_json::from_value::<HashSet<String>>(value).ok())
+                .unwrap_or_default();
+            let saved = store.sessions()?;
+            (hidden, saved)
+        };
+        let saved_ids: HashSet<String> = saved_sessions.iter().map(|session| session.id.clone()).collect();
+        let saved_by_native: HashMap<String, &SessionBinding> = saved_sessions.iter()
+            .filter(|session| session.native_session_id.is_some())
+            .map(|session| (native_session_key(session), session)).collect();
+        let normalize = |path: &str| {
+            let value = path.replace('\\', "/").trim_end_matches('/').to_string();
+            if cfg!(windows) { value.to_lowercase() } else { value }
+        };
+        let mut state = lock(&self.state);
+        let mut changed = false;
+        for (cwd, mut binding) in discovered {
+            if hidden.contains(&native_session_key(&binding)) { continue; }
+            let cwd = normalize(&metadata::display_path(&cwd));
+            let workspace = state.workspaces.values().filter_map(|workspace| {
+                let root = normalize(&workspace.cwd);
+                let matches = cwd == root || (binding.harness_id == "acp:antigravity"
+                    && cwd.strip_prefix(&root).is_some_and(|rest| rest.starts_with('/')));
+                matches.then_some((root.len(), workspace.id.clone()))
+            }).max_by_key(|(length, _)| *length).map(|(_, id)| id);
+            let Some(workspace_id) = workspace else { continue };
+            binding.workspace_id = workspace_id;
+            if let Some(existing) = state.sessions.values_mut().find(|session| {
+                session.binding.harness_id == binding.harness_id
+                    && ((session.binding.native_session_id.is_some()
+                        && session.binding.native_session_id == binding.native_session_id)
+                        || (session.binding.native_session_path.is_some()
+                            && session.binding.native_session_path == binding.native_session_path))
+            }) {
+                if existing.instance_id.is_none() && existing.binding.native_session_path != binding.native_session_path {
+                    existing.binding.native_session_path = binding.native_session_path.clone();
+                    changed = true;
+                }
+                if existing.instance_id.is_none() && !saved_ids.contains(&existing.binding.id)
+                    && (existing.binding.title != binding.title || existing.binding.updated_at != binding.updated_at) {
+                    existing.binding.title = binding.title;
+                    existing.binding.updated_at = binding.updated_at;
+                    changed = true;
+                }
+                continue;
+            }
+            if let Some(saved) = saved_by_native.get(&native_session_key(&binding)) {
+                binding.id = saved.id.clone();
+                binding.title = saved.title.clone();
+                binding.pinned = saved.pinned;
+                binding.archived = saved.archived;
+                binding.read_only = saved.read_only;
+                binding.imported = saved.imported;
+            }
+            state.sessions.insert(binding.id.clone(), SessionView::new(binding));
+            changed = true;
+        }
+        let missing: Vec<String> = state.sessions.values().filter(|session| {
+            session.instance_id.is_none() && session.binding.native_session_path.as_ref().is_some_and(|path| {
+                std::fs::metadata(path).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            })
+        }).map(|session| session.binding.id.clone()).collect();
+        for id in missing {
+            state.sessions.remove(&id);
+            state.dirty.remove(&id);
+            state.published_messages.remove(&id);
+            changed = true;
+        }
+        state.global_dirty |= changed;
+        Ok(())
+    }
+    pub(super) fn hide_native_session(&self, binding: &SessionBinding) -> Result<(), String> {
+        if binding.native_session_id.is_none() { return Ok(()); }
+        let store = lock(&self.store);
+        let mut hidden = store.preference("hiddenNativeSessions")
+            .and_then(|value| serde_json::from_value::<HashSet<String>>(value).ok())
+            .unwrap_or_default();
+        hidden.insert(native_session_key(binding));
+        store.set_preference("hiddenNativeSessions", &json!(hidden))
+    }
     pub fn create(&self, workspace_id: &str, harness: &str, title: &str) -> Result<String, String> {
         if !lock(&self.state).workspaces.contains_key(workspace_id) {
             return Err("请先选择工作区".into());
@@ -332,87 +461,9 @@ impl Host {
         state.global_dirty = true;
         Ok(id)
     }
-    pub async fn scan_history(self: &Arc<Self>) -> Result<Value, String> {
-        let discovered = tokio::task::spawn_blocking(history::discover)
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut state = lock(&self.state);
-        let previous_count = state.sessions.len();
-        state.sessions.retain(|_, session| {
-            session.instance_id.is_some()
-                || session
-                    .binding
-                    .native_session_path
-                    .as_ref()
-                    .map_or(true, |path| PathBuf::from(path).is_file())
-        });
-        if state.sessions.len() != previous_count {
-            state.global_dirty = true;
-        }
-        let items: Vec<Value> = discovered
-            .into_iter()
-            .filter(|item| {
-                !state.sessions.values().any(|s| {
-                    s.binding.id == item.binding.id
-                        || s.binding.native_session_path == item.binding.native_session_path
-                })
-            })
-            .map(|item| {
-                json!({
-                    "id": item.binding.id,
-                    "cwd": item.cwd,
-                    "harnessId": item.binding.harness_id,
-                    "title": item.binding.title,
-                    "readOnly": item.binding.read_only,
-                    "updatedAt": item.binding.updated_at,
-                })
-            })
-            .collect();
-        Ok(json!({ "total": items.len(), "items": items }))
-    }
-    pub async fn import_history_selected(
-        self: &Arc<Self>,
-        selected_ids: Option<HashSet<String>>,
-    ) -> Result<Value, String> {
-        let discovered = tokio::task::spawn_blocking(history::discover)
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut imported = 0;
-        for item in discovered {
-            if let Some(ref allow) = selected_ids {
-                if !allow.contains(&item.binding.id) {
-                    continue;
-                }
-            }
-            if lock(&self.state).sessions.values().any(|s| {
-                s.binding.id == item.binding.id
-                    || s.binding.native_session_path == item.binding.native_session_path
-            }) {
-                continue;
-            }
-            let Ok(workspace) = self.workspace(&item.cwd) else {
-                continue;
-            };
-            let mut binding = item.binding;
-            binding.workspace_id = workspace.id;
-            lock(&self.store).save_session(&binding)?;
-            let mut state = lock(&self.state);
-            state
-                .sessions
-                .insert(binding.id.clone(), SessionView::new(binding));
-            imported += 1;
-        }
-        if imported > 0 {
-            lock(&self.state).global_dirty = true;
-        }
-        Ok(json!({"imported":imported}))
-    }
-    pub async fn import_history(self: &Arc<Self>) -> Result<Value, String> {
-        self.import_history_selected(None).await
-    }
     pub async fn load_history(&self, id: &str, before: Option<usize>) -> Result<Value, String> {
         let view = self.view(id)?;
-        let Some(path) = view.binding.native_session_path else {
+        let Some(ref path) = view.binding.native_session_path else {
             self.update(id, None, |v| {
                 v.history_loaded = true;
                 v.history_available = !v.messages.is_empty();
@@ -422,10 +473,14 @@ impl Host {
         let previous_instance = view.instance_id.clone();
         let previous_revision = view.revision;
         let pi = view.binding.harness_id == "pi";
+        let desktop = antigravity_history::is_desktop(&view.binding);
+        let native_id = view.binding.native_session_id.clone();
         let path = PathBuf::from(path);
         let (messages, offset) = tokio::task::spawn_blocking(move || {
             if pi {
                 history::read_pi(&path, before)
+            } else if desktop {
+                antigravity_history::read(native_id.as_deref().ok_or("缺少 Antigravity 会话标识")?, before)
             } else {
                 history::read_codex(&path, before)
             }
@@ -493,12 +548,21 @@ impl Host {
             .into_iter()
             .find(|h| h.id == view.binding.harness_id)
             .ok_or("代理配置不存在")?;
-        let cwd = lock(&self.state)
+        let mut cwd = lock(&self.state)
             .workspaces
             .get(&view.binding.workspace_id)
             .map(|w| w.cwd.clone())
             .ok_or("工作区不存在")?;
         let (binary, mut args) = registry::launch(&descriptor)?;
+        if antigravity_history::is_desktop(&view.binding) {
+            cwd = metadata::display_path(&antigravity_history::desktop_cwd(
+                view.binding.native_session_id.as_deref().ok_or("缺少 Antigravity 会话标识")?,
+            )?);
+            if args.iter().any(|arg| arg.starts_with("--app-data-dir") || arg.starts_with("--app_data_dir")) {
+                return Err("请从 Antigravity 代理配置中移除自定义 app-data-dir，以便连接桌面会话".into());
+            }
+            args.extend(["--app-data-dir".into(), "antigravity".into()]);
+        }
         let wire = if descriptor.kind == "nativePi" {
             Wire::Pi
         } else {
@@ -506,6 +570,11 @@ impl Host {
         };
         if wire == Wire::Pi {
             args.extend(["--mode".into(), "rpc".into()]);
+            let trust = lock(&self.store).preference("trustedPiExtensions")
+                .and_then(|value| value.get(&cwd).and_then(Value::as_bool));
+            if let Some(trusted) = trust {
+                args.push(if trusted { "--approve" } else { "--no-approve" }.into());
+            }
             if let Some(path) = &view.binding.native_session_path {
                 args.extend(["--session".into(), path.clone()]);
             }
@@ -542,6 +611,7 @@ impl Host {
             session_auto_write: std::sync::atomic::AtomicBool::new(false),
             cancelled: std::sync::atomic::AtomicBool::new(false),
             closing: std::sync::atomic::AtomicBool::new(false),
+            loading_desktop_history: std::sync::atomic::AtomicBool::new(false),
         });
         lock(&self.runtimes).insert(id.into(), runtime.clone());
         let weak = Arc::downgrade(self);
@@ -552,6 +622,12 @@ impl Host {
                 let (Some(host), Some(run)) = (weak.upgrade(), run.upgrade()) else {
                     break;
                 };
+                if frame.get("type").and_then(Value::as_str) == Some("host_event_barrier") {
+                    if let Some(id) = frame.get("id").and_then(Value::as_str) {
+                        run.bridge.finish_event_barrier(id);
+                    }
+                    continue;
+                }
                 host.handle_frame(&sid, &run, frame);
             }
         });

@@ -4,25 +4,6 @@ use rusqlite::{params, Connection};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-use std::collections::{HashMap, HashSet};
-
-fn ensure_column(connection: &Connection, table: &str, column: &str, sql_def: &str) -> Result<(), String> {
-    let mut stmt = connection
-        .prepare(&format!("PRAGMA table_info({table})"))
-        .map_err(|e| e.to_string())?;
-    let cols: Vec<String> = stmt
-        .query_map([], |r| r.get::<_, String>(1))
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    if !cols.iter().any(|c| c == column) {
-        connection
-            .execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {sql_def}"), [])
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
 pub struct MetadataStore {
     connection: Connection,
 }
@@ -30,7 +11,7 @@ impl MetadataStore {
     pub fn open(directory: &Path) -> Result<Self, String> {
         std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
         let connection =
-            Connection::open(directory.join("agent-host.sqlite3")).map_err(|e| e.to_string())?;
+            Connection::open(directory.join("codev.sqlite3")).map_err(|e| e.to_string())?;
         connection
             .busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|e| e.to_string())?;
@@ -61,20 +42,6 @@ impl MetadataStore {
             )
             .map_err(|e| e.to_string())?;
 
-        // Ensure redundant columns exist when upgrading pre-existing v1 tables.
-        ensure_column(&connection, "host_workspaces", "cwd", "TEXT NOT NULL DEFAULT ''")?;
-        ensure_column(&connection, "host_workspaces", "title", "TEXT NOT NULL DEFAULT ''")?;
-        ensure_column(&connection, "host_workspaces", "manual", "INTEGER NOT NULL DEFAULT 1")?;
-        ensure_column(&connection, "host_workspaces", "updated_at", "INTEGER NOT NULL DEFAULT 0")?;
-
-        ensure_column(&connection, "host_sessions", "workspace_id", "TEXT NOT NULL DEFAULT ''")?;
-        ensure_column(&connection, "host_sessions", "harness_id", "TEXT NOT NULL DEFAULT ''")?;
-        ensure_column(&connection, "host_sessions", "title", "TEXT NOT NULL DEFAULT ''")?;
-        ensure_column(&connection, "host_sessions", "pinned", "INTEGER NOT NULL DEFAULT 0")?;
-        ensure_column(&connection, "host_sessions", "archived", "INTEGER NOT NULL DEFAULT 0")?;
-        ensure_column(&connection, "host_sessions", "imported", "INTEGER NOT NULL DEFAULT 0")?;
-        ensure_column(&connection, "host_sessions", "updated_at", "INTEGER NOT NULL DEFAULT 0")?;
-
         connection
             .execute_batch(
                 "CREATE INDEX IF NOT EXISTS idx_host_workspaces_manual ON host_workspaces(manual, updated_at DESC);
@@ -82,65 +49,7 @@ impl MetadataStore {
             )
             .map_err(|e| e.to_string())?;
 
-        let version: i64 = connection
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .unwrap_or(0);
-        let store = Self { connection };
-        if version < 2 {
-            store.migrate_v1_to_v2()?;
-            store
-                .connection
-                .execute_batch("PRAGMA user_version=2;")
-                .map_err(|e| e.to_string())?;
-        }
-        Ok(store)
-    }
-
-    /// Upgrade existing v1 metadata DBs: prune auto-imported-only workspaces left behind by old startup scans,
-    /// and backfill redundant columns for manually managed workspaces and sessions.
-    fn migrate_v1_to_v2(&self) -> Result<(), String> {
-        let all_ws: Vec<Workspace> = self
-            .bodies("host_workspaces")?
-            .iter()
-            .filter_map(|s| serde_json::from_str::<Workspace>(s).ok())
-            .collect();
-        let all_sessions = self.sessions()?;
-        let mut by_ws: HashMap<String, Vec<SessionBinding>> = HashMap::new();
-        for s in &all_sessions {
-            by_ws
-                .entry(s.workspace_id.clone())
-                .or_default()
-                .push(s.clone());
-        }
-        let mut drop_ws: HashSet<String> = HashSet::new();
-        for ws in &all_ws {
-            if let Some(list) = by_ws.get(&ws.id) {
-                let only_unpinned_auto_import = !list.is_empty()
-                    && list.iter().all(|s| s.imported && !s.pinned);
-                if only_unpinned_auto_import {
-                    drop_ws.insert(ws.id.clone());
-                }
-            }
-        }
-        for wid in &drop_ws {
-            let _ = self.remove_workspace(wid);
-            if let Some(list) = by_ws.get(wid) {
-                for s in list {
-                    let _ = self.remove_session(&s.id);
-                }
-            }
-        }
-        for ws in &all_ws {
-            if !drop_ws.contains(&ws.id) {
-                let _ = self.save_workspace(ws);
-            }
-        }
-        for s in &all_sessions {
-            if !drop_ws.contains(&s.workspace_id) {
-                let _ = self.save_session(s);
-            }
-        }
-        Ok(())
+        Ok(Self { connection })
     }
 
     fn bodies(&self, table: &str) -> Result<Vec<String>, String> {

@@ -133,7 +133,7 @@ impl Default for HostToolsPolicy {
     fn default() -> Self {
         Self {
             read: "allow".into(),
-            write: "ask".into(),
+            write: "allow".into(),
         }
     }
 }

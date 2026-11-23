@@ -31,8 +31,10 @@ impl Host {
                 | "harness.list"
                 | "harness.diagnose"
                 | "harness.docs.read"
+                | "pi.models.read"
+                | "pi.assets.list"
+                | "host.project_harnesses.get"
                 | "host.policy.get"
-                | "history.scan"
                 | "session.list"
                 | "session.open"
                 | "runtime.subscribe"
@@ -136,7 +138,18 @@ impl Host {
                 .collect::<Vec<_>>())),
             "workspace.add" => {
                 principal.require_desktop()?;
-                Ok(json!(self.workspace(&text(payload, "cwd"))?))
+                let workspace = self.workspace(&text(payload, "cwd"))?;
+                let host = self.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = host.refresh_native_history().await {
+                        log::warn!("原生会话刷新失败：{error}");
+                    }
+                });
+                Ok(json!(workspace))
+            }
+            "workspace.sessions.refresh" => {
+                self.refresh_native_history().await?;
+                Ok(json!({}))
             }
             "workspace.remove" => {
                 principal.require_desktop()?;
@@ -255,6 +268,122 @@ impl Host {
                 Ok(json!({ "skills": skills }))
             }
             "harness.list" => Ok(json!(self.harnesses())),
+            "usage.sync" => {
+                principal.require_desktop()?;
+                let _guard = self.usage_sync.lock().await;
+                let directory = self.directory.clone();
+                tokio::task::spawn_blocking(move || super::usage::sync(&directory))
+                    .await.map_err(|e| e.to_string())?
+            }
+            "usage.query" => {
+                principal.require_desktop()?;
+                let directory = self.directory.clone();
+                let options = payload.clone();
+                tokio::task::spawn_blocking(move || super::usage::query(&directory, &options))
+                    .await.map_err(|e| e.to_string())?
+            }
+            "usage.prices.save" => {
+                principal.require_desktop()?;
+                super::usage::save_price(&self.directory, payload)
+            }
+            "pi.models.read" => {
+                principal.require_desktop()?;
+                super::pi_settings::read_models()
+            }
+            "pi.version" => {
+                principal.require_desktop()?;
+                let descriptor = self.harnesses().into_iter().find(|h| h.id == "pi").ok_or("Pi 未配置")?;
+                let (binary, mut args) = registry::launch(&descriptor)?;
+                args.push("--version".into());
+                let version = tokio::task::spawn_blocking(move || super::pi_settings::run_command(&binary, &args, Duration::from_secs(10)))
+                    .await.map_err(|e| e.to_string())??;
+                Ok(json!({ "version": version }))
+            }
+            "pi.models.save" => {
+                principal.require_desktop()?;
+                super::pi_settings::save_models(payload)
+            }
+            "pi.models.test" => {
+                principal.require_desktop()?;
+                let provider = text(payload, "provider");
+                let model = text(payload, "modelId");
+                if provider.is_empty() || model.is_empty() {
+                    return Err("请选择已保存的服务商和模型".into());
+                }
+                let descriptor = self.harnesses().into_iter().find(|h| h.id == "pi").ok_or("Pi 未配置")?;
+                let (binary, mut args) = registry::launch(&descriptor)?;
+                args.extend(["--mode".into(), "rpc".into(), "--no-session".into(), "--no-tools".into(), "--no-extensions".into(), "--no-skills".into(), "--no-prompt-templates".into(), "--no-context-files".into()]);
+                let cwd = super::history::pi_home().filter(|p| p.is_dir())
+                    .or_else(dirs::home_dir).ok_or("无法定位工作目录")?;
+                let (bridge, mut frames) = tokio::task::spawn_blocking(move || {
+                    super::bridge::Bridge::spawn(&binary, &args, &cwd, Wire::Pi)
+                }).await.map_err(|e| e.to_string())??;
+                let started = std::time::Instant::now();
+                let result = tokio::time::timeout(Duration::from_secs(60), async {
+                    bridge.request("set_model", json!({"provider": provider, "modelId": model}), QUERY).await?;
+                    bridge.request("prompt", json!({"message": "Reply only OK."}), QUERY).await?;
+                    let mut received_text = false;
+                    while let Some(frame) = frames.recv().await {
+                        if frame.get("type").and_then(Value::as_str) == Some("message_end") {
+                            if let Some(message) = frame.get("message") {
+                                if let Some(error) = message.get("errorMessage").and_then(Value::as_str).filter(|s| !s.trim().is_empty()) {
+                                    return Err(error.to_string());
+                                }
+                                if message.get("role").and_then(Value::as_str) == Some("assistant") {
+                                    received_text |= !super::history::content_text(message.get("content").unwrap_or(&Value::Null)).trim().is_empty();
+                                }
+                            }
+                        }
+                        if frame.get("type").and_then(Value::as_str) == Some("agent_end") {
+                            return if received_text { Ok(()) } else { Err("模型没有返回文本".into()) };
+                        }
+                    }
+                    Err("Pi 测试进程已退出".into())
+                }).await;
+                bridge.close();
+                result.map_err(|_| "模型测试超时".to_string())??;
+                Ok(json!({ "elapsedMs": started.elapsed().as_millis() as u64 }))
+            }
+            "pi.assets.list" => {
+                principal.require_desktop()?;
+                let workspace_id = text(payload, "workspaceId");
+                let cwd = lock(&self.state).workspaces.get(&workspace_id).map(|w| w.cwd.clone());
+                super::pi_settings::assets(&text(payload, "kind"), cwd.as_deref())
+            }
+            "pi.plugins.install" => {
+                principal.require_desktop()?;
+                let package = text(payload, "package");
+                let allowed = ["pi-mcp-adapter", "pi-lens", "pi-subagents", "@ogulcancelik/pi-codex-subagents", "pi-intercom", "pi-feishu-lark", "pi-hide-providers", "pi-rename-session"];
+                if !allowed.contains(&package.as_str()) { return Err("不支持的推荐插件".into()); }
+                let descriptor = self.harnesses().into_iter().find(|h| h.id == "pi").ok_or("Pi 未配置")?;
+                let (binary, mut args) = registry::launch(&descriptor)?;
+                args.extend(["install".into(), format!("npm:{package}")]);
+                let message = tokio::task::spawn_blocking(move || super::pi_settings::run_command(&binary, &args, Duration::from_secs(180)))
+                    .await.map_err(|e| e.to_string())??;
+                Ok(json!({ "message": message }))
+            }
+            "host.project_harnesses.get" => {
+                principal.require_desktop()?;
+                Ok(lock(&self.store).preference("projectHarnesses").unwrap_or(Value::Null))
+            }
+            "host.project_harnesses.set" => {
+                principal.require_desktop()?;
+                let workspace_id = text(payload, "workspaceId");
+                if !lock(&self.state).workspaces.contains_key(&workspace_id) {
+                    return Err("工作区不存在".into());
+                }
+                let ids = payload.get("harnessIds").and_then(Value::as_array).ok_or("缺少代理列表")?;
+                let available = self.harnesses();
+                if ids.iter().any(|id| !id.as_str().is_some_and(|id| available.iter().any(|h| h.id == id))) {
+                    return Err("代理列表包含未注册的代理".into());
+                }
+                let store = lock(&self.store);
+                let mut all = store.preference("projectHarnesses")
+                    .and_then(|value| value.as_object().cloned()).unwrap_or_default();
+                all.insert(workspace_id, json!(ids));
+                store.set_preference("projectHarnesses", &Value::Object(all))?;
+                Ok(json!({}))
+            }
             "harness.diagnose" => {
                 let list = self.harnesses();
                 let items = list
@@ -328,26 +457,25 @@ impl Host {
                     let write = payload
                         .get("write")
                         .and_then(Value::as_str)
-                        .unwrap_or("ask");
-                    let mut all = lock(&self.store)
-                        .preference("hostToolsPolicy")
+                        .unwrap_or("allow");
+                    let store = lock(&self.store);
+                    let mut all = store.preference("hostToolsPolicy")
                         .and_then(|v| v.as_object().cloned())
                         .unwrap_or_default();
                     all.insert(hid.into(), json!({ "read": read, "write": write }));
-                    lock(&self.store).set_preference("hostToolsPolicy", &Value::Object(all))?;
+                    store.set_preference("hostToolsPolicy", &Value::Object(all))?;
                 }
                 if let Some(cwd) = payload.get("trustWorkspaceCwd").and_then(Value::as_str) {
-                    let trusted_val = payload
-                        .get("trusted")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false);
-                    let mut all = lock(&self.store)
-                        .preference("trustedPiExtensions")
+                    let store = lock(&self.store);
+                    let mut all = store.preference("trustedPiExtensions")
                         .and_then(|v| v.as_object().cloned())
                         .unwrap_or_default();
-                    all.insert(cwd.into(), json!(trusted_val));
-                    lock(&self.store)
-                        .set_preference("trustedPiExtensions", &Value::Object(all))?;
+                    if let Some(trusted) = payload.get("trusted").and_then(Value::as_bool) {
+                        all.insert(cwd.into(), json!(trusted));
+                    } else {
+                        all.remove(cwd);
+                    }
+                    store.set_preference("trustedPiExtensions", &Value::Object(all))?;
                 }
                 Ok(json!({}))
             }
@@ -357,9 +485,13 @@ impl Host {
                 let pi_append_path = pi_home.as_ref().map(|p| p.join("APPEND_SYSTEM.md"));
                 let pi_models_path = pi_home.as_ref().map(|p| p.join("models.json"));
                 let codex_agents_path = dirs::home_dir().map(|h| h.join(".codex/AGENTS.md"));
-                let read_opt = |p: Option<&std::path::PathBuf>| -> String {
-                    p.and_then(|f| std::fs::read_to_string(f).ok())
-                        .unwrap_or_default()
+                let read_opt = |p: Option<&std::path::PathBuf>| -> Result<String, String> {
+                    let Some(path) = p else { return Ok(String::new()) };
+                    match std::fs::read_to_string(path) {
+                        Ok(content) => Ok(content),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+                        Err(error) => Err(format!("读取 {} 失败：{error}", path.display())),
+                    }
                 };
                 let pi_models_providers = pi_models_path
                     .as_ref()
@@ -369,11 +501,11 @@ impl Host {
                     .unwrap_or_default();
                 Ok(json!({
                     "piAppendSystemPath": pi_append_path.as_ref().map(|p| super::metadata::display_path(p)).unwrap_or_default(),
-                    "piAppendSystem": read_opt(pi_append_path.as_ref()),
+                    "piAppendSystem": read_opt(pi_append_path.as_ref())?,
                     "piModelsPath": pi_models_path.as_ref().map(|p| super::metadata::display_path(p)).unwrap_or_default(),
                     "piModelsProviders": pi_models_providers,
                     "codexAgentsPath": codex_agents_path.as_ref().map(|p| super::metadata::display_path(p)).unwrap_or_default(),
-                    "codexAgents": read_opt(codex_agents_path.as_ref()),
+                    "codexAgents": read_opt(codex_agents_path.as_ref())?,
                 }))
             }
             "harness.docs.save" => {
@@ -392,28 +524,23 @@ impl Host {
                         .ok_or("找不到 Codex 主目录")?,
                     _ => return Err("不支持的配置文件目标".into()),
                 };
+                if let Some(expected) = payload.get("expected").and_then(Value::as_str) {
+                    let current = match std::fs::read_to_string(&path) {
+                        Ok(content) => content,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+                        Err(error) => return Err(format!("读取配置失败：{error}")),
+                    };
+                    if current != expected { return Err("配置文件已被其他程序修改，请重新打开设置后再保存".into()); }
+                }
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+                    std::io::Write::write_all(&mut file, content.as_bytes()).map_err(|e| e.to_string())?;
+                    file.persist(&path).map_err(|e| e.error.to_string())?;
+                } else {
+                    return Err("无法定位配置目录".into());
                 }
-                std::fs::write(&path, content).map_err(|e| e.to_string())?;
                 Ok(json!({ "saved": super::metadata::display_path(&path) }))
-            }
-            "history.scan" => {
-                principal.require_desktop()?;
-                self.scan_history().await
-            }
-            "history.import" => {
-                principal.require_desktop()?;
-                let ids = payload
-                    .get("ids")
-                    .and_then(Value::as_array)
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(Value::as_str)
-                            .map(str::to_string)
-                            .collect::<std::collections::HashSet<_>>()
-                    });
-                self.import_history_selected(ids).await
             }
             "session.list" => Ok(json!(lock(&self.state)
                 .sessions
@@ -634,16 +761,6 @@ impl Host {
                 });
                 Ok(json!({ "prioritized": true }))
             }
-            "session.restart" => {
-                principal.require_desktop()?;
-                let id = command.session_id.as_deref().ok_or("缺少会话标识")?;
-                if self.view(id)?.busy() {
-                    return Err("请先停止会话再重新连接".into());
-                }
-                self.stop_runtime(id)?;
-                self.ensure_runtime(id).await?;
-                Ok(json!(self.view(id)?))
-            }
             "session.close" => {
                 principal.require_desktop()?;
                 let id = command.session_id.as_deref().ok_or("缺少会话标识")?;
@@ -710,6 +827,8 @@ impl Host {
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 if remove_from_list {
+                    let _refresh = self.native_refresh.lock().await;
+                    self.hide_native_session(&view.binding)?;
                     lock(&self.store).remove_session(id)?;
                     let mut st = lock(&self.state);
                     st.sessions.remove(id);

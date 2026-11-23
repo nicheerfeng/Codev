@@ -13,6 +13,15 @@ import { agentNotifyEnabled, setAgentNotifyEnabled } from "./notify";
 import { useAgentStore } from "./store";
 import type { Harness } from "./types";
 import { VoiceSettingsPanel } from "@/modules/voice/VoiceSettingsPanel";
+import { PiModelsPanel } from "./PiModelsPanel";
+import { PiAssetsPanel } from "./PiAssetsPanel";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 type Diagnosis = {
   id: string;
@@ -64,163 +73,61 @@ function HarnessEditor({
   diagnosis,
   policy,
   onSavePolicy,
-  onAfterMutate,
 }: {
   harness: Harness;
   diagnosis?: Diagnosis;
   policy?: { read?: string; write?: string };
-  onSavePolicy: (harnessId: string, read: string, write: string) => Promise<void>;
-  onAfterMutate: () => Promise<void>;
+  onSavePolicy: (
+    harnessId: string,
+    read: string,
+    write: string,
+  ) => Promise<void>;
 }) {
-  const [command, setCommand] = useState(harness.command);
-  const [args, setArgs] = useState(harness.args.join("\n"));
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    setCommand(harness.command);
-    setArgs(harness.args.join("\n"));
-  }, [harness.id, harness.command, harness.args]);
-
   const verdictLabel =
     diagnosis?.verdict === "ready"
-      ? "就绪"
+      ? "程序已定位"
       : diagnosis?.verdict === "needs_auth"
-        ? "需命令行登录"
+        ? "未检测到常见凭据"
         : diagnosis?.verdict === "needs_config"
-          ? "需模型配置"
+          ? "未检测到 models.json"
           : diagnosis?.verdict === "missing_binary"
             ? "未定位程序"
             : harness.installed
               ? "程序可定位"
               : "未找到启动程序";
-  const isCustom = harness.id.startsWith("acp:custom-");
-
   return (
-    <form
-      className="agent-harness-config"
-      onSubmit={(event) => {
-        event.preventDefault();
-        setSaving(true);
-        void useAgentStore
-          .getState()
-          .command("harness.save", {
-            ...harness,
-            command: command.trim(),
-            args: args
-              .split("\n")
-              .map((s) => s.trim())
-              .filter(Boolean),
-          })
-          .then(onAfterMutate)
-          .then(() => toast.success(`已保存 ${harness.displayName} 启动配置`))
-          .catch((e) => useAgentStore.getState().report(e))
-          .finally(() => setSaving(false));
-      }}
-    >
-      <div className="flex items-center gap-2">
+    <div className="agent-harness-details">
+      <div className="agent-setting-row">
         <strong>{harness.displayName}</strong>
-        <span className="text-[10px] text-muted-foreground">
-          {harness.kind === "nativePi" ? "Pi 原生协议" : "独立 ACP 代理"}
-        </span>
-        <span className="flex-1" />
-        <small
-          className={
-            diagnosis?.verdict === "ready"
-              ? "text-green-600"
-              : diagnosis?.verdict === "missing_binary"
-                ? "text-destructive"
-                : "text-amber-500"
-          }
-        >
-          {verdictLabel}
-        </small>
+        <span>{verdictLabel}</span>
       </div>
-      {diagnosis?.resolvedPath && (
-        <div className="text-[10px] text-muted-foreground">
-          实际执行：{diagnosis.resolvedPath}
-        </div>
-      )}
-      {diagnosis?.hints?.map((hint, i) => (
-        <div key={i} className="rounded bg-muted px-2 py-1 text-[10px] text-muted-foreground">
-          {hint}
-        </div>
-      ))}
-      <label htmlFor={`harness-command-${harness.id}`}>
-        程序或完整路径
-        <Input
-          id={`harness-command-${harness.id}`}
-          aria-label={`${harness.displayName} 启动程序`}
-          value={command}
-          onChange={(e) => setCommand(e.target.value)}
-          className="h-8 text-xs!"
-        />
-      </label>
-      <label>
-        参数，每行一个
-        <textarea
-          aria-label={`${harness.displayName} 参数`}
-          value={args}
-          onChange={(e) => setArgs(e.target.value)}
-          rows={Math.min(5, Math.max(2, args.split("\n").length))}
-        />
-      </label>
       {harness.kind === "acp" && (
-        <div className="flex items-center justify-between gap-2 rounded border border-border px-2 py-1.5 text-[11px]">
-          <span className="text-muted-foreground">ACP 宿主写文件策略</span>
-          <select
-            aria-label={`${harness.displayName} 写文件策略`}
-            value={policy?.write ?? "ask"}
-            onChange={(e) =>
-              void onSavePolicy(harness.id, policy?.read ?? "allow", e.target.value)
+        <div className="agent-setting-row">
+          <span>ACP 宿主写文件策略</span>
+          <Select
+            value={policy?.write ?? "allow"}
+            onValueChange={(value) =>
+              void onSavePolicy(harness.id, policy?.read ?? "allow", value)
             }
-            className="rounded border border-border bg-background px-1.5 py-0.5 text-[11px]"
           >
-            <option value="ask">每次询问确认（推荐）</option>
-            <option value="allow">允许直接写入工作区</option>
-            <option value="deny">禁止代理写文件</option>
-          </select>
+            <SelectTrigger
+              size="sm"
+              aria-label={`${harness.displayName} 写文件策略`}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="allow">最大权限（自动允许写入）</SelectItem>
+              <SelectItem value="ask">执行前询问</SelectItem>
+              <SelectItem value="deny">禁止代理写入</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       )}
-      <div className="flex items-center gap-2">
-        <p>沿用该命令行程序自己的登录与配置。保存后请重新连接空闲会话。</p>
-        {isCustom ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="text-destructive"
-            onClick={() =>
-              void useAgentStore
-                .getState()
-                .command("harness.delete", { id: harness.id })
-                .then(onAfterMutate)
-                .catch((e) => useAgentStore.getState().report(e))
-            }
-          >
-            删除
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() =>
-              void useAgentStore
-                .getState()
-                .command("harness.reset", { id: harness.id })
-                .then(onAfterMutate)
-                .then(() => toast.success(`已恢复 ${harness.displayName} 默认命令`))
-                .catch((e) => useAgentStore.getState().report(e))
-            }
-          >
-            恢复默认
-          </Button>
-        )}
-        <Button type="submit" size="sm" variant="outline" disabled={saving}>
-          保存
-        </Button>
-      </div>
-    </form>
+      {diagnosis?.hints?.length ? (
+        <div className="agent-settings-note">{diagnosis.hints[0]}</div>
+      ) : null}
+    </div>
   );
 }
 export function AgentSettings({
@@ -232,10 +139,20 @@ export function AgentSettings({
 }) {
   const harnesses = useAgentStore((s) => s.harnesses);
   const workspaces = useAgentStore((s) => s.workspaces);
-  const activeWorkspaceId = useAgentStore((s) => s.workspaceId);
-  const [panel, setPanel] = useState<"harnesses" | "config" | "remote" | "voice">(
-    "harnesses",
-  );
+  const projectHarnesses = useAgentStore((s) => s.projectHarnesses);
+  const setProjectHarnesses = useAgentStore((s) => s.setProjectHarnesses);
+  const [panel, setPanel] = useState("pi");
+  const [piTab, setPiTab] = useState<
+    "general" | "models" | "skills" | "plugins"
+  >("general");
+  const [modelsOpened, setModelsOpened] = useState(false);
+  const [modelsDirty, setModelsDirty] = useState(false);
+  const [voiceOpened, setVoiceOpened] = useState(false);
+  const [voiceDirty, setVoiceDirty] = useState(false);
+  const [projectId, setProjectId] = useState("");
+  const [savingProject, setSavingProject] = useState(false);
+  const [piVersion, setPiVersion] = useState("");
+  const [settingsError, setSettingsError] = useState("");
   const [remote, setRemote] = useState<Remote>({ enabled: false });
   const [port, setPort] = useState("7331");
   const [devices, setDevices] = useState<Devices>({ devices: [], pending: [] });
@@ -249,10 +166,14 @@ export function AgentSettings({
   const [pair, setPair] = useState<Pairing | null>(null);
   const [qr, setQr] = useState("");
   const [address, setAddress] = useState("");
-  const [custom, setCustom] = useState(false);
-  const [customName, setCustomName] = useState("");
-  const [customCommand, setCustomCommand] = useState("");
   const report = useAgentStore.getState().report;
+  const showError = useCallback(
+    (error: unknown) => {
+      setSettingsError(String(error));
+      report(error);
+    },
+    [report],
+  );
   const refresh = useCallback(async () => {
     try {
       const [remote, devices, diag, pol] = await Promise.all([
@@ -261,11 +182,10 @@ export function AgentSettings({
         useAgentStore
           .getState()
           .command<{ items?: Diagnosis[] }>("harness.diagnose"),
-        useAgentStore
-          .getState()
-          .command<{ policies?: PolicyMap; trustedPiExtensions?: Record<string, boolean> }>(
-            "host.policy.get",
-          ),
+        useAgentStore.getState().command<{
+          policies?: PolicyMap;
+          trustedPiExtensions?: Record<string, boolean>;
+        }>("host.policy.get"),
       ]);
       setRemote(remote);
       setDevices(devices);
@@ -275,28 +195,37 @@ export function AgentSettings({
       setPolicies(pol?.policies ?? {});
       setTrustedExt(pol?.trustedPiExtensions ?? {});
     } catch (e) {
+      setSettingsError(String(e));
       report(e);
     }
   }, [report]);
   const loadDocs = useCallback(async () => {
     try {
-      const docs = await useAgentStore.getState().command<DocsInfo>("harness.docs.read");
+      const docs = await useAgentStore
+        .getState()
+        .command<DocsInfo>("harness.docs.read");
       setDocsInfo(docs);
       setPiAppendDraft(docs.piAppendSystem);
       setCodexAgentsDraft(docs.codexAgents);
     } catch (e) {
+      setSettingsError(String(e));
       report(e);
     }
   }, [report]);
   useEffect(() => {
     if (!open) return;
+    setSettingsError("");
+    setDocsInfo(null);
     void refresh();
-    if (panel === "config") void loadDocs();
+    void loadDocs();
+  }, [open, refresh, loadDocs]);
+  useEffect(() => {
+    if (!open || panel !== "remote") return;
     const timer = setInterval(() => {
-      if (panel === "remote") void refresh();
+      void refresh();
     }, 2500);
     return () => clearInterval(timer);
-  }, [open, panel, refresh, loadDocs]);
+  }, [open, panel, refresh]);
   useEffect(() => {
     if (!pair || !address) {
       setQr("");
@@ -309,138 +238,398 @@ export function AgentSettings({
       .then((url) => {
         if (live) setQr(url);
       })
-      .catch(report);
+      .catch(showError);
     return () => {
       live = false;
     };
-  }, [pair, address, report]);
+  }, [pair, address, showError]);
   const act = async (operation: string, payload: unknown = {}) => {
     try {
       await useAgentStore.getState().command(operation, payload);
       await refresh();
+      setSettingsError("");
+      return true;
     } catch (e) {
+      setSettingsError(String(e));
       report(e);
+      return false;
+    }
+  };
+  const close = () => {
+    const docsDirty =
+      docsInfo &&
+      (piAppendDraft !== docsInfo.piAppendSystem ||
+        codexAgentsDraft !== docsInfo.codexAgents);
+    if (
+      (modelsDirty || voiceDirty || docsDirty) &&
+      !window.confirm("有未保存的设置，确定关闭？")
+    )
+      return;
+    setModelsDirty(false);
+    setVoiceDirty(false);
+    onClose();
+  };
+  const saveDocument = async (
+    target: "piAppendSystem" | "codexAgents",
+    content: string,
+  ) => {
+    if (!docsInfo) return;
+    if (
+      await act("harness.docs.save", {
+        target,
+        content,
+        expected: docsInfo[target],
+      })
+    ) {
+      setDocsInfo((value) => (value ? { ...value, [target]: content } : value));
+      toast.success("已保存");
+    }
+  };
+  const addProject = async () => {
+    try {
+      const { open: openDirectory } = await import("@tauri-apps/plugin-dialog");
+      const cwd = await openDirectory({
+        directory: true,
+        multiple: false,
+        title: "选择 Agent 工作目录",
+      });
+      if (typeof cwd === "string")
+        await useAgentStore.getState().addWorkspace(cwd);
+    } catch (error) {
+      showError(error);
     }
   };
   return (
     <Dialog
       open={open}
       onOpenChange={(value) => {
-        if (!value) onClose();
+        if (!value) close();
       }}
     >
-      <DialogContent className="agent-settings-dialog sm:max-w-3xl">
-        <DialogTitle>Agent 主机设置</DialogTitle>
-        <DialogDescription>
-          代理运行、会话状态和手机连接由同一个 Rust 主机管理。
+      <DialogContent className="agent-settings-dialog sm:max-w-5xl">
+        <DialogTitle>Agent 设置</DialogTitle>
+        <DialogDescription className="sr-only">
+          配置代理、项目和工作区。
         </DialogDescription>
-        <div className="flex gap-2 border-b border-border pb-2">
-          <Button
-            size="sm"
-            variant={panel === "harnesses" ? "secondary" : "ghost"}
-            onClick={() => setPanel("harnesses")}
-          >
-            代理与诊断
-          </Button>
-          <Button
-            size="sm"
-            variant={panel === "config" ? "secondary" : "ghost"}
-            onClick={() => setPanel("config")}
-          >
-            规则与通知
-          </Button>
-          <Button
-            size="sm"
-            variant={panel === "remote" ? "secondary" : "ghost"}
-            onClick={() => setPanel("remote")}
-          >
-            手机连接
-          </Button>
-          <Button
-            size="sm"
-            variant={panel === "voice" ? "secondary" : "ghost"}
-            onClick={() => setPanel("voice")}
-          >
-            语音
-          </Button>
-        </div>
-        <div className="agent-settings-body reader-scrollbar">
-          {panel === "harnesses" ? (
-            <>
-              <div className="mb-3 flex items-center justify-between gap-2 rounded-lg border border-border bg-muted/50 px-3 py-2">
-                <p className="text-[11px] text-muted-foreground">
-                  Pi 直接运行原生进程；Codex / Antigravity / 自定义 ACP 独立运行，互不混用模型。
-                </p>
-                <Button size="sm" variant="outline" onClick={() => void refresh()}>
-                  重新自检
-                </Button>
-              </div>
-              {harnesses.map((harness) => (
-                <HarnessEditor
-                  key={harness.id}
-                  harness={harness}
-                  diagnosis={diagnoses[harness.id]}
-                  policy={policies[harness.id]}
-                  onSavePolicy={async (harnessId, read, write) => {
-                    await act("host.policy.set", { harnessId, read, write });
-                    toast.success("已更新文件策略");
-                  }}
-                  onAfterMutate={refresh}
-                />
-              ))}
+        <div className="agent-settings-layout">
+          <nav className="agent-settings-nav" aria-label="Agent 设置导航">
+            <span className="agent-settings-nav-label">代理</span>
+            {[
+              ["pi", "Pi"],
+              ["acp:codex", "Codex"],
+              ["acp:antigravity", "Antigravity"],
+            ].map(([id, label]) => (
               <Button
+                key={id}
                 size="sm"
-                variant="outline"
-                onClick={() => setCustom(!custom)}
+                variant={panel === id ? "secondary" : "ghost"}
+                onClick={() => setPanel(id)}
               >
-                添加自定义 ACP 代理
+                {label}
               </Button>
-              {custom && (
-                <form
-                  className="agent-harness-config"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    const id = `acp:custom-${crypto.randomUUID().slice(0, 8)}`;
-                    void act("harness.save", {
-                      id,
-                      displayName: customName,
-                      kind: "acp",
-                      command: customCommand,
-                      args: [],
-                      installed: false,
-                      capabilities: {},
-                    }).then(() => setCustom(false));
-                  }}
+            ))}
+            <span className="agent-settings-nav-label">项目</span>
+            <Button
+              size="sm"
+              variant={panel === "projects" ? "secondary" : "ghost"}
+              onClick={() => setPanel("projects")}
+            >
+              项目配置
+            </Button>
+            <span className="agent-settings-nav-label">工作区</span>
+            {[
+              ["general", "通用"],
+              ["remote", "手机连接"],
+              ["voice", "语音"],
+            ].map(([id, label]) => (
+              <Button
+                key={id}
+                size="sm"
+                variant={panel === id ? "secondary" : "ghost"}
+                onClick={() => {
+                  setPanel(id);
+                  if (id === "voice") setVoiceOpened(true);
+                }}
+              >
+                {label}
+              </Button>
+            ))}
+          </nav>
+          <div className="agent-settings-body reader-scrollbar">
+            {settingsError && (
+              <div role="alert" className="agent-global-error">
+                <span>{settingsError}</span>
+                <button
+                  type="button"
+                  aria-label="关闭错误"
+                  onClick={() => setSettingsError("")}
                 >
-                  <Input
-                    required
-                    aria-label="代理名称"
-                    placeholder="代理名称"
-                    value={customName}
-                    onChange={(e) => setCustomName(e.target.value)}
-                  />
-                  <Input
-                    required
-                    aria-label="ACP 程序路径"
-                    placeholder="能直接以标准输入输出通信的 ACP 程序"
-                    value={customCommand}
-                    onChange={(e) => setCustomCommand(e.target.value)}
-                  />
-                  <Button type="submit" size="sm">
-                    添加
+                  ×
+                </button>
+              </div>
+            )}
+            {panel === "pi" && (
+              <>
+                <div className="agent-settings-section-heading">
+                  <strong>Pi</strong>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void refresh()}
+                  >
+                    检查环境
                   </Button>
-                </form>
-              )}
-            </>
-          ) : panel === "config" ? (
-            <div className="space-y-4">
-              <div className="agent-setting-row">
-                <div>
-                  <strong>回合结束系统桌面通知</strong>
-                  <p>
-                    当窗口在后台或最小化时，代理任务完成或失败发送系统提醒。
-                  </p>
                 </div>
+                <div
+                  className="agent-provider-tabs"
+                  role="tablist"
+                  aria-label="Pi 设置"
+                >
+                  {(
+                    [
+                      ["general", "通用"],
+                      ["models", "模型"],
+                      ["skills", "技能"],
+                      ["plugins", "插件"],
+                    ] as const
+                  ).map(([id, label]) => (
+                    <Button
+                      key={id}
+                      role="tab"
+                      aria-selected={piTab === id}
+                      size="sm"
+                      variant={piTab === id ? "secondary" : "ghost"}
+                      onClick={() => {
+                        setPiTab(id);
+                        if (id === "models") setModelsOpened(true);
+                      }}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+              </>
+            )}
+            {open && modelsOpened && (
+              <div hidden={panel !== "pi" || piTab !== "models"}>
+                <PiModelsPanel onDirtyChange={setModelsDirty} />
+              </div>
+            )}
+            {panel === "pi" && (piTab === "skills" || piTab === "plugins") && (
+              <PiAssetsPanel kind={piTab} />
+            )}
+            {harnesses
+              .filter((harness) =>
+                ["pi", "acp:codex", "acp:antigravity"].includes(harness.id),
+              )
+              .map((harness) => (
+                <div
+                  key={harness.id}
+                  hidden={
+                    panel !== harness.id ||
+                    (harness.id === "pi" && piTab !== "general")
+                  }
+                >
+                  <HarnessEditor
+                    harness={harness}
+                    diagnosis={diagnoses[harness.id]}
+                    policy={policies[harness.id]}
+                    onSavePolicy={async (harnessId, read, write) => {
+                      if (
+                        await act("host.policy.set", { harnessId, read, write })
+                      )
+                        toast.success("已更新文件策略");
+                    }}
+                  />
+                  {harness.id === "pi" && (
+                    <div className="agent-setting-row">
+                      <strong>Pi 版本</strong>
+                      <span>{piVersion}</span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          void useAgentStore
+                            .getState()
+                            .command<{ version: string }>("pi.version")
+                            .then((result) => setPiVersion(result.version))
+                            .catch(showError)
+                        }
+                      >
+                        查看版本
+                      </Button>
+                    </div>
+                  )}
+                  {harness.id === "pi" && (
+                    <div className="agent-document-setting">
+                      <label htmlFor="agent-pi-instructions">
+                        Pi 全局追加指令
+                      </label>
+                      <small>{docsInfo?.piAppendSystemPath}</small>
+                      <textarea
+                        id="agent-pi-instructions"
+                        rows={8}
+                        disabled={!docsInfo}
+                        value={piAppendDraft}
+                        onChange={(event) =>
+                          setPiAppendDraft(event.target.value)
+                        }
+                      />
+                      <Button
+                        size="sm"
+                        disabled={
+                          !docsInfo || piAppendDraft === docsInfo.piAppendSystem
+                        }
+                        onClick={() =>
+                          void saveDocument("piAppendSystem", piAppendDraft)
+                        }
+                      >
+                        保存
+                      </Button>
+                    </div>
+                  )}
+                  {harness.id === "acp:codex" && (
+                    <div className="agent-document-setting">
+                      <label htmlFor="agent-codex-instructions">
+                        Codex 全局指令
+                      </label>
+                      <small>{docsInfo?.codexAgentsPath}</small>
+                      <textarea
+                        id="agent-codex-instructions"
+                        rows={8}
+                        disabled={!docsInfo}
+                        value={codexAgentsDraft}
+                        onChange={(event) =>
+                          setCodexAgentsDraft(event.target.value)
+                        }
+                      />
+                      <Button
+                        size="sm"
+                        disabled={
+                          !docsInfo || codexAgentsDraft === docsInfo.codexAgents
+                        }
+                        onClick={() =>
+                          void saveDocument("codexAgents", codexAgentsDraft)
+                        }
+                      >
+                        保存
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            {panel === "projects" && (
+              <section>
+                <div className="agent-settings-section-heading">
+                  <strong>项目配置</strong>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void addProject()}
+                  >
+                    添加项目
+                  </Button>
+                </div>
+                {workspaces.length ? (
+                  (() => {
+                    const workspace =
+                      workspaces.find((item) => item.id === projectId) ??
+                      workspaces[0];
+                    const enabled = (
+                      projectHarnesses[workspace.id] ?? [
+                        "pi",
+                        "acp:codex",
+                        "acp:antigravity",
+                      ]
+                    ).filter((id) =>
+                      harnesses.some((harness) => harness.id === id),
+                    );
+                    return (
+                      <>
+                        <select
+                          className="agent-project-select"
+                          value={workspace.id}
+                          onChange={(event) => setProjectId(event.target.value)}
+                          aria-label="选择项目"
+                        >
+                          {workspaces.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.title}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="agent-settings-note">{workspace.cwd}</p>
+                        <div className="agent-project-settings">
+                          <strong>新建线程快捷入口</strong>
+                          <div className="agent-project-settings-options">
+                            {harnesses.map((harness) => (
+                              <label key={harness.id}>
+                                <input
+                                  type="checkbox"
+                                  disabled={savingProject}
+                                  checked={enabled.includes(harness.id)}
+                                  onChange={(event) => {
+                                    setSavingProject(true);
+                                    void setProjectHarnesses(
+                                      workspace.id,
+                                      event.target.checked
+                                        ? [...enabled, harness.id]
+                                        : enabled.filter(
+                                            (id) => id !== harness.id,
+                                          ),
+                                    )
+                                      .catch(showError)
+                                      .finally(() => setSavingProject(false));
+                                  }}
+                                />
+                                {harness.displayName}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="agent-setting-row">
+                          <div>
+                            <strong>Pi 项目信任</strong>
+                            <p>
+                              控制 Pi
+                              是否加载此项目的设置、资源和扩展；重新连接后生效。
+                            </p>
+                          </div>
+                          <select
+                            aria-label="Pi 项目信任"
+                            value={
+                              trustedExt[workspace.cwd] === undefined
+                                ? "default"
+                                : trustedExt[workspace.cwd]
+                                  ? "allow"
+                                  : "deny"
+                            }
+                            onChange={(event) =>
+                              void act("host.policy.set", {
+                                trustWorkspaceCwd: workspace.cwd,
+                                trusted:
+                                  event.target.value === "default"
+                                    ? null
+                                    : event.target.value === "allow",
+                              })
+                            }
+                          >
+                            <option value="default">Pi 默认设置</option>
+                            <option value="allow">信任项目</option>
+                            <option value="deny">不信任项目</option>
+                          </select>
+                        </div>
+                      </>
+                    );
+                  })()
+                ) : (
+                  <p className="agent-settings-note">暂无项目</p>
+                )}
+              </section>
+            )}
+            {panel === "general" && (
+              <div className="agent-setting-row">
+                <strong>回合结束系统桌面通知</strong>
                 <Switch
                   checked={notifyOn}
                   onCheckedChange={(checked) => {
@@ -449,245 +638,168 @@ export function AgentSettings({
                   }}
                 />
               </div>
-              {activeWorkspaceId && (() => {
-                const ws = workspaces.find((w) => w.id === activeWorkspaceId);
-                if (!ws) return null;
-                return (
-                  <div className="agent-setting-row">
-                    <div>
-                      <strong>信任当前工作区扩展（.pi/extensions）</strong>
-                      <p>
-                        仅在你信任当前仓库代码时开启（{ws.cwd}）。
-                      </p>
-                    </div>
-                    <Switch
-                      checked={!!trustedExt[ws.cwd]}
-                      onCheckedChange={(checked) =>
-                        void act("host.policy.set", {
-                          trustWorkspaceCwd: ws.cwd,
-                          trusted: checked,
-                        })
-                      }
+            )}
+            {open && voiceOpened && (
+              <div hidden={panel !== "voice"}>
+                <VoiceSettingsPanel embedded onDirtyChange={setVoiceDirty} />
+              </div>
+            )}
+            {panel === "remote" && (
+              <>
+                <div className="agent-setting-row">
+                  <div>
+                    <strong>允许手机连接</strong>
+                    <p>
+                      默认只监听本机。开启后监听局域网地址；应用退出后连接停止。
+                    </p>
+                  </div>
+                  <Switch
+                    checked={remote.enabled}
+                    onCheckedChange={(enabled) =>
+                      void act(
+                        enabled ? "host.remote.enable" : "host.remote.disable",
+                        enabled ? { port: Number(port) } : {},
+                      )
+                    }
+                  />
+                </div>
+                {!remote.enabled && (
+                  <label className="agent-port" htmlFor="agent-remote-port">
+                    端口
+                    <Input
+                      id="agent-remote-port"
+                      type="number"
+                      min={1}
+                      max={65535}
+                      value={port}
+                      onChange={(e) => setPort(e.target.value)}
+                      className="h-8 w-28"
                     />
-                  </div>
-                );
-              })()}
-              <div className="agent-harness-config">
-                <strong>Pi 原生全局指令与模型来源</strong>
-                <small>
-                  路径：{docsInfo?.piModelsPath || "~/.pi/agent/models.json"}（
-                  {docsInfo?.piModelsProviders?.length
-                    ? `已配置 Provider：${docsInfo.piModelsProviders.join("、")}`
-                    : "未检测到自定义 models.json，使用 Pi CLI 默认登录/模型"}
-                  ）
-                </small>
-                <label>
-                  APPEND_SYSTEM.md（{docsInfo?.piAppendSystemPath}）
-                  <textarea
-                    rows={5}
-                    value={piAppendDraft}
-                    onChange={(e) => setPiAppendDraft(e.target.value)}
-                    placeholder="为 Pi 原生代理追加全局系统指令…"
-                  />
-                </label>
-                <div className="flex justify-end">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() =>
-                      void act("harness.docs.save", {
-                        target: "piAppendSystem",
-                        content: piAppendDraft,
-                      }).then(() => toast.success("已保存 Pi APPEND_SYSTEM.md"))
-                    }
-                  >
-                    保存 Pi 全局指令
-                  </Button>
-                </div>
-              </div>
-              <div className="agent-harness-config">
-                <strong>Codex 全局指令（AGENTS.md）</strong>
-                <small>
-                  路径：{docsInfo?.codexAgentsPath}（仅影响 Codex CLI，从 ~/.codex/sessions 导入的旧历史保持只读浏览）
-                </small>
-                <label>
-                  Codex AGENTS.md 内容
-                  <textarea
-                    rows={5}
-                    value={codexAgentsDraft}
-                    onChange={(e) => setCodexAgentsDraft(e.target.value)}
-                    placeholder="填写 ~/.codex/AGENTS.md 全局规范…"
-                  />
-                </label>
-                <div className="flex justify-end">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() =>
-                      void act("harness.docs.save", {
-                        target: "codexAgents",
-                        content: codexAgentsDraft,
-                      }).then(() => toast.success("已保存 Codex AGENTS.md"))
-                    }
-                  >
-                    保存 Codex AGENTS.md
-                  </Button>
-                </div>
-              </div>
-            </div>
-          ) : panel === "voice" ? (
-            <VoiceSettingsPanel embedded />
-          ) : (
-            <>
-              <div className="agent-setting-row">
-                <div>
-                  <strong>允许手机连接</strong>
-                  <p>
-                    默认只监听本机。开启后监听局域网地址；应用退出后连接停止。
-                  </p>
-                </div>
-                <Switch
-                  checked={remote.enabled}
-                  onCheckedChange={(enabled) =>
-                    void act(
-                      enabled ? "host.remote.enable" : "host.remote.disable",
-                      enabled ? { port: Number(port) } : {},
-                    )
-                  }
-                />
-              </div>
-              {!remote.enabled && (
-                <label className="agent-port" htmlFor="agent-remote-port">
-                  端口
-                  <Input
-                    id="agent-remote-port"
-                    type="number"
-                    min={1}
-                    max={65535}
-                    value={port}
-                    onChange={(e) => setPort(e.target.value)}
-                    className="h-8 w-28"
-                  />
-                </label>
-              )}
-              {remote.enabled && (
-                <>
-                  <p className="agent-settings-note">
-                    当前为局域网 HTTP 连接。公网访问请通过 HTTPS
-                    入口或安全隧道；不要把本机端口直接暴露到公网。
-                  </p>
-                  <div className="agent-remote-address">
-                    {remote.addresses?.map((url) => (
-                      <code key={url}>{url}/mobile.html</code>
-                    ))}
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      void useAgentStore
-                        .getState()
-                        .command<Pairing>("host.pair.start")
-                        .then((pair) => {
-                          setPair(pair);
-                          setAddress(
-                            pair.addresses.find(
-                              (url) => !url.includes("127.0.0.1"),
-                            ) ??
-                              pair.addresses[0] ??
-                              "",
-                          );
-                        })
-                        .catch(report)
-                    }
-                  >
-                    生成一次性配对码
-                  </Button>
-                  {pair && (
-                    <div className="agent-pair">
-                      <div>
-                        {qr && (
-                          <img
-                            src={qr}
-                            alt="用手机扫描连接二维码"
-                            width={180}
-                            height={180}
-                          />
-                        )}
-                      </div>
-                      <div>
-                        <strong className="agent-pair-code">{pair.code}</strong>
-                        <p>
-                          手机扫码后输入此验证码，再在桌面批准设备。有效期至{" "}
-                          {new Date(pair.expiresAt * 1000).toLocaleTimeString()}
-                          。
-                        </p>
-                        <label htmlFor="agent-pair-address">
-                          手机可访问的主机地址
-                          <Input
-                            id="agent-pair-address"
-                            value={address}
-                            onChange={(e) => setAddress(e.target.value)}
-                            placeholder="http://电脑局域网地址:7331"
-                            aria-label="手机可访问的主机地址"
-                          />
-                        </label>
-                      </div>
+                  </label>
+                )}
+                {remote.enabled && (
+                  <>
+                    <p className="agent-settings-note">
+                      当前为局域网 HTTP 连接。公网访问请通过 HTTPS
+                      入口或安全隧道；不要把本机端口直接暴露到公网。
+                    </p>
+                    <div className="agent-remote-address">
+                      {remote.addresses?.map((url) => (
+                        <code key={url}>{url}/mobile.html</code>
+                      ))}
                     </div>
-                  )}
-                </>
-              )}
-              {devices.pending.map((device) => (
-                <div className="agent-setting-row" key={device.id}>
-                  <span>{device.name} 请求连接</span>
-                  <div className="flex gap-2">
                     <Button
-                      size="sm"
-                      onClick={() =>
-                        void act("host.device.approve", { id: device.id })
-                      }
-                    >
-                      允许
-                    </Button>
-                    <Button
-                      size="sm"
                       variant="outline"
-                      onClick={() =>
-                        void act("host.device.deny", { id: device.id })
-                      }
-                    >
-                      拒绝
-                    </Button>
-                  </div>
-                </div>
-              ))}
-              <h3 className="mt-4 text-xs font-medium">已配对设备</h3>
-              {devices.devices
-                .filter((d) => !d.revoked)
-                .map((device) => (
-                  <div className="agent-setting-row" key={device.id}>
-                    <span>
-                      {device.name}
-                      <small>
-                        {new Date(device.pairedAt * 1000).toLocaleString()}
-                      </small>
-                    </span>
-                    <Button
-                      variant="ghost"
                       size="sm"
                       onClick={() =>
-                        void act("host.device.revoke", { id: device.id })
+                        void useAgentStore
+                          .getState()
+                          .command<Pairing>("host.pair.start")
+                          .then((pair) => {
+                            setPair(pair);
+                            setAddress(
+                              pair.addresses.find(
+                                (url) => !url.includes("127.0.0.1"),
+                              ) ??
+                                pair.addresses[0] ??
+                                "",
+                            );
+                          })
+                          .catch(showError)
                       }
                     >
-                      撤销授权
+                      生成一次性配对码
                     </Button>
+                    {pair && (
+                      <div className="agent-pair">
+                        <div>
+                          {qr && (
+                            <img
+                              src={qr}
+                              alt="用手机扫描连接二维码"
+                              width={180}
+                              height={180}
+                            />
+                          )}
+                        </div>
+                        <div>
+                          <strong className="agent-pair-code">
+                            {pair.code}
+                          </strong>
+                          <p>
+                            手机扫码后输入此验证码，再在桌面批准设备。有效期至{" "}
+                            {new Date(
+                              pair.expiresAt * 1000,
+                            ).toLocaleTimeString()}
+                            。
+                          </p>
+                          <label htmlFor="agent-pair-address">
+                            手机可访问的主机地址
+                            <Input
+                              id="agent-pair-address"
+                              value={address}
+                              onChange={(e) => setAddress(e.target.value)}
+                              placeholder="http://电脑局域网地址:7331"
+                              aria-label="手机可访问的主机地址"
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+                {devices.pending.map((device) => (
+                  <div className="agent-setting-row" key={device.id}>
+                    <span>{device.name} 请求连接</span>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          void act("host.device.approve", { id: device.id })
+                        }
+                      >
+                        允许
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          void act("host.device.deny", { id: device.id })
+                        }
+                      >
+                        拒绝
+                      </Button>
+                    </div>
                   </div>
                 ))}
-              {!devices.devices.some((d) => !d.revoked) && (
-                <p className="agent-settings-note">暂无已配对设备。</p>
-              )}
-            </>
-          )}
+                <h3 className="mt-4 text-xs font-medium">已配对设备</h3>
+                {devices.devices
+                  .filter((d) => !d.revoked)
+                  .map((device) => (
+                    <div className="agent-setting-row" key={device.id}>
+                      <span>
+                        {device.name}
+                        <small>
+                          {new Date(device.pairedAt * 1000).toLocaleString()}
+                        </small>
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          void act("host.device.revoke", { id: device.id })
+                        }
+                      >
+                        撤销授权
+                      </Button>
+                    </div>
+                  ))}
+                {!devices.devices.some((d) => !d.revoked) && (
+                  <p className="agent-settings-note">暂无已配对设备。</p>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </DialogContent>
     </Dialog>

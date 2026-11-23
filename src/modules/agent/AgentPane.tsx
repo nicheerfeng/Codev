@@ -13,6 +13,7 @@ import {
   SidebarRight01Icon,
   Maximize01Icon,
   Minimize01Icon,
+  Analytics01Icon,
 } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ import { AgentSidebar } from "./AgentSidebar";
 import { AgentTranscript } from "./AgentTranscript";
 import { AgentComposer } from "./AgentComposer";
 import { AgentSettings } from "./AgentSettings";
+import { UsageDialog } from "./UsageDialog";
 import { HarnessIcon } from "./HarnessIcon";
 import { focusAgentSession, useAgentStore } from "./store";
 import {
@@ -108,6 +110,7 @@ export function AgentPane({
     }
   });
   const [settings, setSettings] = useState(false);
+  const [usage, setUsage] = useState(false);
   const [creating, setCreating] = useState(false);
   const [welcomeDismissed, setWelcomeDismissed] = useState(() => {
     try {
@@ -343,7 +346,7 @@ export function AgentPane({
       aria-label="统一 Agent 工作区"
     >
       <header className="agent-header">
-        <div className="agent-header-new">
+        {mobile && <div className="agent-header-new">
           <Button
             variant="ghost"
             size="sm"
@@ -372,7 +375,7 @@ export function AgentPane({
               </option>
             ))}
           </select>
-        </div>
+        </div>}
         <div className="agent-header-current">
           {activeHarness && (
             <HarnessIcon
@@ -394,50 +397,6 @@ export function AgentPane({
             {current?.title ?? currentSummary?.title ?? "Agent 工作区"}
           </span>
         </div>
-        <span
-          className={`agent-host-status ${state.connection === "connected" ? "is-connected" : ""}`}
-          title={`代理宿主状态：${state.connection}`}
-        >
-          {state.connection === "connected" ? "宿主已连接" : "连接中"}
-        </span>
-        {!mobile && current && !isBusy(current) && !current.readOnly && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-1.5 text-[11px]"
-            title={current.instanceId ? "重启并重新连接当前代理进程" : "启动并连接当前代理进程"}
-            onClick={() =>
-              void state
-                .command(
-                  current.instanceId ? "session.restart" : "session.connect",
-                  {},
-                  current.id,
-                )
-                .catch(report)
-            }
-          >
-            {current.instanceId ? "重连" : "连接"}
-          </Button>
-        )}
-        {!mobile &&
-          current?.capabilities.supportsFork &&
-          !current.readOnly &&
-          !isBusy(current) && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 px-1.5 text-[11px]"
-              title="基于当前分支克隆出一个新会话继续实验"
-              onClick={() =>
-                void state
-                  .command<SessionView>("session.fork", {}, current.id)
-                  .then((view) => state.select(view.id))
-                  .catch(report)
-              }
-            >
-              克隆分支
-            </Button>
-          )}
         {mobile && (
           <Button
             variant="ghost"
@@ -471,6 +430,11 @@ export function AgentPane({
           />
         )}
         {!mobile && (
+          <Button variant="ghost" size="icon-xs" title="用量统计" aria-label="用量统计" onClick={() => setUsage(true)}>
+            <HugeiconsIcon icon={Analytics01Icon} size={16} />
+          </Button>
+        )}
+        {!mobile && (
           <Button
             variant="ghost"
             size="icon-xs"
@@ -491,11 +455,12 @@ export function AgentPane({
           <HugeiconsIcon icon={SidebarRight01Icon} size={16} />
         </Button>
       </header>
+      {!mobile && <UsageDialog open={usage} onClose={() => setUsage(false)} />}
       {!mobile && !welcomeDismissed && (
         <div className="agent-welcome-tip" role="note">
           <span>
-            提示：顶栏左侧「新建 + 代理选择」用于创建新会话；点击右侧会话即可按其原生代理运行。输入框支持{" "}
-            <code>/</code> 命令、<code>@</code> 工作区文件引用、拖放图片/文件与 <code>Ctrl+F</code> 搜索。
+            提示：在右侧项目上选择代理即可新建会话。输入框支持{" "}
+            <code>@</code> 工作区文件引用、拖放图片/文件与 <code>Ctrl+F</code> 搜索。
           </span>
           <button
             type="button"
@@ -538,17 +503,6 @@ export function AgentPane({
                     onClick={() => void addDirectory().catch(report)}
                   >
                     选择工作目录
-                  </Button>
-                  <Button
-                    size="sm"
-                    disabled={
-                      !state.workspaceId ||
-                      creating ||
-                      state.connection !== "connected"
-                    }
-                    onClick={() => void create()}
-                  >
-                    {creating ? "正在连接原生代理…" : "新建会话"}
                   </Button>
                 </div>
               )}
@@ -637,53 +591,6 @@ export function AgentPane({
                           className={`agent-state-dot ${isBusy(summary) ? "is-working" : ""}`}
                         />
                         <span>{statusLabel(summary.state)}</span>
-                        {!mobile && !isBusy(summary) && !summary.readOnly && (
-                          <button
-                            type="button"
-                            title={
-                              summary.instanceId ? "重新连接" : "连接原生代理"
-                            }
-                            onClick={() =>
-                              void state
-                                .command(
-                                  summary.instanceId
-                                    ? "session.restart"
-                                    : "session.connect",
-                                  {},
-                                  id,
-                                )
-                                .catch(report)
-                            }
-                          >
-                            ↻
-                          </button>
-                        )}
-                        {!mobile &&
-                          state.views[id]?.capabilities.supportsFork &&
-                          !summary.readOnly &&
-                          !isBusy(summary) && (
-                            <button
-                              type="button"
-                              title="克隆分支会话"
-                              onClick={() =>
-                                void state
-                                  .command<SessionView>("session.fork", {}, id)
-                                  .then((view) => {
-                                    useAgentStore.setState((s) => ({
-                                      sessions: {
-                                        ...s.sessions,
-                                        [view.id]: view,
-                                      },
-                                      views: { ...s.views, [view.id]: view },
-                                    }));
-                                    return state.select(view.id);
-                                  })
-                                  .catch(report)
-                              }
-                            >
-                              ⑂
-                            </button>
-                          )}
                         {!mobile && state.slots.length > 1 && (
                           <button
                             type="button"

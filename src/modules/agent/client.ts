@@ -48,7 +48,12 @@ export class AgentHostClient {
     this.status("reconnecting", "正在同步会话快照");
     void this.request<HostSnapshot>("host.resync")
       .then((snapshot) => {
-        if (this.socket !== socket || !snapshot || snapshot.protocolVersion !== 1) return;
+        if (
+          this.socket !== socket ||
+          !snapshot ||
+          snapshot.protocolVersion !== 1
+        )
+          return;
         this.sequence = snapshot.sequence;
         this.serverId = snapshot.serverId;
         this.frame({ type: "resync", snapshot });
@@ -195,7 +200,11 @@ export class AgentHostClient {
           this.pending.delete(command.requestId);
           reject(new Error(`${operation} 响应超时，请检查会话状态`));
         },
-        operation === "session.compact" ? 3600000 : 150000,
+        operation === "session.compact" || operation === "usage.sync"
+          ? 3600000
+          : operation === "pi.plugins.install"
+            ? 190000
+            : 150000,
       );
       this.pending.set(command.requestId, {
         command,

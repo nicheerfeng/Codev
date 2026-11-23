@@ -38,11 +38,14 @@ type State = {
   slots: Array<string | null>;
   opened: string[];
   drafts: Record<string, Draft>;
+  temporarySessions: string[];
+  projectHarnesses: Record<string, string[]>;
   unread: string[];
   initDesktop: () => Promise<void>;
   connectRemote: (options: ConnectionOptions) => void;
   select: (id: string, viewport?: number) => Promise<void>;
-  createSession: () => Promise<void>;
+  createSession: (workspaceId?: string, harnessId?: string) => Promise<void>;
+  setProjectHarnesses: (workspaceId: string, harnessIds: string[]) => Promise<void>;
   addWorkspace: (cwd: string) => Promise<void>;
   setWorkspace: (id: string) => void;
   setHarness: (id: string) => void;
@@ -71,6 +74,30 @@ const saveLocal = (key: string, value: string) => {
     /* optional UI persistence */
   }
 };
+
+function readStored<T>(key: string, fallback: T): T {
+  try {
+    return JSON.parse(readLocal(key) ?? "") as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function discardEmptySession(id: string | null, remainingSlots: Array<string | null>) {
+  if (!id || remainingSlots.includes(id)) return;
+  const state = useAgentStore.getState();
+  const draft = state.drafts[id];
+  const view = state.views[id];
+  if (!state.temporarySessions.includes(id) || state.mobile ||
+      draft?.text.trim() || draft?.images.length || draft?.files?.length ||
+      view?.messages.some((message) => message.role === "user") || isBusy(view)) return;
+  void state.command("session.delete", { removeFromCodev: true }, id).then(() => {
+    const current = useAgentStore.getState();
+    const temporarySessions = current.temporarySessions.filter((item) => item !== id);
+    saveLocal("codev.agent.temporarySessions", JSON.stringify(temporarySessions));
+    useAgentStore.setState({ temporarySessions });
+  }).catch(state.report);
+}
 
 export function shareMessage(
   previous: AgentMessage | undefined,
@@ -327,8 +354,36 @@ function consume(frame: Frame) {
 function establish(options: ConnectionOptions, mobile: boolean) {
   useAgentStore.setState({ mobile, error: "" });
   stopReady?.();
+  let initialReady = true;
   stopReady = agentClient.onReady(() => {
     const state = useAgentStore.getState();
+    if (!mobile) {
+      void agentClient.request<Record<string, string[]> | null>("host.project_harnesses.get")
+        .then(async (projectHarnesses) => {
+          if (projectHarnesses === null) {
+            const legacy = readStored<Record<string, string[]>>("codev.agent.projectHarnesses", {});
+            const available = new Set(state.harnesses.map((item) => item.id));
+            for (const workspace of state.workspaces) {
+              if (!Array.isArray(legacy[workspace.id])) continue;
+              const harnessIds = legacy[workspace.id].filter((id) => available.has(id));
+              await agentClient.request("host.project_harnesses.set", { workspaceId: workspace.id, harnessIds });
+            }
+            projectHarnesses = await agentClient.request<Record<string, string[]> | null>("host.project_harnesses.get");
+          }
+          useAgentStore.setState({ projectHarnesses: projectHarnesses ?? {} });
+        })
+        .catch(state.report);
+    }
+    if (initialReady && !mobile) {
+      for (const id of state.temporarySessions) {
+        if (!state.sessions[id]) continue;
+        void agentClient.request<SessionView>("session.open", {}, id).then((view) => {
+          storeView(view);
+          discardEmptySession(id, []);
+        }).catch(state.report);
+      }
+    }
+    initialReady = false;
     for (const id of new Set([
       ...state.slots.filter((id): id is string => !!id),
       ...(state.selected ? [state.selected] : []),
@@ -361,7 +416,9 @@ export const useAgentStore = create<State>((set, get) => ({
   harnessId: "pi",
   slots: [null],
   opened: [],
-  drafts: {},
+  drafts: readStored<Record<string, Draft>>("codev.agent.drafts", {}),
+  temporarySessions: readStored<string[]>("codev.agent.temporarySessions", []),
+  projectHarnesses: {},
   unread: [],
   initDesktop: () => {
     if (desktopInit) return desktopInit;
@@ -396,6 +453,7 @@ export const useAgentStore = create<State>((set, get) => ({
       [slots[index], slots[previous]] = [slots[previous], slots[index]];
     else slots[index] = id;
     set({ slots, opened: [...new Set([...state.opened, id])] });
+    if (state.selected !== id) discardEmptySession(state.selected, slots);
     saveLocal("codev.agent.slots", JSON.stringify(slots));
     focusAgentSession(id);
     const view = await agentClient.request<SessionView>("session.open", {}, id);
@@ -412,16 +470,29 @@ export const useAgentStore = create<State>((set, get) => ({
         }));
       }
     }
+    const current = get();
+    if (current.selected !== id) discardEmptySession(id, current.slots);
   },
-  createSession: async () => {
+  createSession: async (workspaceId, harnessId) => {
     const state = get();
-    if (!state.workspaceId) throw new Error("请先选择工作目录");
+    const targetWorkspace = workspaceId ?? state.workspaceId;
+    if (!targetWorkspace) throw new Error("请先选择工作目录");
     const view = await agentClient.request<SessionView>("session.create", {
-      workspaceId: state.workspaceId,
-      harnessId: state.harnessId,
+      workspaceId: targetWorkspace,
+      harnessId: harnessId ?? state.harnessId,
+      connect: false,
     });
+    const temporarySessions = [...get().temporarySessions, view.id];
+    saveLocal("codev.agent.temporarySessions", JSON.stringify(temporarySessions));
+    set({ temporarySessions });
     storeView(view);
     await get().select(view.id);
+  },
+  setProjectHarnesses: async (workspaceId, harnessIds) => {
+    await get().command("host.project_harnesses.set", { workspaceId, harnessIds });
+    set((state) => ({
+      projectHarnesses: { ...state.projectHarnesses, [workspaceId]: harnessIds },
+    }));
   },
   addWorkspace: async (cwd) => {
     const workspace = await agentClient.request<Workspace>("workspace.add", {
@@ -438,14 +509,18 @@ export const useAgentStore = create<State>((set, get) => ({
   setWorkspace: (id) => set({ workspaceId: id }),
   setHarness: (id) => set({ harnessId: id }),
   setDraft: (id, draft) =>
-    set((s) => ({
-      drafts: {
+    set((s) => {
+      const drafts = {
         ...s.drafts,
         [id]: { ...(s.drafts[id] ?? { text: "", images: [], files: [] }), ...draft },
-      },
-    })),
+      };
+      saveLocal("codev.agent.drafts", JSON.stringify(drafts));
+      return { drafts };
+    }),
   setSlots: (slots) => {
     const nextSlots = slots.length ? slots : [null];
+    const previous = get();
+    for (const id of previous.slots) discardEmptySession(id, nextSlots);
     saveLocal("codev.agent.slots", JSON.stringify(nextSlots));
     set((s) => ({
       slots: nextSlots,
@@ -463,10 +538,14 @@ export const useAgentStore = create<State>((set, get) => ({
       id,
       session?.instanceId,
     );
+    if (operation === "session.prompt" && id && get().temporarySessions.includes(id)) {
+      const temporarySessions = get().temporarySessions.filter((item) => item !== id);
+      saveLocal("codev.agent.temporarySessions", JSON.stringify(temporarySessions));
+      set({ temporarySessions });
+    }
     if (
       [
         "session.connect",
-        "session.restart",
         "session.history",
         "session.open",
       ].includes(operation) &&
