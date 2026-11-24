@@ -3,10 +3,22 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 pub fn run_command(binary: &Path, args: &[String], timeout: std::time::Duration) -> Result<String, String> {
+    run_command_output(binary, args, timeout, 16 * 1024, false)
+}
+
+pub(super) fn run_command_with_limit(binary: &Path, args: &[String], timeout: std::time::Duration, max_bytes: u64) -> Result<String, String> {
+    run_command_output(binary, args, timeout, max_bytes, true)
+}
+
+fn run_command_output(binary: &Path, args: &[String], timeout: std::time::Duration, max_bytes: u64, stdout_only: bool) -> Result<String, String> {
     use std::io::{Read, Seek};
     let mut output = tempfile::tempfile().map_err(|e| e.to_string())?;
     let stdout = output.try_clone().map_err(|e| e.to_string())?;
-    let stderr = output.try_clone().map_err(|e| e.to_string())?;
+    let mut error_output = if stdout_only { Some(tempfile::tempfile().map_err(|e| e.to_string())?) } else { None };
+    let stderr = match &error_output {
+        Some(file) => file.try_clone(),
+        None => output.try_clone(),
+    }.map_err(|e| e.to_string())?;
     let mut command = super::registry::command_for(binary, args);
     command.stdin(std::process::Stdio::null()).stdout(stdout).stderr(stderr);
     let mut child = command.spawn().map_err(|e| e.to_string())?;
@@ -34,9 +46,18 @@ pub fn run_command(binary: &Path, args: &[String], timeout: std::time::Duration)
     };
     output.rewind().map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
-    output.take(16 * 1024).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    output.take(max_bytes).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     let message = String::from_utf8_lossy(&bytes).trim().to_string();
-    if !status.success() { return Err(format!("命令执行失败：{message}")); }
+    if !status.success() {
+        if let Some(ref mut errors) = error_output {
+            errors.rewind().map_err(|e| e.to_string())?;
+            let mut bytes = Vec::new();
+            errors.take(max_bytes).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+            let detail = String::from_utf8_lossy(&bytes).trim().to_string();
+            if !detail.is_empty() { return Err(format!("命令执行失败：{detail}")); }
+        }
+        return Err(format!("命令执行失败：{message}"));
+    }
     Ok(message)
 }
 

@@ -412,7 +412,7 @@ export function buildTranscriptBlocks(
             ? "已执行（含失败）"
             : "已完成",
         summaryText: summaryParts.join(" · ") || "执行完成",
-        stepCount: steps.length,
+        stepCount: Math.max(steps.length, tickerItems.length),
         toolCount,
         startedAt,
         finishedAt,

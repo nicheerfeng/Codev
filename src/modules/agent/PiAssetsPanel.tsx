@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { Refresh01Icon } from "@hugeicons/core-free-icons";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Button } from "@/components/ui/button";
 import {
   RECOMMENDED_PI_PLUGINS,
   isRecommendedPluginInstalled,
 } from "@/modules/plugins/pi-agent/recommendedPlugins";
+import { SettingCard, SettingNote, SettingRow, SettingSectionHeader } from "./SettingPrimitives";
 import { useAgentStore } from "./store";
 
 type Asset = { name: string; path: string; source: string };
@@ -47,101 +50,121 @@ export function PiAssetsPanel({ kind }: { kind: "skills" | "plugins" }) {
     }
   };
 
+  const title = kind === "skills" ? "技能" : "插件";
   return (
-    <section>
-      <div className="flex items-center gap-2 pb-3">
-        <strong className="flex-1">
-          {kind === "skills" ? "技能" : "插件"} · {items.length}
-        </strong>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy}
-          onClick={() => void refresh()}
-        >
-          刷新
-        </Button>
-      </div>
-      {kind === "plugins" && (
-        <div className="agent-provider-tabs">
-          <Button
-            size="sm"
-            variant={tab === "installed" ? "secondary" : "ghost"}
-            onClick={() => setTab("installed")}
-          >
-            已安装
-          </Button>
-          <Button
-            size="sm"
-            variant={tab === "recommended" ? "secondary" : "ghost"}
-            onClick={() => setTab("recommended")}
-          >
-            推荐安装
-          </Button>
-        </div>
-      )}
-      {error && (
-        <p role="alert" className="agent-settings-note text-destructive">
-          {error}
-        </p>
-      )}
-      {kind === "plugins" && tab === "recommended" ? (
-        RECOMMENDED_PI_PLUGINS.map((plugin) => {
-          const installed = isRecommendedPluginInstalled(
-            plugin.package,
-            items.map((item) => ({ name: item.name, spec: item.name })),
-          );
-          return (
-            <div className="agent-setting-row" key={plugin.package}>
-              <div>
-                <strong>{plugin.name}</strong>
-                <p>{plugin.summary}</p>
+    <section className="space-y-4">
+      <SettingSectionHeader
+        title={title}
+        count={items.length}
+        description={
+          kind === "skills"
+            ? "Pi 工作区与全局技能目录清单。"
+            : "管理已安装的 Pi 扩展包，或一键安装常用推荐插件。"
+        }
+        actions={
+          <>
+            {kind === "plugins" && (
+              <div className="inline-flex items-center rounded-lg border border-border/75 bg-muted/40 p-0.5">
+                <Button
+                  size="xs"
+                  variant={tab === "installed" ? "secondary" : "ghost"}
+                  onClick={() => setTab("installed")}
+                >
+                  已安装
+                </Button>
+                <Button
+                  size="xs"
+                  variant={tab === "recommended" ? "secondary" : "ghost"}
+                  onClick={() => setTab("recommended")}
+                >
+                  推荐安装
+                </Button>
               </div>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={busy || installed}
-                onClick={() => void install(plugin.package)}
-              >
-                {installed ? "已安装" : "安装"}
-              </Button>
-            </div>
-          );
-        })
+            )}
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              disabled={busy}
+              title="刷新"
+              aria-label="刷新"
+              onClick={() => void refresh()}
+            >
+              <HugeiconsIcon icon={Refresh01Icon} size={15} />
+            </Button>
+          </>
+        }
+      />
+
+      {error && (
+        <SettingNote tone="destructive" role="alert">
+          {error}
+        </SettingNote>
+      )}
+
+      {kind === "plugins" && tab === "recommended" ? (
+        <SettingCard>
+          {RECOMMENDED_PI_PLUGINS.map((plugin) => {
+            const installed = isRecommendedPluginInstalled(
+              plugin.package,
+              items.map((item) => ({ name: item.name, spec: item.name })),
+            );
+            return (
+              <SettingRow
+                key={plugin.package}
+                title={plugin.name}
+                description={plugin.summary}
+                control={
+                  <Button
+                    size="sm"
+                    variant={installed ? "ghost" : "outline"}
+                    disabled={busy || installed}
+                    onClick={() => void install(plugin.package)}
+                  >
+                    {installed ? "已安装" : "安装"}
+                  </Button>
+                }
+              />
+            );
+          })}
+        </SettingCard>
       ) : (
         <>
           {!items.length && !busy && (
-            <p className="agent-settings-note">
-              暂无{kind === "skills" ? "技能" : "插件"}
-            </p>
+            <SettingNote>暂无{title}</SettingNote>
           )}
-          {items.map((item) => (
-            <div
-              className="agent-setting-row"
-              key={`${item.source}:${item.path}:${item.name}`}
-            >
-              <div className="min-w-0">
-                <strong>{item.name}</strong>
-                <p>
-                  {item.source}
-                  {item.path ? ` · ${item.path}` : ""}
-                </p>
-              </div>
-              {item.path && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    void revealItemInDir(item.path).catch(
-                      useAgentStore.getState().report,
+          {items.length > 0 && (
+            <SettingCard>
+              {items.map((item) => (
+                <SettingRow
+                  key={`${item.source}:${item.path}:${item.name}`}
+                  title={
+                    <span className="inline-flex flex-wrap items-center gap-1.5">
+                      <span>{item.name}</span>
+                      <span className="rounded-md border border-border/70 bg-muted/60 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+                        {item.source}
+                      </span>
+                    </span>
+                  }
+                  description={item.path ? <span className="font-mono text-[10px]">{item.path}</span> : undefined}
+                  control={
+                    item.path && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          void revealItemInDir(item.path).catch(
+                            useAgentStore.getState().report,
+                          )
+                        }
+                      >
+                        打开位置
+                      </Button>
                     )
                   }
-                >
-                  打开位置
-                </Button>
-              )}
-            </div>
-          ))}
+                />
+              ))}
+            </SettingCard>
+          )}
         </>
       )}
     </section>

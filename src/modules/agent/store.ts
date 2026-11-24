@@ -22,6 +22,7 @@ export type Draft = {
   text: string;
   images: AgentImage[];
   files?: PiPathAttachment[];
+  localCommand?: "compact" | "fork" | null;
 };
 type State = {
   connection: string;
@@ -36,8 +37,10 @@ type State = {
   workspaceId: string | null;
   harnessId: string;
   slots: Array<string | null>;
+  activeViewport: number;
   opened: string[];
   drafts: Record<string, Draft>;
+  sendRevisions: Record<string, number>;
   temporarySessions: string[];
   projectHarnesses: Record<string, string[]>;
   unread: string[];
@@ -45,12 +48,17 @@ type State = {
   connectRemote: (options: ConnectionOptions) => void;
   select: (id: string, viewport?: number) => Promise<void>;
   createSession: (workspaceId?: string, harnessId?: string) => Promise<void>;
-  setProjectHarnesses: (workspaceId: string, harnessIds: string[]) => Promise<void>;
+  setProjectHarnesses: (
+    workspaceId: string,
+    harnessIds: string[],
+  ) => Promise<void>;
   addWorkspace: (cwd: string) => Promise<void>;
   setWorkspace: (id: string) => void;
   setHarness: (id: string) => void;
   setDraft: (id: string, draft: Partial<Draft>) => void;
+  bumpSend: (id: string) => void;
   setSlots: (slots: Array<string | null>) => void;
+  focusViewport: (index: number) => void;
   command: <T = unknown>(
     operation: string,
     payload?: unknown,
@@ -83,20 +91,38 @@ function readStored<T>(key: string, fallback: T): T {
   }
 }
 
-function discardEmptySession(id: string | null, remainingSlots: Array<string | null>) {
+function discardEmptySession(
+  id: string | null,
+  remainingSlots: Array<string | null>,
+) {
   if (!id || remainingSlots.includes(id)) return;
   const state = useAgentStore.getState();
   const draft = state.drafts[id];
   const view = state.views[id];
-  if (!state.temporarySessions.includes(id) || state.mobile ||
-      draft?.text.trim() || draft?.images.length || draft?.files?.length ||
-      view?.messages.some((message) => message.role === "user") || isBusy(view)) return;
-  void state.command("session.delete", { removeFromCodev: true }, id).then(() => {
-    const current = useAgentStore.getState();
-    const temporarySessions = current.temporarySessions.filter((item) => item !== id);
-    saveLocal("codev.agent.temporarySessions", JSON.stringify(temporarySessions));
-    useAgentStore.setState({ temporarySessions });
-  }).catch(state.report);
+  if (
+    !state.temporarySessions.includes(id) ||
+    state.mobile ||
+    draft?.text.trim() ||
+    draft?.images.length ||
+    draft?.files?.length ||
+    view?.messages.some((message) => message.role === "user") ||
+    isBusy(view)
+  )
+    return;
+  void state
+    .command("session.discard_empty", {}, id)
+    .then(() => {
+      const current = useAgentStore.getState();
+      const temporarySessions = current.temporarySessions.filter(
+        (item) => item !== id,
+      );
+      saveLocal(
+        "codev.agent.temporarySessions",
+        JSON.stringify(temporarySessions),
+      );
+      useAgentStore.setState({ temporarySessions });
+    })
+    .catch(state.report);
 }
 
 export function shareMessage(
@@ -152,12 +178,32 @@ function storeView(incoming: SessionView) {
     };
   });
 }
+async function openSession(id: string) {
+  const view = await agentClient.request<SessionView>("session.open", {}, id);
+  storeView(view);
+  if (view.readOnly || view.instanceId) return;
+  try {
+    const connected = await agentClient.request<SessionView>(
+      "session.connect",
+      {},
+      id,
+    );
+    storeView(connected);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    useAgentStore.setState((state) => ({
+      views: { ...state.views, [id]: { ...state.views[id], error: message } },
+      sessions: { ...state.sessions, [id]: { ...state.sessions[id], error: message } },
+    }));
+  }
+}
 export function focusAgentSession(id: string) {
   const state = useAgentStore.getState();
   markTaskRead(`agent:${id}`);
   saveLocal("codev.agent.selected", id);
   useAgentStore.setState({
     selected: id,
+    activeViewport: Math.max(0, state.slots.indexOf(id)),
     workspaceId: state.sessions[id]?.workspaceId ?? state.workspaceId,
     unread: state.unread.filter((v) => v !== id),
   });
@@ -177,7 +223,7 @@ function restore(snapshot: HostSnapshot) {
     ),
   );
   const saved = readLocal("codev.agent.selected");
-  const selected =
+  const preferred =
     previous.selected && sessions[previous.selected]
       ? previous.selected
       : saved && sessions[saved]
@@ -202,12 +248,18 @@ function restore(snapshot: HostSnapshot) {
   const baseSlots = (savedSlots ?? previous.slots).map((id) =>
     id && sessions[id] ? id : null,
   );
-  const nextSlots =
-    selected && !baseSlots.some(Boolean)
-      ? [selected]
-      : baseSlots.length
-        ? baseSlots
-        : [null];
+  const nextSlots = baseSlots.length ? baseSlots : [null];
+  if (preferred && !nextSlots.some(Boolean) && nextSlots.length === 1)
+    nextSlots[0] = preferred;
+  const preserveEmptyFocus =
+    sameHost &&
+    previous.selected === null &&
+    nextSlots[previous.activeViewport] === null;
+  const selected = preserveEmptyFocus
+    ? null
+    : preferred && nextSlots.includes(preferred)
+      ? preferred
+      : (nextSlots.find(Boolean) ?? null);
   const nextOpened = [
     ...new Set([
       ...previous.opened.filter((id) => !!sessions[id]),
@@ -230,6 +282,9 @@ function restore(snapshot: HostSnapshot) {
     selected,
     workspaceId,
     slots: nextSlots,
+    activeViewport: preserveEmptyFocus
+      ? previous.activeViewport
+      : Math.max(0, nextSlots.indexOf(selected)),
     opened: nextOpened,
   });
 }
@@ -247,12 +302,17 @@ function consume(frame: Frame) {
     >;
     useAgentStore.setState((s) => {
       const nextSessions = Object.fromEntries(
-        value.sessions.map((v) => [v.id, s.sessions[v.id] ? { ...s.sessions[v.id], ...v } : v]),
+        value.sessions.map((v) => [
+          v.id,
+          s.sessions[v.id] ? { ...s.sessions[v.id], ...v } : v,
+        ]),
       );
       const nextViews = Object.fromEntries(
         Object.entries(s.views).filter(([id]) => !!nextSessions[id]),
       );
-      const nextSlots = s.slots.map((id) => (id && nextSessions[id] ? id : null));
+      const nextSlots = s.slots.map((id) =>
+        id && nextSessions[id] ? id : null,
+      );
       return {
         workspaces: value.workspaces,
         harnesses: value.harnesses,
@@ -297,7 +357,11 @@ function consume(frame: Frame) {
     };
   } else view = event.payload as SessionView;
   const previous = state.sessions[view.id];
-  if (previous && isBusy(previous) && (view.state === "idle" || view.state === "crashed")) {
+  if (
+    previous &&
+    isBusy(previous) &&
+    (view.state === "idle" || view.state === "crashed")
+  ) {
     if (state.selected !== view.id || document.hidden) {
       markUnreadTask(`agent:${view.id}`);
       useAgentStore.setState({
@@ -310,7 +374,9 @@ function consume(frame: Frame) {
       )?.title;
       const lastAssistant = [...view.messages]
         .reverse()
-        .find((m) => m.role === "assistant" && m.kind === "message" && !!m.text);
+        .find(
+          (m) => m.role === "assistant" && m.kind === "message" && !!m.text,
+        );
       void import("./notify")
         .then((m) =>
           m.notifyAgentTurnFinished({
@@ -358,17 +424,29 @@ function establish(options: ConnectionOptions, mobile: boolean) {
   stopReady = agentClient.onReady(() => {
     const state = useAgentStore.getState();
     if (!mobile) {
-      void agentClient.request<Record<string, string[]> | null>("host.project_harnesses.get")
+      void agentClient
+        .request<Record<string, string[]> | null>("host.project_harnesses.get")
         .then(async (projectHarnesses) => {
           if (projectHarnesses === null) {
-            const legacy = readStored<Record<string, string[]>>("codev.agent.projectHarnesses", {});
+            const legacy = readStored<Record<string, string[]>>(
+              "codev.agent.projectHarnesses",
+              {},
+            );
             const available = new Set(state.harnesses.map((item) => item.id));
             for (const workspace of state.workspaces) {
               if (!Array.isArray(legacy[workspace.id])) continue;
-              const harnessIds = legacy[workspace.id].filter((id) => available.has(id));
-              await agentClient.request("host.project_harnesses.set", { workspaceId: workspace.id, harnessIds });
+              const harnessIds = legacy[workspace.id].filter((id) =>
+                available.has(id),
+              );
+              await agentClient.request("host.project_harnesses.set", {
+                workspaceId: workspace.id,
+                harnessIds,
+              });
             }
-            projectHarnesses = await agentClient.request<Record<string, string[]> | null>("host.project_harnesses.get");
+            projectHarnesses = await agentClient.request<Record<
+              string,
+              string[]
+            > | null>("host.project_harnesses.get");
           }
           useAgentStore.setState({ projectHarnesses: projectHarnesses ?? {} });
         })
@@ -377,10 +455,13 @@ function establish(options: ConnectionOptions, mobile: boolean) {
     if (initialReady && !mobile) {
       for (const id of state.temporarySessions) {
         if (!state.sessions[id]) continue;
-        void agentClient.request<SessionView>("session.open", {}, id).then((view) => {
-          storeView(view);
-          discardEmptySession(id, []);
-        }).catch(state.report);
+        void agentClient
+          .request<SessionView>("session.open", {}, id)
+          .then((view) => {
+            storeView(view);
+            discardEmptySession(id, []);
+          })
+          .catch(state.report);
       }
     }
     initialReady = false;
@@ -388,10 +469,7 @@ function establish(options: ConnectionOptions, mobile: boolean) {
       ...state.slots.filter((id): id is string => !!id),
       ...(state.selected ? [state.selected] : []),
     ])) {
-      void agentClient
-        .request<SessionView>("session.open", {}, id)
-        .then(storeView)
-        .catch((e) => useAgentStore.getState().report(e));
+      void openSession(id).catch((e) => useAgentStore.getState().report(e));
     }
   });
   agentClient.connect(options, consume, (connection, error) =>
@@ -415,8 +493,10 @@ export const useAgentStore = create<State>((set, get) => ({
   workspaceId: null,
   harnessId: "pi",
   slots: [null],
+  activeViewport: 0,
   opened: [],
   drafts: readStored<Record<string, Draft>>("codev.agent.drafts", {}),
+  sendRevisions: {},
   temporarySessions: readStored<string[]>("codev.agent.temporarySessions", []),
   projectHarnesses: {},
   unread: [],
@@ -440,41 +520,44 @@ export const useAgentStore = create<State>((set, get) => ({
     const state = get();
     const existing = state.slots.indexOf(id);
     const empty = state.slots.indexOf(null);
+    const activeEmpty =
+      state.selected === null && state.slots[state.activeViewport] === null
+        ? state.activeViewport
+        : -1;
     const index =
       viewport ??
       (existing >= 0
         ? existing
-        : empty >= 0
-          ? empty
-          : Math.max(0, state.slots.indexOf(state.selected)));
+        : activeEmpty >= 0
+          ? activeEmpty
+          : empty >= 0
+            ? empty
+            : state.slots.length > 1
+              ? -1
+              : 0);
+    if (index < 0 || index >= state.slots.length)
+      throw new Error("视口已满，请新增视口或拖动线程到目标视口替换");
     const slots = [...state.slots];
     const previous = slots.indexOf(id);
     if (previous >= 0 && previous !== index)
       [slots[index], slots[previous]] = [slots[previous], slots[index]];
     else slots[index] = id;
-    set({ slots, opened: [...new Set([...state.opened, id])] });
+    set({
+      slots,
+      activeViewport: index,
+      opened: [...new Set([...state.opened, id])],
+    });
     if (state.selected !== id) discardEmptySession(state.selected, slots);
     saveLocal("codev.agent.slots", JSON.stringify(slots));
     focusAgentSession(id);
-    const view = await agentClient.request<SessionView>("session.open", {}, id);
-    storeView(view);
-    if (!view.readOnly && !view.instanceId) {
-      try {
-        const connected = await agentClient.request<SessionView>("session.connect", {}, id);
-        storeView(connected);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        useAgentStore.setState((state) => ({
-          views: { ...state.views, [id]: { ...state.views[id], error: message } },
-          sessions: { ...state.sessions, [id]: { ...state.sessions[id], error: message } },
-        }));
-      }
-    }
+    await openSession(id);
     const current = get();
     if (current.selected !== id) discardEmptySession(id, current.slots);
   },
   createSession: async (workspaceId, harnessId) => {
     const state = get();
+    if (state.slots.length > 1 && !state.slots.includes(null))
+      throw new Error("视口已满，请先新增或清空视口");
     const targetWorkspace = workspaceId ?? state.workspaceId;
     if (!targetWorkspace) throw new Error("请先选择工作目录");
     const view = await agentClient.request<SessionView>("session.create", {
@@ -483,15 +566,24 @@ export const useAgentStore = create<State>((set, get) => ({
       connect: false,
     });
     const temporarySessions = [...get().temporarySessions, view.id];
-    saveLocal("codev.agent.temporarySessions", JSON.stringify(temporarySessions));
+    saveLocal(
+      "codev.agent.temporarySessions",
+      JSON.stringify(temporarySessions),
+    );
     set({ temporarySessions });
     storeView(view);
     await get().select(view.id);
   },
   setProjectHarnesses: async (workspaceId, harnessIds) => {
-    await get().command("host.project_harnesses.set", { workspaceId, harnessIds });
+    await get().command("host.project_harnesses.set", {
+      workspaceId,
+      harnessIds,
+    });
     set((state) => ({
-      projectHarnesses: { ...state.projectHarnesses, [workspaceId]: harnessIds },
+      projectHarnesses: {
+        ...state.projectHarnesses,
+        [workspaceId]: harnessIds,
+      },
     }));
   },
   addWorkspace: async (cwd) => {
@@ -512,43 +604,104 @@ export const useAgentStore = create<State>((set, get) => ({
     set((s) => {
       const drafts = {
         ...s.drafts,
-        [id]: { ...(s.drafts[id] ?? { text: "", images: [], files: [] }), ...draft },
+        [id]: {
+          ...(s.drafts[id] ?? { text: "", images: [], files: [] }),
+          ...draft,
+        },
       };
       saveLocal("codev.agent.drafts", JSON.stringify(drafts));
       return { drafts };
     }),
+  bumpSend: (id) =>
+    set((s) => ({
+      sendRevisions: {
+        ...s.sendRevisions,
+        [id]: (s.sendRevisions[id] ?? 0) + 1,
+      },
+    })),
   setSlots: (slots) => {
     const nextSlots = slots.length ? slots : [null];
     const previous = get();
     for (const id of previous.slots) discardEmptySession(id, nextSlots);
     saveLocal("codev.agent.slots", JSON.stringify(nextSlots));
-    set((s) => ({
-      slots: nextSlots,
-      opened: s.opened.filter((id) => nextSlots.includes(id) || id === s.selected),
-      selected: nextSlots.includes(s.selected)
-        ? s.selected
-        : (nextSlots.find(Boolean) ?? null),
-    }));
+    set((s) => {
+      const nextSelected =
+        s.selected && nextSlots.includes(s.selected)
+          ? s.selected
+          : s.selected === null && nextSlots.includes(null)
+            ? null
+            : (nextSlots.find(Boolean) ?? null);
+      const emptyIndex =
+        nextSlots[s.activeViewport] === null
+          ? s.activeViewport
+          : nextSlots.indexOf(null);
+      if (nextSelected) saveLocal("codev.agent.selected", nextSelected);
+      else {
+        try {
+          localStorage.removeItem("codev.agent.selected");
+        } catch {
+          /* optional UI persistence */
+        }
+      }
+      return {
+        slots: nextSlots,
+        opened: s.opened.filter(
+          (id) => nextSlots.includes(id) || id === s.selected,
+        ),
+        selected: nextSelected,
+        activeViewport: nextSelected
+          ? nextSlots.indexOf(nextSelected)
+          : Math.max(0, emptyIndex),
+      };
+    });
+  },
+  focusViewport: (index) => {
+    const state = get();
+    if (index < 0 || index >= state.slots.length) return;
+    const id = state.slots[index];
+    if (id) focusAgentSession(id);
+    else {
+      discardEmptySession(state.selected, state.slots);
+      try {
+        localStorage.removeItem("codev.agent.selected");
+      } catch {
+        /* optional UI persistence */
+      }
+      set({ selected: null, activeViewport: index });
+    }
   },
   command: async <T>(operation: string, payload: unknown = {}, id?: string) => {
     const session = id ? get().views[id] : undefined;
+    if (
+      id &&
+      (operation === "session.prompt" || operation === "session.queue.steer")
+    ) {
+      get().bumpSend(id);
+    }
     const result = await agentClient.request<T>(
       operation,
       payload,
       id,
       session?.instanceId,
     );
-    if (operation === "session.prompt" && id && get().temporarySessions.includes(id)) {
-      const temporarySessions = get().temporarySessions.filter((item) => item !== id);
-      saveLocal("codev.agent.temporarySessions", JSON.stringify(temporarySessions));
+    if (
+      operation === "session.prompt" &&
+      id &&
+      get().temporarySessions.includes(id)
+    ) {
+      const temporarySessions = get().temporarySessions.filter(
+        (item) => item !== id,
+      );
+      saveLocal(
+        "codev.agent.temporarySessions",
+        JSON.stringify(temporarySessions),
+      );
       set({ temporarySessions });
     }
     if (
-      [
-        "session.connect",
-        "session.history",
-        "session.open",
-      ].includes(operation) &&
+      ["session.connect", "session.history", "session.open"].includes(
+        operation,
+      ) &&
       id
     ) {
       const view = result as SessionView;

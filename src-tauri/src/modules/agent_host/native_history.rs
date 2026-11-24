@@ -104,7 +104,7 @@ mod tests {
         std::fs::write(&codex, codex_entries.iter().map(Value::to_string).collect::<Vec<_>>().join("\n")).unwrap();
         let (_, binding) = parse_summary(&codex, false, None).unwrap();
         assert_eq!(binding.title, "真实问题");
-        assert!(binding.read_only);
+        assert!(!binding.read_only);
     }
 
     #[test]
@@ -141,7 +141,7 @@ mod tests {
         assert_eq!(view.binding.title, "我的标题");
         assert!(view.binding.pinned);
 
-        host.hide_native_session(&view.binding).unwrap();
+        lock(&host.store).set_preference("hiddenNativeSessions", &json!([super::super::coordinator::native_session_key(&view.binding)])).unwrap();
         lock(&host.store).remove_session(&live_id).unwrap();
         lock(&host.state).sessions.remove(&live_id);
         host.apply_native_history(vec![(cwd, binding)]).unwrap();
@@ -207,6 +207,7 @@ fn parse_summary(path: &Path, pi: bool, modified: Option<SystemTime>) -> Option<
         id: metadata::stable_id(harness, &id), workspace_id: String::new(),
         harness_id: harness.into(), title: if title.is_empty() { first_user } else { title },
         native_session_id: Some(id), native_session_path: Some(path),
-        archived: false, pinned: false, read_only: !pi, imported: true, updated_at,
+        archived: false, pinned: false, read_only: false, imported: true, updated_at,
+        preferences: SessionPreferences::default(),
     }))
 }

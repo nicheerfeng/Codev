@@ -94,7 +94,144 @@ fn apply_config(view: &mut SessionView, mut config: Vec<Value>) {
     }
     view.config_options = config;
 }
+#[derive(Debug, PartialEq, Eq)]
+enum AcpModelResolution {
+    ConfigValue(String),
+    AvailableModel {
+        model_id: String,
+        base_value: Option<String>,
+        thought_level: Option<String>,
+    },
+}
+
+fn strip_models_prefix(value: &str) -> &str {
+    let trimmed = value.trim();
+    trimmed.strip_prefix("models/").unwrap_or(trimmed)
+}
+
+fn split_tiered_model(
+    candidate: &str,
+    view_models: &[Value],
+) -> (Option<String>, Option<String>) {
+    let lower = candidate.to_ascii_lowercase();
+    let best = view_models
+        .iter()
+        .filter_map(|m| m.get("id").and_then(Value::as_str))
+        .filter(|id| lower == id.to_ascii_lowercase() || lower.starts_with(&format!("{}-", id.to_ascii_lowercase())))
+        .max_by_key(|id| id.len())
+        .map(str::to_string);
+    let tier = best.as_ref().and_then(|base| {
+        if lower.len() > base.len() + 1 {
+            Some(lower[base.len() + 1..].to_string())
+        } else {
+            None
+        }
+    });
+    (best, tier)
+}
+
+fn resolve_acp_model(
+    configured: &str,
+    view_models: &[Value],
+    available_models: Option<&[Value]>,
+) -> Option<AcpModelResolution> {
+    let target = strip_models_prefix(configured);
+    if target.is_empty() {
+        return None;
+    }
+    if let Some(found) = view_models.iter().find(|m| text(m, "id") == target) {
+        return Some(AcpModelResolution::ConfigValue(text(found, "id")));
+    }
+    if let Some(found) = view_models
+        .iter()
+        .find(|m| text(m, "id").eq_ignore_ascii_case(target) || text(m, "name").eq_ignore_ascii_case(target))
+    {
+        return Some(AcpModelResolution::ConfigValue(text(found, "id")));
+    }
+    if let Some(available) = available_models {
+        if let Some(found) = available.iter().find(|m| {
+            let mid = text(m, "modelId");
+            let name = text(m, "name");
+            mid == target || mid.eq_ignore_ascii_case(target) || name.eq_ignore_ascii_case(target)
+        }) {
+            let model_id = text(found, "modelId");
+            let (base_value, thought_level) = split_tiered_model(&model_id, view_models);
+            return Some(AcpModelResolution::AvailableModel {
+                model_id,
+                base_value,
+                thought_level,
+            });
+        }
+    }
+    if let (Some(base_value), Some(thought_level)) = split_tiered_model(target, view_models) {
+        return Some(AcpModelResolution::AvailableModel {
+            model_id: target.to_string(),
+            base_value: Some(base_value),
+            thought_level: Some(thought_level),
+        });
+    }
+    if let Some((base_part, tier_part)) = target.rsplit_once(" (").and_then(|(b, r)| r.strip_suffix(')').map(|t| (b.trim(), t.trim().to_ascii_lowercase()))) {
+        if let Some(found) = view_models
+            .iter()
+            .find(|m| text(m, "name").eq_ignore_ascii_case(base_part) || text(m, "id").eq_ignore_ascii_case(base_part))
+        {
+            let base = text(found, "id");
+            return Some(AcpModelResolution::AvailableModel {
+                model_id: format!("{base}-{tier_part}"),
+                base_value: Some(base),
+                thought_level: Some(tier_part),
+            });
+        }
+    }
+    None
+}
+
+fn apply_provider_scope_to_view(
+    view: &mut SessionView,
+    provider_label: &str,
+    configured_models: Option<&[String]>,
+    available_models: Option<&[Value]>,
+) {
+    if view.binding.harness_id == "acp:antigravity" {
+        if let Some(configured) = configured_models {
+            let mut allowed_ids: Vec<String> = Vec::new();
+            for entry in configured {
+                let matched = match resolve_acp_model(entry, &view.models, available_models) {
+                    Some(AcpModelResolution::ConfigValue(id)) => Some(id),
+                    Some(AcpModelResolution::AvailableModel { base_value: Some(id), .. }) => Some(id),
+                    Some(AcpModelResolution::AvailableModel { model_id, .. }) => view
+                        .models
+                        .iter()
+                        .find(|m| text(m, "id") == model_id)
+                        .map(|m| text(m, "id")),
+                    None => None,
+                };
+                if let Some(id) = matched {
+                    if !allowed_ids.contains(&id) {
+                        allowed_ids.push(id);
+                    }
+                }
+            }
+            if !allowed_ids.is_empty() {
+                view.models.retain(|m| allowed_ids.iter().any(|id| id == &text(m, "id")));
+            }
+        }
+    }
+    for model in &mut view.models {
+        if let Some(obj) = model.as_object_mut() {
+            obj.insert("provider".into(), json!(provider_label));
+        }
+    }
+    if let Some(obj) = view.model.as_mut().and_then(Value::as_object_mut) {
+        obj.insert("provider".into(), json!(provider_label));
+    }
+}
+
 fn apply_session(view: &mut SessionView, response: &Value) {
+    if let Some(commands) = response.get("availableCommands").and_then(Value::as_array) {
+        view.commands = commands.clone();
+        view.capabilities.supports_skills = !commands.is_empty();
+    }
     if let Some(models) = response.get("models") {
         view.models=models.get("availableModels").and_then(Value::as_array).map(|models|models.iter().map(|m|json!({"id":m.get("modelId"),"name":m.get("name"),"provider":view.binding.harness_id})).collect()).unwrap_or_default();
         view.model = view
@@ -120,11 +257,261 @@ fn apply_session(view: &mut SessionView, response: &Value) {
         apply_config(view, config);
     }
 }
+fn permission_option_id(option: &Value) -> String {
+    option
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| text(option, "optionId"))
+}
+
+fn pick_permission_option(options: &[Value], allow: bool) -> Option<String> {
+    if allow {
+        for target_kind in ["allow_once", "allow_always"] {
+            if let Some(opt) = options
+                .iter()
+                .find(|item| text(item, "kind") == target_kind && !permission_option_id(item).is_empty())
+            {
+                return Some(permission_option_id(opt));
+            }
+        }
+        if let Some(opt) = options.iter().find(|item| {
+            let id = permission_option_id(item);
+            let kind = text(item, "kind").to_ascii_lowercase();
+            let name = text(item, "name").to_ascii_lowercase();
+            !id.is_empty()
+                && (kind.starts_with("allow")
+                    || id.to_ascii_lowercase().starts_with("allow")
+                    || name.contains("allow")
+                    || name.contains("允许")
+                    || name.contains("批准"))
+        }) {
+            return Some(permission_option_id(opt));
+        }
+        return options
+            .iter()
+            .find(|item| {
+                let id = permission_option_id(item);
+                let kind = text(item, "kind").to_ascii_lowercase();
+                let name = text(item, "name").to_ascii_lowercase();
+                !id.is_empty()
+                    && !kind.starts_with("reject")
+                    && !id.eq_ignore_ascii_case("reject")
+                    && !id.eq_ignore_ascii_case("deny")
+                    && !name.contains("deny")
+                    && !name.contains("拒绝")
+            })
+            .map(permission_option_id);
+    }
+
+    for target_kind in ["reject_once", "reject_always"] {
+        if let Some(opt) = options
+            .iter()
+            .find(|item| text(item, "kind") == target_kind && !permission_option_id(item).is_empty())
+        {
+            return Some(permission_option_id(opt));
+        }
+    }
+    options
+        .iter()
+        .find(|item| {
+            let id = permission_option_id(item);
+            let kind = text(item, "kind").to_ascii_lowercase();
+            let name = text(item, "name").to_ascii_lowercase();
+            !id.is_empty()
+                && (kind.starts_with("reject")
+                    || id.eq_ignore_ascii_case("reject")
+                    || id.eq_ignore_ascii_case("deny")
+                    || name.contains("deny")
+                    || name.contains("拒绝"))
+        })
+        .map(permission_option_id)
+}
+
+fn normalize_key(key: &str) -> String {
+    key.chars()
+        .filter(|c| *c != '_')
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+fn is_read_only_permission_tool(tool: &Value) -> bool {
+    let kind = text(tool, "kind").to_ascii_lowercase();
+    if matches!(kind.as_str(), "read" | "search" | "fetch") {
+        return true;
+    }
+    if matches!(
+        kind.as_str(),
+        "edit" | "write" | "delete" | "move" | "execute" | "command" | "bash" | "shell"
+    ) {
+        return false;
+    }
+    let title = text(tool, "title").to_ascii_lowercase();
+    if [
+        "edit", "write", "delete", "remove", "command", "run ", "exec", "shell", "bash", "patch",
+    ]
+    .iter()
+    .any(|word| title.contains(word))
+    {
+        return false;
+    }
+    let Some(raw) = tool.get("rawInput").and_then(Value::as_object) else {
+        return false;
+    };
+    let has_mutating = raw.keys().any(|k| {
+        matches!(
+            normalize_key(k).as_str(),
+            "content"
+                | "edits"
+                | "oldtext"
+                | "newtext"
+                | "oldstring"
+                | "newstring"
+                | "replacement"
+                | "command"
+                | "commandline"
+                | "cmd"
+                | "script"
+                | "code"
+                | "patch"
+                | "diff"
+                | "overwrite"
+        )
+    });
+    if has_mutating {
+        return false;
+    }
+    raw.keys().any(|k| {
+        matches!(
+            normalize_key(k).as_str(),
+            "path" | "filepath" | "targetfile" | "directory" | "dir" | "pattern" | "query" | "glob" | "url"
+        )
+    })
+}
+
+fn resolve_permission_auto_reply(policy: &HostToolsPolicy, params: &Value) -> Option<Value> {
+    let options = params
+        .get("options")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let allow = match policy.permission.as_str() {
+        "allow_all" => Some(true),
+        "allow_read" => params
+            .get("toolCall")
+            .is_some_and(is_read_only_permission_tool)
+            .then_some(true),
+        "deny" => Some(false),
+        _ => None,
+    }?;
+    match pick_permission_option(options, allow) {
+        Some(option_id) => Some(json!({ "outcome": "selected", "optionId": option_id })),
+        None if !allow => Some(json!({ "outcome": "cancelled" })),
+        None => None,
+    }
+}
+
+pub(super) fn merge_acp_usage_update(existing: &Value, update: &Value) -> Value {
+    let mut map = existing.as_object().cloned().unwrap_or_default();
+    if let Some(obj) = update.as_object() {
+        for (key, value) in obj {
+            map.insert(key.clone(), value.clone());
+        }
+    }
+    let tokens = update
+        .get("tokens")
+        .or_else(|| update.get("used"))
+        .and_then(Value::as_u64)
+        .or_else(|| map.get("tokens").or_else(|| map.get("used")).and_then(Value::as_u64));
+    let window = update
+        .get("window")
+        .or_else(|| update.get("size"))
+        .and_then(Value::as_u64)
+        .or_else(|| map.get("window").or_else(|| map.get("size")).and_then(Value::as_u64));
+    if let Some(tokens) = tokens {
+        map.insert("tokens".into(), json!(tokens));
+        map.insert("used".into(), json!(tokens));
+    }
+    if let Some(window) = window {
+        map.insert("window".into(), json!(window));
+        map.insert("size".into(), json!(window));
+    }
+    let explicit_percent = update.get("percent").and_then(Value::as_f64).filter(|v| v.is_finite());
+    if let Some(percent) = explicit_percent.or_else(|| {
+        match (tokens, window) {
+            (Some(used), Some(size)) if size > 0 => Some((used as f64 / size as f64) * 100.0),
+            _ => None,
+        }
+    }) {
+        map.insert("percent".into(), json!(percent.clamp(0.0, 100.0)));
+    }
+    Value::Object(map)
+}
+
+pub(super) fn merge_acp_prompt_usage(existing: &Value, reply_usage: &Value) -> Value {
+    let mut map = existing.as_object().cloned().unwrap_or_default();
+    let input = reply_usage
+        .get("inputTokens")
+        .or_else(|| reply_usage.get("input"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let output = reply_usage
+        .get("outputTokens")
+        .or_else(|| reply_usage.get("output"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let cache_read = reply_usage
+        .get("cachedReadTokens")
+        .or_else(|| reply_usage.get("cacheRead"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let cache_write = reply_usage
+        .get("cachedWriteTokens")
+        .or_else(|| reply_usage.get("cacheWrite"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let thought = reply_usage
+        .get("thoughtTokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let total = reply_usage
+        .get("totalTokens")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| input + output + cache_read + cache_write + thought);
+    map.insert(
+        "usage".into(),
+        json!({
+            "input": input,
+            "output": output,
+            "cacheRead": cache_read,
+            "cacheWrite": cache_write,
+        }),
+    );
+    let existing_tokens = map
+        .get("tokens")
+        .or_else(|| map.get("used"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if existing_tokens == 0 && total > 0 {
+        map.insert("tokens".into(), json!(total));
+        map.insert("used".into(), json!(total));
+        if let Some(window) = map
+            .get("window")
+            .or_else(|| map.get("size"))
+            .and_then(Value::as_u64)
+            .filter(|w| *w > 0)
+        {
+            map.insert("percent".into(), json!(((total as f64 / window as f64) * 100.0).clamp(0.0, 100.0)));
+        }
+    }
+    Value::Object(map)
+}
+
 impl Host {
     pub async fn initialize_acp(
         self: &Arc<Self>,
         id: &str,
         runtime: &Arc<Runtime>,
+        require_resume: bool,
     ) -> Result<(), String> {
         let harness = self.view(id)?.binding.harness_id;
         let policy = self.host_tools_policy(&harness);
@@ -150,6 +537,11 @@ impl Host {
         if initialize.get("protocolVersion").and_then(Value::as_u64) != Some(1) {
             return Err("代理返回了不兼容的协议版本".into());
         }
+        if harness == "acp:codex" {
+            if let Some(provider) = super::providers::selected(self, &harness)? {
+                super::providers::apply_codex(runtime, Some(&provider)).await?;
+            }
+        }
         let capabilities = initialize
             .get("agentCapabilities")
             .cloned()
@@ -160,6 +552,7 @@ impl Host {
             .unwrap_or(false);
         let view = self.view(id)?;
         let desktop = antigravity_history::is_desktop(&view.binding);
+        let imported_codex = harness == "acp:codex" && view.binding.imported;
         let mut cwd = lock(&self.state)
             .workspaces
             .get(&view.binding.workspace_id)
@@ -183,6 +576,8 @@ impl Host {
             }
         });
         let native = lock(&runtime.native_id).clone();
+        let was_fresh = native.is_none();
+        let was_empty = view.messages.is_empty();
         let mut recovered = false;
         let response = if let Some(native) = native {
             if !resume {
@@ -196,6 +591,8 @@ impl Host {
             }
             if desktop {
                 runtime.loading_desktop_history.store(true, std::sync::atomic::Ordering::Release);
+            } else {
+                runtime.loading_history.store(true, std::sync::atomic::Ordering::Release);
             }
             let loaded = runtime
                 .bridge
@@ -205,14 +602,19 @@ impl Host {
                     TIMEOUT,
                 )
                 .await;
+            let drained = runtime.bridge.drain_events().await;
             if desktop {
-                let drained = runtime.bridge.drain_events().await;
                 runtime.loading_desktop_history.store(false, std::sync::atomic::Ordering::Release);
                 drained?;
+            } else {
+                runtime.loading_history.store(false, std::sync::atomic::Ordering::Release);
+                if loaded.is_ok() {
+                    drained?;
+                }
             }
             match loaded {
                 Ok(value) => value,
-                Err(error) if !desktop && recoverable_missing_session(&error) => {
+                Err(error) if !require_resume && !desktop && !imported_codex && harness != "acp:antigravity" && recoverable_missing_session(&error) => {
                     recovered = true;
                     *lock(&runtime.native_id) = None;
                     self.update(id, Some(&runtime.instance), |v| {
@@ -224,7 +626,16 @@ impl Host {
                         .await
                         .map_err(|error| with_auth_hint(&harness, error))?
                 }
-                Err(error) => return Err(with_auth_hint(&harness, error)),
+                Err(error) => {
+                    if imported_codex || require_resume {
+                        self.update(id, Some(&runtime.instance), |v| {
+                            v.messages = view.messages.clone();
+                            v.history_available = view.history_available;
+                            v.history_offset = view.history_offset;
+                        });
+                    }
+                    return Err(with_auth_hint(&harness, error));
+                }
             }
         } else {
             runtime
@@ -242,10 +653,37 @@ impl Host {
         if desktop && view.binding.native_session_id.as_deref() != Some(native.as_str()) {
             return Err("Antigravity 返回的会话标识与桌面历史不一致".into());
         }
+        if (imported_codex || require_resume) && view.binding.native_session_id.is_some()
+            && view.binding.native_session_id.as_deref() != Some(native.as_str()) {
+            self.update(id, Some(&runtime.instance), |v| {
+                v.messages = view.messages.clone();
+                v.history_available = view.history_available;
+                v.history_offset = view.history_offset;
+            });
+            return Err("代理返回的会话标识与原生历史不一致".into());
+        }
         *lock(&runtime.native_id) = Some(native.clone());
+        let native_for_model = native.clone();
+        let (provider_label, allowed_models) = super::providers::acp_provider_scope(
+            self,
+            id,
+            &harness,
+            !was_fresh,
+            desktop,
+        );
+        let available_models = response
+            .pointer("/models/availableModels")
+            .and_then(Value::as_array)
+            .cloned();
         self.update(id, Some(&runtime.instance), |v| {
             v.binding.native_session_id = Some(native);
             apply_session(v, &response);
+            apply_provider_scope_to_view(
+                v,
+                &provider_label,
+                allowed_models.as_deref(),
+                available_models.as_deref(),
+            );
             for m in &mut v.messages {
                 m.streaming = false;
                 if m.status == "streaming" {
@@ -266,6 +704,271 @@ impl Host {
                 });
             }
         });
+        self.persist(id)?;
+        let active_provider = super::providers::acp_session_provider(
+            self,
+            id,
+            &harness,
+            !was_fresh,
+            desktop,
+        )?;
+        let should_apply_default_model = match harness.as_str() {
+            "acp:codex" => true,
+            "acp:antigravity" => !desktop && (was_fresh || recovered || was_empty),
+            _ => false,
+        };
+        let prefs = self.view(id)?.binding.preferences;
+        let harness_prefs = self.harness_preferences(&harness);
+        let scoped_available: Option<Vec<Value>> = available_models.as_ref().map(|avail| {
+            if let Some(ref allowed) = allowed_models {
+                if !allowed.is_empty() {
+                    let view_ids: std::collections::HashSet<String> = self
+                        .view(id)
+                        .map(|v| v.models.iter().map(|m| text(m, "id")).collect())
+                        .unwrap_or_default();
+                    return avail
+                        .iter()
+                        .filter(|m| {
+                            let mid = text(m, "modelId");
+                            let (base, _) = split_tiered_model(&mid, &[]);
+                            view_ids.contains(&mid)
+                                || base.is_some_and(|b| view_ids.contains(&b))
+                                || allowed.iter().any(|a| a.eq_ignore_ascii_case(&mid))
+                        })
+                        .cloned()
+                        .collect();
+                }
+            }
+            avail.clone()
+        });
+        let saved_model = prefs.model_id.as_deref().filter(|s| !s.is_empty());
+        let provider_default = if should_apply_default_model {
+            active_provider
+                .as_ref()
+                .map(|p| p.model.trim())
+                .filter(|s| !s.is_empty())
+        } else {
+            None
+        };
+        let fresh_harness_model = if was_fresh && provider_default.is_none() {
+            harness_prefs.model_id.as_deref().filter(|s| !s.is_empty())
+        } else {
+            None
+        };
+        let mut applied_explicit_model = false;
+        if let Some(candidate) = saved_model.or(fresh_harness_model) {
+            let view = self.view(id)?;
+            if let Some(target) =
+                resolve_acp_model(candidate, &view.models, scoped_available.as_deref())
+            {
+                let already = match &target {
+                    AcpModelResolution::ConfigValue(mid) => {
+                        view.model.as_ref().map(|m| text(m, "id")) == Some(mid.clone())
+                    }
+                    AcpModelResolution::AvailableModel {
+                        model_id,
+                        base_value,
+                        ..
+                    } => {
+                        let cur = view.model.as_ref().map(|m| text(m, "id"));
+                        cur == Some(model_id.clone())
+                            || (base_value.is_some() && cur == *base_value)
+                    }
+                };
+                if already
+                    || self
+                        .apply_acp_model_target(id, runtime, &native_for_model, target)
+                        .await
+                        .is_ok()
+                {
+                    applied_explicit_model = true;
+                }
+            }
+        }
+        if !applied_explicit_model {
+            if let Some(default_model) = provider_default {
+                let view = self.view(id)?;
+                let target = resolve_acp_model(
+                    default_model,
+                    &view.models,
+                    available_models.as_deref(),
+                )
+                .ok_or_else(|| {
+                    if harness == "acp:antigravity" {
+                        format!(
+                            "当前 Antigravity 供应商配置的默认模型“{}”不被 agy CLI 支持，请检查或改用受支持的 Gemini 模型（如 gemini-4-hydrogen）",
+                            default_model
+                        )
+                    } else {
+                        format!(
+                            "供应商未返回模型 {}，请检查模型名称或供应商模型列表",
+                            default_model
+                        )
+                    }
+                })?;
+                self.apply_acp_model_target(id, runtime, &native_for_model, target)
+                    .await?;
+            }
+        }
+        let view_after_model = self.view(id)?;
+        let desired_thinking = prefs
+            .thinking_level
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                was_fresh
+                    .then_some(harness_prefs.thinking_level.as_deref())
+                    .flatten()
+                    .filter(|s| !s.is_empty())
+            });
+        if let Some(tier) = desired_thinking {
+            let thought_config_id = view_after_model
+                .config_options
+                .iter()
+                .find(|c| {
+                    matches!(text(c, "category").as_str(), "thought_level" | "thinking")
+                        || text(c, "id").contains("thinking")
+                        || text(c, "id") == "thought_level"
+                })
+                .map(|c| text(c, "id"))
+                .unwrap_or_default();
+            if !thought_config_id.is_empty()
+                && view_after_model.thinking_levels.iter().any(|t| t == tier)
+                && view_after_model.thinking_level != tier
+            {
+                let _ = self
+                    .set_acp_config(id, runtime, &thought_config_id, tier)
+                    .await;
+            }
+        }
+        let mut desired_configs = if was_fresh {
+            harness_prefs.configs
+        } else {
+            std::collections::BTreeMap::new()
+        };
+        for (cid, val) in prefs.configs {
+            desired_configs.insert(cid, val);
+        }
+        if !desired_configs.is_empty() {
+            let current_view = self.view(id)?;
+            for (cid, val) in desired_configs {
+                let Some(opt) = current_view
+                    .config_options
+                    .iter()
+                    .find(|c| text(c, "id") == cid)
+                else {
+                    continue;
+                };
+                if text(opt, "currentValue") == val {
+                    continue;
+                }
+                let allowed = if text(opt, "type") == "boolean" {
+                    val == "true" || val == "false"
+                } else {
+                    options(opt.get("options").unwrap_or(&Value::Null))
+                        .iter()
+                        .any(|c| text(c, "value") == val)
+                };
+                if allowed {
+                    let _ = self.set_acp_config(id, runtime, &cid, &val).await;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn apply_acp_model_target(
+        &self,
+        id: &str,
+        runtime: &Arc<Runtime>,
+        native_for_model: &str,
+        target: AcpModelResolution,
+    ) -> Result<(), String> {
+        let view = self.view(id)?;
+        let config_id = view
+            .config_options
+            .iter()
+            .find(|c| text(c, "category") == "model" || text(c, "id") == "model")
+            .map(|c| text(c, "id"))
+            .unwrap_or_default();
+        let thought_config_id = view
+            .config_options
+            .iter()
+            .find(|c| {
+                matches!(text(c, "category").as_str(), "thought_level" | "thinking")
+                    || text(c, "id").contains("thinking")
+                    || text(c, "id") == "thought_level"
+            })
+            .map(|c| text(c, "id"))
+            .unwrap_or_default();
+        match target {
+            AcpModelResolution::ConfigValue(model_id) => {
+                if config_id.is_empty() {
+                    runtime
+                        .bridge
+                        .request(
+                            "session/set_model",
+                            json!({"sessionId":native_for_model,"modelId":model_id}),
+                            TIMEOUT,
+                        )
+                        .await?;
+                    self.update(id, Some(&runtime.instance), |v| {
+                        v.model = v
+                            .models
+                            .iter()
+                            .find(|m| text(m, "id") == model_id)
+                            .cloned();
+                    });
+                } else {
+                    self.set_acp_config(id, runtime, &config_id, &model_id).await?;
+                }
+            }
+            AcpModelResolution::AvailableModel {
+                model_id,
+                base_value,
+                thought_level,
+            } => {
+                if !config_id.is_empty() {
+                    if let Some(base) = base_value {
+                        self.set_acp_config(id, runtime, &config_id, &base).await?;
+                        if let Some(tier) = thought_level {
+                            if !thought_config_id.is_empty()
+                                && self.view(id)?.thinking_levels.iter().any(|t| t == &tier)
+                            {
+                                let _ = self
+                                    .set_acp_config(id, runtime, &thought_config_id, &tier)
+                                    .await;
+                            }
+                        }
+                    } else {
+                        runtime
+                            .bridge
+                            .request(
+                                "session/set_model",
+                                json!({"sessionId":native_for_model,"modelId":model_id}),
+                                TIMEOUT,
+                            )
+                            .await?;
+                    }
+                } else {
+                    runtime
+                        .bridge
+                        .request(
+                            "session/set_model",
+                            json!({"sessionId":native_for_model,"modelId":model_id}),
+                            TIMEOUT,
+                        )
+                        .await?;
+                    self.update(id, Some(&runtime.instance), |v| {
+                        v.model = v
+                            .models
+                            .iter()
+                            .find(|m| text(m, "id") == model_id)
+                            .cloned();
+                    });
+                }
+            }
+        }
         Ok(())
     }
     pub fn handle_acp_frame(self: &Arc<Self>, id: &str, runtime: &Arc<Runtime>, frame: Value) {
@@ -280,6 +983,32 @@ impl Host {
                 {
                     return;
                 }
+                let event_ts = {
+                    let explicit = history::parse_timestamp_ms(
+                        update.get("timestamp").or_else(|| params.get("timestamp")),
+                    );
+                    if explicit > 0 {
+                        explicit
+                    } else if runtime.loading_history.load(std::sync::atomic::Ordering::Acquire) {
+                        0
+                    } else {
+                        now_ms()
+                    }
+                };
+                let pending_overlay = lock(&runtime.pending_config).clone();
+                let config_scope = if kind == "config_option_update" {
+                    self.view(id).ok().map(|v| {
+                        super::providers::acp_provider_scope(
+                            self,
+                            id,
+                            &v.binding.harness_id,
+                            v.binding.native_session_id.is_some(),
+                            antigravity_history::is_desktop(&v.binding),
+                        )
+                    })
+                } else {
+                    None
+                };
                 self.update(id, Some(&runtime.instance), |v| match kind.as_str() {
                     "agent_message_chunk" | "agent_thought_chunk" | "user_message_chunk" => {
                         let role = if kind == "user_message_chunk" {
@@ -302,7 +1031,7 @@ impl Host {
                                 role: role.into(),
                                 streaming: true,
                                 status: "streaming".into(),
-                                created_at: now_ms(),
+                                created_at: event_ts,
                                 raw_kind: kind.clone(),
                                 ..Message::default()
                             });
@@ -335,7 +1064,7 @@ impl Host {
                                 kind: "toolCall".into(),
                                 role: "tool".into(),
                                 tool_call_id: call,
-                                created_at: now_ms(),
+                                created_at: event_ts,
                                 raw_kind: kind.clone(),
                                 ..Message::default()
                             });
@@ -410,6 +1139,10 @@ impl Host {
                         if let Some(config) = update.get("configOptions").and_then(Value::as_array)
                         {
                             apply_config(v, config.clone());
+                            if let Some((ref label, ref allowed)) = config_scope {
+                                apply_provider_scope_to_view(v, label, allowed.as_deref(), None);
+                            }
+                            pending_overlay.overlay_on_view(v);
                         }
                     }
                     "current_mode_update" => {
@@ -421,6 +1154,7 @@ impl Host {
                             mode["currentValue"] =
                                 update.get("currentModeId").cloned().unwrap_or(Value::Null);
                         }
+                        pending_overlay.overlay_on_view(v);
                     }
                     "session_info_update" => {
                         if let Some(title) = update.get("title").and_then(Value::as_str) {
@@ -449,7 +1183,7 @@ impl Host {
                         });
                     }
                     "usage_update" => {
-                        v.context = update.clone();
+                        v.context = merge_acp_usage_update(&v.context, update);
                         v.capabilities.supports_context_usage = true;
                     }
                     _ => {}
@@ -459,6 +1193,23 @@ impl Host {
                 let Some(native_id) = frame.get("id").cloned() else {
                     return;
                 };
+                let policy = self
+                    .view(id)
+                    .ok()
+                    .map(|v| self.host_tools_policy(&v.binding.harness_id))
+                    .unwrap_or_default();
+                if let Some(outcome) = resolve_permission_auto_reply(&policy, &params) {
+                    if let Err(err) = runtime
+                        .bridge
+                        .send(json!({"jsonrpc":"2.0","id":native_id,"result":{"outcome": outcome}}))
+                    {
+                        runtime.bridge.diagnostic(format!("自动审批回复失败：{err}"));
+                    }
+                    self.update(id, Some(&runtime.instance), |v| {
+                        v.capabilities.supports_permission = true;
+                    });
+                    return;
+                }
                 let key = new_id();
                 lock(&runtime.permission_ids).insert(key.clone(), native_id);
                 let tool = params.get("toolCall").unwrap_or(&Value::Null);
@@ -535,6 +1286,18 @@ impl Host {
                 )
                 .await?
         };
+        let (provider_label, allowed_models) = self.view(id).ok().map_or_else(
+            || (String::new(), None),
+            |v| {
+                super::providers::acp_provider_scope(
+                    self,
+                    id,
+                    &v.binding.harness_id,
+                    v.binding.native_session_id.is_some(),
+                    antigravity_history::is_desktop(&v.binding),
+                )
+            },
+        );
         self.update(id, Some(&runtime.instance), |v| {
             if let Some(config) = response.get("configOptions").and_then(Value::as_array) {
                 apply_config(v, config.clone());
@@ -546,6 +1309,14 @@ impl Host {
                 option["currentValue"] = json!(value);
                 let config = v.config_options.clone();
                 apply_config(v, config);
+            }
+            if !provider_label.is_empty() {
+                apply_provider_scope_to_view(
+                    v,
+                    &provider_label,
+                    allowed_models.as_deref(),
+                    None,
+                );
             }
         });
         Ok(response)
@@ -587,7 +1358,10 @@ impl Host {
                 .map_err(std::io::Error::other)
         }
         .map_err(|e| e.to_string())?;
-        if !canonical.starts_with(&root) {
+        let outside_allowed = policy.allow_outside_workspace
+            || policy.permission == "allow_all"
+            || (!write && policy.permission == "allow_read");
+        if !outside_allowed && !canonical.starts_with(&root) {
             return Err("代理文件请求超出绑定工作区".into());
         }
         if write {
@@ -677,5 +1451,175 @@ impl Host {
                 json!({"content":content.lines().skip(start).take(limit).collect::<Vec<_>>().join("\n")}),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_agy_options() -> (Vec<Value>, Vec<Value>) {
+        let view_models = vec![
+            json!({"id": "gemini-4-neon", "name": "Gemini 4 Neon", "provider": "acp:antigravity", "configId": "model"}),
+            json!({"id": "gemini-4-hydrogen", "name": "Gemini 4 Hydrogen", "provider": "acp:antigravity", "configId": "model"}),
+            json!({"id": "gemini-3.1-pro", "name": "Gemini 3.1 Pro", "provider": "acp:antigravity", "configId": "model"}),
+        ];
+        let available = vec![
+            json!({"modelId": "gemini-4-neon-high", "name": "Gemini 4 Neon (High)"}),
+            json!({"modelId": "gemini-4-hydrogen-xhigh", "name": "Gemini 4 Hydrogen (XHigh)"}),
+            json!({"modelId": "gemini-4-hydrogen-low", "name": "Gemini 4 Hydrogen (Low)"}),
+        ];
+        (view_models, available)
+    }
+
+    #[test]
+    fn resolves_base_display_and_tiered_antigravity_models() {
+        let (view_models, available) = sample_agy_options();
+        assert_eq!(
+            resolve_acp_model("gemini-4-hydrogen", &view_models, Some(&available)),
+            Some(AcpModelResolution::ConfigValue("gemini-4-hydrogen".into()))
+        );
+        assert_eq!(
+            resolve_acp_model("models/gemini-4-hydrogen", &view_models, Some(&available)),
+            Some(AcpModelResolution::ConfigValue("gemini-4-hydrogen".into()))
+        );
+        assert_eq!(
+            resolve_acp_model("Gemini 4 Hydrogen", &view_models, Some(&available)),
+            Some(AcpModelResolution::ConfigValue("gemini-4-hydrogen".into()))
+        );
+        assert_eq!(
+            resolve_acp_model("Gemini 4 Hydrogen (XHigh)", &view_models, Some(&available)),
+            Some(AcpModelResolution::AvailableModel {
+                model_id: "gemini-4-hydrogen-xhigh".into(),
+                base_value: Some("gemini-4-hydrogen".into()),
+                thought_level: Some("xhigh".into()),
+            })
+        );
+        assert_eq!(
+            resolve_acp_model("gemini-4-hydrogen-low", &view_models, Some(&available)),
+            Some(AcpModelResolution::AvailableModel {
+                model_id: "gemini-4-hydrogen-low".into(),
+                base_value: Some("gemini-4-hydrogen".into()),
+                thought_level: Some("low".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn scopes_and_labels_antigravity_models_to_bound_provider() {
+        let (view_models, available) = sample_agy_options();
+        let mut view = SessionView::new(SessionBinding {
+            id: "s1".into(),
+            workspace_id: "w1".into(),
+            harness_id: "acp:antigravity".into(),
+            title: "新会话".into(),
+            native_session_id: None,
+            native_session_path: None,
+            archived: false,
+            pinned: false,
+            read_only: false,
+            imported: false,
+            updated_at: 1,
+            preferences: SessionPreferences::default(),
+        });
+        view.models = view_models;
+        view.model = Some(json!({"id": "gemini-4-hydrogen", "name": "Gemini 4 Hydrogen", "provider": "acp:antigravity"}));
+
+        let configured = vec!["gemini-4-hydrogen".to_string()];
+        apply_provider_scope_to_view(&mut view, "gemini-魔方", Some(&configured), Some(&available));
+        assert_eq!(view.models.len(), 1);
+        assert_eq!(text(&view.models[0], "id"), "gemini-4-hydrogen");
+        assert_eq!(text(&view.models[0], "provider"), "gemini-魔方");
+        assert_eq!(view.model.as_ref().map(|m| text(m, "provider")).as_deref(), Some("gemini-魔方"));
+    }
+
+    #[test]
+    fn normalizes_gemini_base_url_without_doubling_v1beta() {
+        assert_eq!(super::super::providers::normalize_agy_base_url("http://139.9.157.145:5000/"), "http://139.9.157.145:5000");
+        assert_eq!(super::super::providers::normalize_agy_base_url("http://139.9.157.145:5000/v1beta/"), "http://139.9.157.145:5000");
+        assert_eq!(super::super::providers::normalize_agy_base_url("https://proxy.example/custom/v1beta"), "https://proxy.example/custom");
+    }
+
+    #[test]
+    fn resolves_acp_permission_auto_replies_by_policy_and_tool_kind() {
+        let read_req = json!({
+            "toolCall": {
+                "title": "File C:/Users/79988/Desktop/iris-analysis-report/outputs/metrics_summary.json",
+                "rawInput": { "Path": "C:\\Users\\79988\\Desktop\\metrics.json", "StartLine": 801, "EndLine": 1600 }
+            },
+            "options": [
+                { "optionId": "allow_once", "name": "Allow", "kind": "allow_once" },
+                { "optionId": "reject_once", "name": "Deny", "kind": "reject_once" }
+            ]
+        });
+        let cmd_req = json!({
+            "toolCall": {
+                "title": "Get-ChildItem -Path C:\\Users\\79988\\Desktop",
+                "rawInput": { "CommandLine": "Get-ChildItem -Path C:\\Users\\79988\\Desktop" }
+            },
+            "options": [
+                { "optionId": "allow_once", "name": "Allow", "kind": "allow_once" },
+                { "optionId": "reject_once", "name": "Deny", "kind": "reject_once" }
+            ]
+        });
+
+        let ask = HostToolsPolicy::default();
+        assert_eq!(resolve_permission_auto_reply(&ask, &read_req), None);
+        assert_eq!(resolve_permission_auto_reply(&ask, &cmd_req), None);
+
+        let allow_read = HostToolsPolicy { permission: "allow_read".into(), ..HostToolsPolicy::default() };
+        assert_eq!(
+            resolve_permission_auto_reply(&allow_read, &read_req),
+            Some(json!({ "outcome": "selected", "optionId": "allow_once" }))
+        );
+        assert_eq!(resolve_permission_auto_reply(&allow_read, &cmd_req), None);
+
+        let allow_all = HostToolsPolicy { permission: "allow_all".into(), ..HostToolsPolicy::default() };
+        assert_eq!(
+            resolve_permission_auto_reply(&allow_all, &cmd_req),
+            Some(json!({ "outcome": "selected", "optionId": "allow_once" }))
+        );
+
+        let deny = HostToolsPolicy { permission: "deny".into(), ..HostToolsPolicy::default() };
+        assert_eq!(
+            resolve_permission_auto_reply(&deny, &read_req),
+            Some(json!({ "outcome": "selected", "optionId": "reject_once" }))
+        );
+    }
+
+    #[test]
+    fn normalizes_acp_usage_update_and_merges_prompt_breakdown() {
+        let updated = merge_acp_usage_update(
+            &Value::Null,
+            &json!({ "sessionUpdate": "usage_update", "used": 13023, "size": 1048576 }),
+        );
+        assert_eq!(updated["tokens"], json!(13023));
+        assert_eq!(updated["window"], json!(1048576));
+        let pct = updated["percent"].as_f64().unwrap();
+        assert!((pct - (13023.0 / 1048576.0 * 100.0)).abs() < 1e-6);
+
+        let with_usage = merge_acp_prompt_usage(
+            &updated,
+            &json!({
+                "inputTokens": 8345,
+                "outputTokens": 678,
+                "cachedReadTokens": 4000,
+                "cachedWriteTokens": 0,
+                "totalTokens": 13023
+            }),
+        );
+        assert_eq!(with_usage["tokens"], json!(13023));
+        assert_eq!(with_usage["usage"]["input"], json!(8345));
+        assert_eq!(with_usage["usage"]["output"], json!(678));
+        assert_eq!(with_usage["usage"]["cacheRead"], json!(4000));
+        assert_eq!(with_usage["usage"]["cacheWrite"], json!(0));
+
+        // Subsequent usage_update keeps breakdown intact while advancing tokens/percent.
+        let next = merge_acp_usage_update(
+            &with_usage,
+            &json!({ "sessionUpdate": "usage_update", "used": 26046, "size": 1048576 }),
+        );
+        assert_eq!(next["tokens"], json!(26046));
+        assert_eq!(next["usage"]["input"], json!(8345));
     }
 }

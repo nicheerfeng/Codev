@@ -28,6 +28,7 @@ pub struct Bridge {
     events: mpsc::Sender<Value>,
     process: Mutex<Option<Child>>,
     diagnostics: Mutex<VecDeque<String>>,
+    secrets: Mutex<Vec<String>>,
     closed: std::sync::atomic::AtomicBool,
     #[cfg(windows)]
     job: Mutex<Option<crate::modules::proc::job::ProcessJob>>,
@@ -40,8 +41,21 @@ impl Bridge {
         cwd: &Path,
         wire: Wire,
     ) -> Result<(Arc<Self>, mpsc::Receiver<Value>), String> {
+        Self::spawn_with_env(path, args, cwd, wire, &[])
+    }
+
+    pub fn spawn_with_env(
+        path: &Path,
+        args: &[String],
+        cwd: &Path,
+        wire: Wire,
+        env: &[(&str, Option<String>)],
+    ) -> Result<(Arc<Self>, mpsc::Receiver<Value>), String> {
         let mut command = registry::command_for(path, args);
         command.current_dir(cwd);
+        for (key, value) in env {
+            if let Some(value) = value { command.env(key, value); } else { command.env_remove(key); }
+        }
         let mut child = command
             .spawn()
             .map_err(|e| format!("无法启动 {}：{e}", path.display()))?;
@@ -66,6 +80,7 @@ impl Bridge {
             events: events.clone(),
             process: Mutex::new(Some(child)),
             diagnostics: Mutex::new(VecDeque::new()),
+            secrets: Mutex::new(env.iter().filter(|(key, _)| *key == "GEMINI_API_KEY").filter_map(|(_, value)| value.clone()).filter(|value| !value.is_empty()).collect()),
             closed: std::sync::atomic::AtomicBool::new(false),
             #[cfg(windows)]
             job: Mutex::new(Some(job)),
@@ -116,7 +131,7 @@ impl Bridge {
                                     let result=if value.get("success")==Some(&Value::Bool(false)) || err.is_some() {
                                         Err(err.map(|e|e.as_str().map(str::to_string).unwrap_or_else(||e.to_string())).unwrap_or_else(||"代理请求失败".into()))
                                     } else {Ok(value.get(if wire==Wire::Pi{"data"}else{"result"}).cloned().unwrap_or(Value::Null))};
-                                    let _=reply.send(result);
+                                    let _=reply.send(result.map_err(|error| b.redact(&error)));
                                 }
                             }
                         } else if events.blocking_send(value).is_err(){break;}
@@ -149,11 +164,18 @@ impl Bridge {
         Ok((bridge, incoming))
     }
     pub fn diagnostic(&self, line: String) {
+        let line = self.redact(&line);
         let mut tail = lock(&self.diagnostics);
         if tail.len() >= 20 {
             tail.pop_front();
         }
         tail.push_back(line);
+    }
+    pub fn protect_secret(&self, secret: &str) {
+        if !secret.is_empty() { lock(&self.secrets).push(secret.to_string()); }
+    }
+    fn redact(&self, text: &str) -> String {
+        lock(&self.secrets).iter().fold(text.to_string(), |value, secret| value.replace(secret, "[已隐藏]"))
     }
     pub fn diagnostic_tail(&self) -> String {
         lock(&self.diagnostics)
@@ -241,11 +263,18 @@ impl Bridge {
             events,
             process: Mutex::new(None),
             diagnostics: Mutex::new(VecDeque::new()),
+            secrets: Mutex::new(Vec::new()),
             closed: std::sync::atomic::AtomicBool::new(false),
             #[cfg(windows)]
             job: Mutex::new(None),
         });
         (bridge, rx)
+    }
+    #[cfg(test)]
+    pub fn resolve_test(&self, id: &str, result: Result<Value, String>) {
+        if let Some(reply) = lock(&self.pending).remove(id) {
+            let _ = reply.send(result);
+        }
     }
     pub fn poll_exit(&self) -> Result<Option<String>, String> {
         let mut guard = lock(&self.process);

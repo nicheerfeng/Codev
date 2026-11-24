@@ -54,6 +54,7 @@ impl Host {
                     read_only: false,
                     imported: true,
                     updated_at: timestamp,
+                    preferences: SessionPreferences::default(),
                 };
                 lock(&self.store).save_session(&binding)?;
                 let mut state = lock(&self.state);

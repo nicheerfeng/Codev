@@ -75,6 +75,28 @@ pub struct Workspace {
     pub manual: bool,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SessionPreferences {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub configs: std::collections::BTreeMap<String, String>,
+}
+
+impl SessionPreferences {
+    pub fn is_empty(&self) -> bool {
+        self.model_id.is_none()
+            && self.model_provider.is_none()
+            && self.thinking_level.is_none()
+            && self.configs.is_empty()
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionBinding {
@@ -95,6 +117,8 @@ pub struct SessionBinding {
     #[serde(default)]
     pub imported: bool,
     pub updated_at: u64,
+    #[serde(default, skip_serializing_if = "SessionPreferences::is_empty")]
+    pub preferences: SessionPreferences,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -128,12 +152,16 @@ pub struct Message {
 pub struct HostToolsPolicy {
     pub read: String,
     pub write: String,
+    pub permission: String,
+    pub allow_outside_workspace: bool,
 }
 impl Default for HostToolsPolicy {
     fn default() -> Self {
         Self {
             read: "allow".into(),
             write: "allow".into(),
+            permission: "ask".into(),
+            allow_outside_workspace: false,
         }
     }
 }

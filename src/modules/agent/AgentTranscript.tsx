@@ -8,7 +8,13 @@ import {
 } from "react";
 import { Streamdown } from "streamdown";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { File01Icon, PencilEdit01Icon } from "@hugeicons/core-free-icons";
+import {
+  ArrowDown01Icon,
+  ArrowUp01Icon,
+  Cancel01Icon,
+  File01Icon,
+  PencilEdit01Icon,
+} from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -34,10 +40,7 @@ import {
   StructuredRequestCard,
   TurnFileChangesBar,
 } from "./PlanAndRequest";
-import {
-  collectTurnFileChanges,
-  describeToolCall,
-} from "./toolFormat";
+import { collectTurnFileChanges, describeToolCall } from "./toolFormat";
 import {
   buildTranscriptBlocks,
   type TurnProcessBlock,
@@ -60,6 +63,14 @@ const STREAMDOWN_CONTROLS = {
   code: { copy: true, download: false },
   table: false,
 } as const;
+
+type ScrollMemoryEntry = {
+  id: string;
+  offset: number;
+  following: boolean;
+};
+
+const scrollMemory = new Map<string, ScrollMemoryEntry>();
 
 function formatClockTime(ts?: number): string {
   if (!ts || ts <= 0) return "";
@@ -187,7 +198,9 @@ const Message = memo(function Message({
   }
   if (message.kind === "notice") {
     return (
-      <details className={`agent-notice ${message.isError ? "text-destructive" : ""}`}>
+      <details
+        className={`agent-notice ${message.isError ? "text-destructive" : ""}`}
+      >
         <summary>{message.text}</summary>
       </details>
     );
@@ -235,7 +248,11 @@ const Message = memo(function Message({
       {!!userParsed?.attachments.length && (
         <div className="agent-file-chips mt-1 justify-end">
           {userParsed.attachments.map((att) => (
-            <span key={att.path} title={att.path} className="agent-draft-file-chip">
+            <span
+              key={att.path}
+              title={att.path}
+              className="agent-draft-file-chip"
+            >
               <span className="agent-file-chip-kind">
                 {att.kind === "dir" ? "目录" : "文件"}
               </span>
@@ -444,7 +461,13 @@ export function TurnProcessView({
         : "";
 
   const visibleTicker = block.tickerItems.slice(-3);
-  const latestTicker = visibleTicker[visibleTicker.length - 1];
+  const stepSummary =
+    block.stepCount > 0
+      ? `${block.stepCount} 个步骤${block.toolCount > 0 ? ` · ${block.toolCount} 次工具调用` : ""}`
+      : block.running
+        ? "等待模型响应"
+        : "思考过程";
+  const metaText = `${stepSummary}${elapsed ? ` · ${elapsed}` : ""}`;
 
   return (
     <div className={`agent-turn-process ${block.running ? "is-live" : ""}`}>
@@ -453,26 +476,20 @@ export function TurnProcessView({
         open={open}
         onToggle={(event) => setOpen(event.currentTarget.open)}
       >
-        <summary className="agent-turn-summary">
+        <summary
+          className="agent-turn-summary"
+          title={!block.running && block.summaryText ? block.summaryText : undefined}
+        >
           <span className="agent-turn-chevron" aria-hidden="true">
             ▸
           </span>
-          <span
-            className={`agent-state-dot ${block.running ? "is-working" : ""}`}
-          />
+          {block.running && <span className="agent-state-dot is-working" />}
           <span
             className={`agent-process-title ${block.running ? "is-live" : ""}`}
           >
-            {block.running
-              ? `${block.statusTitle}${block.stepCount > 0 ? ` · ${block.stepCount} 步` : ""}`
-              : `${block.statusTitle} · ${block.summaryText}`}
+            {block.statusTitle}
           </span>
-          {!block.running && latestTicker && (
-            <span className="agent-turn-tail hidden sm:inline">
-              {latestTicker.verb} {latestTicker.text}
-            </span>
-          )}
-          {elapsed && <span className="agent-process-meta">{elapsed}</span>}
+          <span className="agent-process-meta">{metaText}</span>
         </summary>
 
         {open && (
@@ -545,45 +562,54 @@ export function AgentTranscript({
   onOpenFile,
   onOpenDiff,
   onFork,
+  searchOpen,
+  onCloseSearch,
 }: {
   session: SessionView;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string, diff: string) => void;
   onFork?: (entryId: string) => void;
+  searchOpen: boolean;
+  onCloseSearch: () => void;
 }) {
-  const scroll = useRef<HTMLDivElement>(null);
-  const following = useRef(true);
+  const scroll = useRef<HTMLElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const sendRevision = useAgentStore((s) => s.sendRevisions[session.id] ?? 0);
+  const seenSend = useRef(sendRevision);
+  const userUntil = useRef(0);
+  const saved = useRef<ScrollMemoryEntry | null>(
+    scrollMemory.get(session.id) ?? null,
+  );
+  const following = useRef(saved.current ? saved.current.following : true);
   const previous = useRef({ first: "", height: 0 });
-  const [away, setAway] = useState(false);
+  const [away, setAway] = useState(!following.current);
   const [filter, setFilter] = useState("");
-  const [search, setSearch] = useState(false);
   const [hit, setHit] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const [file, setFile] = useState<{ path: string; content: string } | null>(
     null,
   );
-  const saved = useRef<{
-    id: string;
-    offset: number;
-    following: boolean;
-  } | null>(null);
   const restored = useRef(false);
-  useState(() => {
-    try {
-      saved.current = JSON.parse(
-        localStorage.getItem(`codev.agent.scroll:${session.id}`) ?? "null",
-      );
-      if (saved.current) following.current = saved.current.following;
-    } catch {
-      /* optional reading position */
-    }
-  });
+  const rememberScroll = (node: HTMLElement) => {
+    if (!node.clientHeight) return;
+    const top = node.getBoundingClientRect().top;
+    const anchor = Array.from(
+      node.querySelectorAll<HTMLElement>("[data-agent-message-id]"),
+    ).find((item) => item.getBoundingClientRect().bottom > top);
+    scrollMemory.set(session.id, {
+      id: anchor?.dataset.agentMessageId ?? "",
+      offset: anchor ? anchor.getBoundingClientRect().top - top : 0,
+      following: following.current,
+    });
+  };
   const running = isBusy(session);
+  const turnRunning =
+    session.state === "working" || session.state === "stopping";
   useLayoutEffect(() => {
-    if (!running) return;
+    if (!turnRunning) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [running]);
+  }, [turnRunning]);
   const openPath = (path: string) => {
     if (onOpenFile && !useAgentStore.getState().mobile) {
       onOpenFile(path);
@@ -599,6 +625,36 @@ export function AgentTranscript({
       .then((result) => setFile({ path, content: result.content }))
       .catch((error) => useAgentStore.getState().report(error));
   };
+  useLayoutEffect(() => {
+    const node = scroll.current;
+    const body = content.current;
+    if (!node || !body || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (following.current && node.clientHeight > 0) {
+        node.scrollTop = node.scrollHeight;
+      }
+    });
+    observer.observe(node);
+    observer.observe(body);
+    return () => observer.disconnect();
+  }, []);
+  useLayoutEffect(() => {
+    if (sendRevision === seenSend.current) return;
+    seenSend.current = sendRevision;
+    userUntil.current = 0;
+    following.current = true;
+    setAway(false);
+    scrollMemory.set(session.id, { id: "", offset: 0, following: true });
+    const pin = () => {
+      const node = scroll.current;
+      if (node) node.scrollTop = node.scrollHeight;
+    };
+    pin();
+    const frame = requestAnimationFrame(() => {
+      if (following.current) pin();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [sendRevision, session.id]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: pending requests and state change the measured height
   useLayoutEffect(() => {
     const node = scroll.current;
@@ -612,25 +668,33 @@ export function AgentTranscript({
           )
         : null;
       if (anchor && saved.current && !saved.current.following) {
+        following.current = false;
         node.scrollTop +=
           anchor.getBoundingClientRect().top -
           node.getBoundingClientRect().top -
           saved.current.offset;
         setAway(true);
+      } else if (following.current) {
+        node.scrollTop = node.scrollHeight;
       }
     }
     if (
+      !following.current &&
       previous.current.first &&
       previous.current.first !== first &&
       session.messages.some((message) => message.id === previous.current.first)
-    )
+    ) {
       node.scrollTop += node.scrollHeight - previous.current.height;
-    else if (following.current) node.scrollTop = node.scrollHeight;
+    } else if (following.current) {
+      node.scrollTop = node.scrollHeight;
+    }
     previous.current = { first, height: node.scrollHeight };
   }, [session.messages, session.pendingRequests, session.state]);
   const bottom = () => {
+    userUntil.current = 0;
     following.current = true;
     setAway(false);
+    scrollMemory.set(session.id, { id: "", offset: 0, following: true });
     scroll.current?.scrollTo({
       top: scroll.current.scrollHeight,
       behavior: "smooth",
@@ -669,23 +733,16 @@ export function AgentTranscript({
         }
         parent = parent.parentElement;
       }
+      userUntil.current = performance.now() + 1000;
       el.scrollIntoView({ block: "center", behavior: "smooth" });
     }
   };
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
-        const active = useAgentStore.getState().selected;
-        if (active !== session.id) return;
-        const wrap = scroll.current?.closest(".agent-transcript-wrap");
-        if (!wrap) return;
-        event.preventDefault();
-        setSearch(true);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [session.id]);
+    if (!searchOpen) {
+      setFilter("");
+      setHit(0);
+    }
+  }, [searchOpen]);
   const userTurns = useMemo(
     () =>
       session.messages
@@ -693,7 +750,9 @@ export function AgentTranscript({
         .map((m, idx) => ({
           id: m.id,
           index: idx + 1,
-          label: m.text.replace(/\s+/g, " ").trim().slice(0, 40) || `提问 ${idx + 1}`,
+          label:
+            m.text.replace(/\s+/g, " ").trim().slice(0, 40) ||
+            `提问 ${idx + 1}`,
         })),
     [session.messages],
   );
@@ -703,30 +762,22 @@ export function AgentTranscript({
       (s) => s.workspaces.find((w) => w.id === session.workspaceId)?.cwd,
     ) ?? "";
   const blocks = useMemo(
-    () => buildTranscriptBlocks(session.messages, running, cwd),
-    [session.messages, running, cwd],
+    () => buildTranscriptBlocks(session.messages, turnRunning, cwd),
+    [session.messages, turnRunning, cwd],
   );
   const hasTurnChanges = useMemo(
     () => blocks.some((b) => b.kind === "process" && b.fileChanges.length > 0),
     [blocks],
   );
   const fallbackTurnChanges = useMemo(
-    () =>
-      hasTurnChanges ? [] : collectTurnFileChanges(session.messages, cwd),
+    () => (hasTurnChanges ? [] : collectTurnFileChanges(session.messages, cwd)),
     [hasTurnChanges, session.messages, cwd],
   );
   return (
     <div className="agent-transcript-wrap">
       <PlanProgressStrip messages={session.messages} />
-      <div className="agent-transcript-actions">
-        <button
-          type="button"
-          onClick={() => setSearch(!search)}
-          title="搜索当前已加载对话"
-        >
-          搜索
-        </button>
-        {search && (
+      {searchOpen && (
+        <div className="agent-transcript-actions is-searching">
           <>
             <Input
               autoFocus
@@ -741,6 +792,10 @@ export function AgentTranscript({
                 if (event.key === "Enter") {
                   event.preventDefault();
                   jump(hit + (event.shiftKey ? -1 : 1));
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onCloseSearch();
                 }
               }}
             />
@@ -757,7 +812,7 @@ export function AgentTranscript({
                   disabled={!matches.length}
                   onClick={() => jump(hit - 1)}
                 >
-                  ↑
+                  <HugeiconsIcon icon={ArrowUp01Icon} size={14} />
                 </button>
                 <button
                   type="button"
@@ -765,16 +820,26 @@ export function AgentTranscript({
                   disabled={!matches.length}
                   onClick={() => jump(hit + 1)}
                 >
-                  ↓
+                  <HugeiconsIcon icon={ArrowDown01Icon} size={14} />
                 </button>
               </>
             )}
+            <button
+              type="button"
+              aria-label="关闭搜索"
+              title="关闭搜索"
+              onClick={onCloseSearch}
+            >
+              <HugeiconsIcon icon={Cancel01Icon} size={14} />
+            </button>
           </>
-        )}
-      </div>
-      <div
+        </div>
+      )}
+      <section
         ref={scroll}
-        className="agent-transcript reader-scrollbar"
+        tabIndex={-1}
+        aria-label="对话记录"
+        className="agent-transcript reader-scrollbar outline-none"
         onLoadCapture={() => {
           if (following.current && scroll.current)
             scroll.current.scrollTop = scroll.current.scrollHeight;
@@ -823,33 +888,60 @@ export function AgentTranscript({
             path = `${cwd}/${path}`;
           openPath(path);
         }}
-        onScroll={(event) => {
+        onWheel={(event) => {
+          userUntil.current = performance.now() + 1000;
           const node = event.currentTarget;
-          following.current =
-            node.scrollHeight - node.clientHeight - node.scrollTop < 64;
-          setAway(!following.current);
-          if (restored.current) {
-            const top = node.getBoundingClientRect().top;
-            const anchor = Array.from(
-              node.querySelectorAll<HTMLElement>("[data-agent-message-id]"),
-            ).find((item) => item.getBoundingClientRect().bottom > top);
-            if (anchor)
-              try {
-                localStorage.setItem(
-                  `codev.agent.scroll:${session.id}`,
-                  JSON.stringify({
-                    id: anchor.dataset.agentMessageId,
-                    offset: anchor.getBoundingClientRect().top - top,
-                    following: following.current,
-                  }),
-                );
-              } catch {
-                /* optional reading position */
-              }
+          if (
+            event.deltaY < 0 &&
+            node.scrollHeight - node.clientHeight - node.scrollTop >= 48
+          ) {
+            if (following.current) {
+              following.current = false;
+              setAway(true);
+            }
           }
         }}
+        onPointerDown={() => {
+          userUntil.current = performance.now() + 1000;
+        }}
+        onTouchStart={() => {
+          userUntil.current = performance.now() + 1000;
+        }}
+        onKeyDown={(event) => {
+          if (
+            [
+              "PageUp",
+              "ArrowUp",
+              "Home",
+              "PageDown",
+              "ArrowDown",
+              "End",
+              " ",
+            ].includes(event.key)
+          ) {
+            userUntil.current = performance.now() + 1000;
+          }
+        }}
+        onScroll={(event) => {
+          const node = event.currentTarget;
+          if (!node.clientHeight) return;
+          const nearBottom =
+            node.scrollHeight - node.clientHeight - node.scrollTop < 48;
+          const userScrolling = performance.now() < userUntil.current;
+          if (userScrolling) userUntil.current = performance.now() + 200;
+          if (nearBottom) {
+            if (!following.current) {
+              following.current = true;
+              setAway(false);
+            }
+          } else if (userScrolling && following.current) {
+            following.current = false;
+            setAway(true);
+          }
+          if (restored.current) rememberScroll(node);
+        }}
       >
-        <div className="agent-transcript-content">
+        <div ref={content} className="agent-transcript-content">
           {session.historyOffset > 0 && (
             <Button
               variant="ghost"
@@ -913,7 +1005,9 @@ export function AgentTranscript({
                 <Message
                   message={block.message}
                   hideThinking={block.hideThinking}
-                  canFork={!session.readOnly && !!session.capabilities.supportsFork}
+                  canFork={
+                    !session.readOnly && !!session.capabilities.supportsFork
+                  }
                   onFork={onFork}
                   onOpenDiff={onOpenDiff}
                 />
@@ -927,21 +1021,27 @@ export function AgentTranscript({
             onOpenDiff={onOpenDiff}
           />
           {session.pendingRequests.map((request) => (
-            <StructuredRequestCard key={request.id} request={request} session={session} />
+            <StructuredRequestCard
+              key={request.id}
+              request={request}
+              session={session}
+            />
           ))}
-          {running && !blocks.some((b) => b.kind === "process" && b.running) && (
-            <div className="agent-activity">
-              <span className="agent-state-dot is-working" />
-              {statusLabel(session.state)}
-            </div>
-          )}
+          {((turnRunning &&
+            !blocks.some((b) => b.kind === "process" && b.running)) ||
+            session.state === "starting") && (
+              <div className="agent-activity">
+                <span className="agent-state-dot is-working" />
+                {statusLabel(session.state)}
+              </div>
+            )}
           {session.error && (
             <div className="agent-error" role="alert">
               {session.error}
             </div>
           )}
         </div>
-      </div>
+      </section>
       {userTurns.length >= 4 && (
         <nav className="agent-conv-nav" aria-label="对话回合快速跳转">
           {userTurns.slice(-12).map((turn) => (
@@ -949,13 +1049,14 @@ export function AgentTranscript({
               key={turn.id}
               type="button"
               title={`#${turn.index} ${turn.label}`}
-              onClick={() =>
+              onClick={() => {
+                userUntil.current = performance.now() + 1000;
                 scroll.current
                   ?.querySelector<HTMLElement>(
                     `[data-agent-message-id="${CSS.escape(turn.id)}"]`,
                   )
-                  ?.scrollIntoView({ block: "start", behavior: "smooth" })
-              }
+                  ?.scrollIntoView({ block: "start", behavior: "smooth" });
+              }}
             >
               {turn.index}
             </button>

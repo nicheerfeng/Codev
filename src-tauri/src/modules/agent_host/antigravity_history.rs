@@ -67,6 +67,7 @@ pub fn discover() -> Result<Vec<(PathBuf, SessionBinding)>, String> {
             read_only: false,
             imported: true,
             updated_at,
+            preferences: SessionPreferences::default(),
         }));
     }
     Ok(found)

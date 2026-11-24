@@ -110,7 +110,7 @@ export type SessionView = SessionSummary & {
   thinkingLevels: string[];
   thinkingLevel: string;
   configOptions: ConfigOption[];
-  commands: Array<{ name: string; description?: string }>;
+  commands: Array<{ name: string; description?: string; source?: string; input?: { hint?: string } | null }>;
   pendingRequests: PendingRequest[];
   queue: Array<{
     id?: string;

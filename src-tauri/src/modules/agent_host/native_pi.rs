@@ -56,7 +56,99 @@ impl Host {
         id: &str,
         runtime: &Arc<Runtime>,
     ) -> Result<(), String> {
-        self.refresh_pi(id, runtime, true).await
+        self.refresh_pi(id, runtime, true).await?;
+        self.restore_pi_preferences(id, runtime).await;
+        Ok(())
+    }
+
+    async fn restore_pi_preferences(&self, id: &str, runtime: &Arc<Runtime>) {
+        let Ok(view) = self.view(id) else {
+            return;
+        };
+        let is_empty_fresh = view.messages.is_empty();
+        let prefs = view.binding.preferences;
+        let harness_prefs = self.harness_preferences(&view.binding.harness_id);
+        let mut changed = false;
+
+        let desired_model = prefs
+            .model_id
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|mid| (prefs.model_provider.clone().unwrap_or_default(), mid.to_string()))
+            .or_else(|| {
+                if is_empty_fresh {
+                    harness_prefs
+                        .model_id
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .map(|mid| {
+                            (
+                                harness_prefs.model_provider.clone().unwrap_or_default(),
+                                mid.to_string(),
+                            )
+                        })
+                } else {
+                    None
+                }
+            });
+        if let Some((provider, model_id)) = desired_model {
+            let matched = view.models.iter().find(|m| {
+                text(m, "id") == model_id
+                    && (provider.is_empty() || text(m, "provider") == provider)
+            });
+            if let Some(m) = matched {
+                let target_provider = text(m, "provider");
+                let already = view
+                    .model
+                    .as_ref()
+                    .is_some_and(|cur| text(cur, "id") == model_id && text(cur, "provider") == target_provider);
+                if !already
+                    && runtime
+                        .bridge
+                        .request(
+                            "set_model",
+                            json!({"provider": target_provider, "modelId": model_id}),
+                            QUERY_TIMEOUT,
+                        )
+                        .await
+                        .is_ok()
+                {
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            let _ = self.refresh_pi(id, runtime, false).await;
+        }
+
+        let Ok(view) = self.view(id) else {
+            return;
+        };
+        let desired_thinking = prefs
+            .thinking_level
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                is_empty_fresh
+                    .then_some(harness_prefs.thinking_level.as_deref())
+                    .flatten()
+                    .filter(|s| !s.is_empty())
+            });
+        if let Some(level) = desired_thinking {
+            if view.thinking_levels.iter().any(|l| l == level) && view.thinking_level != level {
+                if runtime
+                    .bridge
+                    .request("set_thinking_level", json!({"level": level}), QUERY_TIMEOUT)
+                    .await
+                    .is_ok()
+                {
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            let _ = self.refresh_pi(id, runtime, false).await;
+        }
     }
     pub async fn refresh_pi(
         &self,
@@ -77,15 +169,11 @@ impl Host {
             .request("get_available_thinking_levels", json!({}), QUERY_TIMEOUT)
             .await
             .ok();
-        let commands = if initial {
-            runtime
-                .bridge
-                .request("get_commands", json!({}), QUERY_TIMEOUT)
-                .await
-                .ok()
-        } else {
-            None
-        };
+        let commands = runtime
+            .bridge
+            .request("get_commands", json!({}), QUERY_TIMEOUT)
+            .await
+            .ok();
         // Read native history in bounded pages; get_entries can return an unbounded lifetime transcript.
         let session_path = state
             .get("sessionFile")
@@ -231,6 +319,8 @@ impl Host {
                 v.history_loaded = true;
                 v.history_available = true;
             }
+            let pending = lock(&runtime.pending_config).clone();
+            pending.overlay_on_view(v);
         });
         if let Some(native) = self.view(id)?.binding.native_session_id {
             *lock(&runtime.native_id) = Some(native);
@@ -645,6 +735,11 @@ impl Host {
                     }
                 }
             }
+            if let Err(error) = host.apply_pending_config(&id, &runtime).await {
+                host.update(&id, Some(&runtime.instance), |v| {
+                    v.error = Some(error);
+                });
+            }
             let next = {
                 let mut state = lock(&host.state);
                 state
@@ -664,6 +759,7 @@ impl Host {
                         }
                     })
             };
+            drop(_gate);
             if let Some(next) = next {
                 host.schedule_prompt(id, next);
             }

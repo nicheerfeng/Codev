@@ -51,6 +51,7 @@ toml = "0.9"
 toml_edit = "0.25"
 serde_json = "1"
 portable-pty = "0.9"
+serde_yaml = "0.9"
 dirs = "6"
 log = "0.4"
 ignore = "0.4"
@@ -67,6 +68,7 @@ tempfile = "3"
 notify = "8.2.0"
 trash = "5"
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+url = "2"
 sha2 = "0.10"
 # Shared desktop / remote agent host. The host itself has no WebView dependency.
 axum = { version = "0.8", features = ["ws"] }
@@ -100,6 +102,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_Graphics_Dwm",
   "Win32_System_LibraryLoader",
   "Win32_Security",
+  "Win32_Security_Credentials",
   "Win32_Security_Cryptography",
   "Win32_System_Console",
   "Win32_System_JobObjects",

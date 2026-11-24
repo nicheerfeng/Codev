@@ -8,6 +8,7 @@ import {
   promoteLiveOrder,
 } from "@/modules/plugins/sidebarOrder";
 import { AgentHostClient } from "./client";
+import { resolveContextPercent } from "./ContextViz";
 import { splitInlineThinking } from "./inlineThinking";
 import { parsePlanEntries } from "./PlanAndRequest";
 import {
@@ -118,6 +119,15 @@ describe("agent Phase 1 store & transport contracts", () => {
     const merged = mergeView(local, stale);
     expect(merged.revision).toBe(5);
     expect(merged.messages.map((m) => m.id)).toEqual(["m1", "m2"]);
+  });
+
+  it("bumpSend tracks prompt send revisions per session", () => {
+    useAgentStore.setState({ sendRevisions: {} });
+    expect(useAgentStore.getState().sendRevisions.s1 ?? 0).toBe(0);
+    useAgentStore.getState().bumpSend("s1");
+    expect(useAgentStore.getState().sendRevisions.s1).toBe(1);
+    useAgentStore.getState().bumpSend("s1");
+    expect(useAgentStore.getState().sendRevisions.s1).toBe(2);
   });
 
   it("consumeFrameForTest applies snapshot and session.patch cleanly", () => {
@@ -351,6 +361,7 @@ describe("agent Turn timeline aggregation & compact ticker", () => {
     if (proc.kind === "process") {
       expect(proc.running).toBe(false);
       expect(proc.toolCount).toBe(2);
+      expect(proc.stepCount).toBe(7);
       expect(proc.fileChanges).toHaveLength(1);
       expect(proc.fileChanges[0].path).toBe("/repo/export.py");
       expect(proc.tickerItems.map((t) => t.verb)).toEqual([
@@ -398,5 +409,13 @@ describe("agent Turn timeline aggregation & compact ticker", () => {
       "/repo",
     );
     expect(blocks.map((b) => b.kind)).toEqual(["message", "message"]);
+  });
+
+  it("resolveContextPercent computes percentage from used/size when percent is omitted", () => {
+    expect(resolveContextPercent(undefined)).toBeNull();
+    expect(resolveContextPercent({ percent: 42.5 })).toBe(42.5);
+    expect(resolveContextPercent({ used: 0, size: 1048576 })).toBe(0);
+    const pct = resolveContextPercent({ used: 524288, size: 1048576 });
+    expect(pct).toBeCloseTo(50, 5);
   });
 });

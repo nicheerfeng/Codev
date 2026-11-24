@@ -14,6 +14,8 @@ import {
   Maximize01Icon,
   Minimize01Icon,
   Analytics01Icon,
+  GridViewIcon,
+  Search01Icon,
 } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -25,14 +27,13 @@ import { AgentTranscript } from "./AgentTranscript";
 import { AgentComposer } from "./AgentComposer";
 import { AgentSettings } from "./AgentSettings";
 import { UsageDialog } from "./UsageDialog";
-import { HarnessIcon } from "./HarnessIcon";
 import { focusAgentSession, useAgentStore } from "./store";
 import {
   finishAgentProjectRequest,
   useAgentProjectRequest,
 } from "@/modules/plugins/agentProjectRequest";
 import { useNativeAgentDrop } from "./drop";
-import { isBusy, statusLabel, type SessionView } from "./types";
+import { isBusy, type SessionView } from "./types";
 import "./agent.css";
 
 function Conversation({
@@ -40,11 +41,15 @@ function Conversation({
   onOpenFile,
   onOpenDiff,
   onFork,
+  searchOpen,
+  onCloseSearch,
 }: {
   id: string;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string, diff: string) => void;
   onFork?: (entryId: string) => void;
+  searchOpen: boolean;
+  onCloseSearch: () => void;
 }) {
   const view = useAgentStore((s) => s.views[id]);
   const summary = useAgentStore((s) => s.sessions[id]);
@@ -69,6 +74,8 @@ function Conversation({
         onOpenFile={onOpenFile}
         onOpenDiff={onOpenDiff}
         onFork={onFork}
+        searchOpen={searchOpen}
+        onCloseSearch={onCloseSearch}
       />
       <AgentComposer session={view} />
     </>
@@ -111,6 +118,7 @@ export function AgentPane({
   });
   const [settings, setSettings] = useState(false);
   const [usage, setUsage] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [welcomeDismissed, setWelcomeDismissed] = useState(() => {
     try {
@@ -304,9 +312,11 @@ export function AgentPane({
   const columns =
     mobile || state.slots.length === 1
       ? 1
-      : width >= 1100 && state.slots.length > 2
-        ? 3
-        : 2;
+      : width >= 1200
+        ? Math.min(3, state.slots.length)
+        : state.slots.length > 4
+          ? 3
+          : 2;
   const items = useMemo(
     () => [
       ...state.opened,
@@ -330,71 +340,93 @@ export function AgentPane({
   const currentSummary = state.selected
     ? state.sessions[state.selected]
     : undefined;
-  const activeHarness = (current?.harnessId ?? currentSummary?.harnessId)
-    ? state.harnesses.find(
-        (h) => h.id === (current?.harnessId ?? currentSummary?.harnessId),
-      )
-    : undefined;
-  const activeWorkspace = (current?.workspaceId ?? currentSummary?.workspaceId)
-    ? state.workspaces.find(
-        (w) => w.id === (current?.workspaceId ?? currentSummary?.workspaceId),
-      )
-    : undefined;
+  const activeWorkspace =
+    (current?.workspaceId ?? currentSummary?.workspaceId)
+      ? state.workspaces.find(
+          (w) => w.id === (current?.workspaceId ?? currentSummary?.workspaceId),
+        )
+      : undefined;
   return (
     <section
       className={`agent-pane ${mobile ? "agent-mobile" : ""}`}
       aria-label="统一 Agent 工作区"
+      onKeyDown={(event) => {
+        if (
+          (event.ctrlKey || event.metaKey) &&
+          event.key.toLowerCase() === "f" &&
+          state.selected
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          const input = event.currentTarget.querySelector<HTMLInputElement>(
+            'input[aria-label="搜索当前对话"]',
+          );
+          if (input) {
+            input.focus();
+            input.select();
+          }
+          setSearchOpen(true);
+        }
+      }}
     >
       <header className="agent-header">
-        {mobile && <div className="agent-header-new">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 gap-1 px-2 text-[11px]"
-            title="在当前选定工作区使用所选代理新建会话"
-            aria-label="新建会话"
-            disabled={
-              !state.workspaceId || creating || state.connection !== "connected"
-            }
-            onClick={() => void create()}
-          >
-            <HugeiconsIcon icon={PlusSignIcon} size={13} />
-            <span>新建</span>
-          </Button>
-          <select
-            className="agent-harness-picker"
-            aria-label="新建会话时使用的代理"
-            title="新建会话默认代理（仅影响点击“新建”时创建的会话，不会改变已有会话的底层代理）"
-            value={state.harnessId}
-            onChange={(e) => state.setHarness(e.target.value)}
-          >
-            {state.harnesses.map((h) => (
-              <option key={h.id} value={h.id}>
-                {h.displayName}
-                {!h.installed ? "（待配置）" : ""}
-              </option>
-            ))}
-          </select>
-        </div>}
+        {mobile && (
+          <div className="agent-header-new">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 gap-1 px-2 text-[11px]"
+              title="在当前选定工作区使用所选代理新建会话"
+              aria-label="新建会话"
+              disabled={
+                !state.workspaceId ||
+                creating ||
+                state.connection !== "connected"
+              }
+              onClick={() => void create()}
+            >
+              <HugeiconsIcon icon={PlusSignIcon} size={13} />
+              <span>新建</span>
+            </Button>
+            <select
+              className="agent-harness-picker"
+              aria-label="新建会话时使用的代理"
+              title="新建会话默认代理（仅影响点击“新建”时创建的会话，不会改变已有会话的底层代理）"
+              value={state.harnessId}
+              onChange={(e) => state.setHarness(e.target.value)}
+            >
+              {state.harnesses.map((h) => (
+                <option key={h.id} value={h.id}>
+                  {h.displayName}
+                  {!h.installed ? "（待配置）" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          title="搜索当前线程"
+          aria-label="搜索当前线程"
+          aria-pressed={searchOpen}
+          disabled={!state.selected}
+          onClick={() => setSearchOpen((open) => !open)}
+        >
+          <HugeiconsIcon icon={Search01Icon} size={15} />
+        </Button>
         <div className="agent-header-current">
-          {activeHarness && (
-            <HarnessIcon
-              harnessId={activeHarness.id}
-              harness={activeHarness}
-              readOnly={Boolean(current?.readOnly || currentSummary?.readOnly)}
-              size={15}
-            />
-          )}
-          {activeWorkspace && (
-            <span className="agent-header-ws" title={activeWorkspace.cwd}>
-              {activeWorkspace.title}
-            </span>
-          )}
           <span
             className="agent-header-title"
-            title={current?.title ?? currentSummary?.title}
+            title={`${current?.title ?? currentSummary?.title ?? activeWorkspace?.title ?? "Agent 工作区"}${state.selected && activeWorkspace ? ` (${activeWorkspace.cwd})` : ""}`}
           >
-            {current?.title ?? currentSummary?.title ?? "Agent 工作区"}
+            {current?.title ??
+              currentSummary?.title ??
+              activeWorkspace?.title ??
+              "Agent 工作区"}
+            {state.selected && activeWorkspace
+              ? ` (${activeWorkspace.title})`
+              : ""}
           </span>
         </div>
         {mobile && (
@@ -412,11 +444,31 @@ export function AgentPane({
           </Button>
         )}
         {!mobile && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            title={state.slots.length > 1 ? "退出多视口" : "多视口"}
+            aria-label={state.slots.length > 1 ? "退出多视口" : "多视口"}
+            aria-pressed={state.slots.length > 1}
+            onClick={() => {
+              const currentSlot = state.slots[state.activeViewport] ?? null;
+              state.setSlots(
+                state.slots.length > 1 ? [currentSlot] : [state.selected, null],
+              );
+              setMaximized(null);
+            }}
+          >
+            <HugeiconsIcon icon={GridViewIcon} size={16} />
+          </Button>
+        )}
+        {!mobile && state.slots.length > 1 && (
           <ViewportCount
             count={state.slots.length}
             onMinus={() => {
               if (state.slots.length > 1) {
-                state.setSlots(state.slots.slice(0, -1));
+                const next = state.slots.slice(0, -1);
+                state.setSlots(next);
+                if (next.length === 1) state.focusViewport(0);
                 setMaximized(null);
               }
             }}
@@ -430,24 +482,30 @@ export function AgentPane({
           />
         )}
         {!mobile && (
-          <Button variant="ghost" size="icon-xs" title="用量统计" aria-label="用量统计" onClick={() => setUsage(true)}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            title="用量统计"
+            aria-label="用量统计"
+            onClick={() => setUsage(true)}
+          >
             <HugeiconsIcon icon={Analytics01Icon} size={16} />
           </Button>
         )}
         {!mobile && (
           <Button
             variant="ghost"
-            size="icon-xs"
+            size="icon-sm"
             title="代理命令、环境诊断、手机连接与语音设置"
             aria-label="代理与手机设置"
             onClick={() => setSettings(true)}
           >
-            <HugeiconsIcon icon={Settings01Icon} size={15} />
+            <HugeiconsIcon icon={Settings01Icon} size={16} />
           </Button>
         )}
         <Button
           variant="ghost"
-          size="icon-xs"
+          size="icon-sm"
           title="会话侧栏"
           aria-label="会话侧栏"
           onClick={() => setSidebar(!sidebar)}
@@ -459,8 +517,7 @@ export function AgentPane({
       {!mobile && !welcomeDismissed && (
         <div className="agent-welcome-tip" role="note">
           <span>
-            提示：在右侧项目上选择代理即可新建会话。输入框支持{" "}
-            <code>@</code> 工作区文件引用、拖放图片/文件与 <code>Ctrl+F</code> 搜索。
+            提示：在右侧项目上选择代理即可新建会话。输入框支持拖放图片/文件与 <code>Ctrl+F</code> 搜索。
           </span>
           <button
             type="button"
@@ -491,7 +548,9 @@ export function AgentPane({
       )}
       <div className="agent-body">
         <main className="agent-main">
-          {!state.selected && !state.slots.some(Boolean) ? (
+          {!state.selected &&
+          !state.slots.some(Boolean) &&
+          state.slots.length === 1 ? (
             <div className="agent-empty">
               <h2>从一个任务开始</h2>
               <p>选择工作目录和代理，在统一工作区中创建或恢复会话。</p>
@@ -510,7 +569,9 @@ export function AgentPane({
           ) : (
             <ResizableViewportGrid
               columns={maximized !== null ? 1 : columns}
-              rows={Math.ceil(state.slots.length / columns)}
+              rows={
+                maximized !== null ? 1 : Math.ceil(state.slots.length / columns)
+              }
               positions={positions}
               onWidthChange={setWidth}
               className="agent-grid"
@@ -525,9 +586,17 @@ export function AgentPane({
                     key={id}
                     data-agent-viewport-index={index >= 0 ? index : undefined}
                     data-agent-session-id={summary?.id}
-                    className={`agent-viewport ${state.slots.length > 1 ? "is-multi" : ""} ${hover === index ? "is-drop-target" : ""}`}
-                    onPointerDown={() => {
-                      if (summary && !suppress.current) focusAgentSession(id);
+                    className={`agent-viewport ${state.slots.length > 1 ? "is-multi" : ""} ${!summary && state.slots.length > 1 ? "is-empty" : ""} ${state.activeViewport === index && state.slots.length > 1 ? "is-active" : ""} ${hover === index ? "is-drop-target" : ""}`}
+                    inert={
+                      index < 0 || (maximized !== null && index !== maximized)
+                    }
+                    onPointerDownCapture={() => {
+                      if (summary && !suppress.current && state.selected !== id)
+                        focusAgentSession(id);
+                    }}
+                    onFocusCapture={() => {
+                      if (summary && state.selected !== id)
+                        focusAgentSession(id);
                     }}
                   >
                     {summary && state.slots.length > 1 && (
@@ -539,10 +608,7 @@ export function AgentPane({
                             className="flex min-w-0 flex-1"
                             onSubmit={(e) => {
                               e.preventDefault();
-                              void state
-                                .command("session.rename", { title: slotTitle }, id)
-                                .catch(report);
-                              setRenamingSlot(null);
+                              e.currentTarget.querySelector("input")?.blur();
                             }}
                           >
                             <Input
@@ -550,7 +616,14 @@ export function AgentPane({
                               className="h-5 text-[11px]!"
                               value={slotTitle}
                               onChange={(e) => setSlotTitle(e.target.value)}
-                              onBlur={() => setRenamingSlot(null)}
+                              onBlur={() => {
+                                const title = slotTitle.trim();
+                                setRenamingSlot(null);
+                                if (title && title !== summary.title)
+                                  void state
+                                    .command("session.rename", { title }, id)
+                                    .catch(report);
+                              }}
                               onKeyDown={(e) => {
                                 if (e.key === "Escape") setRenamingSlot(null);
                               }}
@@ -584,13 +657,17 @@ export function AgentPane({
                             }}
                             title={`${summary.title}（双击或 F2 重命名，拖动标题交换格子）`}
                           >
-                            {summary.title}
+                            <span>
+                              {summary.title}
+                              {state.workspaces.find(
+                                (workspace) =>
+                                  workspace.id === summary.workspaceId,
+                              )?.title
+                                ? ` (${state.workspaces.find((workspace) => workspace.id === summary.workspaceId)?.title})`
+                                : ""}
+                            </span>
                           </button>
                         )}
-                        <span
-                          className={`agent-state-dot ${isBusy(summary) ? "is-working" : ""}`}
-                        />
-                        <span>{statusLabel(summary.state)}</span>
                         {!mobile && state.slots.length > 1 && (
                           <button
                             type="button"
@@ -617,11 +694,14 @@ export function AgentPane({
                             const next = [...state.slots];
                             next[index] = null;
                             state.setSlots(next);
+                            setMaximized(null);
                           }}
                           onClose={() => {
-                            state.setSlots(
-                              state.slots.filter((_, i) => i !== index),
+                            const next = state.slots.filter(
+                              (_, i) => i !== index,
                             );
+                            state.setSlots(next);
+                            if (next.length === 1) state.focusViewport(0);
                             setMaximized(null);
                           }}
                         />
@@ -630,19 +710,100 @@ export function AgentPane({
                     {summary ? (
                       <Conversation
                         id={id}
+                        searchOpen={searchOpen && state.selected === id}
+                        onCloseSearch={() => setSearchOpen(false)}
                         onOpenFile={onOpenFile}
                         onOpenDiff={onOpenDiff}
-                        onFork={(entryId) =>
+                        onFork={(entryId) => {
+                          if (
+                            state.slots.length > 1 &&
+                            !state.slots.includes(null)
+                          ) {
+                            report(new Error("视口已满，请先新增或清空视口"));
+                            return;
+                          }
                           void state
                             .command<SessionView>(
                               "session.fork",
                               { entryId },
                               id,
                             )
-                            .then((view) => state.select(view.id))
-                            .catch(report)
-                        }
+                            .then((view) => {
+                              useAgentStore.setState((current) => ({
+                                sessions: {
+                                  ...current.sessions,
+                                  [view.id]: view,
+                                },
+                                views: { ...current.views, [view.id]: view },
+                              }));
+                              return state.select(view.id);
+                            })
+                            .catch(report);
+                        }}
                       />
+                    ) : state.slots.length > 1 ? (
+                      <>
+                        <div className="agent-viewport-heading">
+                          <button
+                            type="button"
+                            className="agent-viewport-title"
+                            onPointerDown={(event) => startDrag(event, index)}
+                            onPointerMove={moveDrag}
+                            onPointerUp={endDrag}
+                            onPointerCancel={finishDrag}
+                            onLostPointerCapture={() => {
+                              if (drag.current) finishDrag();
+                            }}
+                            onClick={() => {
+                              if (!suppress.current) state.focusViewport(index);
+                              suppress.current = false;
+                            }}
+                          >
+                            视口 {index + 1}
+                          </button>
+                          <button
+                            type="button"
+                            title={
+                              maximized === index ? "还原视口" : "最大化视口"
+                            }
+                            aria-label={
+                              maximized === index ? "还原视口" : "最大化视口"
+                            }
+                            onClick={() =>
+                              setMaximized(maximized === index ? null : index)
+                            }
+                          >
+                            <HugeiconsIcon
+                              icon={
+                                maximized === index
+                                  ? Minimize01Icon
+                                  : Maximize01Icon
+                              }
+                              size={12}
+                            />
+                          </button>
+                          <ViewportSlotActions
+                            onClear={() => {}}
+                            onClose={() => {
+                              const next = state.slots.filter(
+                                (_, i) => i !== index,
+                              );
+                              state.setSlots(next);
+                              if (next.length === 1) state.focusViewport(0);
+                              setMaximized(null);
+                            }}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          className="agent-empty agent-empty-viewport"
+                          onClick={() => state.focusViewport(index)}
+                        >
+                          从右侧拖入线程
+                          <br />
+                          或点击此处后在侧栏选择
+                        </button>
+                      </>
                     ) : (
                       <div className="agent-empty">
                         <p>{mobile ? "欢迎使用手机端 Agent" : "空视口"}</p>
@@ -664,7 +825,9 @@ export function AgentPane({
                           {mobile && state.workspaceId && (
                             <Button
                               size="sm"
-                              disabled={creating || state.connection !== "connected"}
+                              disabled={
+                                creating || state.connection !== "connected"
+                              }
                               onClick={() => void create()}
                             >
                               新建会话
@@ -735,6 +898,7 @@ export function AgentPane({
               <AgentSidebar
                 onAdd={() => void addDirectory().catch(report)}
                 onSelect={mobile ? () => setSidebar(false) : undefined}
+                onViewportHover={state.slots.length > 1 ? setHover : undefined}
               />
             </div>
           </>

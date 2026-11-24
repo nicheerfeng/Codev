@@ -1,6 +1,7 @@
 //! Shared Rust agent host: desktop and remote clients use the same service.
 mod acp;
 mod antigravity_history;
+mod asset_inventory;
 mod auth;
 mod bridge;
 mod commands;
@@ -10,6 +11,7 @@ mod metadata;
 mod native_pi;
 mod native_history;
 mod pi_settings;
+mod providers;
 pub mod protocol;
 mod registry;
 mod usage;

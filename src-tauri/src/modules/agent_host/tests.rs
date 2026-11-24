@@ -1,6 +1,6 @@
 use super::{
     bridge::{lock, Bridge, Wire},
-    coordinator::{Host, Runtime},
+    coordinator::{Host, PendingRuntimeConfig, Runtime},
     history,
     protocol::*,
     registry,
@@ -27,7 +27,9 @@ fn attach_runtime(host: &Arc<Host>, sid: &str, wire: Wire) -> (Arc<Runtime>, std
         session_auto_write: AtomicBool::new(false),
         cancelled: AtomicBool::new(false),
         closing: AtomicBool::new(false),
+        loading_history: AtomicBool::new(false),
         loading_desktop_history: AtomicBool::new(false),
+        pending_config: Mutex::new(PendingRuntimeConfig::default()),
     });
     lock(&host.runtimes).insert(sid.into(), runtime.clone());
     host.update(sid, None, |v| {
@@ -226,7 +228,9 @@ fn acp_preserves_mode_rposition_diff_and_remote_redaction() {
         assert!(h.get("command").is_none());
         assert!(h.get("args").is_none());
     }
-    assert_eq!(host.host_tools_policy("acp:codex").write, "ask");
+    assert_eq!(host.host_tools_policy("acp:codex").write, "allow");
+    assert_eq!(host.host_tools_policy("acp:codex").permission, "ask");
+    assert!(!host.host_tools_policy("acp:codex").allow_outside_workspace);
 }
 
 #[test]
@@ -326,6 +330,27 @@ async fn phase3_and_4_queue_policy_diagnose_and_delete_work() {
     .unwrap();
     assert_eq!(host.host_tools_policy("acp:codex").write, "deny");
 
+    host.dispatch(
+        &desktop,
+        Command {
+            request_id: "pol-set-2".into(),
+            operation: "host.policy.set".into(),
+            session_id: None,
+            instance_id: None,
+            payload: json!({
+                "harnessId": "acp:antigravity",
+                "permission": "allow_all",
+                "allowOutsideWorkspace": true
+            }),
+        },
+    )
+    .await
+    .unwrap();
+    let agy_pol = host.host_tools_policy("acp:antigravity");
+    assert_eq!(agy_pol.permission, "allow_all");
+    assert!(agy_pol.allow_outside_workspace);
+    assert_eq!(agy_pol.write, "allow");
+
     // Diagnose returns structured verdict entries for built-ins
     let diag = host
         .dispatch(
@@ -377,5 +402,112 @@ async fn phase3_and_4_queue_policy_diagnose_and_delete_work() {
     .await
     .unwrap();
     assert!(!host.harnesses().iter().any(|h| h.id == "acp:custom-test1"));
+}
+
+#[tokio::test]
+async fn deferred_busy_config_applies_before_next_turn_and_history_replay_omits_fake_clock() {
+    let dir = TempDir::new().expect("tmp");
+    let host = test_host(&dir);
+    let ws_dir = dir.path().join("repo");
+    std::fs::create_dir_all(&ws_dir).unwrap();
+    let ws = host.workspace(&ws_dir.to_string_lossy()).unwrap();
+    let sid = host.create(&ws.id, "acp:antigravity", "agy").unwrap();
+    let (runtime, rx) = attach_runtime(&host, &sid, Wire::Acp);
+
+    // 1. Replaying history sets created_at = 0 when explicit timestamp is absent.
+    runtime.loading_history.store(true, std::sync::atomic::Ordering::Release);
+    host.handle_acp_frame(
+        &sid,
+        &runtime,
+        json!({"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hist"}}}}),
+    );
+    assert_eq!(host.view(&sid).unwrap().messages.last().unwrap().created_at, 0);
+    runtime.loading_history.store(false, std::sync::atomic::Ordering::Release);
+
+    // 2. While busy, config changes defer cleanly, update view immediately, and flush in model->thinking->config order.
+    host.update(&sid, Some(&runtime.instance), |v| {
+        v.state = "working".into();
+        v.models = vec![
+            json!({"id":"m1","provider":"acp:antigravity","name":"M1"}),
+            json!({"id":"m2","provider":"acp:antigravity","name":"M2"}),
+        ];
+        v.config_options = vec![
+            json!({"id":"model","name":"Model","category":"model","type":"select","currentValue":"m1","options":[{"value":"m1"},{"value":"m2"}]}),
+            json!({"id":"thought_level","name":"Thinking","category":"thought_level","type":"select","currentValue":"low","options":[{"value":"low"},{"value":"high"}]}),
+            json!({"id":"$mode","name":"Mode","category":"mode","type":"select","currentValue":"default","options":[{"value":"default"},{"value":"auto"}]}),
+        ];
+    });
+    let desktop = Principal { id: "desktop".into(), desktop: true };
+    let r1 = host.dispatch(&desktop, Command {
+        request_id: "cfg-mode".into(),
+        operation: "session.config".into(),
+        session_id: Some(sid.clone()),
+        instance_id: None,
+        payload: json!({"configId":"$mode","value":"auto"}),
+    }).await.unwrap();
+    assert_eq!(r1["deferred"], json!(true));
+    let r2 = host.dispatch(&desktop, Command {
+        request_id: "cfg-think".into(),
+        operation: "session.thinking".into(),
+        session_id: Some(sid.clone()),
+        instance_id: None,
+        payload: json!({"level":"high"}),
+    }).await.unwrap();
+    assert_eq!(r2["deferred"], json!(true));
+    let r3 = host.dispatch(&desktop, Command {
+        request_id: "cfg-model".into(),
+        operation: "session.model".into(),
+        session_id: Some(sid.clone()),
+        instance_id: None,
+        payload: json!({"provider":"acp:antigravity","modelId":"m2"}),
+    }).await.unwrap();
+    assert_eq!(r3["deferred"], json!(true));
+
+    // View updated optimistically and nothing sent over wire mid-turn
+    let busy_view = host.view(&sid).unwrap();
+    assert_eq!(busy_view.model.as_ref().unwrap()["id"], json!("m2"));
+    assert_eq!(busy_view.thinking_level, "high");
+    assert_eq!(busy_view.config_options[2]["currentValue"], json!("auto"));
+    assert!(rx.try_recv().is_err());
+
+    // Simulate responder for the 3 RPC requests when pending config flushes
+    let responder_bridge = runtime.bridge.clone();
+    let applied_order = Arc::new(Mutex::new(Vec::<String>::new()));
+    let order_ref = applied_order.clone();
+    std::thread::spawn(move || {
+        for _ in 0..3 {
+            let Ok(req) = rx.recv() else { break };
+            let req_id = req["id"].as_str().unwrap().to_string();
+            let method = req["method"].as_str().unwrap().to_string();
+            let key = if method == "session/set_mode" {
+                req["params"]["modeId"].as_str().unwrap().to_string()
+            } else {
+                format!("{}:{}", req["params"]["configId"].as_str().unwrap(), req["params"]["value"].as_str().unwrap())
+            };
+            lock(&order_ref).push(key.clone());
+            responder_bridge.resolve_test(&req_id, Ok(json!({"applied": key})));
+        }
+    });
+
+    host.update(&sid, Some(&runtime.instance), |v| v.state = "idle".into());
+    host.apply_pending_config(&sid, &runtime).await.unwrap();
+    assert!(lock(&runtime.pending_config).is_empty());
+    assert_eq!(
+        *lock(&applied_order),
+        vec!["model:m2", "thought_level:high", "auto"]
+    );
+
+    // 3. Reopening Host from SQLite preserves per-session and per-harness preferences.
+    drop(runtime);
+    drop(host);
+    let reopened = test_host(&dir);
+    let persisted = reopened.view(&sid).unwrap().binding.preferences;
+    assert_eq!(persisted.model_id.as_deref(), Some("m2"));
+    assert_eq!(persisted.thinking_level.as_deref(), Some("high"));
+    assert_eq!(persisted.configs.get("$mode").map(String::as_str), Some("auto"));
+    let h_prefs = reopened.harness_preferences("acp:antigravity");
+    assert_eq!(h_prefs.model_id.as_deref(), Some("m2"));
+    assert_eq!(h_prefs.thinking_level.as_deref(), Some("high"));
+    assert_eq!(h_prefs.configs.get("$mode").map(String::as_str), Some("auto"));
 }
 

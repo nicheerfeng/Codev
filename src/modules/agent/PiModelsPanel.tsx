@@ -2,8 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ViewIcon, ViewOffIcon } from "@hugeicons/core-free-icons";
-import { PiModelCard } from "@/modules/plugins/pi-agent/PiModelCard";
+import { FloppyDiskIcon, PlusSignIcon, Refresh01Icon, Search01Icon, ViewIcon, ViewOffIcon } from "@hugeicons/core-free-icons";
+import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
+import { json } from "@codemirror/lang-json";
+import { openSearchPanel } from "@codemirror/search";
+import { EditorView } from "@codemirror/view";
+import { useEditorThemeExt } from "@/modules/editor/lib/useEditorThemeExt";
+import { ModelRemoveButton, PiModelCard } from "@/modules/plugins/pi-agent/PiModelCard";
 import {
   MODEL_EXAMPLE,
   PROVIDER_EXAMPLE,
@@ -17,6 +22,7 @@ import {
   type ProviderDraft,
 } from "@/modules/plugins/pi-agent/modelDashboard";
 import { useAgentStore } from "./store";
+import { SettingNote, SettingSectionHeader } from "./SettingPrimitives";
 
 type ModelFile = { path: string; content: string | null };
 
@@ -51,7 +57,9 @@ export function PiModelsPanel({
   const [testResults, setTestResults] = useState<Record<string, string>>({});
   const expected = useRef<string | null>(null);
   const mounted = useRef(true);
+  const publicEditor = useRef<ReactCodeMirrorRef>(null);
   const report = useAgentStore.getState().report;
+  const editorTheme = useEditorThemeExt();
 
   useEffect(() => {
     mounted.current = true;
@@ -104,6 +112,15 @@ export function PiModelsPanel({
       provider.name !== savedProvider.name ||
       configs[selected] !== publicConfig(savedProvider) ||
       keys[selected] !== apiKey(savedProvider));
+  let configError = "";
+  if (provider) {
+    try {
+      if ("models" in parseConfigObject(configs[selected] ?? "{}", "服务商配置"))
+        configError = "models 请在模型区编辑";
+    } catch (error) {
+      configError = String(error);
+    }
+  }
   const dirty =
     !!draft &&
     !!saved &&
@@ -147,6 +164,10 @@ export function PiModelsPanel({
     if (!draft || !saved || !provider || busy) return;
     setBusy(true);
     try {
+      if (modelKey && savedProvider) {
+        await write(mergeCardSave(draft, saved, selected, modelKey));
+        return;
+      }
       const config = parseConfigObject(configs[selected] ?? "{}", "服务商配置");
       if ("models" in config) throw new Error("models 请在模型区编辑");
       delete config.name;
@@ -177,8 +198,7 @@ export function PiModelsPanel({
     if (
       !draft ||
       !saved ||
-      busy ||
-      !window.confirm(modelKey ? "删除此模型？" : "删除此服务商及其模型？")
+      busy
     )
       return;
     const removeFrom = (value: ModelDashboard): ModelDashboard => ({
@@ -276,133 +296,82 @@ export function PiModelsPanel({
 
   if (!draft || !saved)
     return (
-      <p className="agent-settings-note">{message || "正在读取模型配置…"}</p>
+      <SettingNote>{message || "正在读取模型配置…"}</SettingNote>
     );
   return (
-    <div className="agent-model-settings">
-      <div className="agent-provider-tabs">
-        {draft.providers.map((item) => (
-          <Button
-            key={item.key}
-            size="sm"
-            disabled={busy || testing}
-            variant={item.key === selected ? "secondary" : "ghost"}
-            onClick={() => {
-              setSelected(item.key);
-              setShowKey(false);
-            }}
-          >
-            {item.name} <small>{item.models.length}</small>
-          </Button>
-        ))}
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={busy || testing}
-          onClick={addProvider}
+    <div className="agent-model-settings space-y-4">
+      <SettingSectionHeader
+        title="服务商与模型配置"
+        count={draft.providers.length}
+        description="编辑 ~/.pi/agent/models.json 的服务商与模型清单，新启动或重连 Pi 会话后生效。"
+        actions={
+          <>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              disabled={busy || testing}
+              title="重新读取配置"
+              aria-label="重新读取配置"
+              onClick={() => {
+                if (!dirty || window.confirm("重新读取会放弃未保存的模型配置，继续？"))
+                  setReloadSeq((value) => value + 1);
+              }}
+            >
+              <HugeiconsIcon icon={Refresh01Icon} size={15} />
+            </Button>
+            <Button size="sm" variant="outline" disabled={busy || testing} onClick={() => void testModels()}>
+              {testing ? "测试中…" : "测试全部"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy || testing}
+              onClick={addProvider}
+            >
+              <HugeiconsIcon icon={PlusSignIcon} size={14} /> 添加服务商
+            </Button>
+          </>
+        }
+      />
+
+      {draft.providers.length > 0 && (
+        <div
+          className="flex flex-wrap items-center gap-1.5 rounded-xl border border-border/75 bg-muted/30 p-1.5"
+          role="tablist"
+          aria-label="服务商"
         >
-          添加服务商
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy || testing}
-          onClick={() => {
-            if (
-              !dirty ||
-              window.confirm("重新读取会放弃未保存的模型配置，继续？")
-            )
-              setReloadSeq((value) => value + 1);
-          }}
-        >
-          重新读取
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy || testing}
-          onClick={() => void testModels()}
-        >
-          测试全部
-        </Button>
-      </div>
+          {draft.providers.map((item) => {
+            const active = item.key === selected;
+            return (
+              <Button
+                key={item.key}
+                role="tab"
+                aria-selected={active}
+                size="sm"
+                disabled={busy || testing}
+                variant={active ? "secondary" : "ghost"}
+                className="h-7 gap-1.5 px-2.5 text-xs"
+                onClick={() => {
+                  setSelected(item.key);
+                  setShowKey(false);
+                }}
+              >
+                <span className="truncate max-w-36">{item.name}</span>
+                <span className="rounded-md bg-background/80 px-1.5 py-0.2 text-[10px] text-muted-foreground">
+                  {item.models.length}
+                </span>
+              </Button>
+            );
+          })}
+        </div>
+      )}
+
       {provider && (
         <>
-          <div className="agent-model-provider">
-            <div className="flex items-center gap-2">
-              <strong className="flex-1">
-                公共配置{providerDirty ? " · 未保存" : ""}
-              </strong>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={busy || testing}
-                onClick={() => void remove()}
-              >
-                删除服务商
-              </Button>
-              <Button
-                size="sm"
-                disabled={busy || testing || !providerDirty}
-                onClick={() => void save()}
-              >
-                保存
-              </Button>
-            </div>
-            <label>
-              服务商名称
-              <Input
-                disabled={busy || testing}
-                value={provider.name}
-                onChange={(event) =>
-                  updateProvider({ name: event.target.value })
-                }
-              />
-            </label>
-            <label>
-              API Key
-              <div className="flex gap-2">
-                <Input
-                  disabled={busy || testing}
-                  type={showKey ? "text" : "password"}
-                  value={keys[selected] ?? ""}
-                  autoComplete="off"
-                  onChange={(event) =>
-                    setKeys((value) => ({
-                      ...value,
-                      [selected]: event.target.value,
-                    }))
-                  }
-                />
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label={showKey ? "隐藏 API Key" : "显示 API Key"}
-                  title={showKey ? "隐藏 API Key" : "显示 API Key"}
-                  onClick={() => setShowKey(!showKey)}
-                >
-                  <HugeiconsIcon icon={showKey ? ViewOffIcon : ViewIcon} size={14} />
-                </Button>
-              </div>
-            </label>
-            <label>
-              其他配置
-              <textarea
-                disabled={busy || testing}
-                rows={5}
-                value={configs[selected] ?? ""}
-                spellCheck={false}
-                onChange={(event) =>
-                  setConfigs((value) => ({
-                    ...value,
-                    [selected]: event.target.value,
-                  }))
-                }
-              />
-            </label>
-          </div>
-          <div className="flex items-center gap-2 py-2">
-            <strong className="flex-1">模型</strong>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-medium text-muted-foreground">
+              公共配置与模型清单 · {provider.models.length} 个模型
+            </span>
             <Button
               size="sm"
               variant="outline"
@@ -417,17 +386,58 @@ export function PiModelsPanel({
                 })
               }
             >
-              添加模型
+              <HugeiconsIcon icon={PlusSignIcon} size={14} /> 新增模型
             </Button>
           </div>
           <div className="agent-model-grid">
+            <section
+              key={provider.key}
+              className="agent-model-public-card"
+              aria-label="公共配置"
+              onKeyDownCapture={(event) => {
+                if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (!busy && !testing && providerDirty) void save();
+                }
+                if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (publicEditor.current?.view) openSearchPanel(publicEditor.current.view);
+                }
+              }}
+            >
+              <div className="agent-model-card-heading">
+                <span>公共</span>
+                <Input aria-label="服务商名称" className="agent-model-provider-name" disabled={busy || testing} value={provider.name} onChange={(event) => updateProvider({ name: event.target.value })} />
+                {providerDirty && <span className="agent-model-dirty" title="未保存" aria-label="未保存" />}
+                <Button size="icon-xs" variant="ghost" title="搜索公共配置" aria-label="搜索公共配置" onClick={() => { if (publicEditor.current?.view) openSearchPanel(publicEditor.current.view); }}>
+                  <HugeiconsIcon icon={Search01Icon} size={13} />
+                </Button>
+                <Button size="icon-xs" variant="ghost" disabled={busy || testing || !providerDirty} title="保存公共配置" aria-label="保存公共配置" onClick={() => void save()}>
+                  <HugeiconsIcon icon={FloppyDiskIcon} size={13} />
+                </Button>
+                <ModelRemoveButton label="删除服务商" disabled={busy || testing} onRemove={() => void remove()} />
+              </div>
+              <div className="agent-model-key">
+                <span>API Key</span>
+                <Input aria-label="API Key" disabled={busy || testing} type={showKey ? "text" : "password"} value={keys[selected] ?? ""} autoComplete="off" onChange={(event) => setKeys((value) => ({ ...value, [selected]: event.target.value }))} />
+                <Button size="icon-xs" variant="ghost" aria-label={showKey ? "隐藏 API Key" : "显示 API Key"} title={showKey ? "隐藏 API Key" : "显示 API Key"} onClick={() => setShowKey(!showKey)}>
+                  <HugeiconsIcon icon={showKey ? ViewOffIcon : ViewIcon} size={14} />
+                </Button>
+              </div>
+              <div className="agent-model-public-editor">
+                <CodeMirror ref={publicEditor} value={configs[selected] ?? ""} onChange={(text) => setConfigs((value) => ({ ...value, [selected]: text }))} height="100%" className="h-full" theme={editorTheme} extensions={[json(), EditorView.lineWrapping]} editable={!busy && !testing} basicSetup={{ highlightActiveLine: false, highlightSelectionMatches: false, foldGutter: true }} />
+              </div>
+              {configError && <p role="status" className="agent-model-config-error">{configError}</p>}
+            </section>
             {provider.models.map((model) => {
               const label = modelDraftLabel(model);
               return (
                 <PiModelCard
                   key={model.key}
                   label={`模型 ${label.detail}`}
-                  title={label.title}
+                  title={<span className="block truncate" title={label.detail}>{label.title}<span className="block truncate text-[10px] text-muted-foreground">{label.detail}</span></span>}
                   text={model.text}
                   error={label.valid ? "" : label.detail}
                   dirty={
@@ -464,12 +474,15 @@ export function PiModelsPanel({
           </div>
         </>
       )}
+      {!provider && <SettingNote>暂无服务商，点击右上角「添加服务商」创建配置。</SettingNote>}
       {message && (
-        <p role="status" className="agent-settings-note">
-          {message}
+        <SettingNote role="status">{message}</SettingNote>
+      )}
+      {path && (
+        <p className="font-mono text-[10px] text-muted-foreground [overflow-wrap:anywhere]">
+          配置文件：{path}
         </p>
       )}
-      <small className="text-muted-foreground">{path}</small>
     </div>
   );
 }

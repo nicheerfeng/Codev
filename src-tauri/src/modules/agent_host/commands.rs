@@ -1,6 +1,6 @@
 use super::{
     bridge::{lock, Wire},
-    coordinator::{CachedRequest, Host},
+    coordinator::{CachedRequest, Host, Runtime},
     protocol::*,
     registry,
 };
@@ -26,13 +26,14 @@ impl Host {
                 | "host.snapshot"
                 | "host.resync"
                 | "workspace.list"
-                | "workspace.files"
                 | "workspace.skills"
                 | "harness.list"
                 | "harness.diagnose"
                 | "harness.docs.read"
                 | "pi.models.read"
                 | "pi.assets.list"
+                | "harness.assets.list"
+                | "harness.providers.list"
                 | "host.project_harnesses.get"
                 | "host.policy.get"
                 | "session.list"
@@ -182,68 +183,43 @@ impl Host {
                 st.global_dirty = true;
                 Ok(json!({}))
             }
-            "workspace.files" => {
+            "workspace.skills" => {
                 let wid = text(payload, "workspaceId");
-                let cwd = lock(&self.state)
+                if text(payload, "harnessId") != "acp:antigravity" {
+                    return Err("该代理的技能由运行时提供".into());
+                }
+                let mut cwd = lock(&self.state)
                     .workspaces
                     .get(&wid)
                     .map(|w| w.cwd.clone())
                     .ok_or("工作区不存在")?;
-                let query = text(payload, "query").to_ascii_lowercase();
-                let files = tokio::task::spawn_blocking(move || {
-                    let root = std::path::PathBuf::from(&cwd);
-                    let mut out = vec![];
-                    for entry in ignore::WalkBuilder::new(&root)
-                        .hidden(false)
-                        .max_depth(Some(6))
-                        .build()
-                        .flatten()
-                    {
-                        if entry.depth() == 0 {
-                            continue;
-                        }
-                        let path = entry.path();
-                        if path.file_name().is_some_and(|n| n == ".git" || n == "node_modules") {
-                            continue;
-                        }
-                        let Ok(rel) = path.strip_prefix(&root) else {
-                            continue;
-                        };
-                        let rel_str = super::metadata::display_path(rel);
-                        if !query.is_empty() && !rel_str.to_ascii_lowercase().contains(&query) {
-                            continue;
-                        }
-                        out.push(json!({
-                            "path": rel_str,
-                            "isDir": entry.file_type().is_some_and(|t| t.is_dir()),
-                        }));
-                        if out.len() >= 150 {
-                            break;
-                        }
-                    }
-                    out
-                })
-                .await
-                .map_err(|e| e.to_string())?;
-                Ok(json!({ "files": files }))
-            }
-            "workspace.skills" => {
-                let wid = text(payload, "workspaceId");
-                let cwd = lock(&self.state)
-                    .workspaces
-                    .get(&wid)
-                    .map(|w| w.cwd.clone());
+                let session = self.view(command.session_id.as_deref().ok_or("缺少会话标识")?)?;
+                if session.binding.workspace_id != wid || session.binding.harness_id != "acp:antigravity" {
+                    return Err("技能目录与当前会话不匹配".into());
+                }
+                if super::antigravity_history::is_desktop(&session.binding) {
+                    let native = session.binding.native_session_id.as_deref().ok_or("缺少 Antigravity 会话标识")?;
+                    cwd = super::metadata::display_path(&super::antigravity_history::desktop_cwd(native)?);
+                }
                 let skills = tokio::task::spawn_blocking(move || {
-                    let mut roots = vec![];
-                    if let Some(c) = cwd {
-                        roots.push(std::path::PathBuf::from(c).join(".pi/skills"));
-                    }
-                    if let Some(home) = super::history::pi_home() {
-                        roots.push(home.join("skills"));
-                    }
+                    let home = dirs::home_dir().unwrap_or_default();
+                    let gemini = match std::env::var_os("GEMINI_HOME") {
+                        Some(value) if !value.is_empty() => {
+                            let path = std::path::PathBuf::from(value);
+                            if let Ok(rest) = path.strip_prefix("~") { home.join(rest) } else { path }
+                        }
+                        _ => home.join(".gemini"),
+                    };
+                    let cwd = std::path::PathBuf::from(cwd);
+                    let roots = [
+                        (gemini.join("config/skills"), "全局"),
+                        (cwd.join(".gemini/skills"), "项目"),
+                        (gemini.join("antigravity-cli/skills"), "CLI"),
+                        (cwd.join(".agents/skills"), "项目"),
+                    ];
                     let mut list = vec![];
                     let mut seen = std::collections::HashSet::new();
-                    for root in roots {
+                    for (root, source) in roots {
                         let Ok(entries) = std::fs::read_dir(&root) else {
                             continue;
                         };
@@ -252,11 +228,21 @@ impl Host {
                             if !skill_md.is_file() {
                                 continue;
                             }
-                            let name = entry.file_name().to_string_lossy().into_owned();
-                            if seen.insert(name.clone()) {
+                            let directory = entry.file_name().to_string_lossy().into_owned();
+                            if directory.starts_with('.') { continue; }
+                            let Ok(content) = std::fs::read_to_string(&skill_md) else { continue };
+                            let Some(frontmatter) = content.strip_prefix("---\n").or_else(|| content.strip_prefix("---\r\n"))
+                                .and_then(|body| body.split_once("\n---").map(|(header, _)| header)) else { continue };
+                            let Ok(metadata) = serde_yaml::from_str::<serde_yaml::Value>(frontmatter) else { continue };
+                            let Some(name) = metadata.get("name").and_then(serde_yaml::Value::as_str)
+                                .map(str::trim).filter(|name| !name.is_empty() && !name.chars().any(char::is_whitespace)) else { continue };
+                            let description = metadata.get("description").and_then(serde_yaml::Value::as_str).unwrap_or("");
+                            if seen.insert(name.to_lowercase()) {
                                 list.push(json!({
                                     "name": name,
+                                    "description": description,
                                     "path": super::metadata::display_path(&skill_md),
+                                    "source": source,
                                 }));
                             }
                         }
@@ -349,6 +335,67 @@ impl Host {
                 let workspace_id = text(payload, "workspaceId");
                 let cwd = lock(&self.state).workspaces.get(&workspace_id).map(|w| w.cwd.clone());
                 super::pi_settings::assets(&text(payload, "kind"), cwd.as_deref())
+            }
+            "harness.assets.list" => {
+                principal.require_desktop()?;
+                let workspace_id = text(payload, "workspaceId");
+                let cwd = lock(&self.state).workspaces.get(&workspace_id).map(|w| w.cwd.clone());
+                let harness = text(payload, "harnessId");
+                let kind = text(payload, "kind");
+                tokio::task::spawn_blocking(move || match kind.as_str() {
+                    "skills" => super::asset_inventory::skills(&harness, cwd.as_deref()),
+                    "plugins" => super::asset_inventory::plugins(&harness),
+                    _ => Err("不支持的资源类型".into()),
+                }).await.map_err(|e| e.to_string())?
+            }
+            "harness.providers.list" => {
+                principal.require_desktop()?;
+                super::providers::list(self, &text(payload, "harnessId"))
+            }
+            "harness.providers.save" => {
+                principal.require_desktop()?;
+                let _gate = self.provider_gate.lock().await;
+                super::providers::save(self, &text(payload, "harnessId"), payload)
+            }
+            "harness.providers.native.save" => {
+                principal.require_desktop()?;
+                let _gate = self.provider_gate.lock().await;
+                super::providers::save_codex_native(self, payload)
+            }
+            "harness.providers.import" | "harness.providers.duplicate" | "harness.providers.discover" => {
+                principal.require_desktop()?;
+                let harness = text(payload, "harnessId");
+                let id = text(payload, "id");
+                let host = self.clone();
+                let op = operation.to_owned();
+                let _gate = if operation == "harness.providers.discover" { None } else { Some(self.provider_gate.lock().await) };
+                tokio::task::spawn_blocking(move || super::providers::catalog_action(&host, &harness, &id, &op))
+                    .await.map_err(|e| e.to_string())?
+            }
+            "harness.providers.remove" => {
+                principal.require_desktop()?;
+                let _gate = self.provider_gate.lock().await;
+                super::providers::remove(self, &text(payload, "harnessId"), &text(payload, "id"))
+            }
+            "harness.providers.activate" => {
+                principal.require_desktop()?;
+                let _gate = self.provider_gate.lock().await;
+                super::providers::activate(self, &text(payload, "harnessId"), &text(payload, "id")).await
+            }
+            "harness.providers.reconnect" => {
+                principal.require_desktop()?;
+                let harness = text(payload, "harnessId");
+                let id = text(payload, "id");
+                let ids = {
+                    let _providers = self.provider_gate.lock().await;
+                    super::providers::prepare_reconnect(self, &harness, &id).await?
+                };
+                let mut failures = Vec::new();
+                for id in &ids {
+                    if let Err(error) = self.ensure_runtime(id).await { failures.push(format!("{}：{}", self.view(id).map(|v| v.binding.title).unwrap_or_else(|_| id.clone()), error)); }
+                }
+                if !failures.is_empty() { return Err(format!("配置已保存，但部分线程重新连接失败：{}", failures.join("；"))); }
+                Ok(json!({"count": ids.len()}))
             }
             "pi.plugins.install" => {
                 principal.require_desktop()?;
@@ -450,19 +497,30 @@ impl Host {
             "host.policy.set" => {
                 principal.require_desktop()?;
                 if let Some(hid) = payload.get("harnessId").and_then(Value::as_str) {
-                    let read = payload
-                        .get("read")
-                        .and_then(Value::as_str)
-                        .unwrap_or("allow");
-                    let write = payload
-                        .get("write")
-                        .and_then(Value::as_str)
-                        .unwrap_or("allow");
+                    let mut policy = self.host_tools_policy(hid);
+                    if let Some(read) = payload.get("read").and_then(Value::as_str) {
+                        policy.read = read.to_string();
+                    }
+                    if let Some(write) = payload.get("write").and_then(Value::as_str) {
+                        policy.write = write.to_string();
+                    }
+                    if let Some(permission) = payload.get("permission").and_then(Value::as_str) {
+                        policy.permission = permission.to_string();
+                    }
+                    if let Some(allow_outside) =
+                        payload.get("allowOutsideWorkspace").and_then(Value::as_bool)
+                    {
+                        policy.allow_outside_workspace = allow_outside;
+                    }
                     let store = lock(&self.store);
-                    let mut all = store.preference("hostToolsPolicy")
+                    let mut all = store
+                        .preference("hostToolsPolicy")
                         .and_then(|v| v.as_object().cloned())
                         .unwrap_or_default();
-                    all.insert(hid.into(), json!({ "read": read, "write": write }));
+                    all.insert(
+                        hid.into(),
+                        serde_json::to_value(&policy).map_err(|e| e.to_string())?,
+                    );
                     store.set_preference("hostToolsPolicy", &Value::Object(all))?;
                 }
                 if let Some(cwd) = payload.get("trustWorkspaceCwd").and_then(Value::as_str) {
@@ -485,6 +543,7 @@ impl Host {
                 let pi_append_path = pi_home.as_ref().map(|p| p.join("APPEND_SYSTEM.md"));
                 let pi_models_path = pi_home.as_ref().map(|p| p.join("models.json"));
                 let codex_agents_path = dirs::home_dir().map(|h| h.join(".codex/AGENTS.md"));
+                let antigravity_agents_path = dirs::home_dir().map(|h| h.join(".gemini/AGENTS.md"));
                 let read_opt = |p: Option<&std::path::PathBuf>| -> Result<String, String> {
                     let Some(path) = p else { return Ok(String::new()) };
                     match std::fs::read_to_string(path) {
@@ -506,6 +565,8 @@ impl Host {
                     "piModelsProviders": pi_models_providers,
                     "codexAgentsPath": codex_agents_path.as_ref().map(|p| super::metadata::display_path(p)).unwrap_or_default(),
                     "codexAgents": read_opt(codex_agents_path.as_ref())?,
+                    "antigravityAgentsPath": antigravity_agents_path.as_ref().map(|p| super::metadata::display_path(p)).unwrap_or_default(),
+                    "antigravityAgents": read_opt(antigravity_agents_path.as_ref())?,
                 }))
             }
             "harness.docs.save" => {
@@ -522,6 +583,9 @@ impl Host {
                     "codexAgents" => dirs::home_dir()
                         .map(|h| h.join(".codex/AGENTS.md"))
                         .ok_or("找不到 Codex 主目录")?,
+                    "antigravityAgents" => dirs::home_dir()
+                        .map(|h| h.join(".gemini/AGENTS.md"))
+                        .ok_or("找不到 Antigravity 主目录")?,
                     _ => return Err("不支持的配置文件目标".into()),
                 };
                 if let Some(expected) = payload.get("expected").and_then(Value::as_str) {
@@ -592,6 +656,7 @@ impl Host {
             "session.prompt" => {
                 let id = command.session_id.as_deref().ok_or("缺少会话标识")?;
                 self.ensure_runtime(id).await?;
+                let _gate = self.provider_gate.lock().await;
                 self.accept_prompt(id, payload.clone())?;
                 Ok(json!({"accepted":true}))
             }
@@ -647,6 +712,7 @@ impl Host {
                             v.state = "idle".into();
                         }
                     });
+                    self.turn_finished(id, &runtime);
                 }
                 Ok(json!({}))
             }
@@ -814,33 +880,25 @@ impl Host {
                 self.persist(id)?;
                 Ok(json!(self.view(id)?))
             }
-            "session.delete" => {
+            "session.discard_empty" => {
                 principal.require_desktop()?;
                 let id = command.session_id.as_deref().ok_or("缺少会话标识")?;
                 let view = self.view(id)?;
                 if view.busy() {
-                    return Err("运行中的会话不能移除".into());
+                    return Err("运行中的会话不能清理".into());
                 }
+                if view.binding.imported || view.messages.iter().any(|message| message.role == "user") {
+                    return Err("只能清理未发送消息的新会话".into());
+                }
+                let _refresh = self.native_refresh.lock().await;
                 self.stop_runtime(id)?;
-                let remove_from_list = payload
-                    .get("removeFromCodev")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                if remove_from_list {
-                    let _refresh = self.native_refresh.lock().await;
-                    self.hide_native_session(&view.binding)?;
-                    lock(&self.store).remove_session(id)?;
-                    let mut st = lock(&self.state);
-                    st.sessions.remove(id);
-                    st.published_messages.remove(id);
-                    st.dirty.remove(id);
-                    st.global_dirty = true;
-                    return Ok(json!({"removed":true,"nativeHistoryPreserved":true}));
-                }
-                // Archive inside the application, never delete a native transcript on disk.
-                self.update(id, None, |v| v.binding.archived = true);
-                self.persist(id)?;
-                Ok(json!({"archived":true,"nativeHistoryPreserved":true}))
+                lock(&self.store).remove_session(id)?;
+                let mut st = lock(&self.state);
+                st.sessions.remove(id);
+                st.published_messages.remove(id);
+                st.dirty.remove(id);
+                st.global_dirty = true;
+                Ok(json!({"discarded":true}))
             }
             "session.file.read" => {
                 let id = command.session_id.as_deref().ok_or("缺少会话标识")?;
@@ -850,119 +908,48 @@ impl Host {
             | "session.commands" => {
                 let id = command.session_id.as_deref().ok_or("缺少会话标识")?;
                 let runtime = self.ensure_runtime(id).await?;
+                if matches!(
+                    operation,
+                    "session.model" | "session.thinking" | "session.config"
+                ) {
+                    let view = self.view(id)?;
+                    if view.busy() {
+                        self.queue_session_setting(id, &runtime, operation, payload)?;
+                        let _ = self.save_setting_preference(id, runtime.bridge.wire, &view, operation, payload, true);
+                        let updated = self.view(id)?;
+                        return Ok(json!({
+                            "deferred": true,
+                            "model": updated.model,
+                            "thinkingLevel": updated.thinking_level,
+                        }));
+                    }
+                }
                 let _gate = runtime.gate.lock().await;
-                if self.view(id)?.busy() {
+                let view = self.view(id)?;
+                if view.busy() {
+                    if matches!(
+                        operation,
+                        "session.model" | "session.thinking" | "session.config"
+                    ) {
+                        self.queue_session_setting(id, &runtime, operation, payload)?;
+                        let _ = self.save_setting_preference(id, runtime.bridge.wire, &view, operation, payload, true);
+                        let updated = self.view(id)?;
+                        return Ok(json!({
+                            "deferred": true,
+                            "model": updated.model,
+                            "thinkingLevel": updated.thinking_level,
+                        }));
+                    }
                     return Err("当前会话正在运行，请稍后更改配置".into());
                 }
-                if runtime.bridge.wire == Wire::Pi {
-                    let (method, params) =
-                        match operation {
-                            "session.model" => {
-                                let provider = text(payload, "provider");
-                                let model = text(payload, "modelId");
-                                if !self.view(id)?.models.iter().any(|m| {
-                                    text(m, "provider") == provider && text(m, "id") == model
-                                }) {
-                                    return Err("模型不在当前 Pi 运行时清单中".into());
-                                }
-                                ("set_model", json!({"provider":provider,"modelId":model}))
-                            }
-                            "session.thinking" => {
-                                let level = text(payload, "level");
-                                if !self.view(id)?.thinking_levels.contains(&level) {
-                                    return Err("该模型不支持此思考等级".into());
-                                }
-                                ("set_thinking_level", json!({"level":level}))
-                            }
-                            "session.compact" => (
-                                "compact",
-                                json!({"customInstructions":payload.get("instructions")}),
-                            ),
-                            "session.commands" => ("get_commands", json!({})),
-                            _ => return Err("Pi 使用原生模型和思考等级设置".into()),
-                        };
-                    if operation == "session.compact" {
-                        self.update(id, Some(&runtime.instance), |v| {
-                            v.state = "compacting".into()
-                        });
-                    }
-                    let result = runtime
-                        .bridge
-                        .request(
-                            method,
-                            params,
-                            if operation == "session.compact" {
-                                Duration::from_secs(3600)
-                            } else {
-                                QUERY
-                            },
-                        )
-                        .await;
-                    if operation == "session.compact" {
-                        self.update(id, Some(&runtime.instance), |v| v.state = "idle".into());
-                    }
-                    let result = result?;
-                    self.refresh_pi(id, &runtime, operation == "session.compact")
-                        .await?;
-                    if operation == "session.model" {
-                        Ok(json!({"model":self.view(id)?.model}))
-                    } else {
-                        Ok(result)
-                    }
-                } else {
-                    if operation == "session.compact" {
-                        return Err("该代理没有声明压缩能力".into());
-                    }
-                    let view = self.view(id)?;
-                    if operation == "session.commands" {
-                        return Ok(json!(view.commands));
-                    }
-                    let config_id = if operation == "session.model" {
-                        view.config_options
-                            .iter()
-                            .find(|c| text(c, "category") == "model" || text(c, "id") == "model")
-                            .map(|c| text(c, "id"))
-                            .unwrap_or_default()
-                    } else if operation == "session.thinking" {
-                        view.config_options
-                            .iter()
-                            .find(|c| {
-                                matches!(text(c, "category").as_str(), "thought_level" | "thinking")
-                                    || text(c, "id").contains("thinking")
-                                    || text(c, "id") == "thought_level"
-                            })
-                            .map(|c| text(c, "id"))
-                            .unwrap_or_default()
-                    } else {
-                        text(payload, "configId")
-                    };
-                    let value = if operation == "session.model" {
-                        text(payload, "modelId")
-                    } else if operation == "session.thinking" {
-                        text(payload, "level")
-                    } else {
-                        text(payload, "value")
-                    };
-                    if config_id.is_empty() && operation == "session.model" {
-                        let native = lock(&runtime.native_id).clone();
-                        let result = runtime
-                            .bridge
-                            .request(
-                                "session/set_model",
-                                json!({"sessionId":native,"modelId":value}),
-                                QUERY,
-                            )
-                            .await?;
-                        self.update(id, Some(&runtime.instance), |v| {
-                            v.model = v.models.iter().find(|m| text(m, "id") == value).cloned()
-                        });
-                        return Ok(result);
-                    }
-                    if config_id.is_empty() {
-                        return Err("该代理没有声明此配置选项".into());
-                    }
-                    self.set_acp_config(id, &runtime, &config_id, &value).await
+                let result = self.apply_session_setting(id, &runtime, operation, payload).await?;
+                if matches!(
+                    operation,
+                    "session.model" | "session.thinking" | "session.config"
+                ) {
+                    let _ = self.save_setting_preference(id, runtime.bridge.wire, &view, operation, payload, true);
                 }
+                Ok(result)
             }
             "session.fork" => {
                 principal.require_desktop()?;
@@ -1292,6 +1279,325 @@ impl Host {
             }
         });
     }
+    fn acp_setting_kind(view: &SessionView, operation: &str, payload: &Value) -> Result<(String, String), String> {
+        if operation == "session.commands" {
+            return Ok((String::new(), String::new()));
+        }
+        let config_id = if operation == "session.model" {
+            view.config_options
+                .iter()
+                .find(|c| text(c, "category") == "model" || text(c, "id") == "model")
+                .map(|c| text(c, "id"))
+                .unwrap_or_default()
+        } else if operation == "session.thinking" {
+            view.config_options
+                .iter()
+                .find(|c| {
+                    matches!(text(c, "category").as_str(), "thought_level" | "thinking")
+                        || text(c, "id").contains("thinking")
+                        || text(c, "id") == "thought_level"
+                })
+                .map(|c| text(c, "id"))
+                .unwrap_or_default()
+        } else {
+            text(payload, "configId")
+        };
+        let value = if operation == "session.model" {
+            text(payload, "modelId")
+        } else if operation == "session.thinking" {
+            text(payload, "level")
+        } else {
+            text(payload, "value")
+        };
+        if config_id.is_empty() && operation == "session.model" {
+            return Ok(("__model__".into(), value));
+        }
+        if config_id.is_empty() {
+            return Err("该代理没有声明此配置选项".into());
+        }
+        if !view.config_options.iter().any(|c| text(c, "id") == config_id) {
+            return Err("该代理没有声明此配置选项".into());
+        }
+        Ok((config_id, value))
+    }
+
+    pub(super) fn queue_session_setting(
+        &self,
+        id: &str,
+        runtime: &Arc<Runtime>,
+        operation: &str,
+        payload: &Value,
+    ) -> Result<(), String> {
+        let view = self.view(id)?;
+        if runtime.bridge.wire == Wire::Pi {
+            let mut pending = lock(&runtime.pending_config);
+            match operation {
+                "session.model" => {
+                    let provider = text(payload, "provider");
+                    let model = text(payload, "modelId");
+                    if !view.models.iter().any(|m| {
+                        text(m, "provider") == provider && text(m, "id") == model
+                    }) {
+                        return Err("模型不在当前 Pi 运行时清单中".into());
+                    }
+                    pending.model = Some((provider, model));
+                }
+                "session.thinking" => {
+                    let level = text(payload, "level");
+                    if !view.thinking_levels.contains(&level) {
+                        return Err("该模型不支持此思考等级".into());
+                    }
+                    pending.thinking = Some(level);
+                }
+                _ => return Err("Pi 使用原生模型和思考等级设置".into()),
+            }
+            let snapshot = pending.clone();
+            drop(pending);
+            self.update(id, Some(&runtime.instance), |v| snapshot.overlay_on_view(v));
+            return Ok(());
+        }
+        let (config_id, value) = Self::acp_setting_kind(&view, operation, payload)?;
+        let mut pending = lock(&runtime.pending_config);
+        let is_model = operation == "session.model"
+            || config_id == "__model__"
+            || view
+                .config_options
+                .iter()
+                .any(|c| text(c, "id") == config_id && (text(c, "category") == "model" || text(c, "id") == "model"));
+        let is_thinking = !is_model
+            && (operation == "session.thinking"
+                || view.config_options.iter().any(|c| {
+                    text(c, "id") == config_id
+                        && (matches!(text(c, "category").as_str(), "thought_level" | "thinking")
+                            || text(c, "id").contains("thinking")
+                            || text(c, "id") == "thought_level")
+                }));
+        if is_model {
+            let provider = text(payload, "provider");
+            pending.model = Some((
+                if provider.is_empty() {
+                    view.binding.harness_id.clone()
+                } else {
+                    provider
+                },
+                value,
+            ));
+        } else if is_thinking {
+            pending.thinking = Some(value);
+        } else {
+            pending.set_config(config_id, value);
+        }
+        let snapshot = pending.clone();
+        drop(pending);
+        self.update(id, Some(&runtime.instance), |v| snapshot.overlay_on_view(v));
+        Ok(())
+    }
+
+    pub(super) async fn apply_session_setting(
+        &self,
+        id: &str,
+        runtime: &Arc<Runtime>,
+        operation: &str,
+        payload: &Value,
+    ) -> Result<Value, String> {
+        if runtime.bridge.wire == Wire::Pi {
+            let (method, params) = match operation {
+                "session.model" => {
+                    let provider = text(payload, "provider");
+                    let model = text(payload, "modelId");
+                    if !self.view(id)?.models.iter().any(|m| {
+                        text(m, "provider") == provider && text(m, "id") == model
+                    }) {
+                        return Err("模型不在当前 Pi 运行时清单中".into());
+                    }
+                    lock(&runtime.pending_config).model = None;
+                    ("set_model", json!({"provider":provider,"modelId":model}))
+                }
+                "session.thinking" => {
+                    let level = text(payload, "level");
+                    if !self.view(id)?.thinking_levels.contains(&level) {
+                        return Err("该模型不支持此思考等级".into());
+                    }
+                    lock(&runtime.pending_config).thinking = None;
+                    ("set_thinking_level", json!({"level":level}))
+                }
+                "session.compact" => (
+                    "compact",
+                    json!({"customInstructions":payload.get("instructions")}),
+                ),
+                "session.commands" => ("get_commands", json!({})),
+                _ => return Err("Pi 使用原生模型和思考等级设置".into()),
+            };
+            if operation == "session.compact" {
+                self.update(id, Some(&runtime.instance), |v| {
+                    v.state = "compacting".into()
+                });
+            }
+            let result = runtime
+                .bridge
+                .request(
+                    method,
+                    params,
+                    if operation == "session.compact" {
+                        Duration::from_secs(3600)
+                    } else {
+                        QUERY
+                    },
+                )
+                .await;
+            if operation == "session.compact" {
+                self.update(id, Some(&runtime.instance), |v| v.state = "idle".into());
+            }
+            let result = result?;
+            self.refresh_pi(id, runtime, operation == "session.compact")
+                .await?;
+            if operation == "session.model" {
+                Ok(json!({"model":self.view(id)?.model}))
+            } else {
+                Ok(result)
+            }
+        } else {
+            if operation == "session.compact" {
+                return Err("该代理没有声明压缩能力".into());
+            }
+            let view = self.view(id)?;
+            if operation == "session.commands" {
+                return Ok(json!(view.commands));
+            }
+            let (config_id, value) = Self::acp_setting_kind(&view, operation, payload)?;
+            if config_id == "__model__" {
+                lock(&runtime.pending_config).model = None;
+                let native = lock(&runtime.native_id).clone();
+                let result = runtime
+                    .bridge
+                    .request(
+                        "session/set_model",
+                        json!({"sessionId":native,"modelId":value}),
+                        QUERY,
+                    )
+                    .await?;
+                self.update(id, Some(&runtime.instance), |v| {
+                    v.model = v.models.iter().find(|m| text(m, "id") == value).cloned()
+                });
+                return Ok(result);
+            }
+            {
+                let mut pending = lock(&runtime.pending_config);
+                if operation == "session.model" {
+                    pending.model = None;
+                } else if operation == "session.thinking" {
+                    pending.thinking = None;
+                } else {
+                    pending.configs.retain(|(cid, _)| cid != &config_id);
+                }
+            }
+            self.set_acp_config(id, runtime, &config_id, &value).await
+        }
+    }
+
+    pub(super) fn save_setting_preference(
+        &self,
+        id: &str,
+        wire: Wire,
+        view: &SessionView,
+        operation: &str,
+        payload: &Value,
+        save_harness: bool,
+    ) -> Result<(), String> {
+        if wire == Wire::Pi {
+            return match operation {
+                "session.model" => {
+                    let provider = text(payload, "provider");
+                    let model = text(payload, "modelId");
+                    self.record_session_preference(id, save_harness, |prefs| {
+                        prefs.model_provider = (!provider.is_empty()).then(|| provider.clone());
+                        prefs.model_id = (!model.is_empty()).then(|| model.clone());
+                    })
+                }
+                "session.thinking" => {
+                    let level = text(payload, "level");
+                    self.record_session_preference(id, save_harness, |prefs| {
+                        prefs.thinking_level = (!level.is_empty()).then(|| level.clone());
+                    })
+                }
+                _ => Ok(()),
+            };
+        }
+        let (config_id, value) = Self::acp_setting_kind(view, operation, payload)?;
+        let is_model = operation == "session.model"
+            || config_id == "__model__"
+            || view
+                .config_options
+                .iter()
+                .any(|c| text(c, "id") == config_id && (text(c, "category") == "model" || text(c, "id") == "model"));
+        let is_thinking = !is_model
+            && (operation == "session.thinking"
+                || view.config_options.iter().any(|c| {
+                    text(c, "id") == config_id
+                        && (matches!(text(c, "category").as_str(), "thought_level" | "thinking")
+                            || text(c, "id").contains("thinking")
+                            || text(c, "id") == "thought_level")
+                }));
+        if is_model {
+            let provider = text(payload, "provider");
+            return self.record_session_preference(id, save_harness, |prefs| {
+                prefs.model_id = (!value.is_empty()).then(|| value.clone());
+                prefs.model_provider = if !provider.is_empty() {
+                    Some(provider.clone())
+                } else {
+                    Some(view.binding.harness_id.clone())
+                };
+            });
+        }
+        if is_thinking {
+            return self.record_session_preference(id, save_harness, |prefs| {
+                prefs.thinking_level = (!value.is_empty()).then(|| value.clone());
+            });
+        }
+        self.record_session_preference(id, save_harness, |prefs| {
+            if value.is_empty() {
+                prefs.configs.remove(&config_id);
+            } else {
+                prefs.configs.insert(config_id.clone(), value.clone());
+            }
+        })
+    }
+
+    pub async fn apply_pending_config(&self, id: &str, runtime: &Arc<Runtime>) -> Result<(), String> {
+        let pending = std::mem::take(&mut *lock(&runtime.pending_config));
+        if pending.is_empty() {
+            return Ok(());
+        }
+        if let Some((provider, model_id)) = pending.model {
+            self.apply_session_setting(
+                id,
+                runtime,
+                "session.model",
+                &json!({ "provider": provider, "modelId": model_id }),
+            )
+            .await?;
+        }
+        if let Some(level) = pending.thinking {
+            self.apply_session_setting(
+                id,
+                runtime,
+                "session.thinking",
+                &json!({ "level": level }),
+            )
+            .await?;
+        }
+        for (config_id, value) in pending.configs {
+            self.apply_session_setting(
+                id,
+                runtime,
+                "session.config",
+                &json!({ "configId": config_id, "value": value }),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     async fn prompt_now(self: &Arc<Self>, id: &str, payload: Value) -> Result<(), String> {
         let runtime = {
             lock(&self.runtimes)
@@ -1330,8 +1636,44 @@ impl Host {
             .cancelled
             .store(false, std::sync::atomic::Ordering::Release);
         self.persist(id)?;
+        {
+            let _gate = runtime.gate.lock().await;
+            self.apply_pending_config(id, &runtime).await?;
+        }
+        if let Ok(snapshot) = self.view(id) {
+            if !snapshot.binding.read_only {
+                let model_id = snapshot.model.as_ref().map(|m| text(m, "id")).filter(|s| !s.is_empty());
+                let model_provider = snapshot
+                    .model
+                    .as_ref()
+                    .map(|m| text(m, "provider"))
+                    .filter(|s| !s.is_empty());
+                let thinking = (!snapshot.thinking_level.is_empty()).then(|| snapshot.thinking_level.clone());
+                let mode_val = snapshot
+                    .config_options
+                    .iter()
+                    .find(|c| text(c, "id") == "$mode" || text(c, "category") == "mode")
+                    .and_then(|c| {
+                        let cid = text(c, "id");
+                        let val = text(c, "currentValue");
+                        (!cid.is_empty() && !val.is_empty()).then_some((cid, val))
+                    });
+                let _ = self.record_session_preference(id, false, |prefs| {
+                    if prefs.model_id.is_none() {
+                        prefs.model_id = model_id.clone();
+                        prefs.model_provider = model_provider.clone();
+                    }
+                    if prefs.thinking_level.is_none() {
+                        prefs.thinking_level = thinking.clone();
+                    }
+                    if let Some((ref cid, ref val)) = mode_val {
+                        prefs.configs.entry(cid.clone()).or_insert_with(|| val.clone());
+                    }
+                });
+            }
+        }
         if runtime.bridge.wire == Wire::Pi {
-            runtime
+            let reply = runtime
                 .bridge
                 .request(
                     "prompt",
@@ -1339,6 +1681,15 @@ impl Host {
                     INTERACTIVE_PROMPT,
                 )
                 .await?;
+            if reply.get("disposition").and_then(Value::as_str) == Some("handled") {
+                let state = runtime.bridge.request("get_state", json!({}), QUERY).await?;
+                if state.get("isStreaming") != Some(&json!(true)) && state.get("isCompacting") != Some(&json!(true)) {
+                    self.update(id, Some(&runtime.instance), |v| {
+                        if v.state == "working" { v.state = "idle".into(); }
+                    });
+                    self.turn_finished(id, &runtime);
+                }
+            }
         } else {
             let native = lock(&runtime.native_id).clone().ok_or("代理尚未初始化")?;
             let mut prompt = vec![json!({"type":"text","text":message})];
@@ -1360,6 +1711,12 @@ impl Host {
                 v.state = "idle".into();
                 if was_cancelled {
                     v.error = None;
+                }
+                if let Ok(ref value) = reply {
+                    if let Some(usage) = value.get("usage").filter(|u| u.is_object()) {
+                        v.context = super::acp::merge_acp_prompt_usage(&v.context, usage);
+                        v.capabilities.supports_context_usage = true;
+                    }
                 }
                 for m in &mut v.messages {
                     m.streaming = false;

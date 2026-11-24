@@ -15,6 +15,74 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 
+#[derive(Clone, Debug, Default)]
+pub struct PendingRuntimeConfig {
+    pub model: Option<(String, String)>,
+    pub thinking: Option<String>,
+    pub configs: Vec<(String, String)>,
+}
+
+impl PendingRuntimeConfig {
+    pub fn is_empty(&self) -> bool {
+        self.model.is_none() && self.thinking.is_none() && self.configs.is_empty()
+    }
+
+    pub fn set_config(&mut self, config_id: String, value: String) {
+        if let Some(existing) = self.configs.iter_mut().find(|(id, _)| id == &config_id) {
+            existing.1 = value;
+        } else {
+            self.configs.push((config_id, value));
+        }
+    }
+
+    pub fn overlay_on_view(&self, view: &mut SessionView) {
+        if let Some((ref provider, ref model_id)) = self.model {
+            let matched = view
+                .models
+                .iter()
+                .find(|m| {
+                    text(m, "id") == *model_id
+                        && (provider.is_empty()
+                            || text(m, "provider").is_empty()
+                            || text(m, "provider") == *provider)
+                })
+                .cloned();
+            if let Some(found) = matched {
+                view.model = Some(found);
+            } else {
+                view.model = Some(json!({
+                    "id": model_id,
+                    "provider": if provider.is_empty() { view.binding.harness_id.clone() } else { provider.clone() },
+                    "name": model_id,
+                }));
+            }
+            for opt in &mut view.config_options {
+                if text(opt, "category") == "model" || text(opt, "id") == "model" {
+                    opt["currentValue"] = json!(model_id);
+                }
+            }
+        }
+        if let Some(ref level) = self.thinking {
+            view.thinking_level = level.clone();
+            for opt in &mut view.config_options {
+                let category = text(opt, "category");
+                let oid = text(opt, "id");
+                if matches!(category.as_str(), "thought_level" | "thinking")
+                    || oid.contains("thinking")
+                    || oid == "thought_level"
+                {
+                    opt["currentValue"] = json!(level);
+                }
+            }
+        }
+        for (config_id, val) in &self.configs {
+            if let Some(opt) = view.config_options.iter_mut().find(|o| text(o, "id") == *config_id) {
+                opt["currentValue"] = json!(val);
+            }
+        }
+    }
+}
+
 pub struct Runtime {
     pub instance: String,
     pub bridge: Arc<Bridge>,
@@ -26,7 +94,9 @@ pub struct Runtime {
     pub session_auto_write: std::sync::atomic::AtomicBool,
     pub cancelled: std::sync::atomic::AtomicBool,
     pub closing: std::sync::atomic::AtomicBool,
+    pub loading_history: std::sync::atomic::AtomicBool,
     pub loading_desktop_history: std::sync::atomic::AtomicBool,
+    pub pending_config: Mutex<PendingRuntimeConfig>,
 }
 pub struct State {
     pub sequence: u64,
@@ -62,6 +132,7 @@ pub struct Host {
     native_history: Mutex<NativeHistory>,
     pub(super) native_refresh: tokio::sync::Mutex<()>,
     pub(super) usage_sync: tokio::sync::Mutex<()>,
+    pub(super) provider_gate: tokio::sync::Mutex<()>,
 }
 pub(super) fn native_session_key(binding: &SessionBinding) -> String {
     format!("{}:{}", binding.harness_id, binding.native_session_id.as_deref().unwrap_or_default())
@@ -84,7 +155,12 @@ impl Host {
                     .map_or(true, |path| !std::fs::metadata(path)
                         .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound))
             })
-            .map(|b| (b.id.clone(), SessionView::new(b)))
+            .map(|mut b| {
+                if b.harness_id == "acp:codex" && b.imported && b.native_session_id.is_some() {
+                    b.read_only = false;
+                }
+                (b.id.clone(), SessionView::new(b))
+            })
             .collect();
         let (events, _) = broadcast::channel(512);
         Ok(Arc::new(Self {
@@ -113,6 +189,7 @@ impl Host {
             native_history: Mutex::new(NativeHistory::default()),
             native_refresh: tokio::sync::Mutex::new(()),
             usage_sync: tokio::sync::Mutex::new(()),
+            provider_gate: tokio::sync::Mutex::new(()),
         }))
     }
     pub fn remote_active(&self) -> bool {
@@ -125,6 +202,60 @@ impl Host {
             .and_then(|value| value.get(harness_id).cloned())
             .and_then(|value| serde_json::from_value::<HostToolsPolicy>(value).ok())
             .unwrap_or_default()
+    }
+    pub fn harness_preferences(&self, harness_id: &str) -> SessionPreferences {
+        lock(&self.store)
+            .preference("harnessPreferences")
+            .and_then(|value| value.get(harness_id).cloned())
+            .and_then(|value| serde_json::from_value::<SessionPreferences>(value).ok())
+            .unwrap_or_default()
+    }
+    pub fn save_harness_preferences(
+        &self,
+        harness_id: &str,
+        update: impl FnOnce(&mut SessionPreferences),
+    ) -> Result<(), String> {
+        let store = lock(&self.store);
+        let mut all = store
+            .preference("harnessPreferences")
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let mut prefs = all
+            .get(harness_id)
+            .cloned()
+            .and_then(|value| serde_json::from_value::<SessionPreferences>(value).ok())
+            .unwrap_or_default();
+        update(&mut prefs);
+        if prefs.is_empty() {
+            all.remove(harness_id);
+        } else {
+            all.insert(
+                harness_id.into(),
+                serde_json::to_value(&prefs).map_err(|e| e.to_string())?,
+            );
+        }
+        store.set_preference("harnessPreferences", &Value::Object(all))
+    }
+    pub fn record_session_preference(
+        &self,
+        id: &str,
+        save_harness: bool,
+        mut update: impl FnMut(&mut SessionPreferences),
+    ) -> Result<(), String> {
+        let (binding, harness_id) = {
+            let mut state = lock(&self.state);
+            let view = state.sessions.get_mut(id).ok_or("会话不存在")?;
+            if view.binding.read_only {
+                return Ok(());
+            }
+            update(&mut view.binding.preferences);
+            (view.binding.clone(), view.binding.harness_id.clone())
+        };
+        lock(&self.store).save_session(&binding)?;
+        if save_harness {
+            self.save_harness_preferences(&harness_id, |prefs| update(prefs))?;
+        }
+        Ok(())
     }
     pub fn start_background(self: &Arc<Self>) {
         let weak = Arc::downgrade(self);
@@ -401,8 +532,13 @@ impl Host {
                 binding.title = saved.title.clone();
                 binding.pinned = saved.pinned;
                 binding.archived = saved.archived;
-                binding.read_only = saved.read_only;
+                binding.read_only = if binding.harness_id == "acp:codex" && saved.imported {
+                    false
+                } else {
+                    saved.read_only
+                };
                 binding.imported = saved.imported;
+                binding.preferences = saved.preferences.clone();
             }
             state.sessions.insert(binding.id.clone(), SessionView::new(binding));
             changed = true;
@@ -420,15 +556,6 @@ impl Host {
         }
         state.global_dirty |= changed;
         Ok(())
-    }
-    pub(super) fn hide_native_session(&self, binding: &SessionBinding) -> Result<(), String> {
-        if binding.native_session_id.is_none() { return Ok(()); }
-        let store = lock(&self.store);
-        let mut hidden = store.preference("hiddenNativeSessions")
-            .and_then(|value| serde_json::from_value::<HashSet<String>>(value).ok())
-            .unwrap_or_default();
-        hidden.insert(native_session_key(binding));
-        store.set_preference("hiddenNativeSessions", &json!(hidden))
     }
     pub fn create(&self, workspace_id: &str, harness: &str, title: &str) -> Result<String, String> {
         if !lock(&self.state).workspaces.contains_key(workspace_id) {
@@ -454,6 +581,7 @@ impl Host {
             read_only: false,
             imported: false,
             updated_at: now(),
+            preferences: SessionPreferences::default(),
         };
         lock(&self.store).save_session(&binding)?;
         let mut state = lock(&self.state);
@@ -528,6 +656,17 @@ impl Host {
         id: &str,
         allow_readonly: bool,
     ) -> Result<Arc<Runtime>, String> {
+        let _providers = self.provider_gate.lock().await;
+        self.start_runtime(id, allow_readonly, false).await
+    }
+
+    // Provider operations hold provider_gate across stop, startup and rollback.
+    pub(super) async fn start_runtime(
+        self: &Arc<Self>,
+        id: &str,
+        allow_readonly: bool,
+        require_resume: bool,
+    ) -> Result<Arc<Runtime>, String> {
         let gate = {
             let mut gates = self.opening.lock().await;
             gates
@@ -554,6 +693,21 @@ impl Host {
             .map(|w| w.cwd.clone())
             .ok_or("工作区不存在")?;
         let (binary, mut args) = registry::launch(&descriptor)?;
+        let mut environment = Vec::new();
+        if descriptor.id == "acp:codex" && super::providers::codex_official_selected(self)? {
+            environment.push(("MODEL_PROVIDER", Some("openai".into())));
+            environment.push(("OPENAI_BASE_URL", None));
+        }
+        if descriptor.id == "acp:antigravity" {
+            environment = vec![("GEMINI_API_KEY", None), ("GOOGLE_GEMINI_BASE_URL", None)];
+            let provider = super::providers::agy_for_session(self, id, view.binding.native_session_id.is_some(), antigravity_history::is_desktop(&view.binding))?;
+            if let Some(provider) = provider {
+                if args.iter().any(|arg| arg.starts_with("--gemini-dir") || arg.starts_with("--gemini_dir")) { return Err("请移除自定义 gemini-dir 后使用第三方供应商".into()); }
+                let (extra, env) = super::providers::agy_launch(self, &provider)?;
+                args.extend(extra);
+                environment = env;
+            }
+        }
         if antigravity_history::is_desktop(&view.binding) {
             cwd = metadata::display_path(&antigravity_history::desktop_cwd(
                 view.binding.native_session_id.as_deref().ok_or("缺少 Antigravity 会话标识")?,
@@ -584,9 +738,10 @@ impl Host {
             v.instance_id = Some(instance.clone());
             v.state = "starting".into();
             v.error = None;
+            v.commands.clear();
         });
         let spawned = tokio::task::spawn_blocking(move || {
-            Bridge::spawn(&binary, &args, &PathBuf::from(cwd), wire)
+            Bridge::spawn_with_env(&binary, &args, &PathBuf::from(cwd), wire, &environment)
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -595,6 +750,7 @@ impl Host {
             Err(e) => {
                 self.update(id, Some(&instance), |v| {
                     v.state = "crashed".into();
+                    v.instance_id = None;
                     v.error = Some(e.clone());
                 });
                 return Err(e);
@@ -611,7 +767,9 @@ impl Host {
             session_auto_write: std::sync::atomic::AtomicBool::new(false),
             cancelled: std::sync::atomic::AtomicBool::new(false),
             closing: std::sync::atomic::AtomicBool::new(false),
+            loading_history: std::sync::atomic::AtomicBool::new(false),
             loading_desktop_history: std::sync::atomic::AtomicBool::new(false),
+            pending_config: Mutex::new(PendingRuntimeConfig::default()),
         });
         lock(&self.runtimes).insert(id.into(), runtime.clone());
         let weak = Arc::downgrade(self);
@@ -664,11 +822,16 @@ impl Host {
         let result = if wire == Wire::Pi {
             self.initialize_pi(id, &runtime).await
         } else {
-            self.initialize_acp(id, &runtime).await
+            self.initialize_acp(id, &runtime, require_resume).await
         };
         if let Err(e) = result {
             self.runtime_failed(id, &runtime, &e);
             return Err(e);
+        }
+        if let Err(e) = self.apply_pending_config(id, &runtime).await {
+            self.update(id, Some(&instance), |v| {
+                v.error = Some(e);
+            });
         }
         self.update(id, Some(&instance), |v| {
             if v.state == "starting" {

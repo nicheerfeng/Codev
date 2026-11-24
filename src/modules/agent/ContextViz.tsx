@@ -15,6 +15,26 @@ function formatTokens(value: unknown): string {
   return String(Math.round(n));
 }
 
+export function resolveContextPercent(
+  context?: Record<string, unknown>,
+): number | null {
+  if (!context) return null;
+  if (typeof context.percent === "number" && Number.isFinite(context.percent)) {
+    return Math.max(0, Math.min(100, context.percent));
+  }
+  const tokens = Number(context.tokens ?? context.used);
+  const windowSize = Number(context.window ?? context.size);
+  if (
+    Number.isFinite(tokens) &&
+    tokens >= 0 &&
+    Number.isFinite(windowSize) &&
+    windowSize > 0
+  ) {
+    return Math.max(0, Math.min(100, (tokens / windowSize) * 100));
+  }
+  return null;
+}
+
 export function ContextViz({
   session,
   onCompact,
@@ -57,11 +77,7 @@ export function ContextViz({
     return () => clearInterval(timer);
   }, [compactStartedAt]);
 
-  const percent =
-    typeof session.context?.percent === "number" &&
-    Number.isFinite(session.context.percent)
-      ? Math.max(0, Math.min(100, session.context.percent))
-      : null;
+  const percent = resolveContextPercent(session.context);
 
   const usage =
     session.context?.usage && typeof session.context.usage === "object"
@@ -91,6 +107,7 @@ export function ContextViz({
           type="button"
           className={`agent-context-pill ${toneClass}`}
           title="查看上下文占用明细与压缩操作"
+          aria-label="查看上下文占用明细与压缩操作"
         >
           <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
             <circle
@@ -124,7 +141,7 @@ export function ContextViz({
                 ? "已压缩 · 待更新"
                 : percent !== null
                   ? `${percent.toFixed(0)}%`
-                  : "上下文"}
+                  : null}
           </span>
         </button>
       </PopoverTrigger>
