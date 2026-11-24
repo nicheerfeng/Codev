@@ -1,4 +1,6 @@
+import { PanelErrorBoundary } from "@/components/PanelErrorBoundary";
 import { lazy, Suspense, useEffect, useState } from "react";
+import { ForgeInboxPanel } from "@/modules/forge/ForgeInboxPanel";
 import { JsonFormatterPane } from "./json-formatter/JsonFormatterPane";
 import { TextDiffPane } from "./text-diff/TextDiffPane";
 import { AGENT_HOST_PLUGIN_ID, usePluginStore } from "./store";
@@ -7,7 +9,7 @@ const AgentPane = lazy(() =>
     default: module.AgentPane,
   })),
 );
-export type ToolId = "json" | "diff" | "agent";
+export type ToolId = "json" | "diff" | "agent" | "git-inbox";
 
 function JsonFormatterTool() {
   const [ids, setIds] = useState([1]);
@@ -39,14 +41,18 @@ export function ToolPanel({
   onOpenFile,
   onOpenDiff,
   workspaceRoots = [],
+  activeRoot,
   onAddWorkspaceRoot,
+  onFocusAgentTab,
 }: {
   tool?: ToolId;
   active?: boolean;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string, diff: string) => void;
   workspaceRoots?: string[];
+  activeRoot?: string | null;
   onAddWorkspaceRoot?: (path: string) => void;
+  onFocusAgentTab?: () => void;
 }) {
   const enabled = usePluginStore((s) => s.enabled[AGENT_HOST_PLUGIN_ID]);
   const [visited, setVisited] = useState(active && tool === "agent");
@@ -71,25 +77,41 @@ export function ToolPanel({
       </div>
       <div
         className={
+          tool === "git-inbox" ? "absolute inset-0" : "hidden absolute inset-0"
+        }
+      >
+        <PanelErrorBoundary title="Git 收件箱">
+          <ForgeInboxPanel
+            workspaceRoots={workspaceRoots}
+            activeRoot={activeRoot}
+            onAddWorkspaceRoot={onAddWorkspaceRoot}
+            onFocusAgentTab={onFocusAgentTab}
+          />
+        </PanelErrorBoundary>
+      </div>
+      <div
+        className={
           tool === "agent" ? "absolute inset-0" : "hidden absolute inset-0"
         }
       >
         {visited && enabled && (
-          <Suspense
-            fallback={
-              <div className="p-4 text-xs text-muted-foreground">
-                正在连接 Agent 主机…
-              </div>
-            }
-          >
-            <AgentPane
-              active={active && tool === "agent"}
-              onOpenFile={onOpenFile}
-              onOpenDiff={onOpenDiff}
-              workspaceRoots={workspaceRoots}
-              onAddWorkspaceRoot={onAddWorkspaceRoot}
-            />
-          </Suspense>
+          <PanelErrorBoundary title="Agent">
+            <Suspense
+              fallback={
+                <div className="p-4 text-xs text-muted-foreground">
+                  正在连接 Agent 主机…
+                </div>
+              }
+            >
+              <AgentPane
+                active={active && tool === "agent"}
+                onOpenFile={onOpenFile}
+                onOpenDiff={onOpenDiff}
+                workspaceRoots={workspaceRoots}
+                onAddWorkspaceRoot={onAddWorkspaceRoot}
+              />
+            </Suspense>
+          </PanelErrorBoundary>
         )}
       </div>
     </div>

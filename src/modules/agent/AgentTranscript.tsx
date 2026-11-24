@@ -33,6 +33,9 @@ import {
   useVoiceOutput,
 } from "@/modules/voice/output";
 import { splitInlineThinking } from "./inlineThinking";
+import { usePreferencesStore } from "@/modules/settings/preferences";
+import { TurnGitCard } from "@/modules/vcs/TurnGitCard";
+import type { VcsTurnDiffSummary } from "@/modules/vcs/types";
 import {
   EditDiffView,
   PlanCard,
@@ -465,9 +468,9 @@ export function TurnProcessView({
     block.stepCount > 0
       ? `${block.stepCount} 个步骤${block.toolCount > 0 ? ` · ${block.toolCount} 次工具调用` : ""}`
       : block.running
-        ? "等待模型响应"
+        ? ""
         : "思考过程";
-  const metaText = `${stepSummary}${elapsed ? ` · ${elapsed}` : ""}`;
+  const metaText = [stepSummary, elapsed].filter(Boolean).join(" · ");
 
   return (
     <div className={`agent-turn-process ${block.running ? "is-live" : ""}`}>
@@ -489,7 +492,7 @@ export function TurnProcessView({
           >
             {block.statusTitle}
           </span>
-          <span className="agent-process-meta">{metaText}</span>
+          {metaText && <span className="agent-process-meta">{metaText}</span>}
         </summary>
 
         {open && (
@@ -757,6 +760,7 @@ export function AgentTranscript({
     [session.messages],
   );
   const mobile = useAgentStore((s) => s.mobile);
+  const gitUiEnabled = usePreferencesStore((s) => s.gitUiEnabled);
   const cwd =
     useAgentStore(
       (s) => s.workspaces.find((w) => w.id === session.workspaceId)?.cwd,
@@ -1020,6 +1024,17 @@ export function AgentTranscript({
             onOpenFile={openPath}
             onOpenDiff={onOpenDiff}
           />
+          {gitUiEnabled && (
+            <TurnGitCard
+              sessionId={session.id}
+              summary={
+                (session.statuses?.turnGit as VcsTurnDiffSummary | undefined) ??
+                null
+              }
+              mobile={mobile}
+              onOpenDiff={onOpenDiff}
+            />
+          )}
           {session.pendingRequests.map((request) => (
             <StructuredRequestCard
               key={request.id}

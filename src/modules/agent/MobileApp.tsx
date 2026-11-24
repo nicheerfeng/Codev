@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AgentPane } from "./AgentPane";
 import { agentClient } from "./client";
 import { useAgentStore } from "./store";
+import { useVcsStore } from "@/modules/vcs/store";
 
 const TOKEN_KEY = "codev.agent.deviceToken";
 const nonceFromLink = () =>
@@ -36,6 +37,12 @@ export function MobileApp() {
   const [connecting, setConnecting] = useState(false);
   const [hostOffline, setHostOffline] = useState(false);
   const [retryTick, setRetryTick] = useState(0);
+  const [mobileTab, setMobileTab] = useState<"agent" | "vcs">("agent");
+  const snapshotsMap = useVcsStore((s) => s.snapshots);
+  const inboxesMap = useVcsStore((s) => s.inboxes);
+  const vcsSnapshots = useMemo(() => Object.values(snapshotsMap), [snapshotsMap]);
+  const forgeInboxes = useMemo(() => Object.values(inboxesMap), [inboxesMap]);
+  const totalUnread = useVcsStore((s) => s.totalForgeUnread);
   const save = useCallback((token: string) => {
     try {
       localStorage.setItem(TOKEN_KEY, token);
@@ -177,7 +184,105 @@ export function MobileApp() {
       setWaiting(false);
     }
   };
-  if (token && !connecting && !hostOffline) return <AgentPane mobile />;
+  if (token && !connecting && !hostOffline) {
+    return (
+      <div className="flex h-dvh w-screen flex-col overflow-hidden bg-background">
+        <nav className="flex h-9 shrink-0 items-center gap-1 border-b border-border/60 bg-card px-2 text-xs">
+          <button
+            type="button"
+            onClick={() => setMobileTab("agent")}
+            className={`rounded px-2.5 py-1 font-medium ${mobileTab === "agent" ? "bg-accent text-foreground" : "text-muted-foreground"}`}
+          >
+            Agent 会话
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobileTab("vcs")}
+            className={`flex items-center gap-1 rounded px-2.5 py-1 font-medium ${mobileTab === "vcs" ? "bg-accent text-foreground" : "text-muted-foreground"}`}
+          >
+            <span>仓库与收件箱 (只读)</span>
+            {totalUnread > 0 && (
+              <span className="rounded-full bg-primary/20 px-1 text-[10px] text-primary">
+                {totalUnread}
+              </span>
+            )}
+          </button>
+        </nav>
+        <div className="min-h-0 flex-1 overflow-hidden">
+          {mobileTab === "agent" ? (
+            <AgentPane mobile />
+          ) : (
+            <div className="h-full space-y-4 overflow-y-auto p-3 text-xs">
+              <section className="space-y-2">
+                <h2 className="font-semibold text-foreground">
+                  仓库状态投影（{vcsSnapshots.length}）
+                </h2>
+                {vcsSnapshots.length === 0 ? (
+                  <p className="text-muted-foreground">暂无活跃 Git 仓库快照。</p>
+                ) : (
+                  vcsSnapshots.map((snap) => (
+                    <div
+                      key={snap.worktreeRoot}
+                      className="space-y-1.5 rounded border border-border/60 bg-card p-2.5"
+                    >
+                      <div className="flex items-center justify-between font-medium">
+                        <span>
+                          {snap.repoName} · {snap.branch}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {snap.ahead ? `↑${snap.ahead}` : ""}{" "}
+                          {snap.behind ? `↓${snap.behind}` : ""}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-muted-foreground">
+                        已暂存 {snap.counts.staged} · 修改 {snap.counts.modified} · 未跟踪{" "}
+                        {snap.counts.untracked} · 冲突 {snap.counts.conflicted}
+                      </div>
+                      {snap.entries.slice(0, 15).map((e) => (
+                        <div
+                          key={e.path}
+                          className="truncate font-mono text-[10.5px] text-foreground/80"
+                        >
+                          {e.indexStatus}
+                          {e.worktreeStatus} {e.path}
+                        </div>
+                      ))}
+                    </div>
+                  ))
+                )}
+              </section>
+              <section className="space-y-2">
+                <h2 className="font-semibold text-foreground">
+                  Forge 通知与 Issues/PR（{forgeInboxes.length}）
+                </h2>
+                {forgeInboxes.map((inbox) => (
+                  <div
+                    key={inbox.repo?.fullName ?? "none"}
+                    className="space-y-1.5 rounded border border-border/60 bg-card p-2.5"
+                  >
+                    <div className="font-medium">
+                      {inbox.repo?.fullName ?? "未连接远程"}（未读 {inbox.unreadCount}）
+                    </div>
+                    {inbox.notifications.slice(0, 8).map((n) => (
+                      <div key={n.id} className="text-[11px] text-foreground/85">
+                        {n.unread ? "● " : ""}
+                        [{n.subjectType}] {n.title}
+                      </div>
+                    ))}
+                    {inbox.pulls.slice(0, 6).map((pr) => (
+                      <div key={pr.id} className="text-[10.5px] text-muted-foreground">
+                        PR #{pr.number}: {pr.title} ({pr.checksStatus})
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </section>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
   if (token && hostOffline) {
     return (
       <main className="agent-pair-page">

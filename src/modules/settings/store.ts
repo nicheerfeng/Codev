@@ -84,8 +84,9 @@ export type Preferences = {
   editorWordWrapColumn: number;
   markdownDefaultView: MarkdownDefaultView;
   showHidden: boolean;
-  gitEnabled: boolean;
-  notepadEnabled: boolean;
+  gitUiEnabled: boolean;
+  gitTreeBadges: boolean;
+  gitInboxEnabled: boolean;
   /** Multi-root workspace: imported folder roots (forward-slash paths). */
   workspaceRoots: string[];
   activeWorkspaceRoot: string | null;
@@ -120,8 +121,9 @@ const KEY_EDITOR_WORD_WRAP = "editorWordWrap";
 const KEY_EDITOR_WORD_WRAP_COLUMN = "editorWordWrapColumn";
 const KEY_MARKDOWN_DEFAULT_VIEW = "markdownDefaultView";
 const KEY_SHOW_HIDDEN = "showHidden";
-const KEY_GIT_ENABLED = "gitEnabled";
-const KEY_NOTEPAD_ENABLED = "notepadEnabled";
+const KEY_GIT_UI_ENABLED = "gitUiEnabled";
+const KEY_GIT_TREE_BADGES = "gitTreeBadges";
+const KEY_GIT_INBOX_ENABLED = "gitInboxEnabled";
 const LEGACY_KEY_SHOW_HIDDEN_DIRS = "showHiddenDirectories";
 const KEY_WORKSPACE_ROOTS = "workspaceRoots";
 const KEY_ACTIVE_WORKSPACE_ROOT = "activeWorkspaceRoot";
@@ -184,8 +186,9 @@ export const DEFAULT_PREFERENCES: Preferences = {
   editorWordWrapColumn: EDITOR_WORD_WRAP_COLUMN_DEFAULT,
   markdownDefaultView: "rendered",
   showHidden: true,
-  gitEnabled: false,
-  notepadEnabled: true,
+  gitUiEnabled: true,
+  gitTreeBadges: false,
+  gitInboxEnabled: true,
   workspaceRoots: [],
   activeWorkspaceRoot: null,
   terminalCursorBlink: false,
@@ -314,9 +317,13 @@ export async function loadPreferences(): Promise<Preferences> {
       get<boolean>(KEY_SHOW_HIDDEN) ??
       get<boolean>(LEGACY_KEY_SHOW_HIDDEN_DIRS) ??
       DEFAULT_PREFERENCES.showHidden,
-    gitEnabled: get<boolean>(KEY_GIT_ENABLED) ?? DEFAULT_PREFERENCES.gitEnabled,
-    notepadEnabled:
-      get<boolean>(KEY_NOTEPAD_ENABLED) ?? DEFAULT_PREFERENCES.notepadEnabled,
+    gitUiEnabled:
+      get<boolean>(KEY_GIT_UI_ENABLED) ?? DEFAULT_PREFERENCES.gitUiEnabled,
+    gitTreeBadges:
+      get<boolean>(KEY_GIT_TREE_BADGES) ?? DEFAULT_PREFERENCES.gitTreeBadges,
+    gitInboxEnabled:
+      get<boolean>(KEY_GIT_INBOX_ENABLED) ??
+      DEFAULT_PREFERENCES.gitInboxEnabled,
     workspaceRoots,
     activeWorkspaceRoot,
     terminalCursorBlink:
@@ -511,12 +518,16 @@ export async function setShowHidden(value: boolean): Promise<void> {
   await writePref(KEY_SHOW_HIDDEN, value);
 }
 
-export async function setGitEnabled(value: boolean): Promise<void> {
-  await writePref(KEY_GIT_ENABLED, value);
+export async function setGitUiEnabled(value: boolean): Promise<void> {
+  await writePref(KEY_GIT_UI_ENABLED, value);
 }
 
-export async function setNotepadEnabled(value: boolean): Promise<void> {
-  await writePref(KEY_NOTEPAD_ENABLED, value);
+export async function setGitTreeBadges(value: boolean): Promise<void> {
+  await writePref(KEY_GIT_TREE_BADGES, value);
+}
+
+export async function setGitInboxEnabled(value: boolean): Promise<void> {
+  await writePref(KEY_GIT_INBOX_ENABLED, value);
 }
 
 export async function setTerminalCursorBlink(value: boolean): Promise<void> {
@@ -646,8 +657,9 @@ export async function onPreferencesChange(
     [KEY_EDITOR_WORD_WRAP_COLUMN]: "editorWordWrapColumn",
     [KEY_MARKDOWN_DEFAULT_VIEW]: "markdownDefaultView",
     [KEY_SHOW_HIDDEN]: "showHidden",
-    [KEY_GIT_ENABLED]: "gitEnabled",
-    [KEY_NOTEPAD_ENABLED]: "notepadEnabled",
+    [KEY_GIT_UI_ENABLED]: "gitUiEnabled",
+    [KEY_GIT_TREE_BADGES]: "gitTreeBadges",
+    [KEY_GIT_INBOX_ENABLED]: "gitInboxEnabled",
     [KEY_WORKSPACE_ROOTS]: "workspaceRoots",
     [KEY_ACTIVE_WORKSPACE_ROOT]: "activeWorkspaceRoot",
     [KEY_TERMINAL_CURSOR_BLINK]: "terminalCursorBlink",

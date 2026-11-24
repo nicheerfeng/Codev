@@ -6,11 +6,13 @@ export const JSON_FORMATTER_PLUGIN_ID = "json-formatter" as const;
 export const TEXT_DIFF_PLUGIN_ID = "text-diff" as const;
 export const AGENT_HOST_PLUGIN_ID = "agent-host" as const;
 export const TASKBAR_UNREAD_PLUGIN_ID = "taskbar-unread" as const;
+export const NOTEPAD_PLUGIN_ID = "notepad" as const;
 export type PluginId =
   | typeof JSON_FORMATTER_PLUGIN_ID
   | typeof TEXT_DIFF_PLUGIN_ID
   | typeof AGENT_HOST_PLUGIN_ID
-  | typeof TASKBAR_UNREAD_PLUGIN_ID;
+  | typeof TASKBAR_UNREAD_PLUGIN_ID
+  | typeof NOTEPAD_PLUGIN_ID;
 export type PluginState = { enabled: Record<PluginId, boolean> };
 type State = PluginState & { hydrated: boolean; init: () => Promise<void> };
 const FILE = new LazyStore("codev-plugins.json", {
@@ -23,6 +25,7 @@ const IDS: PluginId[] = [
   TEXT_DIFF_PLUGIN_ID,
   AGENT_HOST_PLUGIN_ID,
   TASKBAR_UNREAD_PLUGIN_ID,
+  NOTEPAD_PLUGIN_ID,
 ];
 let initialization: Promise<void> | null = null;
 function normalize(value: unknown): PluginState["enabled"] {
@@ -40,6 +43,7 @@ function normalize(value: unknown): PluginState["enabled"] {
           old["codex-agent"] === true ||
           old["antigravity-agent"] === true,
     "taskbar-unread": old[TASKBAR_UNREAD_PLUGIN_ID] !== false,
+    notepad: old[NOTEPAD_PLUGIN_ID] !== false,
   };
 }
 export const usePluginStore = create<State>((set) => ({

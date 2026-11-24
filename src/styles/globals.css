@@ -5,7 +5,7 @@
 @import "./code-highlight.css";
 @import "./frosted-glass.css";
 
-@source "../../node_modules/streamdown/dist/index.js";
+@source "../../node_modules/streamdown/dist/*.js";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -366,6 +366,114 @@ html *::-webkit-scrollbar {
 }
 
 /* Reader panes opt back into a narrow, theme-colored scrollbar. */
+.markdown-rendered {
+  font-size: 14.5px;
+  line-height: 1.72;
+  color: var(--foreground);
+}
+.markdown-rendered h1 {
+  font-size: 1.55em;
+  font-weight: 700;
+  line-height: 1.32;
+  margin: 1.4em 0 0.6em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+.markdown-rendered h2 {
+  font-size: 1.3em;
+  font-weight: 650;
+  line-height: 1.36;
+  margin: 1.3em 0 0.5em;
+  padding-bottom: 0.24em;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+}
+.markdown-rendered h3 {
+  font-size: 1.12em;
+  font-weight: 600;
+  line-height: 1.4;
+  margin: 1.15em 0 0.45em;
+}
+.markdown-rendered h4 {
+  font-size: 1em;
+  font-weight: 600;
+  line-height: 1.45;
+  margin: 0.95em 0 0.35em;
+}
+.markdown-rendered p {
+  margin: 0.65em 0;
+  line-height: 1.72;
+}
+.markdown-rendered ul,
+.markdown-rendered ol {
+  list-style-position: outside;
+  padding-left: 1.6em;
+  margin: 0.55em 0;
+}
+.markdown-rendered li > ul,
+.markdown-rendered li > ol {
+  padding-left: 1.45em;
+  margin: 0.25em 0 0.35em;
+}
+.markdown-rendered ul {
+  list-style-type: disc;
+}
+.markdown-rendered ul ul {
+  list-style-type: circle;
+}
+.markdown-rendered ul ul ul {
+  list-style-type: square;
+}
+.markdown-rendered ol {
+  list-style-type: decimal;
+}
+.markdown-rendered ol ol {
+  list-style-type: lower-alpha;
+}
+.markdown-rendered ol ol ol {
+  list-style-type: lower-roman;
+}
+.markdown-rendered li {
+  padding: 0.16em 0;
+  line-height: 1.7;
+}
+.markdown-rendered li::marker {
+  color: var(--muted-foreground);
+}
+.markdown-rendered li > p {
+  margin: 0;
+}
+.markdown-rendered li > p + p {
+  display: block;
+  margin-top: 0.45em;
+}
+.markdown-rendered ul.contains-task-list {
+  list-style: none;
+  padding-left: 0.3em;
+}
+.markdown-rendered li > ul.contains-task-list {
+  padding-left: 1.45em;
+}
+.markdown-rendered li.task-list-item > input[type="checkbox"] {
+  margin-right: 0.5em;
+  vertical-align: -0.14em;
+  accent-color: var(--primary);
+}
+.markdown-rendered blockquote {
+  margin: 0.85em 0;
+  padding: 0.35em 0 0.35em 1em;
+  border-left: 3px solid color-mix(in srgb, var(--primary) 45%, var(--border));
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--muted) 28%, transparent);
+  border-radius: 0 6px 6px 0;
+}
+.markdown-rendered [data-streamdown="inline-code"] {
+  padding: 0.1em 0.35em;
+  font-size: 0.875em;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--muted) 75%, transparent);
+  overflow-wrap: break-word;
+}
+
 .reader-scrollbar,
 .reader-scrollbar .cm-scroller {
   scrollbar-width: thin !important;
@@ -704,3 +812,28 @@ html *::-webkit-scrollbar {
   0%, 100% { height: 30%; }
   50% { height: 100%; }
 }
+
+@keyframes forge-progress {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+.forge-indeterminate-bar {
+  width: 30%;
+  animation: forge-progress 1.3s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .forge-indeterminate-bar {
+    animation: none;
+    width: 100%;
+    opacity: 0.45;
+  }
+}
+
+.forge-markdown h1 { font-size: 1.25em; margin: 0.9em 0 0.45em; }
+.forge-markdown h2 { font-size: 1.14em; margin: 0.85em 0 0.4em; }
+.forge-markdown h3 { font-size: 1.05em; margin: 0.75em 0 0.35em; }
+.forge-markdown p { margin: 0.45em 0; line-height: 1.65; }
+.forge-markdown ul,
+.forge-markdown ol { margin: 0.4em 0; padding-left: 1.45em; }
+.forge-markdown pre { margin: 0.5em 0; }
+.forge-markdown [data-streamdown="code-block"] { margin: 0.5em 0; }

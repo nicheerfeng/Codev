@@ -15,6 +15,7 @@ mod providers;
 pub mod protocol;
 mod registry;
 mod usage;
+mod vcs_commands;
 pub mod server;
 #[cfg(test)]
 mod tests;

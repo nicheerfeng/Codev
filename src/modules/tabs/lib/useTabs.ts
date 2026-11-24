@@ -88,6 +88,9 @@ export type GitDiffTab = TabBase & {
   path: string;
   repoRoot: string;
   diff: string;
+  staged?: boolean;
+  conflict?: boolean;
+  commitHash?: string;
 };
 
 export type GitHistoryTab = TabBase & {
@@ -95,13 +98,7 @@ export type GitHistoryTab = TabBase & {
   kind: "git-history";
   title: string;
   repoRoot: string;
-  commits: {
-    hash: string;
-    subject: string;
-    author: string;
-    date: string;
-    refs: string;
-  }[];
+  commits: import("@/modules/vcs/types").VcsCommit[];
 };
 
 export type Tab =
@@ -783,17 +780,36 @@ export function useTabs(initial?: Partial<TerminalTab>) {
   );
 
   const openGitDiffTab = useCallback(
-    (input: { repoRoot: string; path: string; diff: string }) => {
+    (input: {
+      repoRoot: string;
+      path: string;
+      diff?: string;
+      staged?: boolean;
+      conflict?: boolean;
+      commitHash?: string;
+    }) => {
+      const diffText = input.diff ?? "";
       const title = input.path.split(/[\\/]/).pop() || input.path;
       const existing = tabsRef.current.find(
         (tab) =>
           tab.kind === "git-diff" &&
           tab.repoRoot === input.repoRoot &&
-          tab.path === input.path,
+          tab.path === input.path &&
+          !!tab.staged === !!input.staged &&
+          !!tab.conflict === !!input.conflict &&
+          tab.commitHash === input.commitHash,
       );
       if (existing?.kind === "git-diff") {
         const tabs = tabsRef.current.map((tab) =>
-          tab.id === existing.id ? { ...existing, diff: input.diff } : tab,
+          tab.id === existing.id
+            ? {
+                ...existing,
+                diff: diffText,
+                staged: input.staged,
+                conflict: input.conflict,
+                commitHash: input.commitHash,
+              }
+            : tab,
         );
         tabsRef.current = tabs;
         setTabs(tabs);
@@ -808,7 +824,10 @@ export function useTabs(initial?: Partial<TerminalTab>) {
         title,
         path: input.path,
         repoRoot: input.repoRoot,
-        diff: input.diff,
+        diff: diffText,
+        staged: input.staged,
+        conflict: input.conflict,
+        commitHash: input.commitHash,
       };
       const tabs = [...tabsRef.current, tab];
       tabsRef.current = tabs;

@@ -287,6 +287,15 @@ function restore(snapshot: HostSnapshot) {
       : Math.max(0, nextSlots.indexOf(selected)),
     opened: nextOpened,
   });
+  if (snapshot.vcsSnapshots?.length || snapshot.forgeInboxes?.length) {
+    void import("@/modules/vcs/store")
+      .then((m) =>
+        m.useVcsStore
+          .getState()
+          .applyHostSnapshots(snapshot.vcsSnapshots, snapshot.forgeInboxes),
+      )
+      .catch(() => undefined);
+  }
 }
 function consume(frame: Frame) {
   if (frame.type === "snapshot" || frame.type === "resync") {
@@ -295,6 +304,30 @@ function consume(frame: Frame) {
   }
   if (frame.type !== "event") return;
   const event = frame.event;
+  if (event.kind === "vcs.changed") {
+    const snap = (
+      event.payload as { snapshot?: import("@/modules/vcs/types").VcsSnapshot }
+    )?.snapshot;
+    if (snap) {
+      void import("@/modules/vcs/store")
+        .then((m) => m.useVcsStore.getState().applyVcsSnapshot(snap))
+        .catch(() => undefined);
+    }
+    return;
+  }
+  if (event.kind === "forge.updated") {
+    const inbox = (
+      event.payload as {
+        inbox?: import("@/modules/vcs/types").ForgeInboxSnapshot;
+      }
+    )?.inbox;
+    if (inbox) {
+      void import("@/modules/vcs/store")
+        .then((m) => m.useVcsStore.getState().applyForgeInbox(inbox))
+        .catch(() => undefined);
+    }
+    return;
+  }
   if (event.kind === "host.changed") {
     const value = event.payload as Pick<
       HostSnapshot,

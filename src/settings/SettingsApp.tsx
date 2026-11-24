@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useEffect } from "react";
 import { EditorSection } from "./sections/EditorSection";
 import { GeneralSection } from "./sections/GeneralSection";
+import { GitSection } from "./sections/GitSection";
 import { PluginsSection } from "./sections/PluginsSection";
 import { ThemesSection } from "./sections/ThemesSection";
 import { VersionSection } from "./sections/VersionSection";
@@ -60,6 +61,7 @@ export function SettingsApp() {
             <div className="flex flex-col gap-4">
               <GeneralSection />
               <ThemesSection />
+              <GitSection />
               <EditorSection />
             </div>
           </TabsContent>

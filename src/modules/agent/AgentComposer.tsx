@@ -18,6 +18,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowUp01Icon, StopIcon } from "@hugeicons/core-free-icons";
 import { useAgentStore, type Draft } from "./store";
 import { ContextViz } from "./ContextViz";
+import { BranchDropdown } from "@/modules/vcs/BranchDropdown";
 import { choices, isBusy, type AgentImage, type SessionView } from "./types";
 
 type Skill = { name: string; path: string; source?: string; description?: string };
@@ -738,9 +739,11 @@ export function AgentComposer({ session }: { session: SessionView }) {
           )}
         </div>
       </div>
-      <div className="agent-composer-note">
-        <span title={cwd}>{cwd}</span>
-      </div>
+      <BranchDropdown
+        cwd={cwd}
+        harnessId={session.harnessId}
+        disabled={mobile}
+      />
     </footer>
   );
 }

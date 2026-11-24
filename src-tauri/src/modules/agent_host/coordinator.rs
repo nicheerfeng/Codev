@@ -133,6 +133,9 @@ pub struct Host {
     pub(super) native_refresh: tokio::sync::Mutex<()>,
     pub(super) usage_sync: tokio::sync::Mutex<()>,
     pub(super) provider_gate: tokio::sync::Mutex<()>,
+    pub vcs: Arc<crate::modules::vcs::VcsService>,
+    pub vcs_watcher: crate::modules::vcs::VcsWatcher,
+    pub forge: Arc<crate::modules::forge::ForgeService>,
 }
 pub(super) fn native_session_key(binding: &SessionBinding) -> String {
     format!("{}:{}", binding.harness_id, binding.native_session_id.as_deref().unwrap_or_default())
@@ -163,6 +166,15 @@ impl Host {
             })
             .collect();
         let (events, _) = broadcast::channel(512);
+        let forge = Arc::new(crate::modules::forge::ForgeService::default());
+        let saved_pat = store
+            .preference("forgePat")
+            .and_then(|v| v.as_str().map(str::to_string));
+        let read_ids = store
+            .preference("forgeReadIds")
+            .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+            .unwrap_or_default();
+        forge.load_persisted(saved_pat, read_ids);
         Ok(Arc::new(Self {
             id: new_id(),
             desktop_token: super::auth::secret(),
@@ -190,6 +202,9 @@ impl Host {
             native_refresh: tokio::sync::Mutex::new(()),
             usage_sync: tokio::sync::Mutex::new(()),
             provider_gate: tokio::sync::Mutex::new(()),
+            vcs: Arc::new(crate::modules::vcs::VcsService::default()),
+            vcs_watcher: crate::modules::vcs::VcsWatcher::default(),
+            forge,
         }))
     }
     pub fn remote_active(&self) -> bool {
@@ -258,6 +273,7 @@ impl Host {
         Ok(())
     }
     pub fn start_background(self: &Arc<Self>) {
+        self.start_vcs_and_forge();
         let weak = Arc::downgrade(self);
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(600));
@@ -289,6 +305,134 @@ impl Host {
                 host.flush();
             }
         });
+    }
+
+    fn start_vcs_and_forge(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        let rt = tokio::runtime::Handle::try_current().ok();
+        self.vcs_watcher.start(move |cwd| {
+            let Some(host) = weak.upgrade() else { return };
+            if let Some(ref handle) = rt {
+                handle.spawn(async move {
+                    host.refresh_vcs_snapshot(&cwd).await;
+                });
+            }
+        });
+        self.sync_vcs_watchers();
+
+        // Initial snapshot & forge background poller (120s)
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let cwds: Vec<String> = {
+                let Some(host) = weak.upgrade() else { return };
+                let list = lock(&host.state)
+                    .workspaces
+                    .values()
+                    .map(|w| w.cwd.clone())
+                    .collect();
+                list
+            };
+            for cwd in cwds {
+                let Some(host) = weak.upgrade() else { return };
+                host.refresh_vcs_snapshot(&cwd).await;
+            }
+            let mut ticker = tokio::time::interval(Duration::from_secs(120));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                let Some(host) = weak.upgrade() else { break };
+                host.sync_watched_forge_repos().await;
+            }
+        });
+    }
+
+    pub fn sync_vcs_watchers(&self) {
+        let cwds: Vec<String> = lock(&self.state)
+            .workspaces
+            .values()
+            .map(|w| w.cwd.clone())
+            .collect();
+        self.vcs_watcher.sync_roots(cwds);
+    }
+
+    pub async fn refresh_vcs_snapshot(&self, cwd: &str) {
+        let vcs = self.vcs.clone();
+        let target = cwd.to_string();
+        if let Ok(Ok(Some(snapshot))) =
+            tokio::task::spawn_blocking(move || vcs.snapshot(&target)).await
+        {
+            self.emit_event("vcs.changed", json!({ "snapshot": snapshot }));
+        }
+    }
+
+    pub async fn sync_watched_forge_repos(&self) {
+        let snapshots = self.vcs.cached_snapshots();
+        let mut seen = HashSet::new();
+        for snap in snapshots {
+            let Some(repo) = crate::modules::forge::ForgeService::detect_repo(&snap) else {
+                continue;
+            };
+            if !seen.insert(repo.full_name.clone()) {
+                continue;
+            }
+            let forge = self.forge.clone();
+            if let Ok(inbox) =
+                tokio::task::spawn_blocking(move || forge.sync_repo(Some(repo), "open")).await
+            {
+                self.emit_event("forge.updated", json!({ "inbox": inbox }));
+            }
+        }
+    }
+
+    pub fn emit_event(&self, kind: &str, payload: Value) {
+        let mut state = lock(&self.state);
+        state.sequence += 1;
+        let _ = self.events.send(Event {
+            protocol_version: PROTOCOL_VERSION,
+            sequence: state.sequence,
+            kind: kind.to_string(),
+            session_id: None,
+            instance_id: None,
+            payload,
+        });
+    }
+
+    pub fn session_cwd(&self, id: &str) -> Option<String> {
+        let state = lock(&self.state);
+        let wid = &state.sessions.get(id)?.binding.workspace_id;
+        state.workspaces.get(wid).map(|w| w.cwd.clone())
+    }
+
+    pub fn require_vcs_write(&self, principal: &Principal) -> Result<(), String> {
+        if principal.desktop {
+            return Ok(());
+        }
+        let allowed = lock(&self.store)
+            .preference("remoteWriteDevices")
+            .and_then(|v| v.as_array().cloned())
+            .is_some_and(|arr| arr.iter().any(|x| x.as_str() == Some(&principal.id)));
+        if allowed {
+            Ok(())
+        } else {
+            Err("移动端当前为只读投影模式，请在桌面端“远程设备授权”中开启该设备的 Git 写权限".into())
+        }
+    }
+
+    pub fn set_device_write(&self, device_id: &str, enabled: bool) -> Result<Vec<String>, String> {
+        let store = lock(&self.store);
+        let mut list = store
+            .preference("remoteWriteDevices")
+            .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+            .unwrap_or_default();
+        if enabled {
+            if !list.iter().any(|id| id == device_id) {
+                list.push(device_id.to_string());
+            }
+        } else {
+            list.retain(|id| id != device_id);
+        }
+        store.set_preference("remoteWriteDevices", &json!(list))?;
+        Ok(list)
     }
     pub fn flush(&self) {
         let mut state = lock(&self.state);
@@ -330,7 +474,16 @@ impl Host {
     }
     pub fn snapshot(&self) -> Value {
         let state = lock(&self.state);
-        json!({"protocolVersion":PROTOCOL_VERSION,"serverId":self.id,"sequence":state.sequence,"workspaces":state.workspaces.values().collect::<Vec<_>>(),"sessions":state.sessions.values().map(summary).collect::<Vec<_>>(),"harnesses":self.harnesses()})
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "serverId": self.id,
+            "sequence": state.sequence,
+            "workspaces": state.workspaces.values().collect::<Vec<_>>(),
+            "sessions": state.sessions.values().map(summary).collect::<Vec<_>>(),
+            "harnesses": self.harnesses(),
+            "vcsSnapshots": self.vcs.cached_snapshots(),
+            "forgeInboxes": self.forge.all_cached(),
+        })
     }
 
     /// Remote clients get identities and capability flags, never local command lines.
@@ -339,7 +492,16 @@ impl Host {
             return self.snapshot();
         }
         let state = lock(&self.state);
-        json!({"protocolVersion":PROTOCOL_VERSION,"serverId":self.id,"sequence":state.sequence,"workspaces":state.workspaces.values().collect::<Vec<_>>(),"sessions":state.sessions.values().map(summary).collect::<Vec<_>>(),"harnesses":self.harnesses().iter().map(remote_harness).collect::<Vec<_>>()})
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "serverId": self.id,
+            "sequence": state.sequence,
+            "workspaces": state.workspaces.values().collect::<Vec<_>>(),
+            "sessions": state.sessions.values().map(summary).collect::<Vec<_>>(),
+            "harnesses": self.harnesses().iter().map(remote_harness).collect::<Vec<_>>(),
+            "vcsSnapshots": self.vcs.cached_snapshots(),
+            "forgeInboxes": self.forge.all_cached(),
+        })
     }
     pub fn view(&self, id: &str) -> Result<SessionView, String> {
         lock(&self.state)
@@ -465,6 +627,8 @@ impl Host {
         let mut state = lock(&self.state);
         state.workspaces.insert(id, workspace.clone());
         state.global_dirty = true;
+        drop(state);
+        self.sync_vcs_watchers();
         Ok(workspace)
     }
     pub async fn refresh_native_history(self: &Arc<Self>) -> Result<(), String> {
@@ -900,6 +1064,7 @@ impl Host {
         if let Some(remote) = lock(&self.remote).take() {
             let _ = remote.stop.send(());
         }
+        self.vcs_watcher.shutdown();
         self.shutdown.notify_waiters();
     }
 }

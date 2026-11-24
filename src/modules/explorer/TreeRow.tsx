@@ -4,9 +4,26 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { memo } from "react";
 import { InlineInput } from "./InlineInput";
 import { fileIconUrl, folderIconUrl } from "./lib/iconResolver";
+import type { FileVcsIndicator, VcsBadgeTone } from "@/modules/vcs/store";
 
 const TREE_BASE_INDENT = 12;
 const TREE_DEPTH_INDENT = 12;
+
+const VCS_TEXT_TONE: Record<VcsBadgeTone, string> = {
+  modified: "text-amber-300",
+  added: "text-emerald-400",
+  deleted: "text-rose-400 line-through opacity-80",
+  untracked: "text-sky-300",
+  conflict: "text-red-400 font-medium",
+};
+
+const VCS_BADGE_TONE: Record<VcsBadgeTone, string> = {
+  modified: "text-amber-400",
+  added: "text-emerald-400",
+  deleted: "text-rose-400",
+  untracked: "text-sky-400",
+  conflict: "text-red-400 font-bold",
+};
 
 export type RowActions = {
   toggle: (path: string) => void;
@@ -26,6 +43,8 @@ export type EntryRowProps = {
   isSelected: boolean;
   isRenaming: boolean;
   isDropTarget?: boolean;
+  vcsBadge?: FileVcsIndicator | null;
+  vcsDirTone?: VcsBadgeTone | null;
   onOpenFile: (path: string, pin?: boolean) => void;
   onSelectPath: (path: string, multi: boolean) => void;
 };
@@ -43,6 +62,8 @@ function EntryRowImpl(props: EntryRowProps) {
     isSelected,
     isRenaming,
     isDropTarget = false,
+    vcsBadge = null,
+    vcsDirTone = null,
     onOpenFile,
     onSelectPath,
   } = props;
@@ -114,7 +135,37 @@ function EntryRowImpl(props: EntryRowProps) {
       ) : (
         <span className="size-4 shrink-0" />
       )}
-      <span className="min-w-0 flex-1 truncate">{name}</span>
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate",
+          vcsBadge ? VCS_TEXT_TONE[vcsBadge.tone] : vcsDirTone ? VCS_TEXT_TONE[vcsDirTone] : "",
+        )}
+      >
+        {name}
+      </span>
+      {vcsBadge ? (
+        <span
+          className={cn(
+            "ml-1 shrink-0 font-mono text-[10px] leading-none",
+            VCS_BADGE_TONE[vcsBadge.tone],
+          )}
+          title={vcsBadge.staged ? "已暂存" : "未暂存"}
+        >
+          {vcsBadge.code}
+        </span>
+      ) : vcsDirTone ? (
+        <span
+          aria-hidden="true"
+          className={cn(
+            "ml-1 size-1.5 shrink-0 rounded-full",
+            vcsDirTone === "conflict"
+              ? "bg-red-400"
+              : vcsDirTone === "added" || vcsDirTone === "untracked"
+                ? "bg-emerald-400/80"
+                : "bg-amber-400/80",
+          )}
+        />
+      ) : null}
     </button>
   );
 }

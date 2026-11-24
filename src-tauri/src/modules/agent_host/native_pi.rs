@@ -740,6 +740,22 @@ impl Host {
                     v.error = Some(error);
                 });
             }
+            if let Some(cwd) = host.session_cwd(&id) {
+                let vcs = host.vcs.clone();
+                let sid_clone = id.clone();
+                let cwd_clone = cwd.clone();
+                if let Ok(Some(turn_git)) = tokio::task::spawn_blocking(move || {
+                    vcs.compute_turn_diff(&sid_clone, &cwd_clone)
+                })
+                .await
+                {
+                    host.update(&id, Some(&runtime.instance), |v| {
+                        v.statuses
+                            .insert("turnGit".into(), serde_json::json!(turn_git));
+                    });
+                }
+                host.refresh_vcs_snapshot(&cwd).await;
+            }
             let next = {
                 let mut state = lock(&host.state);
                 state

@@ -6,6 +6,7 @@ import {
   JSON_FORMATTER_PLUGIN_ID,
   TEXT_DIFF_PLUGIN_ID,
   TASKBAR_UNREAD_PLUGIN_ID,
+  NOTEPAD_PLUGIN_ID,
   setPluginEnabled,
   usePluginStore,
 } from "@/modules/plugins";
@@ -68,6 +69,17 @@ export function PluginsSection() {
           checked={enabled[TASKBAR_UNREAD_PLUGIN_ID]}
           onCheckedChange={(value) =>
             void setPluginEnabled(TASKBAR_UNREAD_PLUGIN_ID, value)
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        title="记事本"
+        description="在主界面右侧悬浮记录项目待办。"
+      >
+        <Switch
+          checked={enabled[NOTEPAD_PLUGIN_ID]}
+          onCheckedChange={(value) =>
+            void setPluginEnabled(NOTEPAD_PLUGIN_ID, value)
           }
         />
       </SettingRow>

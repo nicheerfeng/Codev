@@ -43,6 +43,24 @@ impl Host {
                 | "session.file.read"
                 | "host.remote.status"
                 | "host.devices"
+                | "vcs.snapshot"
+                | "vcs.diff"
+                | "vcs.branches"
+                | "vcs.log"
+                | "vcs.commit.detail"
+                | "vcs.commit.diff"
+                | "vcs.stash.list"
+                | "vcs.worktree.list"
+                | "vcs.conflict.versions"
+                | "vcs.doctor.check"
+                | "vcs.turn.diff"
+                | "forge.repos"
+                | "forge.inbox"
+                | "forge.comments"
+                | "forge.pr.checks"
+                | "forge.pr.files"
+                | "forge.auth.status"
+                | "forge.image"
         ) {
             return self.execute(principal, command).await;
         }
@@ -181,6 +199,8 @@ impl Host {
                 }
                 st.workspaces.remove(&wid);
                 st.global_dirty = true;
+                drop(st);
+                self.sync_vcs_watchers();
                 Ok(json!({}))
             }
             "workspace.skills" => {
@@ -1126,7 +1146,22 @@ impl Host {
                 principal.require_desktop()?;
                 let devices = lock(&self.store).devices()?;
                 let pending = lock(&self.auth).pending_list();
-                Ok(json!({"devices":devices,"pending":pending}))
+                let remote_write_devices = lock(&self.store)
+                    .preference("remoteWriteDevices")
+                    .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+                    .unwrap_or_default();
+                Ok(json!({"devices":devices,"pending":pending,"remoteWriteDevices":remote_write_devices}))
+            }
+            "host.device.write" => {
+                principal.require_desktop()?;
+                let list = self.set_device_write(
+                    &text(payload, "id"),
+                    payload.get("enabled").and_then(Value::as_bool).unwrap_or(false),
+                )?;
+                Ok(json!({ "remoteWriteDevices": list }))
+            }
+            _ if operation.starts_with("vcs.") || operation.starts_with("forge.") => {
+                self.execute_vcs_or_forge(principal, &command).await
             }
             "host.device.approve" | "host.device.deny" => {
                 principal.require_desktop()?;
@@ -1312,6 +1347,17 @@ impl Host {
         if config_id.is_empty() && operation == "session.model" {
             return Ok(("__model__".into(), value));
         }
+        if config_id.is_empty()
+            && operation == "session.thinking"
+            && view.binding.harness_id == "acp:codex"
+        {
+            if value.is_empty()
+                || (!view.thinking_levels.is_empty() && !view.thinking_levels.contains(&value))
+            {
+                return Err("该模型不支持此思考等级".into());
+            }
+            return Ok(("__codex_thinking__".into(), value));
+        }
         if config_id.is_empty() {
             return Err("该代理没有声明此配置选项".into());
         }
@@ -1319,6 +1365,15 @@ impl Host {
             return Err("该代理没有声明此配置选项".into());
         }
         Ok((config_id, value))
+    }
+
+    #[cfg(test)]
+    pub(super) fn acp_setting_kind_for_test(
+        view: &SessionView,
+        operation: &str,
+        payload: &Value,
+    ) -> Result<(String, String), String> {
+        Self::acp_setting_kind(view, operation, payload)
     }
 
     pub(super) fn queue_session_setting(
@@ -1481,6 +1536,10 @@ impl Host {
                 });
                 return Ok(result);
             }
+            if config_id == "__codex_thinking__" {
+                lock(&runtime.pending_config).thinking = None;
+                return self.apply_codex_thinking_fallback(id, runtime, &value).await;
+            }
             {
                 let mut pending = lock(&runtime.pending_config);
                 if operation == "session.model" {
@@ -1635,6 +1694,9 @@ impl Host {
         runtime
             .cancelled
             .store(false, std::sync::atomic::Ordering::Release);
+        if let Some(cwd) = self.session_cwd(id) {
+            self.vcs.capture_turn_baseline(id, &new_id(), &cwd);
+        }
         self.persist(id)?;
         {
             let _gate = runtime.gate.lock().await;

@@ -511,3 +511,54 @@ async fn deferred_busy_config_applies_before_next_turn_and_history_replay_omits_
     assert_eq!(h_prefs.configs.get("$mode").map(String::as_str), Some("auto"));
 }
 
+#[test]
+fn codex_default_session_exposes_thinking_levels_when_config_omits_thought_level() {
+    let dir = TempDir::new().unwrap();
+    let host = test_host(&dir);
+    let ws = host.workspace(&dir.path().to_string_lossy()).unwrap();
+    let sid = host.create(&ws.id, "acp:codex", "Codex Thinking Test").unwrap();
+
+    host.update(&sid, None, |v| {
+        super::acp::apply_session_for_test(
+            v,
+            &json!({
+                "sessionId": "native-codex-1",
+                "models": {
+                    "currentModelId": "custom-relay-model/high",
+                    "availableModels": [
+                        { "modelId": "gpt-5.3-codex/low", "name": "5.3 Codex (low)" },
+                        { "modelId": "gpt-5.3-codex/medium", "name": "5.3 Codex (medium)" },
+                        { "modelId": "gpt-5.3-codex/high", "name": "5.3 Codex (high)" },
+                        { "modelId": "gpt-5.3-codex/xhigh", "name": "5.3 Codex (xhigh)" }
+                    ]
+                },
+                "configOptions": [
+                    {
+                        "id": "model",
+                        "name": "Model",
+                        "category": "model",
+                        "type": "select",
+                        "currentValue": "custom-relay-model",
+                        "options": [{ "value": "gpt-5.3-codex", "name": "5.3 Codex" }]
+                    }
+                ]
+            }),
+        );
+    });
+
+    let view = host.view(&sid).unwrap();
+    assert!(view.capabilities.supports_thinking);
+    assert_eq!(
+        view.thinking_levels,
+        vec!["low", "medium", "high", "xhigh"]
+    );
+    assert_eq!(view.thinking_level, "high");
+    let setting = super::coordinator::Host::acp_setting_kind_for_test(
+        &view,
+        "session.thinking",
+        &json!({ "level": "xhigh" }),
+    )
+    .unwrap();
+    assert_eq!(setting, ("__codex_thinking__".into(), "xhigh".into()));
+}
+

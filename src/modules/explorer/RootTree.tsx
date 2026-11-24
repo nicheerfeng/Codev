@@ -45,7 +45,15 @@ import { COMPACT_CONTENT, COMPACT_ITEM } from "./lib/menuItemClass";
 import { useExplorerDnd } from "./lib/useExplorerDnd";
 import { useExplorerFileDrop } from "./lib/useExplorerFileDrop";
 import { useFileTree } from "./lib/useFileTree";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useGlobalShortcuts } from "@/modules/shortcuts";
+import {
+  buildRepoBadgeIndex,
+  findSnapshotForPath,
+  useVcsStore,
+} from "@/modules/vcs/store";
+import { normalizeVcsPath } from "@/modules/vcs/types";
+import { toast } from "sonner";
 import type { ExplorerPathDropTarget } from "./lib/useExplorerDnd";
 
 export type RootTreeHandle = {
@@ -94,6 +102,12 @@ export type RootTreeProps = {
   showToolbar?: boolean;
   /** Opens a file in the secondary editor group. */
   onOpenFileToSide?: (path: string) => void;
+  /** Opens a file's Git diff in the main tab area. */
+  onOpenGitDiff?: (input: {
+    repoRoot: string;
+    path: string;
+    staged?: boolean;
+  }) => void;
   pathDropTarget?: ExplorerPathDropTarget;
   /** Renders this root into the explorer's single continuous scroll flow. */
   sharedScroll?: boolean;
@@ -231,6 +245,7 @@ export const RootTree = memo(
       onActivateRoot,
       showToolbar = true,
       onOpenFileToSide,
+      onOpenGitDiff,
       pathDropTarget,
       sharedScroll = false,
     },
@@ -585,6 +600,9 @@ export const RootTree = memo(
       switch (row.kind) {
         case "entry":
         case "rename": {
+          const norm = normalizeVcsPath(row.path);
+          const vcsBadge = !row.isDir ? (vcsBadges?.files.get(norm) ?? null) : null;
+          const vcsDirTone = row.isDir ? (vcsBadges?.dirs.get(norm) ?? null) : null;
           return (
             <EntryRow
               path={row.path}
@@ -597,6 +615,8 @@ export const RootTree = memo(
               isSelected={selectedPaths.includes(row.path)}
               isRenaming={row.kind === "rename"}
               isDropTarget={dropTargetDir === row.path}
+              vcsBadge={gitTreeBadges ? vcsBadge : null}
+              vcsDirTone={gitTreeBadges ? vcsDirTone : null}
               onOpenFile={onOpenFile}
               onSelectPath={(path, multi) => {
                 selectPath(path, multi);
@@ -624,11 +644,24 @@ export const RootTree = memo(
       }
     };
 
+    const gitUiEnabled = usePreferencesStore((s) => s.gitUiEnabled);
+    const gitTreeBadges = usePreferencesStore((s) => s.gitTreeBadges);
+    const vcsSnapshot = useVcsStore((s) =>
+      gitUiEnabled ? findSnapshotForPath(s.snapshots, rootPath) : null,
+    );
+    const vcsBadges = useMemo(
+      () => (gitUiEnabled ? buildRepoBadgeIndex(vcsSnapshot) : null),
+      [gitUiEnabled, vcsSnapshot],
+    );
     const menuPaths = selectedPaths.length
       ? selectedPaths
       : menuTarget
         ? [menuTarget.path]
         : [];
+    const menuTargetIndicator =
+      menuTarget && !menuTarget.isDir && vcsBadges
+        ? (vcsBadges.files.get(normalizeVcsPath(menuTarget.path)) ?? null)
+        : null;
     const copyPathLabel = menuPaths.length > 1 ? "Copy Paths" : "Copy Path";
     const visibleRows = sharedScroll
       ? rows.map((row, index) => ({
@@ -866,6 +899,63 @@ export const RootTree = memo(
                     >
                       {t("Open in Side")}
                     </ContextMenuItem>
+                  )}
+                  {vcsSnapshot && menuTargetIndicator?.entry && (
+                    <>
+                      <ContextMenuSeparator className="my-0.5" />
+                      {onOpenGitDiff && (
+                        <ContextMenuItem
+                          className={COMPACT_ITEM}
+                          onSelect={() =>
+                            onOpenGitDiff({
+                              repoRoot: vcsSnapshot.worktreeRoot,
+                              path: menuTargetIndicator.entry!.path,
+                              staged:
+                                menuTargetIndicator.entry!.staged &&
+                                !menuTargetIndicator.entry!.unstaged,
+                            })
+                          }
+                        >
+                          查看 Git Diff
+                        </ContextMenuItem>
+                      )}
+                      {(!menuTargetIndicator.entry.staged ||
+                        menuTargetIndicator.entry.unstaged ||
+                        menuTargetIndicator.entry.untracked) && (
+                        <ContextMenuItem
+                          className={COMPACT_ITEM}
+                          onSelect={() =>
+                            void useVcsStore
+                              .getState()
+                              .stage(
+                                vcsSnapshot.worktreeRoot,
+                                [menuTargetIndicator.entry!.path],
+                                true,
+                              )
+                              .catch((e) => toast.error(String(e)))
+                          }
+                        >
+                          暂存 Git 更改
+                        </ContextMenuItem>
+                      )}
+                      {menuTargetIndicator.entry.staged && (
+                        <ContextMenuItem
+                          className={COMPACT_ITEM}
+                          onSelect={() =>
+                            void useVcsStore
+                              .getState()
+                              .stage(
+                                vcsSnapshot.worktreeRoot,
+                                [menuTargetIndicator.entry!.path],
+                                false,
+                              )
+                              .catch((e) => toast.error(String(e)))
+                          }
+                        >
+                          取消暂存
+                        </ContextMenuItem>
+                      )}
+                    </>
                   )}
                   {onRevealInTerminal && (
                     <ContextMenuItem

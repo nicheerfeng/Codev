@@ -7,8 +7,9 @@ import { cn } from "@/lib/utils";
 import { EditorStack, type EditorPaneHandle } from "@/modules/editor";
 import { MarkdownStack } from "@/modules/markdown";
 import { HtmlStack } from "@/modules/html";
-import { GitDiffView } from "@/modules/git/GitDiffView";
-import { GitHistoryView } from "@/modules/git/GitHistoryView";
+import { VcsDiffView } from "@/modules/vcs/VcsDiffView";
+import { VcsHistoryView } from "@/modules/vcs/VcsHistoryView";
+import type { OpenVcsDiffInput } from "@/modules/vcs/VcsPanel";
 import { ReaderContextMenu } from "@/modules/editor/ReaderContextMenu";
 import { TabBar } from "@/modules/tabs";
 import type { Tab } from "@/modules/tabs";
@@ -40,6 +41,7 @@ type EditorGroupProps = {
   onSetHtmlView: (id: number, mode: "rendered" | "raw") => void;
   onFocusSearch: () => void;
   onFocusEditor: (id: number) => void;
+  onOpenGitDiff?: (input: OpenVcsDiffInput) => void;
 };
 
 /** 渲染一个拥有独立标签栏和阅览器堆栈的编辑器组。 */
@@ -63,6 +65,7 @@ function EditorGroup({
   onSetHtmlView,
   onFocusSearch,
   onFocusEditor,
+  onOpenGitDiff,
 }: EditorGroupProps) {
   const activeTab = tabs.find((tab) => tab.id === activeId);
   const showEditorStack =
@@ -173,12 +176,23 @@ function EditorGroup({
           </div>
           {showGitHistory && activeTab?.kind === "git-history" && (
             <div className="absolute inset-0">
-              <GitHistoryView commits={activeTab.commits} />
+              <VcsHistoryView
+                repoRoot={activeTab.repoRoot}
+                initialCommits={activeTab.commits}
+                onOpenDiff={onOpenGitDiff}
+              />
             </div>
           )}
           {showGitDiff && activeTab?.kind === "git-diff" && (
             <div className="absolute inset-0">
-              <GitDiffView diff={activeTab.diff} />
+              <VcsDiffView
+                repoRoot={activeTab.repoRoot}
+                path={activeTab.path}
+                diff={activeTab.diff}
+                staged={activeTab.staged}
+                conflict={activeTab.conflict}
+                commitHash={activeTab.commitHash}
+              />
             </div>
           )}
         </div>
@@ -213,6 +227,7 @@ type Props = {
   onSetHtmlView: (id: number, mode: "rendered" | "raw") => void;
   onFocusSearch: () => void;
   onFocusEditor: (id: number) => void;
+  onOpenGitDiff?: (input: OpenVcsDiffInput) => void;
 };
 
 /** 在中央区域渲染单栏或固定双栏的编辑器布局。 */
@@ -238,6 +253,7 @@ export function EditorCompareView({
   onSetHtmlView,
   onFocusSearch,
   onFocusEditor,
+  onOpenGitDiff,
 }: Props) {
   const labelScopeTabs = [...primaryTabs, ...secondaryTabs];
   const primary = (
@@ -261,6 +277,7 @@ export function EditorCompareView({
       onSetHtmlView={onSetHtmlView}
       onFocusSearch={onFocusSearch}
       onFocusEditor={onFocusEditor}
+      onOpenGitDiff={onOpenGitDiff}
     />
   );
 
@@ -285,6 +302,7 @@ export function EditorCompareView({
       onSetHtmlView={onSetHtmlView}
       onFocusSearch={onFocusSearch}
       onFocusEditor={onFocusEditor}
+      onOpenGitDiff={onOpenGitDiff}
     />
   );
 

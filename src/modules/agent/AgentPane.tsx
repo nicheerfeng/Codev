@@ -581,6 +581,13 @@ export function AgentPane({
                   ? Number(id.slice(6))
                   : state.slots.indexOf(id);
                 const summary = state.sessions[id];
+                const liveSummary = state.views[id] ?? summary;
+                const slotBusy = isBusy(liveSummary);
+                const slotWaiting = !!(
+                  state.views[id]?.pendingRequests?.length
+                );
+                const slotUnread = state.unread.includes(id);
+                const slotTitleText = liveSummary?.title ?? summary?.title ?? "";
                 return (
                   <div
                     key={id}
@@ -603,6 +610,21 @@ export function AgentPane({
                       <div
                         className={`agent-viewport-heading ${state.selected === id ? "is-active" : ""}`}
                       >
+                        {renamingSlot !== id && (
+                          <span
+                            role="img"
+                            aria-label={
+                              slotWaiting
+                                ? "等待输入"
+                                : slotBusy
+                                  ? "运行中"
+                                  : slotUnread
+                                    ? "已完成，待查看"
+                                    : "就绪"
+                            }
+                            className={`agent-state-dot agent-viewport-heading-dot ${slotWaiting ? "is-waiting" : slotBusy ? "is-working" : slotUnread ? "is-unread" : ""}`}
+                          />
+                        )}
                         {renamingSlot === id ? (
                           <form
                             className="flex min-w-0 flex-1"
@@ -632,7 +654,7 @@ export function AgentPane({
                         ) : (
                           <button
                             type="button"
-                            className={`agent-viewport-title ${isBusy(summary) ? "is-running" : ""}`}
+                            className={`agent-viewport-title ${slotWaiting ? "is-waiting" : slotBusy ? "is-running" : ""}`}
                             onPointerDown={(e) => startDrag(e, index)}
                             onPointerMove={moveDrag}
                             onPointerUp={endDrag}
@@ -642,23 +664,23 @@ export function AgentPane({
                             }}
                             onDoubleClick={() => {
                               setRenamingSlot(id);
-                              setSlotTitle(summary.title);
+                              setSlotTitle(slotTitleText);
                             }}
                             onKeyDown={(e) => {
                               if (e.key === "F2") {
                                 e.preventDefault();
                                 setRenamingSlot(id);
-                                setSlotTitle(summary.title);
+                                setSlotTitle(slotTitleText);
                               }
                             }}
                             onClick={() => {
                               if (!suppress.current) focusAgentSession(id);
                               suppress.current = false;
                             }}
-                            title={`${summary.title}（双击或 F2 重命名，拖动标题交换格子）`}
+                            title={`${slotTitleText}${slotWaiting ? " · 等待确认" : slotBusy ? " · 运行中" : ""}（双击或 F2 重命名，拖动标题交换格子）`}
                           >
                             <span>
-                              {summary.title}
+                              {slotTitleText}
                               {state.workspaces.find(
                                 (workspace) =>
                                   workspace.id === summary.workspaceId,

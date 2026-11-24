@@ -12,6 +12,7 @@ import {
   FileAddIcon,
   Folder01Icon,
   FolderAddIcon,
+  GitBranchIcon,
   PlusSignIcon,
   Refresh01Icon,
   Search01Icon,
@@ -30,7 +31,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { RootGitButton } from "@/modules/git/RootGitButton";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useT } from "@/lib/i18n";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { copyToClipboard } from "./lib/contextActions";
@@ -250,7 +251,7 @@ function RootSection({
           <div
             {...reorderHeaderProps}
             data-root-reorder-header=""
-            className={`relative flex h-7 shrink-0 cursor-pointer items-center gap-1 overflow-hidden border-b border-l-2 px-2 text-xs font-medium select-none hover:bg-accent/70 ${selected ? "border-primary bg-primary/12 ring-1 ring-inset ring-primary/80" : "border-border/60"}`}
+            className={`group/root relative flex h-7 shrink-0 cursor-pointer items-center gap-1 overflow-hidden border-b border-l-2 px-2 text-xs font-medium select-none hover:bg-accent/70 ${selected ? "border-primary bg-primary/12 ring-1 ring-inset ring-primary/80" : "border-border/60"}`}
             style={{
               borderLeftColor: color,
               color: "var(--foreground)",
@@ -315,7 +316,6 @@ function RootSection({
                 {basename(root) || root}
               </span>
             )}
-            {onOpenGit && <RootGitButton root={root} onOpen={onOpenGit} />}
             <button
               type="button"
               data-root-remove=""
@@ -371,6 +371,14 @@ function RootSection({
             {t("Add folder to workspace")}
           </ContextMenuItem>
           <AgentProjectMenuItems cwd={root} />
+          {onOpenGit ? (
+            <ContextMenuItem
+              className={COMPACT_ITEM}
+              onSelect={() => onOpenGit(root)}
+            >
+              Git 管理…
+            </ContextMenuItem>
+          ) : null}
           {onOpenTerminal ? (
             <ContextMenuItem className={COMPACT_ITEM} onSelect={onOpenTerminal}>
               {t("New terminal")}
@@ -419,6 +427,8 @@ export const FileExplorer = memo(
     ref,
   ) {
     const t = useT();
+    const gitUiEnabled = usePreferencesStore((s) => s.gitUiEnabled);
+    const activeGitHandler = gitUiEnabled ? onOpenGit : undefined;
     const storedRootCollapsed = useRef(readFileTreeRootCollapsed());
     const [collapsedRoots, setCollapsedRoots] = useState<Set<string>>(
       () => storedRootCollapsed.current.keys,
@@ -1004,6 +1014,24 @@ export const FileExplorer = memo(
               >
                 <HugeiconsIcon icon={PlusSignIcon} size={13} strokeWidth={2} />
               </Button>
+              {activeGitHandler && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-6 text-muted-foreground hover:text-foreground disabled:opacity-35"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    const target = activeRoot ?? roots[0];
+                    if (target) activeGitHandler(target);
+                  }}
+                  disabled={roots.length === 0}
+                  title="打开 Git 工作台"
+                  aria-label="打开 Git 工作台"
+                >
+                  <HugeiconsIcon icon={GitBranchIcon} size={13} strokeWidth={2} />
+                </Button>
+              )}
             </div>
           </ContextMenuTrigger>
           <ContextMenuContent className={COMPACT_CONTENT}>
@@ -1105,7 +1133,7 @@ export const FileExplorer = memo(
                       onRevealPath={revealRootPath}
                       onActivate={() => onSetActiveRoot(root)}
                       onSelectRoot={() => selectRoot(root)}
-                      onOpenGit={onOpenGit}
+                      onOpenGit={activeGitHandler}
                       onRemove={() => removeRoot(root)}
                       onCopy={() => void copyToClipboard(root)}
                       onRename={(name) => void renameRoot(root, name)}

@@ -2,7 +2,7 @@ pub mod modules;
 #[cfg(target_os = "windows")]
 mod window_material;
 
-use modules::{agent_host, app_db, fs, git, github, history, pty, voice, workspace};
+use modules::{agent_host, app_db, fs, github, history, pty, voice, workspace};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -668,15 +668,6 @@ pub fn run() {
             voice::voice_config_copy_to_codex,
             voice::voice_asr_start,
             voice::voice_tts_start,
-            git::git_snapshot,
-            git::git_diff,
-            git::git_stage,
-            git::git_commit,
-            git::git_log,
-            git::git_fetch,
-            git::git_tracking,
-            git::git_pull,
-            git::git_push,
             github::github_latest_release,
             codev_quit,
         ])

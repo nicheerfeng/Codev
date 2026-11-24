@@ -27,8 +27,11 @@ import {
   useApplyEditorFontSize,
   useEditorFileSync,
 } from "@/modules/editor";
+import { PanelErrorBoundary } from "@/components/PanelErrorBoundary";
 import { FileExplorer, type FileExplorerHandle } from "@/modules/explorer";
-import { GitPanel } from "@/modules/git/GitPanel";
+import { VcsModal } from "@/modules/vcs/VcsModal";
+import { useVcsStore } from "@/modules/vcs/store";
+import { useAgentStore } from "@/modules/agent/store";
 import { NotepadPopover } from "@/modules/notepad/NotepadPopover";
 import {
   Header,
@@ -38,6 +41,7 @@ import {
 import { openSettingsWindow } from "@/modules/settings/openSettingsWindow";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
+  NOTEPAD_PLUGIN_ID,
   TASKBAR_UNREAD_PLUGIN_ID,
   ToolPanel,
   usePluginStore,
@@ -125,9 +129,16 @@ export default function App() {
   );
   useTaskbarUnreadBadge(taskbarUnreadEnabled);
   const [installStamp, setInstallStamp] = useState<string | null>(null);
-  const [sidebarMode, setSidebarMode] = useState<"files" | "git">("files");
-  const gitEnabled = usePreferencesStore((state) => state.gitEnabled);
-  const notepadEnabled = usePreferencesStore((state) => state.notepadEnabled);
+  const [vcsModalOpen, setVcsModalOpen] = useState(false);
+  const [vcsModalRoot, setVcsModalRoot] = useState<string | null>(null);
+  const notepadEnabled = usePluginStore(
+    (state) => state.enabled[NOTEPAD_PLUGIN_ID],
+  );
+  const gitUiEnabled = usePreferencesStore((state) => state.gitUiEnabled);
+  const gitInboxEnabled = usePreferencesStore((state) => state.gitInboxEnabled);
+  useEffect(() => {
+    void useAgentStore.getState().initDesktop().catch(() => undefined);
+  }, []);
   const [showWelcome, setShowWelcome] = useState(() => shouldShowWelcome(null));
   const [needsInitialLayout] = useState(() => needsFirstLayout());
   const [initialFirstSizes] = useState(() =>
@@ -215,7 +226,8 @@ export default function App() {
     (state) =>
       state.enabled["json-formatter"] ||
       state.enabled["text-diff"] ||
-      state.enabled["agent-host"],
+      state.enabled["agent-host"] ||
+      gitInboxEnabled,
   );
   const jsonFormatterEnabled = usePluginStore(
     (state) => state.enabled["json-formatter"],
@@ -227,7 +239,7 @@ export default function App() {
     "terminal",
   );
   const [toolView, setToolView] = useState<
-    "json" | "diff" | "agent"
+    "json" | "diff" | "agent" | "git-inbox"
   >("agent");
   const [dockOrder, setDockOrder] = useState<DockTab[]>(() => {
     try {
@@ -242,17 +254,20 @@ export default function App() {
     uiState.setItem("codev.dock.order", JSON.stringify(dockOrder));
   }, [dockOrder]);
 
+  const totalForgeUnread = useVcsStore((state) => state.totalForgeUnread);
   const availableDockTabs = useMemo<DockTab[]>(
     () => [
       "terminal",
       ...(jsonFormatterEnabled ? ["json" as const] : []),
       ...(textDiffEnabled ? ["diff" as const] : []),
       ...(agentEnabled ? ["agent" as const] : []),
+      ...(gitInboxEnabled ? ["git-inbox" as const] : []),
     ],
     [
       jsonFormatterEnabled,
       agentEnabled,
       textDiffEnabled,
+      gitInboxEnabled,
     ],
   );
   const dockTabs = useMemo(
@@ -293,10 +308,14 @@ export default function App() {
     if (toolView === "agent" && !agentEnabled) {
       setRightDockView("terminal");
     }
+    if (toolView === "git-inbox" && !gitInboxEnabled) {
+      setRightDockView("terminal");
+    }
   }, [
     jsonFormatterEnabled,
     agentEnabled,
     textDiffEnabled,
+    gitInboxEnabled,
     toolView,
   ]);
 
@@ -1332,23 +1351,7 @@ export default function App() {
               >
                 <div className="flex h-full min-h-0 flex-col border-r border-border/60 bg-card">
                   <div className="min-h-0 flex-1 codev-panel-in">
-                    {sidebarMode === "git" && gitEnabled ? (
-                      <GitPanel
-                        key={activeRoot}
-                        root={activeRoot}
-                        onBack={() => setSidebarMode("files")}
-                        onOpenDiff={(repo, change, diff) =>
-                          openGitDiffTab({
-                            repoRoot: repo.root,
-                            path: change.path,
-                            diff,
-                          })
-                        }
-                        onOpenHistory={(repo, commits) =>
-                          openGitHistoryTab({ repoRoot: repo.root, commits })
-                        }
-                      />
-                    ) : (
+                    <PanelErrorBoundary title="文件树">
                       <FileExplorer
                         ref={explorerRef}
                         roots={workspaceRoots}
@@ -1359,13 +1362,15 @@ export default function App() {
                         onReorderRoot={reorderRoot}
                         onSetActiveRoot={(p) => void setActiveRoot(p)}
                         onOpenGit={
-                          gitEnabled
+                          gitUiEnabled
                             ? (root) => {
                                 void setActiveRoot(root);
-                                setSidebarMode("git");
+                                setVcsModalRoot(root);
+                                setVcsModalOpen(true);
                               }
                             : undefined
                         }
+                        onOpenGitDiff={(input) => openGitDiffTab(input)}
                         activeFilePath={explorerActiveFilePath}
                         onOpenFile={handleOpenFile}
                         onOpenFileToSide={handleOpenFileToSide}
@@ -1374,7 +1379,7 @@ export default function App() {
                         onRevealInTerminal={cdInNewTab}
                         pathDropTarget={explorerPathDropTarget}
                       />
-                    )}
+                    </PanelErrorBoundary>
                   </div>
                 </div>
               </ResizablePanel>
@@ -1403,6 +1408,7 @@ export default function App() {
                     onSetHtmlView={setHtmlView}
                     onFocusSearch={() => searchInlineRef.current?.focus()}
                     onFocusEditor={focusEditor}
+                    onOpenGitDiff={(input) => openGitDiffTab(input)}
                   />
                 </div>
               </ResizablePanel>
@@ -1443,7 +1449,9 @@ export default function App() {
                               ? "JSON格式化"
                               : tab === "diff"
                                 ? "文本对照"
-                                : "Agent";
+                                : tab === "git-inbox"
+                                  ? "Git 收件箱"
+                                  : "Agent";
                         return (
                           <Fragment key={tab}>
                             {dockReorder.dropIndex === index && (
@@ -1454,7 +1462,7 @@ export default function App() {
                             )}
                             <button
                               type="button"
-                              className={`h-6 cursor-grab rounded-sm px-2 text-[11px] active:cursor-grabbing ${
+                              className={`flex h-6 cursor-grab items-center gap-1 rounded-sm px-2 text-[11px] active:cursor-grabbing ${
                                 active
                                   ? "bg-accent text-foreground"
                                   : "text-muted-foreground hover:bg-muted"
@@ -1462,7 +1470,12 @@ export default function App() {
                               onClick={() => selectDockTab(tab)}
                               {...dockReorder.tabProps(tab)}
                             >
-                              {label}
+                              <span>{label}</span>
+                              {tab === "git-inbox" && totalForgeUnread > 0 && (
+                                <span className="rounded-full bg-primary/20 px-1 text-[9.5px] font-semibold text-primary">
+                                  {totalForgeUnread}
+                                </span>
+                              )}
                             </button>
                           </Fragment>
                         );
@@ -1529,14 +1542,25 @@ export default function App() {
                             );
                             const parent =
                               path.replace(/[\\/][^\\/]+$/, "") || path;
+                            const repoRoot = matchedRoot ?? parent;
+                            const normRepo = repoRoot
+                              .replace(/\\/g, "/")
+                              .replace(/\/+$/, "");
+                            const relPath = normalized
+                              .toLowerCase()
+                              .startsWith(`${normRepo.toLowerCase()}/`)
+                              ? normalized.slice(normRepo.length + 1)
+                              : path;
                             openGitDiffTab({
-                              repoRoot: matchedRoot ?? parent,
-                              path,
+                              repoRoot,
+                              path: relPath,
                               diff,
                             });
                           }}
                           workspaceRoots={workspaceRoots}
+                          activeRoot={activeRoot}
                           onAddWorkspaceRoot={(path) => void addRoot(path)}
+                          onFocusAgentTab={() => selectDockTab("agent")}
                         />
                       </div>
                     )}
@@ -1568,6 +1592,23 @@ export default function App() {
             rootPath={explorerRoot ?? home}
             onCreated={(path) => handleOpenFile(path)}
           />
+
+          {gitUiEnabled && (
+            <VcsModal
+              open={vcsModalOpen}
+              onOpenChange={setVcsModalOpen}
+              workspaceRoots={workspaceRoots}
+              initialRoot={vcsModalRoot ?? activeRoot}
+              onOpenDiff={(input) => openGitDiffTab(input)}
+              onOpenHistory={({ repoRoot, commits }) =>
+                openGitHistoryTab({ repoRoot, commits })
+              }
+              onSwitchWorkspaceRoot={(cwd) => {
+                void addRoot(cwd);
+                void setActiveRoot(cwd);
+              }}
+            />
+          )}
 
           {notepadEnabled && <NotepadPopover />}
           <ImageLightbox />

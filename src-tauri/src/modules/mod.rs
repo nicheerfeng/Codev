@@ -1,10 +1,11 @@
 pub mod agent_host;
 pub mod app_db;
+pub mod forge;
 pub mod fs;
-pub mod git;
 pub mod github;
 pub mod history;
 pub mod proc;
 pub mod pty;
+pub mod vcs;
 pub mod voice;
 pub mod workspace;

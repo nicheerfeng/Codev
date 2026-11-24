@@ -52,7 +52,98 @@ fn options(value: &Value) -> Vec<Value> {
         })
         .collect()
 }
-fn apply_config(view: &mut SessionView, mut config: Vec<Value>) {
+fn codex_effort_from_model_id(model_id: &str) -> Option<String> {
+    let suffix = model_id
+        .rsplit_once('/')
+        .map(|(_, e)| e.trim().to_ascii_lowercase())?;
+    matches!(
+        suffix.as_str(),
+        "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
+    )
+    .then_some(suffix)
+}
+
+fn collect_codex_thinking_levels(
+    available_models: Option<&[Value]>,
+    current_model_id: Option<&str>,
+) -> Vec<String> {
+    let base_filter = current_model_id
+        .map(|m| m.split('/').next().unwrap_or(m).trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty());
+    let mut matched = Vec::new();
+    let mut all = Vec::new();
+    if let Some(list) = available_models {
+        for item in list {
+            let mid = text(item, "modelId");
+            if let Some(effort) = codex_effort_from_model_id(&mid) {
+                let item_base = mid.split('/').next().unwrap_or("").trim().to_ascii_lowercase();
+                if base_filter.as_deref() == Some(item_base.as_str())
+                    && !matched.contains(&effort)
+                {
+                    matched.push(effort.clone());
+                }
+                if !all.contains(&effort) {
+                    all.push(effort);
+                }
+            }
+        }
+    }
+    if matched.len() > 1 {
+        return matched;
+    }
+    if all.len() > 1 {
+        return all;
+    }
+    ["low", "medium", "high", "xhigh"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+fn ensure_codex_thinking_defaults(
+    view: &mut SessionView,
+    available_models: Option<&[Value]>,
+    current_model_id: Option<&str>,
+) {
+    if view.binding.harness_id != "acp:codex" {
+        return;
+    }
+    if view.thinking_levels.is_empty() {
+        let current_or_view = current_model_id.map(str::to_string).or_else(|| {
+            view.model
+                .as_ref()
+                .map(|m| text(m, "id"))
+                .filter(|s| !s.is_empty())
+        });
+        view.thinking_levels =
+            collect_codex_thinking_levels(available_models, current_or_view.as_deref());
+    }
+    if view.thinking_level.is_empty() || !view.thinking_levels.contains(&view.thinking_level) {
+        let from_model = current_model_id.and_then(codex_effort_from_model_id);
+        let from_pref = view.binding.preferences.thinking_level.clone();
+        if let Some(level) = from_model.filter(|l| view.thinking_levels.contains(l)) {
+            view.thinking_level = level;
+        } else if let Some(level) = from_pref.filter(|l| view.thinking_levels.contains(l)) {
+            view.thinking_level = level;
+        } else if view.thinking_levels.iter().any(|l| l == "medium") {
+            view.thinking_level = "medium".into();
+        } else if let Some(first) = view.thinking_levels.first() {
+            view.thinking_level = first.clone();
+        }
+    }
+    view.capabilities.supports_thinking = view.thinking_levels.len() > 1;
+}
+
+fn apply_config(view: &mut SessionView, config: Vec<Value>) {
+    apply_config_with_models(view, config, None, None);
+}
+
+fn apply_config_with_models(
+    view: &mut SessionView,
+    mut config: Vec<Value>,
+    available_models: Option<&[Value]>,
+    current_model_id: Option<&str>,
+) {
     let has_mode = config
         .iter()
         .any(|o| text(o, "id") == "$mode" || text(o, "category") == "mode");
@@ -77,7 +168,17 @@ fn apply_config(view: &mut SessionView, mut config: Vec<Value>) {
                 .models
                 .iter()
                 .find(|v| text(v, "id") == current)
-                .cloned();
+                .cloned()
+                .or_else(|| {
+                    (!current.is_empty()).then(|| {
+                        json!({
+                            "id": current,
+                            "name": current,
+                            "provider": view.binding.harness_id,
+                            "configId": id,
+                        })
+                    })
+                });
             view.capabilities.supports_model_selection = !view.models.is_empty();
         }
         if matches!(category.as_str(), "thought_level" | "thinking")
@@ -93,6 +194,7 @@ fn apply_config(view: &mut SessionView, mut config: Vec<Value>) {
         }
     }
     view.config_options = config;
+    ensure_codex_thinking_defaults(view, available_models, current_model_id);
 }
 #[derive(Debug, PartialEq, Eq)]
 enum AcpModelResolution {
@@ -253,9 +355,22 @@ fn apply_session(view: &mut SessionView, response: &Value) {
     if let Some(modes) = response.get("modes") {
         config.push(json!({"id":"$mode","name":"权限模式","category":"mode","type":"select","currentValue":modes.get("currentModeId"),"options":modes.get("availableModes").and_then(Value::as_array).map(|list|list.iter().map(|m|json!({"value":m.get("id"),"name":m.get("name")})).collect::<Vec<_>>()).unwrap_or_default()}));
     }
+    let available = response
+        .pointer("/models/availableModels")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice);
+    let current_model = response
+        .pointer("/models/currentModelId")
+        .and_then(Value::as_str);
     if !config.is_empty() {
-        apply_config(view, config);
+        apply_config_with_models(view, config, available, current_model);
+    } else {
+        ensure_codex_thinking_defaults(view, available, current_model);
     }
+}
+#[cfg(test)]
+pub(super) fn apply_session_for_test(view: &mut SessionView, response: &Value) {
+    apply_session(view, response);
 }
 fn permission_option_id(option: &Value) -> String {
     option
@@ -566,6 +681,7 @@ impl Host {
         self.update(id, Some(&runtime.instance), |v| {
             v.capabilities = Capabilities {
                 supports_resume: resume,
+                supports_thinking: harness == "acp:codex",
                 supports_images: capabilities
                     .pointer("/promptCapabilities/image")
                     .and_then(Value::as_bool)
@@ -838,6 +954,14 @@ impl Host {
             {
                 let _ = self
                     .set_acp_config(id, runtime, &thought_config_id, tier)
+                    .await;
+            } else if thought_config_id.is_empty()
+                && harness == "acp:codex"
+                && view_after_model.thinking_levels.iter().any(|t| t == tier)
+                && view_after_model.thinking_level != tier
+            {
+                let _ = self
+                    .apply_codex_thinking_fallback(id, runtime, tier)
                     .await;
             }
         }
@@ -1320,6 +1444,58 @@ impl Host {
             }
         });
         Ok(response)
+    }
+
+    pub(super) async fn apply_codex_thinking_fallback(
+        &self,
+        id: &str,
+        runtime: &Arc<Runtime>,
+        level: &str,
+    ) -> Result<Value, String> {
+        let view = self.view(id)?;
+        let thought_config_id = view
+            .config_options
+            .iter()
+            .find(|c| {
+                matches!(text(c, "category").as_str(), "thought_level" | "thinking")
+                    || text(c, "id").contains("thinking")
+                    || text(c, "id") == "thought_level"
+            })
+            .map(|c| text(c, "id"))
+            .unwrap_or_default();
+        if !thought_config_id.is_empty() {
+            return self
+                .set_acp_config(id, runtime, &thought_config_id, level)
+                .await;
+        }
+        let native = lock(&runtime.native_id).clone().ok_or("会话尚未初始化")?;
+        if let Some(model_id) = view
+            .model
+            .as_ref()
+            .map(|m| text(m, "id"))
+            .filter(|s| !s.is_empty())
+        {
+            let base = model_id.split('/').next().unwrap_or(&model_id);
+            let tiered = format!("{base}/{level}");
+            if let Ok(res) = runtime
+                .bridge
+                .request(
+                    "session/set_model",
+                    json!({ "sessionId": native, "modelId": tiered }),
+                    TIMEOUT,
+                )
+                .await
+            {
+                self.update(id, Some(&runtime.instance), |v| {
+                    v.thinking_level = level.to_string();
+                });
+                return Ok(res);
+            }
+        }
+        self.update(id, Some(&runtime.instance), |v| {
+            v.thinking_level = level.to_string();
+        });
+        Ok(json!({ "ok": true }))
     }
     pub(super) async fn agent_file(
         &self,

@@ -93,6 +93,7 @@ type Devices = {
     pairedAt: number;
     revoked: boolean;
   }>;
+  remoteWriteDevices?: string[];
   pending: Array<{ id: string; name: string; expiresAt: number }>;
 };
 
@@ -1312,17 +1313,44 @@ export function AgentSettings({
                                 device.pairedAt * 1000,
                               ).toLocaleString()}`}
                               control={
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() =>
-                                    void act("host.device.revoke", {
-                                      id: device.id,
-                                    })
-                                  }
-                                >
-                                  撤销授权
-                                </Button>
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    variant={
+                                      devices?.remoteWriteDevices?.includes(
+                                        device.id,
+                                      )
+                                        ? "default"
+                                        : "outline"
+                                    }
+                                    size="sm"
+                                    onClick={() =>
+                                      void act("host.device.write", {
+                                        id: device.id,
+                                        enabled:
+                                          !devices?.remoteWriteDevices?.includes(
+                                            device.id,
+                                          ),
+                                      })
+                                    }
+                                  >
+                                    {devices?.remoteWriteDevices?.includes(
+                                      device.id,
+                                    )
+                                      ? "Git 可写"
+                                      : "Git 只读"}
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() =>
+                                      void act("host.device.revoke", {
+                                        id: device.id,
+                                      })
+                                    }
+                                  >
+                                    撤销授权
+                                  </Button>
+                                </div>
                               }
                             />
                           ))}

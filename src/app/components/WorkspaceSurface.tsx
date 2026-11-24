@@ -1,5 +1,6 @@
 import type { EditorPaneHandle } from "@/modules/editor";
 import type { Tab } from "@/modules/tabs";
+import type { OpenVcsDiffInput } from "@/modules/vcs/VcsPanel";
 import { EditorCompareView } from "./EditorCompareView";
 
 type Props = {
@@ -28,6 +29,7 @@ type Props = {
   onSetHtmlView: (id: number, mode: "rendered" | "raw") => void;
   onFocusSearch: () => void;
   onFocusEditor: (id: number) => void;
+  onOpenGitDiff?: (input: OpenVcsDiffInput) => void;
 };
 
 /** 渲染中央双编辑器组，并保持两个阅览器的标签与活动状态独立。 */
@@ -53,6 +55,7 @@ export function WorkspaceSurface({
   onSetHtmlView,
   onFocusSearch,
   onFocusEditor,
+  onOpenGitDiff,
 }: Props) {
   return (
     <div className="relative h-full min-h-0">
@@ -78,6 +81,7 @@ export function WorkspaceSurface({
         onSetHtmlView={onSetHtmlView}
         onFocusSearch={onFocusSearch}
         onFocusEditor={onFocusEditor}
+        onOpenGitDiff={onOpenGitDiff}
       />
     </div>
   );

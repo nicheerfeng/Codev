@@ -1,8 +1,8 @@
-export type DockTab = "terminal" | "json" | "diff" | "agent";
+export type DockTab = "terminal" | "json" | "diff" | "agent" | "git-inbox";
 
 /** 恢复标签顺序，去掉无效重复项并补齐新加入的插件。 */
 export function normalizeDockOrder(value: unknown): DockTab[] {
-  const defaults: DockTab[] = ["terminal", "json", "diff", "agent"];
+  const defaults: DockTab[] = ["terminal", "json", "diff", "agent", "git-inbox"];
   const saved = Array.isArray(value)
     ? value
         .map((tab) =>

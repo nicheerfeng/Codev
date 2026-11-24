@@ -299,6 +299,10 @@ export function StructuredRequestCard({
   const isSecret = /password|secret|token|key|口令|密码/iu.test(
     `${request.title} ${request.message}`,
   );
+  const isDestructiveGit =
+    /\bgit\s+(push\s+.*(-f|--force|--force-with-lease)|reset\s+--hard|clean\s+-[a-z]*f|branch\s+-D|checkout\s+--\s+\.)/iu.test(
+      `${parsed.command ?? ""} ${request.message}`,
+    );
 
   return (
     <fieldset className="agent-request" disabled={busy}>
@@ -306,6 +310,11 @@ export function StructuredRequestCard({
         <span className="agent-request-scope">{scopeLabel}</span>
         <span>{request.title || "代理需要你的确认"}</span>
       </legend>
+      {isDestructiveGit && (
+        <div className="mb-2 rounded border border-destructive/50 bg-destructive/15 px-2.5 py-1.5 text-[11px] font-medium text-destructive">
+          高危 Git 操作预警：该命令可能覆盖远端提交历史或不可逆清除工作区未保存更改，请仔细核对！
+        </div>
+      )}
       {(parsed.path || parsed.command) && (
         <div className="agent-request-meta">
           {parsed.path && (

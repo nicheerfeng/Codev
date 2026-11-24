@@ -634,9 +634,13 @@ export function AgentSidebar({
                     (s) => s.workspaceId === workspace.id,
                   );
                   const runCount = list.filter((s) => isBusy(s)).length;
+                  const waitCount = list.filter(
+                    (s) => !!views[s.id]?.pendingRequests?.length,
+                  ).length;
                   const isOpen =
                     !!search ||
                     (expanded[workspace.id] ?? workspace.id === workspaceId);
+                  const liveProject = !isOpen && (runCount > 0 || waitCount > 0);
                   const visible = isOpen
                     ? list.slice(
                         0,
@@ -651,7 +655,7 @@ export function AgentSidebar({
                         <ContextMenuTrigger asChild>
                           <div
                             data-agent-workspace-id={workspace.id}
-                            className={`agent-project-heading ${workspace.id === workspaceId ? "is-selected" : ""} ${dropTarget?.kind === "workspace" && dropTarget.id === workspace.id ? (dropTarget.after ? "agent-drop-after" : "agent-drop-before") : ""}`}
+                            className={`agent-project-heading ${workspace.id === workspaceId ? "is-selected" : ""} ${liveProject ? "is-live" : ""} ${dropTarget?.kind === "workspace" && dropTarget.id === workspace.id ? (dropTarget.after ? "agent-drop-after" : "agent-drop-before") : ""}`}
                           >
                             <button
                               type="button"
@@ -714,12 +718,22 @@ export function AgentSidebar({
                               />
                               {workspace.title}
                             </button>
-                            {runCount > 0 && (
+                            {(runCount > 0 || waitCount > 0) && (
                               <span
-                                className="agent-ws-running"
-                                title={`${runCount} 个任务运行中`}
+                                className={`agent-ws-running ${waitCount > 0 ? "is-waiting" : ""}`}
+                                title={
+                                  waitCount > 0
+                                    ? `${waitCount} 个任务等待确认`
+                                    : `${runCount} 个任务运行中`
+                                }
                               >
-                                {runCount}
+                                {!isOpen && (
+                                  <span
+                                    aria-hidden="true"
+                                    className={`agent-state-dot ${waitCount > 0 ? "is-waiting" : "is-working"}`}
+                                  />
+                                )}
+                                {waitCount > 0 ? waitCount : runCount}
                               </span>
                             )}
                             {!mobile && (

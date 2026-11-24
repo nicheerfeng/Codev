@@ -127,7 +127,7 @@ export type SessionView = SessionSummary & {
     size?: number;
     [key: string]: unknown;
   };
-  statuses?: Record<string, string>;
+  statuses?: Record<string, unknown>;
   historyLoaded: boolean;
   historyOffset: number;
   historyAvailable: boolean;
@@ -140,6 +140,8 @@ export type HostSnapshot = {
   workspaces: Workspace[];
   sessions: SessionSummary[];
   harnesses: Harness[];
+  vcsSnapshots?: import("@/modules/vcs/types").VcsSnapshot[];
+  forgeInboxes?: import("@/modules/vcs/types").ForgeInboxSnapshot[];
 };
 export type HostEvent = {
   protocolVersion: number;
