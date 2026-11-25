@@ -410,27 +410,86 @@ pub fn acp_provider_scope(
     }
 }
 
-pub fn agy_for_session(host: &Host, session_id: &str, native: bool, desktop: bool) -> Result<Option<Provider>, String> {
-    if desktop { return Ok(None); }
-    let mut bindings = lock(&host.store).preference("agySessionProviders").and_then(|v| v.as_object().cloned()).unwrap_or_default();
+pub fn agy_for_session(host: &Host, session_id: &str, _native: bool, _desktop: bool) -> Result<Option<Provider>, String> {
+    let bindings = lock(&host.store).preference("agySessionProviders").and_then(|v| v.as_object().cloned()).unwrap_or_default();
     let selected = selected(host, "acp:antigravity")?;
-    let id = match bindings.get(session_id).and_then(Value::as_str) {
+    let id = match bindings.get(session_id).and_then(Value::as_str).filter(|s| !s.is_empty()) {
         Some(id) => id.to_string(),
-        None if native => String::new(),
-        None => {
-            let id = selected.as_ref().map(|p| p.id.clone()).unwrap_or_default();
-            bindings.insert(session_id.into(), json!(id));
-            lock(&host.store).set_preference("agySessionProviders", &Value::Object(bindings))?;
-            id
-        }
+        None => selected.as_ref().map(|p| p.id.clone()).unwrap_or_default(),
     };
     if id.is_empty() { return Ok(None); }
     read(host, "acp:antigravity")?.items.into_iter().find(|p| p.id == id).map(Some).ok_or("会话绑定的 Antigravity 供应商不存在".into())
 }
 
-pub fn agy_launch(host: &Host, provider: &Provider) -> Result<(Vec<String>, Vec<(&'static str, Option<String>)>), String> {
+fn is_dir_link(path: &std::path::Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(path) else { return false };
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        return (meta.file_attributes() & 0x400) != 0;
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+fn merge_dir_into(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+    let Ok(entries) = std::fs::read_dir(src) else { return Ok(()) };
+    for entry in entries.flatten() {
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+            merge_dir_into(&from, &to)?;
+            let _ = std::fs::remove_dir(&from);
+        } else if !to.exists() {
+            if std::fs::rename(&from, &to).is_err() {
+                std::fs::copy(&from, &to).map_err(|e| e.to_string())?;
+                std::fs::remove_file(&from).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ensure_dir_link(shared: &std::path::Path, link: &std::path::Path, err_msg: &str) -> Result<(), String> {
+    if is_dir_link(link) {
+        return Ok(());
+    }
+    if link.is_dir() {
+        merge_dir_into(link, shared)?;
+        std::fs::remove_dir_all(link).map_err(|e| e.to_string())?;
+    } else if std::fs::symlink_metadata(link).is_ok() {
+        return Err("目标路径已存在同名文件，无法创建 Antigravity 共享目录联接".into());
+    }
+    if let Some(parent) = link.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    #[cfg(windows)]
+    if std::os::windows::fs::symlink_dir(shared, link).is_err() {
+        use std::os::windows::process::CommandExt;
+        let link_arg = link.to_string_lossy();
+        let shared_arg = shared.to_string_lossy();
+        if link_arg.contains(['%', '!', '"', '\r', '\n']) || shared_arg.contains(['%', '!', '"', '\r', '\n']) {
+            return Err("共享目录路径包含无法用于目录联接的字符".into());
+        }
+        let mut command = std::process::Command::new("cmd.exe");
+        command.args(["/D", "/V:OFF", "/S", "/C"]).raw_arg(format!("\"mklink /J \"{link_arg}\" \"{shared_arg}\"\""));
+        crate::modules::proc::hide_console(&mut command);
+        let status = command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map_err(|e| e.to_string())?;
+        if !status.success() { return Err(err_msg.into()); }
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(shared, link).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn agy_launch(host: &Host, provider: &Provider, desktop: bool) -> Result<(Vec<String>, Vec<(&'static str, Option<String>)>), String> {
     let dir: PathBuf = host.directory.join("agent-providers").join("agy").join(&provider.id);
-    let settings = dir.join("antigravity-cli/settings.json");
+    let app_subdir = if desktop { "antigravity" } else { "antigravity-cli" };
+    let settings = dir.join(app_subdir).join("settings.json");
     std::fs::create_dir_all(settings.parent().ok_or("供应商目录无效")?).map_err(|e| e.to_string())?;
     let mut config = match std::fs::read(&settings) { Ok(bytes) => serde_json::from_slice::<Value>(&bytes).map_err(|e| e.to_string())?, Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}), Err(e) => return Err(e.to_string()) };
     let object = config.as_object_mut().ok_or("Antigravity 配置格式错误")?;
@@ -439,24 +498,20 @@ pub fn agy_launch(host: &Host, provider: &Provider) -> Result<(Vec<String>, Vec<
     let mut file = tempfile::NamedTempFile::new_in(settings.parent().unwrap()).map_err(|e| e.to_string())?;
     serde_json::to_writer_pretty(&mut file, &config).map_err(|e| e.to_string())?;
     file.persist(&settings).map_err(|e| e.error.to_string())?;
-    let shared = dirs::home_dir().ok_or("无法定位用户目录")?.join(".gemini/config");
-    std::fs::create_dir_all(&shared).map_err(|e| e.to_string())?;
-    let link = dir.join("config");
-    if !link.exists() {
-        #[cfg(windows)]
-        if std::os::windows::fs::symlink_dir(&shared, &link).is_err() {
-            use std::os::windows::process::CommandExt;
-            let link_arg = link.to_string_lossy();
-            let shared_arg = shared.to_string_lossy();
-            if link_arg.contains(['%', '!', '"', '\r', '\n']) || shared_arg.contains(['%', '!', '"', '\r', '\n']) { return Err("共享目录路径包含无法用于目录联接的字符".into()); }
-            let mut command = std::process::Command::new("cmd.exe");
-            command.args(["/D", "/V:OFF", "/S", "/C"]).raw_arg(format!("\"mklink /J \"{link_arg}\" \"{shared_arg}\"\""));
-            crate::modules::proc::hide_console(&mut command);
-            let status = command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map_err(|e| e.to_string())?;
-            if !status.success() { return Err("无法连接 Antigravity 共享技能目录".into()); }
+    let gemini_home = dirs::home_dir().ok_or("无法定位用户目录")?.join(".gemini");
+    let shared_config = gemini_home.join("config");
+    std::fs::create_dir_all(&shared_config).map_err(|e| e.to_string())?;
+    ensure_dir_link(&shared_config, &dir.join("config"), "无法连接 Antigravity 共享技能目录")?;
+    let native_app = gemini_home.join(app_subdir);
+    let target_app = dir.join(app_subdir);
+    for subdir in ["conversations", "brain", "annotations", "implicit"] {
+        let shared_sub = native_app.join(subdir);
+        if !desktop {
+            std::fs::create_dir_all(&shared_sub).map_err(|e| e.to_string())?;
         }
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&shared, &link).map_err(|e| e.to_string())?;
+        if shared_sub.is_dir() {
+            ensure_dir_link(&shared_sub, &target_app.join(subdir), "无法连接 Antigravity 原生会话历史目录")?;
+        }
     }
     let key = secrets::get(&provider.id)?.ok_or("供应商密钥不存在")?;
     Ok((
@@ -489,7 +544,7 @@ pub async fn prepare_reconnect(host: &Host, harness: &str, provider_id: &str) ->
         let state = lock(&host.state);
         lock(&host.runtimes).iter().filter(|(id, _)| {
             state.sessions.get(*id).is_some_and(|v| v.binding.harness_id == harness &&
-                (harness == "acp:codex" || (!super::antigravity_history::is_desktop(&v.binding) && bindings.get(*id).and_then(Value::as_str).unwrap_or("") == provider_id)))
+                (harness == "acp:codex" || bindings.get(*id).and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or(settings.active.as_str()) == provider_id))
         }).map(|(id, runtime)| (id.clone(), runtime.clone())).collect()
     };
     let mut guards = Vec::new();

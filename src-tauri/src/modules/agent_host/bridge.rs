@@ -5,7 +5,7 @@ use super::registry;
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
@@ -29,6 +29,7 @@ pub struct Bridge {
     process: Mutex<Option<Child>>,
     diagnostics: Mutex<VecDeque<String>>,
     secrets: Mutex<Vec<String>>,
+    temp_dir: Mutex<Option<PathBuf>>,
     closed: std::sync::atomic::AtomicBool,
     #[cfg(windows)]
     job: Mutex<Option<crate::modules::proc::job::ProcessJob>>,
@@ -71,8 +72,8 @@ impl Bridge {
         let stdin = child.stdin.take().ok_or("无法连接代理输入")?;
         let stdout = child.stdout.take().ok_or("无法连接代理输出")?;
         let stderr = child.stderr.take().ok_or("无法连接代理诊断输出")?;
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Value>(256);
-        let (events, incoming) = mpsc::channel(512);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Value>(512);
+        let (events, incoming) = mpsc::channel(2048);
         let bridge = Arc::new(Self {
             wire,
             outbound: tx,
@@ -81,6 +82,7 @@ impl Bridge {
             process: Mutex::new(Some(child)),
             diagnostics: Mutex::new(VecDeque::new()),
             secrets: Mutex::new(env.iter().filter(|(key, _)| *key == "GEMINI_API_KEY").filter_map(|(_, value)| value.clone()).filter(|value| !value.is_empty()).collect()),
+            temp_dir: Mutex::new(None),
             closed: std::sync::atomic::AtomicBool::new(false),
             #[cfg(windows)]
             job: Mutex::new(Some(job)),
@@ -264,6 +266,7 @@ impl Bridge {
             process: Mutex::new(None),
             diagnostics: Mutex::new(VecDeque::new()),
             secrets: Mutex::new(Vec::new()),
+            temp_dir: Mutex::new(None),
             closed: std::sync::atomic::AtomicBool::new(false),
             #[cfg(windows)]
             job: Mutex::new(None),
@@ -312,7 +315,15 @@ impl Bridge {
             let _ = child.kill();
             let _ = child.wait();
         }
+        if let Some(dir) = lock(&self.temp_dir).take() {
+            std::thread::spawn(move || {
+                let _ = std::fs::remove_dir_all(dir);
+            });
+        }
         self.fail_pending("代理已停止");
+    }
+    pub fn set_temp_dir(&self, dir: PathBuf) {
+        *lock(&self.temp_dir) = Some(dir);
     }
     pub fn weak(self: &Arc<Self>) -> Weak<Self> {
         Arc::downgrade(self)

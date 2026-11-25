@@ -223,6 +223,10 @@ pub struct VcsTurnFileSummary {
     pub status: String,
     pub staged: bool,
     pub untracked: bool,
+    #[serde(default)]
+    pub additions: usize,
+    #[serde(default)]
+    pub deletions: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

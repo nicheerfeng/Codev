@@ -1,4 +1,5 @@
 import { Switch } from "@/components/ui/switch";
+import { agentClient } from "@/modules/agent/client";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
   setGitInboxEnabled,
@@ -22,7 +23,12 @@ export function GitSection() {
       >
         <Switch
           checked={gitUiEnabled}
-          onCheckedChange={(value) => void setGitUiEnabled(value)}
+          onCheckedChange={(value) => {
+            void setGitUiEnabled(value);
+            void agentClient
+              .request("host.policy.set", { gitUiEnabled: value })
+              .catch(() => undefined);
+          }}
         />
       </SettingRow>
       {gitUiEnabled && (

@@ -9,6 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 const QUERY: Duration = Duration::from_secs(120);
 const INTERACTIVE_PROMPT: Duration = Duration::from_secs(900);
+const ACP_CANCEL_TIMEOUT: Duration = Duration::from_secs(15);
+const ACP_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 impl Host {
     /// Bounded mutation replay protection, scoped to one authenticated device and host lifetime.
@@ -374,12 +376,12 @@ impl Host {
             }
             "harness.providers.save" => {
                 principal.require_desktop()?;
-                let _gate = self.provider_gate.lock().await;
+                let _gate = self.provider_gate.write().await;
                 super::providers::save(self, &text(payload, "harnessId"), payload)
             }
             "harness.providers.native.save" => {
                 principal.require_desktop()?;
-                let _gate = self.provider_gate.lock().await;
+                let _gate = self.provider_gate.write().await;
                 super::providers::save_codex_native(self, payload)
             }
             "harness.providers.import" | "harness.providers.duplicate" | "harness.providers.discover" => {
@@ -388,18 +390,18 @@ impl Host {
                 let id = text(payload, "id");
                 let host = self.clone();
                 let op = operation.to_owned();
-                let _gate = if operation == "harness.providers.discover" { None } else { Some(self.provider_gate.lock().await) };
+                let _gate = if operation == "harness.providers.discover" { None } else { Some(self.provider_gate.write().await) };
                 tokio::task::spawn_blocking(move || super::providers::catalog_action(&host, &harness, &id, &op))
                     .await.map_err(|e| e.to_string())?
             }
             "harness.providers.remove" => {
                 principal.require_desktop()?;
-                let _gate = self.provider_gate.lock().await;
+                let _gate = self.provider_gate.write().await;
                 super::providers::remove(self, &text(payload, "harnessId"), &text(payload, "id"))
             }
             "harness.providers.activate" => {
                 principal.require_desktop()?;
-                let _gate = self.provider_gate.lock().await;
+                let _gate = self.provider_gate.write().await;
                 super::providers::activate(self, &text(payload, "harnessId"), &text(payload, "id")).await
             }
             "harness.providers.reconnect" => {
@@ -407,7 +409,7 @@ impl Host {
                 let harness = text(payload, "harnessId");
                 let id = text(payload, "id");
                 let ids = {
-                    let _providers = self.provider_gate.lock().await;
+                    let _providers = self.provider_gate.write().await;
                     super::providers::prepare_reconnect(self, &harness, &id).await?
                 };
                 let mut failures = Vec::new();
@@ -512,7 +514,12 @@ impl Host {
                 let trusted = lock(&self.store)
                     .preference("trustedPiExtensions")
                     .unwrap_or_else(|| json!({}));
-                Ok(json!({ "policies": policies, "trustedPiExtensions": trusted }))
+                let git_ui_enabled = self.vcs_background_enabled();
+                Ok(json!({
+                    "policies": policies,
+                    "trustedPiExtensions": trusted,
+                    "gitUiEnabled": git_ui_enabled,
+                }))
             }
             "host.policy.set" => {
                 principal.require_desktop()?;
@@ -554,6 +561,9 @@ impl Host {
                         all.remove(cwd);
                     }
                     store.set_preference("trustedPiExtensions", &Value::Object(all))?;
+                }
+                if let Some(enabled) = payload.get("gitUiEnabled").and_then(Value::as_bool) {
+                    self.set_vcs_background_enabled(enabled)?;
                 }
                 Ok(json!({}))
             }
@@ -676,7 +686,7 @@ impl Host {
             "session.prompt" => {
                 let id = command.session_id.as_deref().ok_or("缺少会话标识")?;
                 self.ensure_runtime(id).await?;
-                let _gate = self.provider_gate.lock().await;
+                let _gate = self.provider_gate.read().await;
                 self.accept_prompt(id, payload.clone())?;
                 Ok(json!({"accepted":true}))
             }
@@ -686,11 +696,15 @@ impl Host {
                     .get(id)
                     .cloned()
                     .ok_or("会话没有运行")?;
-                {
+                let cancel_token = {
                     let _replies = runtime.reply_gate.lock().await;
                     runtime
                         .cancelled
                         .store(true, std::sync::atomic::Ordering::Release);
+                    let token = runtime
+                        .cancel_seq
+                        .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+                        + 1;
                     for (_, tx) in lock(&runtime.fs_approvals).drain() {
                         let _ = tx.send(false);
                     }
@@ -708,7 +722,8 @@ impl Host {
                         v.queue.clear();
                         v.pending_requests.clear();
                     });
-                }
+                    token
+                };
                 let result = if runtime.bridge.wire == Wire::Pi {
                     runtime
                         .bridge
@@ -733,6 +748,13 @@ impl Host {
                         }
                     });
                     self.turn_finished(id, &runtime);
+                } else {
+                    self.spawn_cancel_watchdog(
+                        id.to_string(),
+                        runtime,
+                        cancel_token,
+                        ACP_CANCEL_TIMEOUT,
+                    );
                 }
                 Ok(json!({}))
             }
@@ -836,6 +858,13 @@ impl Host {
                                 ..Message::default()
                             });
                         });
+                        return Ok(json!({ "steered": true }));
+                    }
+                    if runtime
+                        .supports_prompt_steer
+                        .load(std::sync::atomic::Ordering::Acquire)
+                    {
+                        self.schedule_prompt(id.into(), item);
                         return Ok(json!({ "steered": true }));
                     }
                 }
@@ -1229,36 +1258,46 @@ impl Host {
                     obj.entry("id").or_insert_with(|| json!(new_id()));
                 }
                 if item.get("steer").and_then(Value::as_bool) == Some(true)
-                    && runtime.bridge.wire == Wire::Pi
+                    && (runtime.bridge.wire == Wire::Pi
+                        || runtime
+                            .supports_prompt_steer
+                            .load(std::sync::atomic::Ordering::Acquire))
                 {
-                    let runtime_cloned = runtime.clone();
-                    let host_cloned = self.clone();
-                    let sid = id.to_string();
-                    let msg_text = text.clone();
-                    let imgs = images.clone();
-                    tokio::spawn(async move {
-                        let _ = runtime_cloned
-                            .bridge
-                            .request(
-                                "steer",
-                                json!({ "message": msg_text, "images": imgs }),
-                                INTERACTIVE_PROMPT,
-                            )
-                            .await;
-                        host_cloned.update(&sid, Some(&runtime_cloned.instance), |v| {
-                            v.messages.push(Message {
-                                id: new_id(),
-                                kind: "message".into(),
-                                role: "user".into(),
-                                text: msg_text,
-                                images: imgs,
-                                status: "completed".into(),
-                                created_at: now_ms(),
-                                raw_kind: "pending_user_echo".into(),
-                                ..Message::default()
+                    if runtime.bridge.wire == Wire::Pi {
+                        let runtime_cloned = runtime.clone();
+                        let host_cloned = self.clone();
+                        let sid = id.to_string();
+                        let msg_text = text.clone();
+                        let imgs = images.clone();
+                        tokio::spawn(async move {
+                            let _ = runtime_cloned
+                                .bridge
+                                .request(
+                                    "steer",
+                                    json!({ "message": msg_text, "images": imgs }),
+                                    INTERACTIVE_PROMPT,
+                                )
+                                .await;
+                            host_cloned.update(&sid, Some(&runtime_cloned.instance), |v| {
+                                v.messages.push(Message {
+                                    id: new_id(),
+                                    kind: "message".into(),
+                                    role: "user".into(),
+                                    text: msg_text,
+                                    images: imgs,
+                                    status: "completed".into(),
+                                    created_at: now_ms(),
+                                    raw_kind: "pending_user_echo".into(),
+                                    ..Message::default()
+                                });
                             });
                         });
-                    });
+                        return Ok(());
+                    }
+                    view.revision += 1;
+                    state.dirty.insert(id.into());
+                    drop(state);
+                    self.schedule_prompt(id.into(), item);
                     return Ok(());
                 }
                 if item.get("queue").and_then(Value::as_bool) == Some(true)
@@ -1297,13 +1336,42 @@ impl Host {
         self.schedule_prompt(id.into(), payload);
         Ok(())
     }
+    pub fn spawn_cancel_watchdog(
+        self: &Arc<Self>,
+        id: String,
+        runtime: Arc<Runtime>,
+        cancel_token: u64,
+        timeout: Duration,
+    ) {
+        let host = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(timeout).await;
+            if runtime.closing.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
+            if runtime.cancel_seq.load(std::sync::atomic::Ordering::Acquire) != cancel_token {
+                return;
+            }
+            let still_stopping = host
+                .view(&id)
+                .is_ok_and(|v| v.instance_id.as_deref() == Some(runtime.instance.as_str()) && v.state == "stopping");
+            if still_stopping {
+                host.runtime_failed(
+                    &id,
+                    &runtime,
+                    "停止当前回合超时，已断开该代理进程，可重新发送消息以重连",
+                );
+            }
+        });
+    }
+
     pub fn schedule_prompt(self: &Arc<Self>, id: String, payload: Value) {
         let host = self.clone();
         let instance = self.view(&id).ok().and_then(|v| v.instance_id);
         tokio::spawn(async move {
             if let Err(error) = host.prompt_now(&id, payload).await {
                 host.update(&id, instance.as_deref(), |v| {
-                    if !error.ends_with("响应超时") {
+                    if !error.ends_with("响应超时") && !error.contains("长时间无响应") {
                         v.state = "idle".into();
                         for m in &mut v.messages {
                             m.streaming = false;
@@ -1673,6 +1741,7 @@ impl Host {
         self.update(id, Some(&runtime.instance), |v| {
             v.state = "working".into();
             v.error = None;
+            v.statuses.remove("turnGit");
             for m in &mut v.messages {
                 m.streaming = false;
             }
@@ -1694,10 +1763,32 @@ impl Host {
         runtime
             .cancelled
             .store(false, std::sync::atomic::Ordering::Release);
-        if let Some(cwd) = self.session_cwd(id) {
-            self.vcs.capture_turn_baseline(id, &new_id(), &cwd);
-        }
         self.persist(id)?;
+        let turn_id = new_id();
+        self.vcs.suppress_turn_baseline(id, &turn_id);
+        let baseline_task = if self.vcs_background_enabled() {
+            self.session_cwd(id).and_then(|cwd| {
+                if self.vcs.begin_turn_baseline(id, &turn_id, &cwd) {
+                    None
+                } else {
+                    Some((cwd, turn_id.clone()))
+                }
+            })
+        } else {
+            None
+        };
+        if let Some((cwd, tid)) = baseline_task {
+            let vcs = self.vcs.clone();
+            let sid = id.to_string();
+            tokio::spawn(async move {
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Ok(Some(snap)) = vcs.snapshot(&cwd) {
+                        vcs.record_turn_baseline_from_snapshot(&sid, &tid, snap);
+                    }
+                })
+                .await;
+            });
+        }
         {
             let _gate = runtime.gate.lock().await;
             self.apply_pending_config(id, &runtime).await?;
@@ -1735,16 +1826,29 @@ impl Host {
             }
         }
         if runtime.bridge.wire == Wire::Pi {
-            let reply = runtime
+            let reply = match runtime
                 .bridge
                 .request(
                     "prompt",
                     json!({"message":message,"images":images}),
                     INTERACTIVE_PROMPT,
                 )
-                .await?;
+                .await
+            {
+                Ok(reply) => reply,
+                Err(e) => {
+                    self.vcs.suppress_turn_baseline(id, &turn_id);
+                    return Err(e);
+                }
+            };
             if reply.get("disposition").and_then(Value::as_str) == Some("handled") {
-                let state = runtime.bridge.request("get_state", json!({}), QUERY).await?;
+                let state = match runtime.bridge.request("get_state", json!({}), QUERY).await {
+                    Ok(state) => state,
+                    Err(e) => {
+                        self.vcs.suppress_turn_baseline(id, &turn_id);
+                        return Err(e);
+                    }
+                };
                 if state.get("isStreaming") != Some(&json!(true)) && state.get("isCompacting") != Some(&json!(true)) {
                     self.update(id, Some(&runtime.instance), |v| {
                         if v.state == "working" { v.state = "idle".into(); }
@@ -1758,36 +1862,80 @@ impl Host {
             for image in images {
                 prompt.push(json!({"type":"image","data":image.get("data"),"mimeType":image.get("mimeType")}));
             }
-            let reply = runtime
-                .bridge
-                .request(
-                    "session/prompt",
-                    json!({"sessionId":native,"prompt":prompt}),
-                    Duration::from_secs(24 * 3600),
-                )
-                .await;
-            let was_cancelled = runtime
-                .cancelled
-                .swap(false, std::sync::atomic::Ordering::AcqRel);
-            self.update(id, Some(&runtime.instance), |v| {
-                v.state = "idle".into();
-                if was_cancelled {
-                    v.error = None;
-                }
-                if let Ok(ref value) = reply {
-                    if let Some(usage) = value.get("usage").filter(|u| u.is_object()) {
-                        v.context = super::acp::merge_acp_prompt_usage(&v.context, usage);
-                        v.capabilities.supports_context_usage = true;
+            runtime.touch_activity();
+            runtime
+                .active_prompts
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            let mut req_fut = Box::pin(runtime.bridge.request(
+                "session/prompt",
+                json!({"sessionId":native,"prompt":prompt}),
+                Duration::from_secs(24 * 3600),
+            ));
+            let inactivity_ms = ACP_INACTIVITY_TIMEOUT.as_millis() as u64;
+            let mut poll = tokio::time::interval(Duration::from_secs(15));
+            poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let reply = loop {
+                tokio::select! {
+                    res = &mut req_fut => break res,
+                    _ = poll.tick() => {
+                        if runtime.closing.load(std::sync::atomic::Ordering::Acquire) {
+                            break Err("代理已停止".into());
+                        }
+                        let waiting_user = !lock(&runtime.permission_ids).is_empty()
+                            || !lock(&runtime.fs_approvals).is_empty();
+                        if waiting_user {
+                            runtime.touch_activity();
+                            continue;
+                        }
+                        let last = runtime.last_activity_ms.load(std::sync::atomic::Ordering::Acquire);
+                        if now_ms().saturating_sub(last) >= inactivity_ms {
+                            let err = "代理长时间无响应（超过 15 分钟未收到输出），已断开，请重新发送消息".to_string();
+                            runtime.active_prompts.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+                            self.vcs.suppress_turn_baseline(id, &turn_id);
+                            self.runtime_failed(id, &runtime, &err);
+                            return Err(err);
+                        }
                     }
                 }
-                for m in &mut v.messages {
-                    m.streaming = false;
+            };
+            let prev_prompts = runtime
+                .active_prompts
+                .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+            let is_outermost = prev_prompts <= 1;
+            if is_outermost {
+                runtime
+                    .cancel_seq
+                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                let was_cancelled = runtime
+                    .cancelled
+                    .swap(false, std::sync::atomic::Ordering::AcqRel);
+                self.update(id, Some(&runtime.instance), |v| {
+                    v.state = "idle".into();
+                    if was_cancelled {
+                        v.error = None;
+                    }
+                    if let Ok(ref value) = reply {
+                        if let Some(usage) = value.get("usage").filter(|u| u.is_object()) {
+                            v.context = super::acp::merge_acp_prompt_usage(&v.context, usage);
+                            v.capabilities.supports_context_usage = true;
+                        }
+                    }
+                    for m in &mut v.messages {
+                        m.streaming = false;
+                    }
+                });
+                match reply {
+                    Ok(_) => self.turn_finished(id, &runtime),
+                    Err(_) if was_cancelled => self.turn_finished(id, &runtime),
+                    Err(e) => {
+                        self.vcs.suppress_turn_baseline(id, &turn_id);
+                        return Err(super::acp::format_acp_error(&e, &runtime.bridge.diagnostic_tail()));
+                    }
                 }
-            });
-            match reply {
-                Ok(_) => self.turn_finished(id, &runtime),
-                Err(_) if was_cancelled => self.turn_finished(id, &runtime),
-                Err(e) => return Err(e),
+            } else if let Err(e) = reply {
+                if !runtime.cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                    return Err(super::acp::format_acp_error(&e, &runtime.bridge.diagnostic_tail()));
+                }
             }
         }
         Ok(())

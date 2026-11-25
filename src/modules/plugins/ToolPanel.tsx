@@ -48,7 +48,7 @@ export function ToolPanel({
   tool?: ToolId;
   active?: boolean;
   onOpenFile?: (path: string) => void;
-  onOpenDiff?: (path: string, diff: string) => void;
+  onOpenDiff?: (path: string, diff: string, options?: { activate?: boolean }) => void;
   workspaceRoots?: string[];
   activeRoot?: string | null;
   onAddWorkspaceRoot?: (path: string) => void;

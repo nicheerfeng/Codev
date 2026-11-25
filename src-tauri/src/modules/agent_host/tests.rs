@@ -6,8 +6,11 @@ use super::{
     registry,
 };
 use serde_json::json;
-use std::collections::HashMap;
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::collections::{HashMap, HashSet};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, AtomicUsize},
+    Arc, Mutex,
+};
 use tempfile::TempDir;
 
 fn test_host(dir: &TempDir) -> Arc<Host> {
@@ -29,6 +32,11 @@ fn attach_runtime(host: &Arc<Host>, sid: &str, wire: Wire) -> (Arc<Runtime>, std
         closing: AtomicBool::new(false),
         loading_history: AtomicBool::new(false),
         loading_desktop_history: AtomicBool::new(false),
+        supports_prompt_steer: AtomicBool::new(false),
+        active_prompts: AtomicUsize::new(0),
+        cancel_seq: AtomicU64::new(0),
+        last_activity_ms: AtomicU64::new(now_ms()),
+        update_steps_calls: Mutex::new(HashSet::new()),
         pending_config: Mutex::new(PendingRuntimeConfig::default()),
     });
     lock(&host.runtimes).insert(sid.into(), runtime.clone());
@@ -560,5 +568,361 @@ fn codex_default_session_exposes_thinking_levels_when_config_omits_thought_level
     )
     .unwrap();
     assert_eq!(setting, ("__codex_thinking__".into(), "xhigh".into()));
+}
+
+#[tokio::test]
+async fn prompt_and_turn_finished_do_not_block_on_git_and_deque_immediately() {
+    let dir = TempDir::new().expect("tmp");
+    let host = test_host(&dir);
+    let ws_dir = dir.path().join("repo");
+    std::fs::create_dir_all(&ws_dir).unwrap();
+    let ws = host.workspace(&ws_dir.to_string_lossy()).unwrap();
+    let sid = host.create(&ws.id, "pi", "fast-turn").unwrap();
+    let (runtime, rx) = attach_runtime(&host, &sid, Wire::Pi);
+
+    let desktop = Principal { id: "desktop".into(), desktop: true };
+    host.dispatch(
+        &desktop,
+        Command {
+            request_id: "git-bg-off".into(),
+            operation: "host.policy.set".into(),
+            session_id: None,
+            instance_id: None,
+            payload: json!({ "gitUiEnabled": false }),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!host.vcs_background_enabled());
+
+    host.update(&sid, Some(&runtime.instance), |v| {
+        v.state = "working".into();
+        v.capabilities.supports_queue = true;
+    });
+    host.accept_prompt(&sid, json!({ "text": "queued-next", "queue": true }))
+        .unwrap();
+    assert_eq!(host.view(&sid).unwrap().queue.len(), 1);
+
+    let responder_bridge = runtime.bridge.clone();
+    let saw_prompt = Arc::new(AtomicBool::new(false));
+    let saw_prompt_ref = saw_prompt.clone();
+    let (tx_prompt, rx_prompt) = tokio::sync::oneshot::channel::<()>();
+    std::thread::spawn(move || {
+        let mut tx_prompt = Some(tx_prompt);
+        while let Ok(req) = rx.recv() {
+            let req_id = req["id"].as_str().unwrap_or("").to_string();
+            let method = req["type"]
+                .as_str()
+                .or_else(|| req["method"].as_str())
+                .unwrap_or("")
+                .to_string();
+            if method == "get_state" {
+                responder_bridge.resolve_test(&req_id, Ok(json!({"isStreaming": false})));
+            } else if method == "get_available_models" {
+                responder_bridge.resolve_test(&req_id, Ok(json!({"models": []})));
+            } else if method == "get_available_thinking_levels" {
+                responder_bridge.resolve_test(&req_id, Ok(json!({"levels": []})));
+            } else if method == "get_commands" {
+                responder_bridge.resolve_test(&req_id, Ok(json!({"commands": []})));
+            } else if method == "get_messages" {
+                responder_bridge.resolve_test(&req_id, Ok(json!({"messages": []})));
+            } else if method == "prompt" {
+                saw_prompt_ref.store(true, std::sync::atomic::Ordering::Release);
+                responder_bridge.resolve_test(&req_id, Ok(json!({"disposition": "handled"})));
+                if let Some(tx) = tx_prompt.take() {
+                    let _ = tx.send(());
+                }
+            } else {
+                responder_bridge.resolve_test(&req_id, Ok(json!({})));
+            }
+        }
+    });
+
+    host.update(&sid, Some(&runtime.instance), |v| {
+        v.state = "idle".into();
+    });
+    host.turn_finished(&sid, &runtime);
+    tokio::time::timeout(std::time::Duration::from_secs(3), rx_prompt)
+        .await
+        .expect("queued prompt should dispatch quickly")
+        .expect("prompt signal");
+    assert!(saw_prompt.load(std::sync::atomic::Ordering::Acquire));
+
+    let got = host
+        .dispatch(
+            &desktop,
+            Command {
+                request_id: "git-bg-get".into(),
+                operation: "host.policy.get".into(),
+                session_id: None,
+                instance_id: None,
+                payload: json!({}),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(got["gitUiEnabled"], json!(false));
+}
+
+#[test]
+fn update_and_clamp_arguments_handle_large_tool_payloads() {
+    let dir = TempDir::new().expect("tmp");
+    let host = test_host(&dir);
+    let ws_dir = dir.path().join("repo");
+    std::fs::create_dir_all(&ws_dir).unwrap();
+    let ws = host.workspace(&ws_dir.to_string_lossy()).unwrap();
+    let sid = host.create(&ws.id, "pi", "clamp-test").unwrap();
+    let (runtime, _rx) = attach_runtime(&host, &sid, Wire::Pi);
+
+    let big = "x".repeat(140 * 1024);
+    host.handle_frame(
+        &sid,
+        &runtime,
+        json!({
+            "type": "tool_execution_start",
+            "toolCallId": "big-1",
+            "toolName": "write",
+            "args": { "content": big }
+        }),
+    );
+    let view = host.view(&sid).unwrap();
+    let msg = view.messages.last().unwrap();
+    assert!(
+        msg.arguments
+            .as_str()
+            .is_some_and(|s| s.contains("参数过长")),
+        "expected oversized arguments summary, got {:?}",
+        msg.arguments
+    );
+}
+
+#[tokio::test]
+async fn provider_gate_allows_concurrent_sessions_while_serializing_provider_mutations() {
+    let dir = TempDir::new().expect("tmp");
+    let host = test_host(&dir);
+
+    let r1 = host.provider_gate.read().await;
+    let try_r2 = host.provider_gate.try_read();
+    assert!(try_r2.is_ok(), "two sessions must acquire read lock concurrently");
+    drop(try_r2);
+    assert!(
+        host.provider_gate.try_write().is_err(),
+        "provider mutation write lock must wait for active read lock"
+    );
+    drop(r1);
+    assert!(
+        host.provider_gate.try_write().is_ok(),
+        "provider mutation write lock must succeed once reads finish"
+    );
+}
+
+#[test]
+fn flush_preserves_patch_contract_and_tracks_dirty_messages_without_cloning_all_history() {
+    let dir = TempDir::new().expect("tmp");
+    let host = test_host(&dir);
+    let ws_dir = dir.path().join("repo");
+    std::fs::create_dir_all(&ws_dir).unwrap();
+    let ws = host.workspace(&ws_dir.to_string_lossy()).unwrap();
+    let sid = host.create(&ws.id, "acp:antigravity", "flush-test").unwrap();
+    let (runtime, _rx) = attach_runtime(&host, &sid, Wire::Acp);
+    host.flush();
+    let mut events = host.events.subscribe();
+
+    host.handle_acp_frame(
+        &sid,
+        &runtime,
+        json!({"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}}}),
+    );
+    host.flush();
+    let ev1 = events.try_recv().expect("first session.patch");
+    assert_eq!(ev1.kind, "session.patch");
+    assert!(ev1.payload["view"]["messages"].as_array().unwrap().is_empty());
+    assert_eq!(ev1.payload["messageOrder"].as_array().unwrap().len(), 1);
+    assert_eq!(ev1.payload["messageUpserts"].as_array().unwrap().len(), 1);
+    assert_eq!(ev1.payload["messageUpserts"][0]["text"], json!("hello"));
+
+    // Stream an update to the tail message, verify only that updated message is emitted cleanly
+    host.handle_acp_frame(
+        &sid,
+        &runtime,
+        json!({"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":" world"}}}}),
+    );
+    host.flush();
+    let ev2 = events.try_recv().expect("second session.patch");
+    assert_eq!(ev2.payload["messageOrder"].as_array().unwrap().len(), 1);
+    assert_eq!(ev2.payload["messageUpserts"].as_array().unwrap().len(), 1);
+    assert_eq!(ev2.payload["messageUpserts"][0]["text"], json!("hello world"));
+}
+
+#[tokio::test]
+async fn agy_interaction_permission_never_auto_replies_even_under_allow_all() {
+    let dir = TempDir::new().expect("tmp");
+    let host = test_host(&dir);
+    let ws_dir = dir.path().join("repo");
+    std::fs::create_dir_all(&ws_dir).unwrap();
+    let ws = host.workspace(&ws_dir.to_string_lossy()).unwrap();
+    let sid = host.create(&ws.id, "acp:antigravity", "interaction-test").unwrap();
+    let (runtime, rx) = attach_runtime(&host, &sid, Wire::Acp);
+
+    let desktop = Principal { id: "desktop".into(), desktop: true };
+    host.dispatch(
+        &desktop,
+        Command {
+            request_id: "allow-all".into(),
+            operation: "host.policy.set".into(),
+            session_id: None,
+            instance_id: None,
+            payload: json!({
+                "harnessId": "acp:antigravity",
+                "permission": "allow_all",
+                "allowOutsideWorkspace": true
+            }),
+        },
+    )
+    .await
+    .unwrap();
+
+    host.handle_acp_frame(
+        &sid,
+        &runtime,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "perm-1",
+            "method": "session/request_permission",
+            "params": {
+                "toolCall": {
+                    "toolCallId": "interaction_123",
+                    "title": "请选择部署环境"
+                },
+                "options": [
+                    { "optionId": "staging", "name": "Staging", "kind": "allow_once" },
+                    { "optionId": "prod", "name": "Production", "kind": "allow_once" }
+                ]
+            }
+        }),
+    );
+
+    assert!(rx.try_recv().is_err(), "interaction_* must never be auto-replied");
+    let view = host.view(&sid).unwrap();
+    assert_eq!(view.pending_requests.len(), 1);
+    assert_eq!(view.pending_requests[0].title, "请选择部署环境");
+    assert_eq!(view.pending_requests[0].options.len(), 2);
+}
+
+#[test]
+fn agy_update_steps_converts_to_plan_and_sanitizes_tool_payloads() {
+    let dir = TempDir::new().expect("tmp");
+    let host = test_host(&dir);
+    let ws_dir = dir.path().join("repo");
+    std::fs::create_dir_all(&ws_dir).unwrap();
+    let ws = host.workspace(&ws_dir.to_string_lossy()).unwrap();
+    let sid = host.create(&ws.id, "acp:antigravity", "steps-plan").unwrap();
+    let (runtime, _rx) = attach_runtime(&host, &sid, Wire::Acp);
+
+    host.handle_acp_frame(
+        &sid,
+        &runtime,
+        json!({
+            "method": "session/update",
+            "params": {
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "call-steps-1",
+                    "title": "Run update_steps",
+                    "kind": "other",
+                    "rawInput": {
+                        "steps": [
+                            { "title": "Inspect codebase", "status": "done" },
+                            { "title": "Implement patch", "status": "in_progress" }
+                        ]
+                    }
+                }
+            }
+        }),
+    );
+    // Subsequent update for the same call ID without steps is dropped cleanly
+    host.handle_acp_frame(
+        &sid,
+        &runtime,
+        json!({
+            "method": "session/update",
+            "params": {
+                "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "call-steps-1",
+                    "status": "completed"
+                }
+            }
+        }),
+    );
+
+    let view = host.view(&sid).unwrap();
+    assert_eq!(view.messages.len(), 1);
+    assert_eq!(view.messages[0].kind, "plan");
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(&view.messages[0].text).unwrap();
+    assert_eq!(parsed[0]["content"], json!("Inspect codebase"));
+    assert_eq!(parsed[0]["status"], json!("completed"));
+    assert_eq!(parsed[1]["status"], json!("in_progress"));
+
+    // Payload sanitization keeps CommandLine head, output tail, strips data:image/ & binary blobs
+    let long_cmd = format!("git diff {}", "a".repeat(9000));
+    let long_out = format!("{}{}", "X".repeat(9000), "TAIL_MARKER");
+    host.handle_acp_frame(
+        &sid,
+        &runtime,
+        json!({
+            "method": "session/update",
+            "params": {
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "call-exec-1",
+                    "title": "run_command",
+                    "kind": "execute",
+                    "rawInput": {
+                        "CommandLine": long_cmd,
+                        "preview": "data:image/png;base64,AAAA"
+                    },
+                    "rawOutput": {
+                        "combinedOutput": long_out,
+                        "formatted_output": long_out
+                    }
+                }
+            }
+        }),
+    );
+    let view = host.view(&sid).unwrap();
+    let tool = view.messages.last().unwrap();
+    assert!(tool.arguments["CommandLine"].as_str().unwrap().starts_with("git diff "));
+    assert!(tool.arguments.get("preview").is_none());
+    assert!(tool.text.contains("TAIL_MARKER"));
+    assert!(!tool.text.contains("formatted_output"));
+}
+
+#[tokio::test]
+async fn acp_cancel_watchdog_recovers_wedged_stopping_session() {
+    let dir = TempDir::new().expect("tmp");
+    let host = test_host(&dir);
+    let ws_dir = dir.path().join("repo");
+    std::fs::create_dir_all(&ws_dir).unwrap();
+    let ws = host.workspace(&ws_dir.to_string_lossy()).unwrap();
+    let sid = host.create(&ws.id, "acp:antigravity", "watchdog").unwrap();
+    let (runtime, _rx) = attach_runtime(&host, &sid, Wire::Acp);
+
+    host.update(&sid, Some(&runtime.instance), |v| {
+        v.state = "stopping".into();
+    });
+    let token = runtime.cancel_seq.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
+    host.spawn_cancel_watchdog(
+        sid.clone(),
+        runtime.clone(),
+        token,
+        std::time::Duration::from_millis(40),
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+
+    let view = host.view(&sid).unwrap();
+    assert_eq!(view.state, "crashed");
+    assert!(view.instance_id.is_none());
+    assert!(view.error.as_deref().is_some_and(|e| e.contains("超时")));
 }
 

@@ -63,14 +63,39 @@ export function VcsDiffView({
         setConflictData(null);
       }
     } catch {
-      // Fallback gracefully to inline diff string if provided (e.g. legacy caller / mock)
+      // Fallback gracefully to inline diff string if provided (e.g. legacy caller / non-git)
       if (diff) {
+        const origLines: string[] = [];
+        const modLines: string[] = [];
+        for (const raw of diff.split(/\r?\n/u)) {
+          if (
+            raw.startsWith("diff --git ") ||
+            raw.startsWith("index ") ||
+            raw.startsWith("new file mode") ||
+            raw.startsWith("deleted file mode") ||
+            raw.startsWith("--- ") ||
+            raw.startsWith("+++ ") ||
+            raw.startsWith("@@") ||
+            raw.startsWith("*** ")
+          ) {
+            continue;
+          }
+          if (raw.startsWith("-")) {
+            origLines.push(raw.slice(1));
+          } else if (raw.startsWith("+")) {
+            modLines.push(raw.slice(1));
+          } else if (raw.startsWith(" ")) {
+            const line = raw.slice(1);
+            origLines.push(line);
+            modLines.push(line);
+          }
+        }
         setPayload({
           path,
-          originalLabel: "基准",
-          modifiedLabel: "当前",
-          original: "",
-          modified: "",
+          originalLabel: "修改前",
+          modifiedLabel: "修改后",
+          original: origLines.join("\n"),
+          modified: modLines.join("\n"),
           unified: diff,
           truncated: false,
           binary: false,
@@ -381,7 +406,7 @@ export function VcsDiffView({
           <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
             当前文件为二进制内容，无法文本对照预览。
           </div>
-        ) : viewMode === "side-by-side" ? (
+        ) : payload && viewMode === "side-by-side" ? (
           <div
             ref={mergeHostRef}
             className="codev-vcs-merge h-full min-h-0 [&_.cm-mergeView]:h-full [&_.cm-mergeViewEditors]:min-h-full [&_.cm-editor]:text-[12px]"

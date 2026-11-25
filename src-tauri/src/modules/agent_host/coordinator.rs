@@ -11,7 +11,10 @@ use super::{
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    Arc, Mutex,
+};
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 
@@ -91,18 +94,30 @@ pub struct Runtime {
     pub reply_gate: tokio::sync::Mutex<()>,
     pub permission_ids: Mutex<HashMap<String, Value>>,
     pub fs_approvals: Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
-    pub session_auto_write: std::sync::atomic::AtomicBool,
-    pub cancelled: std::sync::atomic::AtomicBool,
-    pub closing: std::sync::atomic::AtomicBool,
-    pub loading_history: std::sync::atomic::AtomicBool,
-    pub loading_desktop_history: std::sync::atomic::AtomicBool,
+    pub session_auto_write: AtomicBool,
+    pub cancelled: AtomicBool,
+    pub closing: AtomicBool,
+    pub loading_history: AtomicBool,
+    pub loading_desktop_history: AtomicBool,
+    pub supports_prompt_steer: AtomicBool,
+    pub active_prompts: AtomicUsize,
+    pub cancel_seq: AtomicU64,
+    pub last_activity_ms: AtomicU64,
+    pub update_steps_calls: Mutex<HashSet<String>>,
     pub pending_config: Mutex<PendingRuntimeConfig>,
+}
+
+impl Runtime {
+    pub fn touch_activity(&self) {
+        self.last_activity_ms.store(now_ms(), Ordering::Release);
+    }
 }
 pub struct State {
     pub sequence: u64,
     pub workspaces: BTreeMap<String, Workspace>,
     pub sessions: BTreeMap<String, SessionView>,
     pub dirty: HashSet<String>,
+    pub dirty_messages: HashMap<String, HashSet<String>>,
     pub global_dirty: bool,
     pub published_messages: HashMap<String, HashMap<String, Message>>,
 }
@@ -132,9 +147,11 @@ pub struct Host {
     native_history: Mutex<NativeHistory>,
     pub(super) native_refresh: tokio::sync::Mutex<()>,
     pub(super) usage_sync: tokio::sync::Mutex<()>,
-    pub(super) provider_gate: tokio::sync::Mutex<()>,
+    pub(super) provider_gate: tokio::sync::RwLock<()>,
     pub vcs: Arc<crate::modules::vcs::VcsService>,
     pub vcs_watcher: crate::modules::vcs::VcsWatcher,
+    vcs_refresh_inflight: Mutex<HashMap<String, bool>>,
+    pub vcs_background_enabled: std::sync::atomic::AtomicBool,
     pub forge: Arc<crate::modules::forge::ForgeService>,
 }
 pub(super) fn native_session_key(binding: &SessionBinding) -> String {
@@ -175,6 +192,10 @@ impl Host {
             .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
             .unwrap_or_default();
         forge.load_persisted(saved_pat, read_ids);
+        let vcs_bg = store
+            .preference("gitUiEnabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
         Ok(Arc::new(Self {
             id: new_id(),
             desktop_token: super::auth::secret(),
@@ -183,6 +204,7 @@ impl Host {
                 workspaces,
                 sessions,
                 dirty: HashSet::new(),
+                dirty_messages: HashMap::new(),
                 global_dirty: false,
                 published_messages: HashMap::new(),
             }),
@@ -201,9 +223,11 @@ impl Host {
             native_history: Mutex::new(NativeHistory::default()),
             native_refresh: tokio::sync::Mutex::new(()),
             usage_sync: tokio::sync::Mutex::new(()),
-            provider_gate: tokio::sync::Mutex::new(()),
+            provider_gate: tokio::sync::RwLock::new(()),
             vcs: Arc::new(crate::modules::vcs::VcsService::default()),
             vcs_watcher: crate::modules::vcs::VcsWatcher::default(),
+            vcs_refresh_inflight: Mutex::new(HashMap::new()),
+            vcs_background_enabled: std::sync::atomic::AtomicBool::new(vcs_bg),
             forge,
         }))
     }
@@ -312,6 +336,9 @@ impl Host {
         let rt = tokio::runtime::Handle::try_current().ok();
         self.vcs_watcher.start(move |cwd| {
             let Some(host) = weak.upgrade() else { return };
+            if !host.vcs_background_enabled() {
+                return;
+            }
             if let Some(ref handle) = rt {
                 handle.spawn(async move {
                     host.refresh_vcs_snapshot(&cwd).await;
@@ -325,12 +352,15 @@ impl Host {
         tokio::spawn(async move {
             let cwds: Vec<String> = {
                 let Some(host) = weak.upgrade() else { return };
-                let list = lock(&host.state)
-                    .workspaces
-                    .values()
-                    .map(|w| w.cwd.clone())
-                    .collect();
-                list
+                if !host.vcs_background_enabled() {
+                    Vec::new()
+                } else {
+                    lock(&host.state)
+                        .workspaces
+                        .values()
+                        .map(|w| w.cwd.clone())
+                        .collect()
+                }
             };
             for cwd in cwds {
                 let Some(host) = weak.upgrade() else { return };
@@ -346,7 +376,24 @@ impl Host {
         });
     }
 
+    pub fn vcs_background_enabled(&self) -> bool {
+        self.vcs_background_enabled
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub fn set_vcs_background_enabled(&self, enabled: bool) -> Result<(), String> {
+        lock(&self.store).set_preference("gitUiEnabled", &json!(enabled))?;
+        self.vcs_background_enabled
+            .store(enabled, std::sync::atomic::Ordering::Release);
+        self.sync_vcs_watchers();
+        Ok(())
+    }
+
     pub fn sync_vcs_watchers(&self) {
+        if !self.vcs_background_enabled() {
+            self.vcs_watcher.sync_roots(Vec::new());
+            return;
+        }
         let cwds: Vec<String> = lock(&self.state)
             .workspaces
             .values()
@@ -356,12 +403,40 @@ impl Host {
     }
 
     pub async fn refresh_vcs_snapshot(&self, cwd: &str) {
-        let vcs = self.vcs.clone();
-        let target = cwd.to_string();
-        if let Ok(Ok(Some(snapshot))) =
-            tokio::task::spawn_blocking(move || vcs.snapshot(&target)).await
+        let key = {
+            let norm = cwd.replace('\\', "/").trim_end_matches('/').to_string();
+            if cfg!(windows) { norm.to_ascii_lowercase() } else { norm }
+        };
         {
-            self.emit_event("vcs.changed", json!({ "snapshot": snapshot }));
+            let mut inflight = lock(&self.vcs_refresh_inflight);
+            if let Some(pending) = inflight.get_mut(&key) {
+                *pending = true;
+                return;
+            }
+            inflight.insert(key.clone(), false);
+        }
+
+        loop {
+            let vcs = self.vcs.clone();
+            let target = cwd.to_string();
+            if let Ok(Ok(Some(snapshot))) =
+                tokio::task::spawn_blocking(move || vcs.snapshot(&target)).await
+            {
+                self.emit_event("vcs.changed", json!({ "snapshot": snapshot }));
+            }
+            let rerun = {
+                let mut inflight = lock(&self.vcs_refresh_inflight);
+                if inflight.get(&key).copied() == Some(true) {
+                    inflight.insert(key.clone(), false);
+                    true
+                } else {
+                    inflight.remove(&key);
+                    false
+                }
+            };
+            if !rerun {
+                break;
+            }
         }
     }
 
@@ -435,41 +510,78 @@ impl Host {
         Ok(list)
     }
     pub fn flush(&self) {
-        let mut state = lock(&self.state);
-        let ids = state.dirty.drain().collect::<Vec<_>>();
-        for id in ids {
-            let Some(mut session) = state.sessions.get(&id).cloned() else {
-                continue;
-            };
-            state.sequence += 1;
-            let previous = state.published_messages.remove(&id).unwrap_or_default();
-            let order = session
-                .messages
-                .iter()
-                .map(|m| m.id.clone())
-                .collect::<Vec<_>>();
-            let changed = session
-                .messages
-                .iter()
-                .filter(|m| previous.get(&m.id) != Some(*m))
-                .cloned()
-                .collect::<Vec<_>>();
-            state.published_messages.insert(
-                id.clone(),
-                session
-                    .messages
-                    .iter()
-                    .map(|m| (m.id.clone(), m.clone()))
-                    .collect(),
-            );
-            let summary = summary(&session);
-            session.messages.clear();
-            let _=self.events.send(Event{protocol_version:PROTOCOL_VERSION,sequence:state.sequence,kind:"session.patch".into(),session_id:Some(id),instance_id:session.instance_id.clone(),payload:json!({"view":session,"messageOrder":order,"messageUpserts":changed,"summary":summary})});
-        }
-        if state.global_dirty {
-            state.global_dirty = false;
-            state.sequence += 1;
-            let _=self.events.send(Event{protocol_version:PROTOCOL_VERSION,sequence:state.sequence,kind:"host.changed".into(),session_id:None,instance_id:None,payload:json!({"workspaces":state.workspaces.values().collect::<Vec<_>>(),"sessions":state.sessions.values().map(summary).collect::<Vec<_>>(),"harnesses":self.harnesses()})});
+        let outgoing = {
+            let mut state = lock(&self.state);
+            let mut events_to_send = Vec::new();
+            let ids = state.dirty.drain().collect::<Vec<_>>();
+            for id in ids {
+                let Some((view, order, changed, summary_val, instance_id)) = ({
+                    let state_ref = &mut *state;
+                    state_ref.sessions.get(&id).map(|session| {
+                        let dirty_set = state_ref.dirty_messages.remove(&id);
+                        let published = state_ref.published_messages.entry(id.clone()).or_default();
+                        let mut changed = Vec::new();
+                        let mut order = Vec::with_capacity(session.messages.len());
+                        let mut current_ids = HashSet::with_capacity(session.messages.len());
+                        let full_check = published.is_empty() && !session.messages.is_empty();
+                        for m in &session.messages {
+                            order.push(m.id.clone());
+                            current_ids.insert(m.id.clone());
+                            let candidate = full_check
+                                || dirty_set.as_ref().is_none_or(|d| d.contains(&m.id))
+                                || !published.contains_key(&m.id);
+                            if candidate && published.get(&m.id) != Some(m) {
+                                changed.push(m.clone());
+                                published.insert(m.id.clone(), m.clone());
+                            }
+                        }
+                        if published.len() > current_ids.len() {
+                            published.retain(|mid, _| current_ids.contains(mid));
+                        }
+                        let view = session.clone_without_messages();
+                        let summary_val = summary(session);
+                        let instance_id = session.instance_id.clone();
+                        (view, order, changed, summary_val, instance_id)
+                    })
+                }) else {
+                    state.dirty_messages.remove(&id);
+                    continue;
+                };
+                state.sequence += 1;
+                events_to_send.push(Event {
+                    protocol_version: PROTOCOL_VERSION,
+                    sequence: state.sequence,
+                    kind: "session.patch".into(),
+                    session_id: Some(id),
+                    instance_id,
+                    payload: json!({
+                        "view": view,
+                        "messageOrder": order,
+                        "messageUpserts": changed,
+                        "summary": summary_val,
+                    }),
+                });
+            }
+            if state.global_dirty {
+                state.global_dirty = false;
+                state.sequence += 1;
+                events_to_send.push(Event {
+                    protocol_version: PROTOCOL_VERSION,
+                    sequence: state.sequence,
+                    kind: "host.changed".into(),
+                    session_id: None,
+                    instance_id: None,
+                    payload: json!({
+                        "workspaces": state.workspaces.values().collect::<Vec<_>>(),
+                        "sessions": state.sessions.values().map(summary).collect::<Vec<_>>(),
+                        "harnesses": self.harnesses(),
+                    }),
+                });
+            }
+            events_to_send
+        };
+        for event in outgoing {
+            let _ = self.events.send(event);
         }
     }
     pub fn snapshot(&self) -> Value {
@@ -512,10 +624,24 @@ impl Host {
     }
     pub fn update(&self, id: &str, instance: Option<&str>, f: impl FnOnce(&mut SessionView)) {
         let mut state = lock(&self.state);
-        if let Some(view) = state.sessions.get_mut(id) {
+        let dirty_ids = if let Some(view) = state.sessions.get_mut(id) {
             if instance.is_some() && view.instance_id.as_deref() != instance {
                 return;
             }
+            let prev_len = view.messages.len();
+            let prev_tail = view.messages.last().map(|m| (
+                m.id.clone(),
+                m.text.len(),
+                m.thinking.len(),
+                m.streaming,
+                m.status.clone(),
+                m.tool_call_id.clone(),
+                m.is_error,
+                m.locations.len(),
+                m.diff.is_some(),
+                m.images.len(),
+                m.arguments.to_string().len(),
+            ));
             f(view);
             view.revision += 1;
             view.binding.updated_at = now();
@@ -539,8 +665,8 @@ impl Host {
                     }
                     bytes += content.len();
                 }
-                if message.arguments.to_string().len() > 128 * 1024 {
-                    message.arguments = json!("参数过长，实时视图只展示摘要；原生历史保留完整内容");
+                if matches!(message.arguments, Value::String(ref s) if s.len() > 128 * 1024) {
+                    message.clamp_arguments_size();
                     view.truncated = true;
                 }
                 for image in &mut message.images {
@@ -559,7 +685,69 @@ impl Host {
                 bytes = bytes.saturating_sub(first.text.len() + first.thinking.len());
                 view.truncated = true;
             }
+            let mut tracked: Vec<String> = Vec::new();
+            let tail_same_id = prev_tail.as_ref().is_some_and(|(tid, ..)| {
+                view.messages.len() == prev_len
+                    && view.messages.last().is_some_and(|m| m.id == *tid)
+            });
+            let tail_changed = tail_same_id
+                && prev_tail.as_ref().is_some_and(|prev| {
+                    view.messages.last().is_some_and(|m| {
+                        (
+                            m.id.as_str(),
+                            m.text.len(),
+                            m.thinking.len(),
+                            m.streaming,
+                            m.status.as_str(),
+                            m.tool_call_id.as_str(),
+                            m.is_error,
+                            m.locations.len(),
+                            m.diff.is_some(),
+                            m.images.len(),
+                            m.arguments.to_string().len(),
+                        ) != (
+                            prev.0.as_str(),
+                            prev.1,
+                            prev.2,
+                            prev.3,
+                            prev.4.as_str(),
+                            prev.5.as_str(),
+                            prev.6,
+                            prev.7,
+                            prev.8,
+                            prev.9,
+                            prev.10,
+                        )
+                    })
+                });
+            if tail_changed {
+                if let Some(last) = view.messages.last() {
+                    tracked.push(last.id.clone());
+                }
+            } else if prev_len > 0 && view.messages.len() > prev_len {
+                for m in &view.messages[prev_len.saturating_sub(1)..] {
+                    tracked.push(m.id.clone());
+                }
+            } else if !tail_same_id || prev_len != view.messages.len() {
+                for m in &view.messages {
+                    tracked.push(m.id.clone());
+                }
+            } else {
+                // Same length and tail looks untouched: either a non-message field changed or an earlier message changed.
+                for m in &view.messages {
+                    tracked.push(m.id.clone());
+                }
+            }
+            Some(tracked)
+        } else {
+            None
+        };
+        if let Some(tracked) = dirty_ids {
             state.dirty.insert(id.to_string());
+            let entry = state.dirty_messages.entry(id.to_string()).or_default();
+            for mid in tracked {
+                entry.insert(mid);
+            }
         }
     }
     pub fn persist(&self, id: &str) -> Result<(), String> {
@@ -715,6 +903,7 @@ impl Host {
         for id in missing {
             state.sessions.remove(&id);
             state.dirty.remove(&id);
+            state.dirty_messages.remove(&id);
             state.published_messages.remove(&id);
             changed = true;
         }
@@ -766,13 +955,15 @@ impl Host {
         let previous_revision = view.revision;
         let pi = view.binding.harness_id == "pi";
         let desktop = antigravity_history::is_desktop(&view.binding);
+        let indexed_agy = antigravity_history::has_indexed_history(&view.binding);
         let native_id = view.binding.native_session_id.clone();
         let path = PathBuf::from(path);
         let (messages, offset) = tokio::task::spawn_blocking(move || {
             if pi {
                 history::read_pi(&path, before)
-            } else if desktop {
-                antigravity_history::read(native_id.as_deref().ok_or("缺少 Antigravity 会话标识")?, before)
+            } else if indexed_agy {
+                let app_dir = if desktop { "antigravity" } else { "antigravity-cli" };
+                antigravity_history::read_from(app_dir, native_id.as_deref().ok_or("缺少 Antigravity 会话标识")?, before)
             } else {
                 history::read_codex(&path, before)
             }
@@ -820,11 +1011,12 @@ impl Host {
         id: &str,
         allow_readonly: bool,
     ) -> Result<Arc<Runtime>, String> {
-        let _providers = self.provider_gate.lock().await;
+        let _providers = self.provider_gate.read().await;
         self.start_runtime(id, allow_readonly, false).await
     }
 
-    // Provider operations hold provider_gate across stop, startup and rollback.
+    // Provider mutations hold provider_gate write lock across stop, startup and rollback,
+    // while independent sessions hold concurrent read locks.
     pub(super) async fn start_runtime(
         self: &Arc<Self>,
         id: &str,
@@ -858,19 +1050,24 @@ impl Host {
             .ok_or("工作区不存在")?;
         let (binary, mut args) = registry::launch(&descriptor)?;
         let mut environment = Vec::new();
+        let mut agy_temp_dir: Option<PathBuf> = None;
         if descriptor.id == "acp:codex" && super::providers::codex_official_selected(self)? {
             environment.push(("MODEL_PROVIDER", Some("openai".into())));
             environment.push(("OPENAI_BASE_URL", None));
         }
         if descriptor.id == "acp:antigravity" {
             environment = vec![("GEMINI_API_KEY", None), ("GOOGLE_GEMINI_BASE_URL", None)];
-            let provider = super::providers::agy_for_session(self, id, view.binding.native_session_id.is_some(), antigravity_history::is_desktop(&view.binding))?;
+            let desktop = antigravity_history::is_desktop(&view.binding);
+            let provider = super::providers::agy_for_session(self, id, view.binding.native_session_id.is_some(), desktop)?;
             if let Some(provider) = provider {
                 if args.iter().any(|arg| arg.starts_with("--gemini-dir") || arg.starts_with("--gemini_dir")) { return Err("请移除自定义 gemini-dir 后使用第三方供应商".into()); }
-                let (extra, env) = super::providers::agy_launch(self, &provider)?;
+                let (extra, env) = super::providers::agy_launch(self, &provider, desktop)?;
                 args.extend(extra);
                 environment = env;
             }
+            environment.push(("AGY_CLI_DISABLE_AUTO_UPDATE", Some("true".into())));
+            environment.push(("PYTHONUNBUFFERED", Some("1".into())));
+            environment.push(("AGY_ACP_FORCE_FILE_STORAGE", Some("1".into())));
         }
         if antigravity_history::is_desktop(&view.binding) {
             cwd = metadata::display_path(&antigravity_history::desktop_cwd(
@@ -898,6 +1095,20 @@ impl Host {
             }
         }
         let instance = new_id();
+        if descriptor.id == "acp:antigravity" {
+            let short_key: String = instance.chars().filter(|c| c.is_ascii_alphanumeric()).take(12).collect();
+            let temp_root = std::env::temp_dir().join(format!("cv-agy-{short_key}"));
+            if std::fs::create_dir_all(&temp_root).is_ok() {
+                let temp_str = temp_root.to_string_lossy().into_owned();
+                if cfg!(windows) {
+                    environment.push(("TEMP", Some(temp_str.clone())));
+                    environment.push(("TMP", Some(temp_str)));
+                } else {
+                    environment.push(("TMPDIR", Some(temp_str)));
+                }
+                agy_temp_dir = Some(temp_root);
+            }
+        }
         self.update(id, None, |v| {
             v.instance_id = Some(instance.clone());
             v.state = "starting".into();
@@ -912,6 +1123,9 @@ impl Host {
         let (bridge, mut frames) = match spawned {
             Ok(v) => v,
             Err(e) => {
+                if let Some(dir) = agy_temp_dir.take() {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
                 self.update(id, Some(&instance), |v| {
                     v.state = "crashed".into();
                     v.instance_id = None;
@@ -920,6 +1134,9 @@ impl Host {
                 return Err(e);
             }
         };
+        if let Some(dir) = agy_temp_dir.take() {
+            bridge.set_temp_dir(dir);
+        }
         let runtime = Arc::new(Runtime {
             instance: instance.clone(),
             bridge,
@@ -928,11 +1145,16 @@ impl Host {
             reply_gate: tokio::sync::Mutex::new(()),
             permission_ids: Mutex::new(HashMap::new()),
             fs_approvals: Mutex::new(HashMap::new()),
-            session_auto_write: std::sync::atomic::AtomicBool::new(false),
-            cancelled: std::sync::atomic::AtomicBool::new(false),
-            closing: std::sync::atomic::AtomicBool::new(false),
-            loading_history: std::sync::atomic::AtomicBool::new(false),
-            loading_desktop_history: std::sync::atomic::AtomicBool::new(false),
+            session_auto_write: AtomicBool::new(false),
+            cancelled: AtomicBool::new(false),
+            closing: AtomicBool::new(false),
+            loading_history: AtomicBool::new(false),
+            loading_desktop_history: AtomicBool::new(false),
+            supports_prompt_steer: AtomicBool::new(false),
+            active_prompts: AtomicUsize::new(0),
+            cancel_seq: AtomicU64::new(0),
+            last_activity_ms: AtomicU64::new(now_ms()),
+            update_steps_calls: Mutex::new(HashSet::new()),
             pending_config: Mutex::new(PendingRuntimeConfig::default()),
         });
         lock(&self.runtimes).insert(id.into(), runtime.clone());
@@ -1006,9 +1228,9 @@ impl Host {
         Ok(runtime)
     }
     pub fn runtime_failed(&self, id: &str, runtime: &Arc<Runtime>, error: &str) {
-        runtime
-            .closing
-            .store(true, std::sync::atomic::Ordering::Release);
+        runtime.closing.store(true, Ordering::Release);
+        runtime.cancel_seq.fetch_add(1, Ordering::AcqRel);
+        runtime.active_prompts.store(0, Ordering::Release);
         for (_, tx) in lock(&runtime.fs_approvals).drain() {
             let _ = tx.send(false);
         }
@@ -1037,9 +1259,9 @@ impl Host {
     pub fn stop_runtime(&self, id: &str) -> Result<(), String> {
         let runtime = lock(&self.runtimes).remove(id);
         if let Some(runtime) = runtime {
-            runtime
-                .closing
-                .store(true, std::sync::atomic::Ordering::Release);
+            runtime.closing.store(true, Ordering::Release);
+            runtime.cancel_seq.fetch_add(1, Ordering::AcqRel);
+            runtime.active_prompts.store(0, Ordering::Release);
             for (_, tx) in lock(&runtime.fs_approvals).drain() {
                 let _ = tx.send(false);
             }

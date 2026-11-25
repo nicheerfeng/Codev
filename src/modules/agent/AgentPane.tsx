@@ -46,7 +46,7 @@ function Conversation({
 }: {
   id: string;
   onOpenFile?: (path: string) => void;
-  onOpenDiff?: (path: string, diff: string) => void;
+  onOpenDiff?: (path: string, diff: string, options?: { activate?: boolean }) => void;
   onFork?: (entryId: string) => void;
   searchOpen: boolean;
   onCloseSearch: () => void;
@@ -92,7 +92,7 @@ export function AgentPane({
   active?: boolean;
   workspaceRoots?: string[];
   onOpenFile?: (path: string) => void;
-  onOpenDiff?: (path: string, diff: string) => void;
+  onOpenDiff?: (path: string, diff: string, options?: { activate?: boolean }) => void;
   onAddWorkspaceRoot?: (cwd: string) => void;
   mobile?: boolean;
 }) {

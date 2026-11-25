@@ -31,6 +31,7 @@ import { PanelErrorBoundary } from "@/components/PanelErrorBoundary";
 import { FileExplorer, type FileExplorerHandle } from "@/modules/explorer";
 import { VcsModal } from "@/modules/vcs/VcsModal";
 import { useVcsStore } from "@/modules/vcs/store";
+import { agentClient } from "@/modules/agent/client";
 import { useAgentStore } from "@/modules/agent/store";
 import { NotepadPopover } from "@/modules/notepad/NotepadPopover";
 import {
@@ -139,6 +140,13 @@ export default function App() {
   useEffect(() => {
     void useAgentStore.getState().initDesktop().catch(() => undefined);
   }, []);
+  const prefsHydrated = usePreferencesStore((state) => state.hydrated);
+  useEffect(() => {
+    if (!prefsHydrated) return;
+    void agentClient
+      .request("host.policy.set", { gitUiEnabled })
+      .catch(() => undefined);
+  }, [prefsHydrated, gitUiEnabled]);
   const [showWelcome, setShowWelcome] = useState(() => shouldShowWelcome(null));
   const [needsInitialLayout] = useState(() => needsFirstLayout());
   const [initialFirstSizes] = useState(() =>
@@ -1531,30 +1539,38 @@ export default function App() {
                           tool={toolView}
                           active={rightDockView === "tools"}
                           onOpenFile={(path) => handleOpenFile(path, false)}
-                          onOpenDiff={(path, diff) => {
-                            const normalized = path.replace(/\\/g, "/");
+                          onOpenDiff={(path, diff, options) => {
+                            const normalized = path
+                              .replace(/\\/g, "/")
+                              .replace(/^\/+([A-Za-z]:\/)/u, "$1");
                             const matchedRoot = workspaceRoots.find((root) =>
                               normalized
                                 .toLowerCase()
                                 .startsWith(
-                                  root.replace(/\\/g, "/").toLowerCase(),
+                                  root
+                                    .replace(/\\/g, "/")
+                                    .replace(/^\/+([A-Za-z]:\/)/u, "$1")
+                                    .toLowerCase(),
                                 ),
                             );
                             const parent =
-                              path.replace(/[\\/][^\\/]+$/, "") || path;
+                              normalized.replace(/[\\/][^\\/]+$/, "") ||
+                              normalized;
                             const repoRoot = matchedRoot ?? parent;
                             const normRepo = repoRoot
                               .replace(/\\/g, "/")
+                              .replace(/^\/+([A-Za-z]:\/)/u, "$1")
                               .replace(/\/+$/, "");
                             const relPath = normalized
                               .toLowerCase()
                               .startsWith(`${normRepo.toLowerCase()}/`)
                               ? normalized.slice(normRepo.length + 1)
-                              : path;
+                              : normalized;
                             openGitDiffTab({
-                              repoRoot,
+                              repoRoot: normRepo,
                               path: relPath,
                               diff,
+                              activate: options?.activate,
                             });
                           }}
                           workspaceRoots={workspaceRoots}

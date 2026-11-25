@@ -1,10 +1,19 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
 import { toast } from "sonner";
+import { HugeiconsIcon } from "@hugeicons/react";
+import {
+  ArrowDown01Icon,
+  FileValidationIcon,
+} from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAgentStore } from "./store";
-import type { DiffSummary, TurnFileChange } from "./toolFormat";
+import {
+  formatCompactPathParts,
+  type DiffSummary,
+  type TurnFileChange,
+} from "./toolFormat";
 import type { PendingRequest, SessionView } from "./types";
 
 type PlanEntry = {
@@ -146,20 +155,57 @@ export function EditDiffView({
   );
 }
 
+function fileTypeBadge(ext: string): { label: string; toneClass: string } {
+  switch (ext) {
+    case "ts":
+    case "tsx":
+      return { label: "TS", toneClass: "is-ts" };
+    case "js":
+    case "jsx":
+    case "mjs":
+    case "cjs":
+      return { label: "JS", toneClass: "is-js" };
+    case "rs":
+      return { label: "RS", toneClass: "is-rs" };
+    case "py":
+      return { label: "PY", toneClass: "is-py" };
+    case "yaml":
+    case "yml":
+      return { label: "Y", toneClass: "is-yaml" };
+    case "md":
+    case "mdx":
+      return { label: "M↓", toneClass: "is-md" };
+    case "json":
+      return { label: "{}", toneClass: "is-json" };
+    case "css":
+    case "scss":
+      return { label: "#", toneClass: "is-css" };
+    case "toml":
+      return { label: "T", toneClass: "is-toml" };
+    default:
+      return { label: (ext.slice(0, 2) || "·").toUpperCase(), toneClass: "" };
+  }
+}
+
 export function TurnFileChangesBar({
   changes,
+  cwd = "",
   mobile,
   onOpenFile,
   onOpenDiff,
 }: {
   changes: TurnFileChange[];
+  cwd?: string;
   mobile?: boolean;
   onOpenFile: (path: string) => void;
-  onOpenDiff?: (path: string, diff: string) => void;
+  onOpenDiff?: (path: string, diff: string, options?: { activate?: boolean }) => void;
 }) {
+  const [open, setOpen] = useState(true);
   if (!changes.length) return null;
   const totalAdds = changes.reduce((sum, c) => sum + c.adds, 0);
   const totalDels = changes.reduce((sum, c) => sum + c.dels, 0);
+  const hasStats = totalAdds > 0 || totalDels > 0;
+
   const reveal = async (item: TurnFileChange) => {
     try {
       await revealItemInDir(
@@ -171,57 +217,119 @@ export function TurnFileChangesBar({
       toast.error("无法在资源管理器中定位", { description: String(error) });
     }
   };
+
+  const openItemDiffOrFile = (
+    item: TurnFileChange,
+    options?: { activate?: boolean },
+  ) => {
+    if (onOpenDiff) {
+      onOpenDiff(item.path, item.diffText ?? "", options);
+    } else if (item.operation === "删除") {
+      void reveal(item);
+    } else {
+      onOpenFile(item.path);
+    }
+  };
+
+  const handleReviewAll = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!onOpenDiff) {
+      const first = changes[0];
+      if (first) openItemDiffOrFile(first);
+      return;
+    }
+    changes.forEach((item, index) => {
+      onOpenDiff(item.path, item.diffText ?? "", { activate: index === 0 });
+    });
+  };
+
   return (
-    <details className="agent-turn-files">
-      <summary>
-        <span>
-          文件变更 · {changes.length} 个文件（
-          {changes.map((c) => c.path.split(/[\\/]/u).pop()).join("、")}）
-        </span>
-        {(totalAdds > 0 || totalDels > 0) && (
-          <span className="font-mono text-[10px]">
-            {totalAdds > 0 && <span className="text-green-500">+{totalAdds}</span>}
-            {totalAdds > 0 && totalDels > 0 ? " " : ""}
-            {totalDels > 0 && <span className="text-red-500">-{totalDels}</span>}
+    <details
+      className="agent-turn-files"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className="agent-turn-files-summary">
+        <div className="agent-turn-files-head-left">
+          <span className="agent-turn-files-count">
+            {changes.length} 个文件变更
           </span>
+          {hasStats && (
+            <span className="agent-turn-files-stats">
+              <span className="is-add">+{totalAdds}</span>
+              <span className="is-del">-{totalDels}</span>
+            </span>
+          )}
+          <HugeiconsIcon
+            icon={ArrowDown01Icon}
+            size={13}
+            className={`agent-turn-files-chevron ${open ? "is-open" : ""}`}
+          />
+        </div>
+        {(onOpenDiff || changes.length > 0) && (
+          <button
+            type="button"
+            className="agent-turn-review-btn"
+            title="在主编辑器打开全部变更文件进行对比审查"
+            onClick={handleReviewAll}
+          >
+            <HugeiconsIcon icon={FileValidationIcon} size={13} />
+            <span>代码审查</span>
+          </button>
         )}
       </summary>
       <div className="agent-turn-files-list">
-        {changes.map((item) => (
-          <div key={item.path} className="agent-turn-file-row">
-            <button
-              type="button"
-              className="min-w-0 flex-1 truncate text-left hover:text-foreground"
-              title={
-                item.diffText && onOpenDiff ? "在主编辑器打开 Diff" : item.path
-              }
-              onClick={() => {
-                if (item.diffText && onOpenDiff) onOpenDiff(item.path, item.diffText);
-                else if (item.operation === "删除") void reveal(item);
-                else onOpenFile(item.path);
-              }}
-            >
-              <span className="agent-file-op">{item.operation}</span> · {item.path}
-            </button>
-            {(item.adds > 0 || item.dels > 0) && (
-              <span className="shrink-0 font-mono text-[10px]">
-                {item.adds > 0 && <span className="text-green-500">+{item.adds}</span>}
-                {item.adds > 0 && item.dels > 0 ? " " : ""}
-                {item.dels > 0 && <span className="text-red-500">-{item.dels}</span>}
-              </span>
-            )}
-            {!mobile && (
+        {changes.map((item) => {
+          const { fileName, dirDisplay, ext } = formatCompactPathParts(
+            item.path,
+            cwd,
+          );
+          const badge = fileTypeBadge(ext);
+          const itemHasStats = item.adds > 0 || item.dels > 0;
+          return (
+            <div key={item.path} className="agent-turn-file-row">
               <button
                 type="button"
-                className="shrink-0 px-1 text-muted-foreground hover:text-foreground"
-                title="在系统目录中显示"
-                onClick={() => void reveal(item)}
+                className="agent-turn-file-main"
+                title={
+                  onOpenDiff
+                    ? `点击对比差异: ${item.path}`
+                    : `点击打开文件: ${item.path}`
+                }
+                onClick={() => openItemDiffOrFile(item, { activate: true })}
               >
-                ↗
+                <span className={`agent-file-badge ${badge.toneClass}`}>
+                  {badge.label}
+                </span>
+                <span className="agent-turn-file-name">{fileName}</span>
+                {dirDisplay && (
+                  <span className="agent-turn-file-dir">{dirDisplay}</span>
+                )}
               </button>
-            )}
-          </div>
-        ))}
+              <div className="agent-turn-file-right">
+                {itemHasStats ? (
+                  <span className="agent-turn-files-stats">
+                    <span className="is-add">+{item.adds}</span>
+                    <span className="is-del">-{item.dels}</span>
+                  </span>
+                ) : (
+                  <span className="agent-file-op-tag">{item.operation}</span>
+                )}
+                {!mobile && (
+                  <button
+                    type="button"
+                    className="agent-turn-file-reveal"
+                    title="在系统目录中显示"
+                    onClick={() => void reveal(item)}
+                  >
+                    ↗
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </details>
   );

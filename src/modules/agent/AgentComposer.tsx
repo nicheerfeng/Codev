@@ -454,7 +454,7 @@ export function AgentComposer({ session }: { session: SessionView }) {
                 ? "输入任务；输入 / 查看命令与技能…"
                 : "输入任务，发送时连接原生代理…"
           }
-          className="agent-prompt reader-scrollbar min-h-18 rounded-none border-0! bg-transparent! px-3 py-3 text-[13px]! shadow-none! outline-none! ring-0! focus-visible:border-0! focus-visible:ring-0! [field-sizing:fixed]"
+          className="agent-prompt reader-scrollbar min-h-24 rounded-none border-0! bg-transparent! px-3 py-3 text-[13px]! shadow-none! outline-none! ring-0! focus-visible:border-0! focus-visible:ring-0! [field-sizing:fixed]"
           value={draft.text}
           disabled={session.readOnly || !connected}
           onChange={(e) => {

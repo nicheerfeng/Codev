@@ -37,14 +37,25 @@ impl Default for VcsWatcher {
 fn should_ignore_path(path: &Path) -> bool {
     let text = path.to_string_lossy();
     let lower = text.to_ascii_lowercase();
-    if lower.contains("node_modules")
+    if lower.contains("\\node_modules\\")
+        || lower.contains("/node_modules/")
+        || lower.ends_with("\\node_modules")
+        || lower.ends_with("/node_modules")
         || lower.contains("\\target\\")
         || lower.contains("/target/")
+        || lower.contains("\\.next\\")
+        || lower.contains("/.next/")
+        || lower.contains("\\dist\\")
+        || lower.contains("/dist/")
+        || lower.contains("\\__pycache__\\")
+        || lower.contains("/__pycache__/")
+        || lower.contains("\\.venv\\")
+        || lower.contains("/.venv/")
         || lower.contains("index.lock")
     {
         return true;
     }
-    if lower.contains(".git") {
+    if lower.contains("\\.git") || lower.contains("/.git") {
         let name = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -52,7 +63,14 @@ fn should_ignore_path(path: &Path) -> bool {
         let is_refs = lower.contains("refs");
         let is_git_meta = matches!(
             name,
-            "HEAD" | "index" | "MERGE_HEAD" | "REBASE_HEAD" | "CHERRY_PICK_HEAD" | "REVERT_HEAD" | "packed-refs"
+            "HEAD"
+                | "index"
+                | "MERGE_HEAD"
+                | "REBASE_HEAD"
+                | "CHERRY_PICK_HEAD"
+                | "REVERT_HEAD"
+                | "packed-refs"
+                | "FETCH_HEAD"
         );
         return !(is_refs || is_git_meta);
     }

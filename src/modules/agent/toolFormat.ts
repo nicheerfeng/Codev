@@ -43,6 +43,65 @@ export type TurnFileChange = {
   diffText: string | null;
 };
 
+export function normalizeAgentPath(input: string, cwd = ""): string {
+  const raw = input.replace(/\\/g, "/").trim().replace(/^\/+([A-Za-z]:\/)/u, "$1");
+  if (!raw) return "";
+  const normCwd = cwd.replace(/\\/g, "/").trim().replace(/^\/+([A-Za-z]:\/)/u, "$1");
+  const abs = /^[A-Za-z]:\//u.test(raw) || raw.startsWith("/");
+  const full = abs || !normCwd ? raw : `${normCwd.replace(/\/+$/u, "")}/${raw}`;
+  const drive = /^[A-Za-z]:\//u.test(full)
+    ? `${full[0].toLowerCase()}:/`
+    : full.startsWith("/")
+      ? "/"
+      : "";
+  const body = drive ? full.slice(drive.length) : full;
+  const parts: string[] = [];
+  for (const part of body.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === ".." && parts.length && !parts[parts.length - 1].endsWith(":")) {
+      parts.pop();
+    } else if (part !== "..") {
+      parts.push(part);
+    }
+  }
+  return `${drive}${parts.join("/")}`;
+}
+
+export function agentPathKey(path: string, cwd = ""): string {
+  const resolved = normalizeAgentPath(path, cwd);
+  return /^[A-Za-z]:/u.test(resolved) ? resolved.toLowerCase() : resolved;
+}
+
+export function formatCompactPathParts(
+  filePath: string,
+  cwd = "",
+): { fileName: string; dirDisplay: string; ext: string } {
+  const normPath = normalizeAgentPath(filePath);
+  const slashIdx = normPath.lastIndexOf("/");
+  const fileName = slashIdx >= 0 ? normPath.slice(slashIdx + 1) : normPath;
+  const fullDir = slashIdx > 0 ? normPath.slice(0, slashIdx) : "";
+  const dotIdx = fileName.lastIndexOf(".");
+  const ext = dotIdx > 0 && dotIdx < fileName.length - 1
+    ? fileName.slice(dotIdx + 1).toLowerCase()
+    : "";
+
+  const normCwd = normalizeAgentPath(cwd).replace(/\/+$/u, "");
+  let dirDisplay = fullDir;
+  if (normCwd && fullDir) {
+    const lowDir = fullDir.toLowerCase();
+    const lowCwd = normCwd.toLowerCase();
+    if (lowDir === lowCwd) {
+      dirDisplay = ".";
+    } else if (lowDir.startsWith(`${lowCwd}/`)) {
+      dirDisplay = fullDir.slice(normCwd.length + 1);
+    }
+  }
+  if (dirDisplay.length > 68) {
+    dirDisplay = `…${dirDisplay.slice(-65)}`;
+  }
+  return { fileName, dirDisplay, ext };
+}
+
 const TOOL_LABELS: Record<ToolCategory, string> = {
   read: "读取",
   search: "搜索",
@@ -173,7 +232,7 @@ export function extractToolPaths(value: unknown, output = new Set<string>()): st
     for (const [key, item] of Object.entries(node as Record<string, unknown>)) {
       if (
         typeof item === "string" &&
-        /^(path|file_?path|absolute_?path|filePath|target_?file|directory|dir)$/i.test(
+        /^(path|file_?path|absolute_?path|filePath|target_?file|TargetFile|SearchPath|SearchDirectory|DirectoryPath|directory|dir)$/i.test(
           key,
         ) &&
         item.length < 400 &&
@@ -195,32 +254,243 @@ export function extractToolPaths(value: unknown, output = new Set<string>()): st
   return [...output];
 }
 
+export function computeLineDiff(
+  oldText: string,
+  newText: string,
+  path?: string,
+): DiffSummary | null {
+  if (!oldText && !newText) return null;
+  const oldLines = oldText ? oldText.split(/\r?\n/u) : [];
+  const newLines = newText ? newText.split(/\r?\n/u) : [];
+  const header = path ? `--- a/${path}\n+++ b/${path}\n` : "--- a\n+++ b\n";
+
+  // Trim common prefix & suffix first to keep LCS fast and small
+  let prefix = 0;
+  while (
+    prefix < oldLines.length &&
+    prefix < newLines.length &&
+    oldLines[prefix] === newLines[prefix]
+  ) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    suffix < oldLines.length - prefix &&
+    suffix < newLines.length - prefix &&
+    oldLines[oldLines.length - 1 - suffix] ===
+      newLines[newLines.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+
+  const midOld = oldLines.slice(prefix, oldLines.length - suffix);
+  const midNew = newLines.slice(prefix, newLines.length - suffix);
+
+  const lines: DiffLine[] = [];
+  let adds = 0;
+  let dels = 0;
+
+  if (midOld.length === 0 && midNew.length === 0) {
+    return null;
+  }
+
+  // Show up to 2 context lines around changed region
+  const ctxBefore = oldLines.slice(Math.max(0, prefix - 2), prefix);
+  const ctxAfter = oldLines.slice(
+    oldLines.length - suffix,
+    Math.min(oldLines.length, oldLines.length - suffix + 2),
+  );
+  for (const l of ctxBefore) lines.push({ kind: "ctx", text: ` ${l}` });
+
+  const MAX_DP_CELLS = 250_000;
+  if (midOld.length * midNew.length <= MAX_DP_CELLS) {
+    const m = midOld.length;
+    const n = midNew.length;
+    const dp = new Int32Array((m + 1) * (n + 1));
+    const stride = n + 1;
+    for (let i = m - 1; i >= 0; i -= 1) {
+      for (let j = n - 1; j >= 0; j -= 1) {
+        if (midOld[i] === midNew[j]) {
+          dp[i * stride + j] = dp[(i + 1) * stride + (j + 1)] + 1;
+        } else {
+          const down = dp[(i + 1) * stride + j];
+          const right = dp[i * stride + (j + 1)];
+          dp[i * stride + j] = down >= right ? down : right;
+        }
+      }
+    }
+    let i = 0;
+    let j = 0;
+    while (i < m && j < n) {
+      if (midOld[i] === midNew[j]) {
+        lines.push({ kind: "ctx", text: ` ${midOld[i]}` });
+        i += 1;
+        j += 1;
+      } else if (dp[(i + 1) * stride + j] >= dp[i * stride + (j + 1)]) {
+        dels += 1;
+        lines.push({ kind: "del", text: `-${midOld[i]}` });
+        i += 1;
+      } else {
+        adds += 1;
+        lines.push({ kind: "add", text: `+${midNew[j]}` });
+        j += 1;
+      }
+    }
+    while (i < m) {
+      dels += 1;
+      lines.push({ kind: "del", text: `-${midOld[i]}` });
+      i += 1;
+    }
+    while (j < n) {
+      adds += 1;
+      lines.push({ kind: "add", text: `+${midNew[j]}` });
+      j += 1;
+    }
+  } else {
+    // Multiset line-bag heuristic when diff slice is huge
+    const oldSet = new Map<string, number>();
+    for (const l of midOld) oldSet.set(l, (oldSet.get(l) ?? 0) + 1);
+    const newSet = new Map<string, number>();
+    for (const l of midNew) newSet.set(l, (newSet.get(l) ?? 0) + 1);
+    for (const l of midOld) {
+      const rem = newSet.get(l) ?? 0;
+      if (rem > 0) {
+        newSet.set(l, rem - 1);
+      } else {
+        dels += 1;
+        lines.push({ kind: "del", text: `-${l}` });
+      }
+    }
+    for (const l of midNew) {
+      const rem = oldSet.get(l) ?? 0;
+      if (rem > 0) {
+        oldSet.set(l, rem - 1);
+      } else {
+        adds += 1;
+        lines.push({ kind: "add", text: `+${l}` });
+      }
+    }
+  }
+
+  for (const l of ctxAfter) lines.push({ kind: "ctx", text: ` ${l}` });
+  const hunkHead = `@@ -${Math.max(1, prefix - ctxBefore.length + 1)},${ctxBefore.length + midOld.length + ctxAfter.length} +${Math.max(1, prefix - ctxBefore.length + 1)},${ctxBefore.length + midNew.length + ctxAfter.length} @@`;
+  return {
+    adds,
+    dels,
+    lines,
+    rawPatch: `${header}${hunkHead}\n${lines.map((l) => l.text).join("\n")}`,
+    path,
+  };
+}
+
+function mergeDiffSummaries(
+  parts: Array<DiffSummary | null>,
+  fallbackPath?: string,
+): DiffSummary | null {
+  const combined: DiffLine[] = [];
+  let adds = 0;
+  let dels = 0;
+  const rawParts: string[] = [];
+  let firstPath = fallbackPath;
+  for (const sub of parts) {
+    if (!sub) continue;
+    adds += sub.adds;
+    dels += sub.dels;
+    combined.push(...sub.lines);
+    rawParts.push(sub.rawPatch);
+    if (!firstPath && sub.path) firstPath = sub.path;
+  }
+  if (!rawParts.length) return null;
+  return {
+    adds,
+    dels,
+    lines: combined,
+    rawPatch: rawParts.join("\n\n"),
+    path: firstPath,
+  };
+}
+
+export function extractDiffFromToolArguments(
+  category: ToolCategory,
+  argsValue: unknown,
+  pathHint?: string,
+): DiffSummary | null {
+  if (category !== "edit" && category !== "write") return null;
+  if (typeof argsValue === "string") {
+    const trimmed = argsValue.trim();
+    if (trimmed.includes("@@") || trimmed.includes("*** Update File:")) {
+      return parseDiffSummary({ patch: trimmed, path: pathHint });
+    }
+    return null;
+  }
+  if (!argsValue || typeof argsValue !== "object") return null;
+  const args = argsValue as Record<string, unknown>;
+  const path =
+    pathHint ??
+    (typeof args.TargetFile === "string"
+      ? args.TargetFile
+      : typeof args.file_path === "string"
+        ? args.file_path
+        : typeof args.path === "string"
+          ? args.path
+          : undefined);
+
+  if (typeof args.patch === "string" && args.patch.trim()) {
+    return parseDiffSummary({ patch: args.patch, path });
+  }
+  if (typeof args.input === "string" && args.input.includes("@@")) {
+    return parseDiffSummary({ patch: args.input, path });
+  }
+  if (Array.isArray(args.ReplacementChunks)) {
+    const chunkDiffs = args.ReplacementChunks.map((chunk) => {
+      if (!chunk || typeof chunk !== "object") return null;
+      const c = chunk as Record<string, unknown>;
+      const oldText =
+        typeof c.TargetContent === "string" ? c.TargetContent : "";
+      const newText =
+        typeof c.ReplacementContent === "string" ? c.ReplacementContent : "";
+      return computeLineDiff(oldText, newText, path);
+    });
+    return mergeDiffSummaries(chunkDiffs, path);
+  }
+  const oldCandidates = [
+    args.TargetContent,
+    args.oldText,
+    args.old_text,
+    args.oldString,
+    args.old_string,
+  ];
+  const newCandidates = [
+    args.ReplacementContent,
+    args.newText,
+    args.new_text,
+    args.newString,
+    args.new_string,
+  ];
+  const oldText = oldCandidates.find((v) => typeof v === "string") as string | undefined;
+  const newText = newCandidates.find((v) => typeof v === "string") as string | undefined;
+  if (oldText !== undefined || newText !== undefined) {
+    return computeLineDiff(oldText ?? "", newText ?? "", path);
+  }
+  if (category === "write") {
+    const content =
+      typeof args.CodeContent === "string"
+        ? args.CodeContent
+        : typeof args.content === "string"
+          ? args.content
+          : undefined;
+    if (typeof content === "string" && content.length > 0) {
+      return computeLineDiff("", content, path);
+    }
+  }
+  return null;
+}
+
 export function parseDiffSummary(diff: unknown): DiffSummary | null {
   if (!diff || typeof diff !== "object") return null;
   const obj = diff as Record<string, unknown>;
   if (Array.isArray(obj.items)) {
-    const combined: DiffLine[] = [];
-    let adds = 0;
-    let dels = 0;
-    const rawParts: string[] = [];
-    let firstPath: string | undefined;
-    for (const item of obj.items) {
-      const sub = parseDiffSummary(item);
-      if (!sub) continue;
-      adds += sub.adds;
-      dels += sub.dels;
-      combined.push(...sub.lines);
-      rawParts.push(sub.rawPatch);
-      if (!firstPath && sub.path) firstPath = sub.path;
-    }
-    if (!rawParts.length) return null;
-    return {
-      adds,
-      dels,
-      lines: combined,
-      rawPatch: rawParts.join("\n\n"),
-      path: firstPath,
-    };
+    return mergeDiffSummaries(obj.items.map((item) => parseDiffSummary(item)));
   }
   const path = typeof obj.path === "string" ? obj.path : undefined;
   if (typeof obj.patch === "string" && obj.patch.trim()) {
@@ -249,20 +519,7 @@ export function parseDiffSummary(diff: unknown): DiffSummary | null {
   }
   const oldText = typeof obj.oldText === "string" ? obj.oldText : "";
   const newText = typeof obj.newText === "string" ? obj.newText : "";
-  if (!oldText && !newText) return null;
-  const lines: DiffLine[] = [];
-  const oldLines = oldText ? oldText.split(/\r?\n/u) : [];
-  const newLines = newText ? newText.split(/\r?\n/u) : [];
-  for (const l of oldLines) lines.push({ kind: "del", text: `-${l}` });
-  for (const l of newLines) lines.push({ kind: "add", text: `+${l}` });
-  const header = path ? `--- a/${path}\n+++ b/${path}\n` : "--- a\n+++ b\n";
-  return {
-    adds: newLines.length,
-    dels: oldLines.length,
-    lines,
-    rawPatch: `${header}@@\n${lines.map((l) => l.text).join("\n")}`,
-    path,
-  };
+  return computeLineDiff(oldText, newText, path);
 }
 
 function isGrepNoMatch(
@@ -287,6 +544,37 @@ function isGrepNoMatch(
   );
 }
 
+function shortToolPath(p: string): string {
+  const clean = p.replace(/\\/g, "/").replace(/\/+$/u, "");
+  return clean.split("/").pop() || clean;
+}
+
+function readNumArg(args: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const val = args[key];
+    if (typeof val === "number" && Number.isFinite(val)) return val;
+  }
+  return undefined;
+}
+
+function readStrArg(args: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const val = args[key];
+    if (typeof val === "string" && val.trim()) return val;
+  }
+  return undefined;
+}
+
+/** 去除工具标题中冗长的系统绝对路径（如 Agy 返回的 `C:\Users\...\file.ts`），仅保留文件名。 */
+export function compactToolTitlePaths(text: string): string {
+  if (!text) return "";
+  return text
+    .replace(/(?:\/)?[A-Za-z]:[\\/][^\s"'`)\]]+/gu, (match) => shortToolPath(match))
+    .replace(/\/(?:Users|home|var|tmp|opt|etc|Volumes|mnt)\/[^\s"'`)\]]+/gu, (match) =>
+      shortToolPath(match),
+    );
+}
+
 export function describeToolCall(message: AgentMessage): DescribedTool {
   const category = normalizeToolCategory(message.toolName, message.toolKind);
   const args =
@@ -299,43 +587,55 @@ export function describeToolCall(message: AgentMessage): DescribedTool {
       paths.push(loc.path);
     }
   }
-  const rawCmd =
-    typeof args.command === "string"
-      ? args.command
-      : typeof args.cmd === "string"
-        ? args.cmd
-        : undefined;
+  const rawCmd = readStrArg(args, ["command", "cmd", "CommandLine", "commandLine"]);
   const commandText = rawCmd ? displayCommand(rawCmd) : undefined;
-  const shortPath = (p: string) => p.split(/[\\/]/u).pop() || p;
 
   let target = "";
+  const searchQuery = readStrArg(args, ["query", "pattern", "Query", "Pattern", "SearchTerm"]);
   if (category === "command" && commandText) {
     target = commandText;
-  } else if (
-    category === "search" &&
-    typeof (args.query ?? args.pattern) === "string"
-  ) {
-    target = `"${String(args.query ?? args.pattern)}"`;
-    if (paths[0]) target += ` · ${shortPath(paths[0])}`;
+  } else if (category === "search" && searchQuery) {
+    target = `"${searchQuery}"`;
+    if (paths[0]) target += ` · ${shortToolPath(paths[0])}`;
   } else if (paths[0]) {
-    target = shortPath(paths[0]);
-    if (category === "read" && typeof args.offset === "number") {
-      target += ` (L${args.offset}${typeof args.limit === "number" ? `-${args.offset + args.limit}` : ""})`;
+    target = shortToolPath(paths[0]);
+    const startLine = readNumArg(args, ["StartLine", "startLine", "start_line", "line"]);
+    const endLine = readNumArg(args, ["EndLine", "endLine", "end_line"]);
+    if (category === "read" && startLine !== undefined) {
+      target +=
+        endLine !== undefined && endLine >= startLine
+          ? ` #L${startLine}-${endLine}`
+          : ` #L${startLine}`;
+    } else if (category === "read" && typeof args.offset === "number") {
+      target += ` #L${args.offset}${typeof args.limit === "number" ? `-${args.offset + args.limit}` : ""}`;
     }
-  } else if (typeof args.url === "string") {
-    target = args.url;
+  } else if (typeof args.url === "string" || typeof args.Url === "string") {
+    target = String(args.url ?? args.Url);
   } else if (typeof message.arguments === "string" && message.arguments.trim()) {
-    target = message.arguments.trim().split(/\r?\n/u)[0].slice(0, 80);
+    target = compactToolTitlePaths(
+      message.arguments.trim().split(/\r?\n/u)[0].slice(0, 80),
+    );
+  } else if (message.toolName) {
+    const compacted = compactToolTitlePaths(message.toolName);
+    if (compacted !== message.toolName) {
+      target = compacted;
+    }
   }
 
-  const diff = parseDiffSummary(message.diff);
+  const diff =
+    parseDiffSummary(message.diff) ??
+    extractDiffFromToolArguments(category, message.arguments, paths[0]);
   if (diff && target && !target.includes("+") && (diff.adds || diff.dels)) {
     target += ` (+${diff.adds} -${diff.dels})`;
   }
 
   const badge = TOOL_LABELS[category];
-  const baseTitle = message.toolName || badge;
-  const title = target ? `${badge} ${target}` : baseTitle;
+  const baseTitle = compactToolTitlePaths(message.toolName) || badge;
+  const title = target
+    ? target === baseTitle
+      ? `${badge} ${target}`
+      : `${badge} ${target}`
+    : baseTitle;
   const isGrepEmpty = isGrepNoMatch(category, message.toolName, commandText, message);
 
   return {
@@ -350,28 +650,6 @@ export function describeToolCall(message: AgentMessage): DescribedTool {
   };
 }
 
-function normalizePath(cwd: string, input: string): string {
-  const raw = input.replace(/\\/g, "/").trim();
-  const abs = /^[A-Za-z]:\//u.test(raw) || raw.startsWith("/");
-  const full = abs || !cwd ? raw : `${cwd.replace(/\\/g, "/")}/${raw}`;
-  const drive = /^[A-Za-z]:\//u.test(full)
-    ? full.slice(0, 3)
-    : full.startsWith("/")
-      ? "/"
-      : "";
-  const body = drive ? full.slice(drive.length) : full;
-  const parts: string[] = [];
-  for (const part of body.split("/")) {
-    if (!part || part === ".") continue;
-    if (part === ".." && parts.length && !parts[parts.length - 1].endsWith(":")) {
-      parts.pop();
-    } else if (part !== "..") {
-      parts.push(part);
-    }
-  }
-  return `${drive}${parts.join("/")}`;
-}
-
 export function collectTurnFileChanges(
   messages: AgentMessage[],
   cwd: string,
@@ -383,15 +661,19 @@ export function collectTurnFileChanges(
     diff: DiffSummary | null,
   ) => {
     if (!rawPath.trim()) return;
-    const resolved = normalizePath(cwd, rawPath);
-    const key = /^[A-Za-z]:/u.test(resolved) ? resolved.toLowerCase() : resolved;
+    const resolved = normalizeAgentPath(rawPath, cwd);
+    const key = agentPathKey(resolved, cwd);
     const prev = byKey.get(key);
+    const nextDiff =
+      diff?.rawPatch && prev?.diffText && diff.rawPatch !== prev.diffText
+        ? `${prev.diffText}\n\n${diff.rawPatch}`
+        : (diff?.rawPatch ?? prev?.diffText ?? null);
     byKey.set(key, {
       path: resolved,
-      operation,
+      operation: prev?.operation ?? operation,
       adds: (prev?.adds ?? 0) + (diff?.adds ?? 0),
       dels: (prev?.dels ?? 0) + (diff?.dels ?? 0),
-      diffText: diff?.rawPatch ?? prev?.diffText ?? null,
+      diffText: nextDiff,
     });
   };
 

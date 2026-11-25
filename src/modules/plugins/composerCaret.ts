@@ -5,8 +5,8 @@ export type ComposerCaret = {
   height: number;
 };
 
-export const COMPOSER_MIN_HEIGHT = 72;
-export const COMPOSER_DEFAULT_MAX = 180;
+export const COMPOSER_MIN_HEIGHT = 96;
+export const COMPOSER_DEFAULT_MAX = Math.round(COMPOSER_MIN_HEIGHT * 2.5);
 
 const carets = new Map<string, ComposerCaret>();
 let lastHeight = COMPOSER_DEFAULT_MAX;

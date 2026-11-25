@@ -166,6 +166,8 @@ export type VcsTurnFileSummary = {
   status: string;
   staged: boolean;
   untracked: boolean;
+  additions?: number;
+  deletions?: number;
 };
 
 export type VcsTurnDiffSummary = {

@@ -42,6 +42,10 @@ describe("composer height", () => {
     expect(composerHeight("new-draft")).toBe(COMPOSER_DEFAULT_MAX);
   });
 
+  it("keeps the default max height at 2.5x the minimum height", () => {
+    expect(COMPOSER_DEFAULT_MAX).toBe(Math.round(COMPOSER_MIN_HEIGHT * 2.5));
+  });
+
   it("keeps a dragged height between the bounds", () => {
     expect(clampComposerHeight(240, 480)).toBe(240);
   });

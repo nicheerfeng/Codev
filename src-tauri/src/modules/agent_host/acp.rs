@@ -7,9 +7,207 @@ use super::{
     protocol::*,
 };
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 const TIMEOUT: Duration = Duration::from_secs(120);
+const REPLAY_IDLE_GAP: Duration = Duration::from_millis(2000);
+const TOOL_TEXT_LIMIT: usize = 8_000;
+const TOOL_PAYLOAD_MAX_NODES: usize = 512;
+const TOOL_PAYLOAD_MAX_TEXT: usize = 64_000;
+const TOOL_TEXT_TRUNCATED: &str = "[Earlier output truncated]\n\n";
+const COMMAND_LINE_TRUNCATED: &str = "\n\n[Command truncated]";
+
+fn parse_semver3(version: &str) -> Option<(u32, u32, u32)> {
+    let trimmed = version.trim().trim_start_matches(|c: char| !c.is_ascii_digit());
+    let mut parts = trimmed.split(['.', '-', '+']);
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts.next()?.parse::<u32>().ok()?;
+    let patch = parts.next()?.parse::<u32>().ok()?;
+    Some((major, minor, patch))
+}
+
+fn detect_agy_cli_version() -> Option<(u32, u32, u32)> {
+    static VERSION: OnceLock<Option<(u32, u32, u32)>> = OnceLock::new();
+    *VERSION.get_or_init(|| {
+        let bin = super::registry::resolve_binary("agy")?;
+        let mut cmd = super::registry::command_for(&bin, &["--version".to_string()]);
+        let output = cmd.output().ok()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        parse_semver3(&stdout).or_else(|| parse_semver3(&stderr))
+    })
+}
+
+fn antigravity_client_info(cli_version: Option<(u32, u32, u32)>) -> Value {
+    // agy >= 1.5.1 exposes every model to any clientInfo; older 1.3/1.4/1.5.0 builds allowlist Zed.
+    if cli_version.is_some_and(|v| v < (1, 5, 1)) {
+        json!({ "name": "zed", "version": "0.0.0" })
+    } else {
+        json!({ "name": "Codev", "version": env!("CARGO_PKG_VERSION") })
+    }
+}
+
+pub(super) fn format_acp_error(error: &str, diagnostic: &str) -> String {
+    let lower = format!("{error}\n{diagnostic}").to_ascii_lowercase();
+    if lower.contains("quota_exhausted") || lower.contains("quota exceeded") || lower.contains("resource_exhausted") {
+        return format!("Antigravity 模型配额已耗尽，请切换模型或稍后再试。\n{error}");
+    }
+    if lower.contains("invalid_thinking_signature") || lower.contains("thinking signature") {
+        return format!("Antigravity 会话思考签名失效，建议新建会话继续。\n{error}");
+    }
+    if let Some(url) = extract_auth_url(diagnostic).or_else(|| extract_auth_url(error)) {
+        return format!("{error}\n请在浏览器完成授权：{url}");
+    }
+    error.to_string()
+}
+
+fn extract_auth_url(text: &str) -> Option<&str> {
+    for token in text.split_whitespace() {
+        let trimmed = token.trim_matches(|c: char| matches!(c, '"' | '\'' | '<' | '>' | ',' | ')' | ']'));
+        if (trimmed.starts_with("https://") || trimmed.starts_with("http://"))
+            && (trimmed.contains("accounts.google.com")
+                || trimmed.contains("oauth")
+                || trimmed.contains("auth")
+                || trimmed.contains("login"))
+        {
+            return Some(trimmed);
+        }
+    }
+    None
+}
+
+fn bound_tail(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        return s.to_string();
+    }
+    let keep = s.chars().skip(char_count - max_chars).collect::<String>();
+    format!("{TOOL_TEXT_TRUNCATED}{keep}")
+}
+
+fn bound_head(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        return s.to_string();
+    }
+    let keep = s.chars().take(max_chars).collect::<String>();
+    format!("{keep}{COMMAND_LINE_TRUNCATED}")
+}
+
+struct SanitizeBudget {
+    nodes: usize,
+    text: usize,
+}
+
+fn sanitize_tool_value(
+    value: &Value,
+    budget: &mut SanitizeBudget,
+    depth: usize,
+    field: Option<&str>,
+) -> Option<Value> {
+    if depth > 12 || budget.nodes == 0 {
+        return None;
+    }
+    budget.nodes -= 1;
+    match value {
+        Value::String(s) => {
+            if s.len() >= 11 && s[..11].eq_ignore_ascii_case("data:image/") {
+                return None;
+            }
+            if budget.text == 0 {
+                return None;
+            }
+            let limit = TOOL_TEXT_LIMIT.min(budget.text);
+            let is_cmd = matches!(
+                field,
+                Some("CommandLine" | "command_line" | "commandLine" | "command")
+            );
+            let bounded = if is_cmd {
+                bound_head(s, limit)
+            } else {
+                bound_tail(s, limit)
+            };
+            let len = bounded.chars().count();
+            budget.text = budget.text.saturating_sub(len);
+            Some(Value::String(bounded))
+        }
+        Value::Array(items) => {
+            let mut out = Vec::new();
+            for item in items {
+                if budget.nodes == 0 {
+                    break;
+                }
+                if let Some(cleaned) = sanitize_tool_value(item, budget, depth + 1, None) {
+                    out.push(cleaned);
+                }
+            }
+            Some(Value::Array(out))
+        }
+        Value::Object(map) => {
+            let is_image_obj = map.get("type").and_then(Value::as_str) == Some("image");
+            let has_image_mime = map
+                .get("mimeType")
+                .and_then(Value::as_str)
+                .is_some_and(|m| m.starts_with("image/"));
+            let combined = map
+                .get("combinedOutput")
+                .or_else(|| map.get("combined_output"));
+            let mut out = serde_json::Map::new();
+            for (k, v) in map {
+                if budget.nodes == 0 {
+                    break;
+                }
+                if (is_image_obj && (k == "data" || k == "blob"))
+                    || (k == "blob" && has_image_mime)
+                    || ((k == "formatted_output" || k == "formattedOutput") && combined == Some(v))
+                {
+                    continue;
+                }
+                if let Some(cleaned) = sanitize_tool_value(v, budget, depth + 1, Some(k.as_str())) {
+                    out.insert(k.clone(), cleaned);
+                }
+            }
+            Some(Value::Object(out))
+        }
+        other => Some(other.clone()),
+    }
+}
+
+pub(super) fn sanitize_acp_tool_payload(value: &Value) -> Value {
+    let mut budget = SanitizeBudget {
+        nodes: TOOL_PAYLOAD_MAX_NODES,
+        text: TOOL_PAYLOAD_MAX_TEXT,
+    };
+    sanitize_tool_value(value, &mut budget, 0, None).unwrap_or(Value::Null)
+}
+
+fn extract_antigravity_update_steps(raw_input: &Value) -> Option<Vec<Value>> {
+    let steps = raw_input.get("steps")?.as_array()?;
+    let entries: Vec<Value> = steps
+        .iter()
+        .filter_map(|step| {
+            let title = step.get("title").and_then(Value::as_str)?;
+            let status = match step.get("status").and_then(Value::as_str) {
+                Some("done") => "completed",
+                Some(other) => other,
+                None => "pending",
+            };
+            Some(json!({
+                "content": title,
+                "priority": "medium",
+                "status": status,
+            }))
+        })
+        .collect();
+    Some(entries)
+}
+
+pub(super) fn is_antigravity_interaction_permission(params: &Value) -> bool {
+    params
+        .pointer("/toolCall/toolCallId")
+        .and_then(Value::as_str)
+        .is_some_and(|id| id.starts_with("interaction_"))
+}
 
 /// CLI-owned credentials only. Codev never asks for or stores an agent password.
 fn with_auth_hint(harness: &str, error: String) -> String {
@@ -630,17 +828,27 @@ impl Host {
     ) -> Result<(), String> {
         let harness = self.view(id)?.binding.harness_id;
         let policy = self.host_tools_policy(&harness);
+        let is_antigravity = harness == "acp:antigravity";
+        let client_info = if is_antigravity {
+            let ver = tokio::task::spawn_blocking(detect_agy_cli_version)
+                .await
+                .ok()
+                .flatten();
+            antigravity_client_info(ver)
+        } else {
+            json!({ "name": "Codev", "version": env!("CARGO_PKG_VERSION") })
+        };
         let initialize = runtime
             .bridge
             .request(
                 "initialize",
                 json!({
                     "protocolVersion": 1,
-                    "clientInfo": { "name": "Codev", "version": env!("CARGO_PKG_VERSION") },
+                    "clientInfo": client_info,
                     "clientCapabilities": {
                         "fs": {
-                            "readTextFile": policy.read != "deny",
-                            "writeTextFile": policy.write != "deny"
+                            "readTextFile": !is_antigravity && policy.read != "deny",
+                            "writeTextFile": !is_antigravity && policy.write != "deny"
                         },
                         "terminal": false
                     }
@@ -648,9 +856,19 @@ impl Host {
                 TIMEOUT,
             )
             .await
-            .map_err(|error| with_auth_hint(&harness, error))?;
+            .map_err(|error| with_auth_hint(&harness, format_acp_error(&error, &runtime.bridge.diagnostic_tail())))?;
         if initialize.get("protocolVersion").and_then(Value::as_u64) != Some(1) {
             return Err("代理返回了不兼容的协议版本".into());
+        }
+        if is_antigravity {
+            let supports_steer = initialize
+                .pointer("/agentInfo/version")
+                .and_then(Value::as_str)
+                .and_then(parse_semver3)
+                .is_some_and(|v| v >= (1, 5, 0));
+            runtime
+                .supports_prompt_steer
+                .store(supports_steer, std::sync::atomic::Ordering::Release);
         }
         if harness == "acp:codex" {
             if let Some(provider) = super::providers::selected(self, &harness)? {
@@ -661,10 +879,14 @@ impl Host {
             .get("agentCapabilities")
             .cloned()
             .unwrap_or(Value::Null);
-        let resume = capabilities
+        let supports_load = capabilities
             .get("loadSession")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let supports_resume_cap = capabilities
+            .pointer("/sessionCapabilities/resume")
+            .is_some_and(|v| !v.is_null());
+        let resume = supports_load || supports_resume_cap;
         let view = self.view(id)?;
         let desktop = antigravity_history::is_desktop(&view.binding);
         let imported_codex = harness == "acp:codex" && view.binding.imported;
@@ -699,66 +921,150 @@ impl Host {
             if !resume {
                 return Err("该代理不支持恢复原生会话；请新建会话，原有绑定已保留".into());
             }
-            if !desktop {
-                self.update(id, Some(&runtime.instance), |v| {
-                    v.messages.clear();
-                    v.history_available = false;
-                });
-            }
-            if desktop {
-                runtime.loading_desktop_history.store(true, std::sync::atomic::Ordering::Release);
+            if is_antigravity && supports_resume_cap {
+                let res = runtime
+                    .bridge
+                    .request(
+                        "session/resume",
+                        json!({"sessionId":native,"cwd":cwd,"mcpServers":[]}),
+                        TIMEOUT,
+                    )
+                    .await;
+                let res = match res {
+                    Ok(v) => Ok(v),
+                    Err(err) if err.to_ascii_lowercase().contains("auth") || err.to_ascii_lowercase().contains("login") => {
+                        let auth_method = initialize
+                            .get("authMethods")
+                            .and_then(Value::as_array)
+                            .and_then(|arr| arr.iter().find(|m| text(m, "id") == "oauth-personal" || text(m, "type") == "agent"))
+                            .map(|m| text(m, "id"));
+                        if let Some(method_id) = auth_method.filter(|s| !s.is_empty()) {
+                            let _ = runtime.bridge.request("authenticate", json!({"methodId": method_id}), TIMEOUT).await;
+                            runtime
+                                .bridge
+                                .request("session/resume", json!({"sessionId":native,"cwd":cwd,"mcpServers":[]}), TIMEOUT)
+                                .await
+                        } else {
+                            Err(err)
+                        }
+                    }
+                    other => other,
+                };
+                match res {
+                    Ok(v) => v,
+                    Err(error) => {
+                        if imported_codex || require_resume {
+                            self.update(id, Some(&runtime.instance), |v| {
+                                v.messages = view.messages.clone();
+                                v.history_available = view.history_available;
+                                v.history_offset = view.history_offset;
+                            });
+                        }
+                        return Err(with_auth_hint(&harness, format_acp_error(&error, &runtime.bridge.diagnostic_tail())));
+                    }
+                }
             } else {
-                runtime.loading_history.store(true, std::sync::atomic::Ordering::Release);
-            }
-            let loaded = runtime
-                .bridge
-                .request(
+                if !desktop {
+                    self.update(id, Some(&runtime.instance), |v| {
+                        v.messages.clear();
+                        v.history_available = false;
+                    });
+                }
+                if desktop {
+                    runtime.loading_desktop_history.store(true, std::sync::atomic::Ordering::Release);
+                } else {
+                    runtime.loading_history.store(true, std::sync::atomic::Ordering::Release);
+                }
+                runtime.touch_activity();
+                let mut load_fut = Box::pin(runtime.bridge.request(
                     "session/load",
                     json!({"sessionId":native,"cwd":cwd,"mcpServers":[]}),
                     TIMEOUT,
-                )
-                .await;
-            let drained = runtime.bridge.drain_events().await;
-            if desktop {
-                runtime.loading_desktop_history.store(false, std::sync::atomic::Ordering::Release);
-                drained?;
-            } else {
-                runtime.loading_history.store(false, std::sync::atomic::Ordering::Release);
-                if loaded.is_ok() {
-                    drained?;
-                }
-            }
-            match loaded {
-                Ok(value) => value,
-                Err(error) if !require_resume && !desktop && !imported_codex && harness != "acp:antigravity" && recoverable_missing_session(&error) => {
-                    recovered = true;
-                    *lock(&runtime.native_id) = None;
-                    self.update(id, Some(&runtime.instance), |v| {
-                        v.messages.clear();
-                    });
-                    runtime
-                        .bridge
-                        .request("session/new", json!({"cwd":cwd,"mcpServers":[]}), TIMEOUT)
-                        .await
-                        .map_err(|error| with_auth_hint(&harness, error))?
-                }
-                Err(error) => {
-                    if imported_codex || require_resume {
-                        self.update(id, Some(&runtime.instance), |v| {
-                            v.messages = view.messages.clone();
-                            v.history_available = view.history_available;
-                            v.history_offset = view.history_offset;
-                        });
+                ));
+                let load_start_ms = now_ms();
+                let mut replay_provisional = false;
+                let mut poll = tokio::time::interval(Duration::from_millis(200));
+                poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let loaded = loop {
+                    tokio::select! {
+                        res = &mut load_fut => break res,
+                        _ = poll.tick() => {
+                            let last = runtime.last_activity_ms.load(std::sync::atomic::Ordering::Acquire);
+                            if last > load_start_ms
+                                && now_ms().saturating_sub(last) >= REPLAY_IDLE_GAP.as_millis() as u64
+                            {
+                                replay_provisional = true;
+                                break Ok(json!({ "sessionId": native }));
+                            }
+                        }
                     }
-                    return Err(with_auth_hint(&harness, error));
+                };
+                let drained = runtime.bridge.drain_events().await;
+                if desktop {
+                    runtime.loading_desktop_history.store(false, std::sync::atomic::Ordering::Release);
+                    if !replay_provisional {
+                        drained?;
+                    }
+                } else {
+                    runtime.loading_history.store(false, std::sync::atomic::Ordering::Release);
+                    if loaded.is_ok() && !replay_provisional {
+                        drained?;
+                    }
+                }
+                match loaded {
+                    Ok(value) => value,
+                    Err(error) if !require_resume && !desktop && !imported_codex && !is_antigravity && recoverable_missing_session(&error) => {
+                        recovered = true;
+                        *lock(&runtime.native_id) = None;
+                        self.update(id, Some(&runtime.instance), |v| {
+                            v.messages.clear();
+                        });
+                        runtime
+                            .bridge
+                            .request("session/new", json!({"cwd":cwd,"mcpServers":[]}), TIMEOUT)
+                            .await
+                            .map_err(|error| with_auth_hint(&harness, format_acp_error(&error, &runtime.bridge.diagnostic_tail())))?
+                    }
+                    Err(error) => {
+                        if imported_codex || require_resume {
+                            self.update(id, Some(&runtime.instance), |v| {
+                                v.messages = view.messages.clone();
+                                v.history_available = view.history_available;
+                                v.history_offset = view.history_offset;
+                            });
+                        }
+                        return Err(with_auth_hint(&harness, format_acp_error(&error, &runtime.bridge.diagnostic_tail())));
+                    }
                 }
             }
         } else {
-            runtime
+            let res = runtime
                 .bridge
                 .request("session/new", json!({"cwd":cwd,"mcpServers":[]}), TIMEOUT)
-                .await
-                .map_err(|error| with_auth_hint(&harness, error))?
+                .await;
+            match res {
+                Ok(v) => v,
+                Err(err) if is_antigravity && (err.to_ascii_lowercase().contains("auth") || err.to_ascii_lowercase().contains("login")) => {
+                    let auth_method = initialize
+                        .get("authMethods")
+                        .and_then(Value::as_array)
+                        .and_then(|arr| arr.iter().find(|m| text(m, "id") == "oauth-personal" || text(m, "type") == "agent"))
+                        .map(|m| text(m, "id"));
+                    if let Some(method_id) = auth_method.filter(|s| !s.is_empty()) {
+                        let _ = runtime.bridge.request("authenticate", json!({"methodId": method_id}), TIMEOUT).await;
+                        runtime
+                            .bridge
+                            .request("session/new", json!({"cwd":cwd,"mcpServers":[]}), TIMEOUT)
+                            .await
+                            .map_err(|error| with_auth_hint(&harness, format_acp_error(&error, &runtime.bridge.diagnostic_tail())))?
+                    } else {
+                        return Err(with_auth_hint(&harness, format_acp_error(&err, &runtime.bridge.diagnostic_tail())));
+                    }
+                }
+                Err(err) => {
+                    return Err(with_auth_hint(&harness, format_acp_error(&err, &runtime.bridge.diagnostic_tail())));
+                }
+            }
         };
         let native = response
             .get("sessionId")
@@ -830,7 +1136,7 @@ impl Host {
         )?;
         let should_apply_default_model = match harness.as_str() {
             "acp:codex" => true,
-            "acp:antigravity" => !desktop && (was_fresh || recovered || was_empty),
+            "acp:antigravity" => active_provider.is_some() || (!desktop && (was_fresh || recovered || was_empty)),
             _ => false,
         };
         let prefs = self.view(id)?.binding.preferences;
@@ -1096,8 +1402,44 @@ impl Host {
         Ok(())
     }
     pub fn handle_acp_frame(self: &Arc<Self>, id: &str, runtime: &Arc<Runtime>, frame: Value) {
+        runtime.touch_activity();
         let method = text(&frame, "method");
         let params = frame.get("params").cloned().unwrap_or(Value::Null);
+        if method == "session/update" {
+            let update_peek = params.get("update").unwrap_or(&Value::Null);
+            let kind_peek = text(update_peek, "sessionUpdate");
+            if kind_peek == "tool_call_update" {
+                let status = update_peek.get("status").and_then(Value::as_str);
+                let is_pending = matches!(status, None | Some("in_progress" | "pending"));
+                if is_pending
+                    && update_peek.get("title").is_none()
+                    && update_peek.get("locations").is_none()
+                    && update_peek.get("rawInput").is_none()
+                    && update_peek.get("rawOutput").is_none()
+                {
+                    let empty_content = update_peek
+                        .get("content")
+                        .and_then(Value::as_array)
+                        .map(|c| {
+                            !c.iter().any(|entry| entry.get("diff").is_some())
+                                && c.iter()
+                                    .map(|entry| history::content_text(entry.get("content").unwrap_or(entry)).len())
+                                    .sum::<usize>()
+                                    == 0
+                        })
+                        .unwrap_or(true);
+                    let call_id = text(update_peek, "toolCallId");
+                    let already_exists = self.view(id).is_ok_and(|v| {
+                        v.messages
+                            .iter()
+                            .any(|m| m.tool_call_id == call_id && (m.kind == "toolCall" || m.kind == "plan"))
+                    });
+                    if empty_content && already_exists {
+                        return;
+                    }
+                }
+            }
+        }
         match method.as_str() {
             "session/update" => {
                 let update = params.get("update").unwrap_or(&Value::Null);
@@ -1176,6 +1518,52 @@ impl Host {
                             message.streaming = false;
                         }
                         let call = text(update, "toolCallId");
+                        let raw_title = update.get("title").and_then(Value::as_str);
+                        let raw_kind = update.get("kind").and_then(Value::as_str);
+                        let is_update_steps = {
+                            let mut calls = lock(&runtime.update_steps_calls);
+                            if raw_title == Some("Run update_steps")
+                                && matches!(raw_kind, None | Some("") | Some("other"))
+                            {
+                                calls.insert(call.clone());
+                            }
+                            let tracked = calls.contains(&call);
+                            if tracked
+                                && matches!(
+                                    update.get("status").and_then(Value::as_str),
+                                    Some("completed" | "failed" | "error")
+                                )
+                            {
+                                calls.remove(&call);
+                            }
+                            tracked
+                        };
+                        if is_update_steps {
+                            if let Some(entries) = update
+                                .get("rawInput")
+                                .and_then(extract_antigravity_update_steps)
+                            {
+                                let plan_id = format!("acp-plan:{}:{call}", runtime.instance);
+                                let serialized =
+                                    serde_json::to_string_pretty(&entries).unwrap_or_default();
+                                if let Some(plan_msg) =
+                                    v.messages.iter_mut().rfind(|m| m.id == plan_id)
+                                {
+                                    plan_msg.text = serialized;
+                                } else {
+                                    v.messages.push(Message {
+                                        id: plan_id,
+                                        kind: "plan".into(),
+                                        role: "system".into(),
+                                        text: serialized,
+                                        created_at: event_ts,
+                                        raw_kind: kind.clone(),
+                                        ..Message::default()
+                                    });
+                                }
+                            }
+                            return;
+                        }
                         let existing = v
                             .messages
                             .iter()
@@ -1196,7 +1584,7 @@ impl Host {
                         };
                         let tool = &mut v.messages[index];
                         if let Some(title) = update.get("title").and_then(Value::as_str) {
-                            tool.tool_name = title.into();
+                            tool.tool_name = bound_tail(title, TOOL_TEXT_LIMIT);
                         }
                         if let Some(tk) = update.get("kind").and_then(Value::as_str) {
                             tool.tool_kind = tk.into();
@@ -1219,21 +1607,25 @@ impl Host {
                                 .as_object()
                                 .is_some_and(|o| !o.is_empty());
                             if !args.is_null() && !(is_empty_obj && has_existing) {
-                                tool.arguments = args.clone();
+                                tool.arguments = sanitize_acp_tool_payload(args);
+                                tool.clamp_arguments_size();
                             }
                         }
                         if let Some(output) = update.get("rawOutput") {
-                            tool.text = if output.is_string() {
-                                output.as_str().unwrap_or_default().into()
+                            let sanitized_output = sanitize_acp_tool_payload(output);
+                            let next_text = if sanitized_output.is_string() {
+                                sanitized_output.as_str().unwrap_or_default().into()
                             } else {
-                                serde_json::to_string_pretty(output).unwrap_or_default()
+                                serde_json::to_string_pretty(&sanitized_output).unwrap_or_default()
                             };
+                            tool.text = next_text;
                         }
                         if let Some(content) = update.get("content").and_then(Value::as_array) {
                             let mut diffs = vec![];
                             let mut blocks = vec![];
                             for c in content {
-                                if let Some(diff) = c.get("diff") {
+                                let cleaned = sanitize_acp_tool_payload(c);
+                                if let Some(diff) = cleaned.get("diff") {
                                     diffs.push(diff.clone());
                                     let old_t = text(diff, "oldText");
                                     let new_t = text(diff, "newText");
@@ -1241,9 +1633,11 @@ impl Host {
                                         blocks.push(format!("--- old\n{old_t}\n+++ new\n{new_t}"));
                                     }
                                 } else {
-                                    let txt = history::content_text(c.get("content").unwrap_or(c));
+                                    let txt = history::content_text(
+                                        cleaned.get("content").unwrap_or(&cleaned),
+                                    );
                                     if !txt.is_empty() {
-                                        blocks.push(txt);
+                                        blocks.push(bound_tail(&txt, TOOL_TEXT_LIMIT));
                                     }
                                 }
                             }
@@ -1255,7 +1649,7 @@ impl Host {
                                 };
                             }
                             if !blocks.is_empty() {
-                                tool.text = blocks.join("\n");
+                                tool.text = bound_tail(&blocks.join("\n"), TOOL_TEXT_LIMIT * 2);
                             }
                         }
                     }
@@ -1322,31 +1716,42 @@ impl Host {
                     .ok()
                     .map(|v| self.host_tools_policy(&v.binding.harness_id))
                     .unwrap_or_default();
-                if let Some(outcome) = resolve_permission_auto_reply(&policy, &params) {
-                    if let Err(err) = runtime
-                        .bridge
-                        .send(json!({"jsonrpc":"2.0","id":native_id,"result":{"outcome": outcome}}))
-                    {
-                        runtime.bridge.diagnostic(format!("自动审批回复失败：{err}"));
+                if !is_antigravity_interaction_permission(&params) {
+                    if let Some(outcome) = resolve_permission_auto_reply(&policy, &params) {
+                        if let Err(err) = runtime
+                            .bridge
+                            .send(json!({"jsonrpc":"2.0","id":native_id,"result":{"outcome": outcome}}))
+                        {
+                            runtime.bridge.diagnostic(format!("自动审批回复失败：{err}"));
+                        }
+                        self.update(id, Some(&runtime.instance), |v| {
+                            v.capabilities.supports_permission = true;
+                        });
+                        return;
                     }
-                    self.update(id, Some(&runtime.instance), |v| {
-                        v.capabilities.supports_permission = true;
-                    });
-                    return;
                 }
                 let key = new_id();
                 lock(&runtime.permission_ids).insert(key.clone(), native_id);
                 let tool = params.get("toolCall").unwrap_or(&Value::Null);
+                let is_interaction = is_antigravity_interaction_permission(&params);
+                let sanitized_input = tool
+                    .get("rawInput")
+                    .map(sanitize_acp_tool_payload)
+                    .filter(|v| !v.is_null() && !v.as_object().is_some_and(serde_json::Map::is_empty));
                 self.update(id, Some(&runtime.instance), |v| {
                     v.capabilities.supports_permission = true;
                     v.pending_requests.push(PendingRequest {
                         id: key,
                         kind: "permission".into(),
                         title: text(tool, "title"),
-                        message: serde_json::to_string_pretty(
-                            tool.get("rawInput").unwrap_or(&Value::Null),
-                        )
-                        .unwrap_or_default(),
+                        message: if is_interaction {
+                            String::new()
+                        } else {
+                            sanitized_input
+                                .as_ref()
+                                .map(|v| serde_json::to_string_pretty(v).unwrap_or_default())
+                                .unwrap_or_default()
+                        },
                         options: params
                             .get("options")
                             .and_then(Value::as_array)

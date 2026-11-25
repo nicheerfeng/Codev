@@ -1,6 +1,7 @@
 use super::process::{
-    classify_error, command, git, git_binary, git_bytes, git_with_stdin, has_head, run_raw,
-    PromptPolicy, VcsError, VcsErrorCode, MAX_DIFF_BYTES, MAX_STATUS_ENTRIES,
+    classify_error, command, git, git_binary, git_bytes, git_with_stdin, has_head,
+    refresh_git_binary, run_raw, PromptPolicy, VcsError, VcsErrorCode, MAX_DIFF_BYTES,
+    MAX_STATUS_ENTRIES,
 };
 use super::types::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -23,11 +24,78 @@ struct TurnBaselineRecord {
     dirty_before: usize,
 }
 
+#[derive(Clone, Debug)]
+struct CachedRepoMeta {
+    remotes: Vec<VcsRemoteInfo>,
+    author_configured: bool,
+    expires_at: std::time::Instant,
+}
+
+const REPO_META_TTL: Duration = Duration::from_secs(30);
+
+fn collect_numstat(repo: &Path, args: &[&str]) -> HashMap<String, (usize, usize)> {
+    let mut map = HashMap::new();
+    let Ok(out) = git(repo, args, PromptPolicy::SilentRead, Duration::from_secs(4)) else {
+        return map;
+    };
+    for line in out.lines() {
+        let mut parts = line.splitn(3, '\t');
+        let Some(add_str) = parts.next() else {
+            continue;
+        };
+        let Some(del_str) = parts.next() else {
+            continue;
+        };
+        let Some(path) = parts.next() else {
+            continue;
+        };
+        let additions = add_str.trim().parse::<usize>().unwrap_or(0);
+        let deletions = del_str.trim().parse::<usize>().unwrap_or(0);
+        let clean_path = path.rsplit(" => ").next().unwrap_or(path).trim();
+        let norm_path = if clean_path.contains('{') && clean_path.contains(" => ") && clean_path.ends_with('}') {
+            // git rename notation: prefix/{old => new}suffix
+            if let Some(open) = clean_path.find('{') {
+                let prefix = &clean_path[..open];
+                let inner = &clean_path[open + 1..clean_path.len() - 1];
+                if let Some((_old, new_and_suffix)) = inner.split_once(" => ") {
+                    format!("{prefix}{new_and_suffix}")
+                } else {
+                    clean_path.to_string()
+                }
+            } else {
+                clean_path.to_string()
+            }
+        } else {
+            clean_path.to_string()
+        };
+        map.insert(norm_path, (additions, deletions));
+    }
+    map
+}
+
+fn count_untracked_lines(path: &Path) -> usize {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return 0;
+    };
+    if !meta.is_file() || meta.len() > 2 * 1024 * 1024 {
+        return 0;
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return 0;
+    };
+    if bytes.contains(&0) {
+        return 0;
+    }
+    String::from_utf8_lossy(&bytes).lines().count()
+}
+
 pub struct VcsService {
     snapshot_seq: AtomicU64,
     snapshots: Mutex<HashMap<String, VcsSnapshot>>,
+    repo_meta_cache: Mutex<HashMap<String, CachedRepoMeta>>,
     write_slots: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     turn_baselines: Mutex<HashMap<String, TurnBaselineRecord>>,
+    suppressed_turns: Mutex<HashMap<String, String>>,
 }
 
 impl Default for VcsService {
@@ -35,8 +103,10 @@ impl Default for VcsService {
         Self {
             snapshot_seq: AtomicU64::new(1),
             snapshots: Mutex::new(HashMap::new()),
+            repo_meta_cache: Mutex::new(HashMap::new()),
             write_slots: Mutex::new(HashMap::new()),
             turn_baselines: Mutex::new(HashMap::new()),
+            suppressed_turns: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -193,6 +263,19 @@ fn format_bytes_capped(bytes: &[u8]) -> (String, bool, bool) {
     (String::from_utf8_lossy(bytes).into_owned(), false, false)
 }
 
+struct ParsedPorcelainV2 {
+    entries: Vec<VcsEntry>,
+    counts: VcsCounts,
+    truncated: bool,
+    head_oid: String,
+    branch: String,
+    detached: bool,
+    has_commit: bool,
+    upstream: Option<String>,
+    ahead: u32,
+    behind: u32,
+}
+
 pub(crate) fn parse_status_z(raw: &str) -> (Vec<VcsEntry>, VcsCounts, bool) {
     let mut tokens = raw.split('\0').peekable();
     let mut entries = Vec::new();
@@ -249,37 +332,185 @@ pub(crate) fn parse_status_z(raw: &str) -> (Vec<VcsEntry>, VcsCounts, bool) {
     (entries, counts, truncated)
 }
 
-fn parse_tracking_counts(repo: &Path) -> (Option<String>, u32, u32) {
-    let Ok(upstream) = git(
-        repo,
-        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-        PromptPolicy::SilentRead,
-        Duration::from_secs(4),
-    ) else {
-        return (None, 0, 0);
-    };
-    let upstream = upstream.trim().to_string();
-    if upstream.is_empty() {
-        return (None, 0, 0);
+fn map_v2_xy(xy: &str) -> (char, char) {
+    let bytes = xy.as_bytes();
+    let x = bytes.first().copied().map(|b| if b == b'.' { ' ' } else { b as char }).unwrap_or(' ');
+    let y = bytes.get(1).copied().map(|b| if b == b'.' { ' ' } else { b as char }).unwrap_or(' ');
+    (x, y)
+}
+
+fn parse_porcelain_v2_z(raw: &str) -> ParsedPorcelainV2 {
+    let records: Vec<&str> = raw.split('\0').filter(|r| !r.is_empty()).collect();
+    let mut entries = Vec::new();
+    let mut counts = VcsCounts::default();
+    let mut truncated = false;
+    let mut head_oid = String::new();
+    let mut branch = String::new();
+    let mut detached = false;
+    let mut has_commit = false;
+    let mut upstream = None;
+    let mut ahead = 0u32;
+    let mut behind = 0u32;
+    let mut idx = 0usize;
+
+    while idx < records.len() {
+        let record = records[idx];
+        idx += 1;
+        if let Some(oid) = record.strip_prefix("# branch.oid ") {
+            if oid != "(initial)" {
+                has_commit = true;
+                head_oid = oid.chars().take(12).collect();
+            }
+            continue;
+        }
+        if let Some(head) = record.strip_prefix("# branch.head ") {
+            if head == "(detached)" {
+                detached = true;
+            } else if !head.is_empty() {
+                branch = head.to_string();
+            }
+            continue;
+        }
+        if let Some(up) = record.strip_prefix("# branch.upstream ") {
+            let trimmed = up.trim();
+            if !trimmed.is_empty() {
+                upstream = Some(trimmed.to_string());
+            }
+            continue;
+        }
+        if let Some(ab) = record.strip_prefix("# branch.ab ") {
+            let mut parts = ab.split_whitespace();
+            ahead = parts
+                .next()
+                .and_then(|s| s.strip_prefix('+'))
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(0);
+            behind = parts
+                .next()
+                .and_then(|s| s.strip_prefix('-'))
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(0);
+            continue;
+        }
+
+        if entries.len() >= MAX_STATUS_ENTRIES {
+            truncated = true;
+            if record.starts_with("2 ") && idx < records.len() {
+                idx += 1;
+            }
+            continue;
+        }
+
+        let first = record.as_bytes().first().copied().unwrap_or_default();
+        match first {
+            b'?' => {
+                let path = record.get(2..).unwrap_or_default();
+                if path.is_empty() {
+                    continue;
+                }
+                counts.untracked += 1;
+                entries.push(VcsEntry {
+                    path: path.to_string(),
+                    index_status: "?".into(),
+                    worktree_status: "?".into(),
+                    staged: false,
+                    unstaged: false,
+                    untracked: true,
+                    conflicted: false,
+                    rename_from: None,
+                });
+            }
+            b'1' => {
+                // 1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>
+                let parts: Vec<&str> = record.splitn(9, ' ').collect();
+                if parts.len() < 9 {
+                    continue;
+                }
+                let (x, y) = map_v2_xy(parts[1]);
+                let staged = x != ' ';
+                let unstaged = y != ' ';
+                if staged {
+                    counts.staged += 1;
+                }
+                if unstaged {
+                    counts.modified += 1;
+                }
+                entries.push(VcsEntry {
+                    path: parts[8].to_string(),
+                    index_status: x.to_string(),
+                    worktree_status: y.to_string(),
+                    staged,
+                    unstaged,
+                    untracked: false,
+                    conflicted: false,
+                    rename_from: None,
+                });
+            }
+            b'2' => {
+                // 2 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path>\0<origPath>
+                let parts: Vec<&str> = record.splitn(10, ' ').collect();
+                let orig = records.get(idx).copied().unwrap_or_default();
+                if idx < records.len() {
+                    idx += 1;
+                }
+                if parts.len() < 10 {
+                    continue;
+                }
+                let (x, y) = map_v2_xy(parts[1]);
+                let staged = x != ' ';
+                let unstaged = y != ' ';
+                if staged {
+                    counts.staged += 1;
+                }
+                if unstaged {
+                    counts.modified += 1;
+                }
+                entries.push(VcsEntry {
+                    path: parts[9].to_string(),
+                    index_status: x.to_string(),
+                    worktree_status: y.to_string(),
+                    staged,
+                    unstaged,
+                    untracked: false,
+                    conflicted: false,
+                    rename_from: (!orig.is_empty()).then(|| orig.to_string()),
+                });
+            }
+            b'u' => {
+                // u <XY> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>
+                let parts: Vec<&str> = record.splitn(11, ' ').collect();
+                if parts.len() < 11 {
+                    continue;
+                }
+                let (x, y) = map_v2_xy(parts[1]);
+                counts.conflicted += 1;
+                entries.push(VcsEntry {
+                    path: parts[10].to_string(),
+                    index_status: x.to_string(),
+                    worktree_status: y.to_string(),
+                    staged: false,
+                    unstaged: false,
+                    untracked: false,
+                    conflicted: true,
+                    rename_from: None,
+                });
+            }
+            _ => {}
+        }
     }
-    let Ok(lr) = git(
-        repo,
-        &["rev-list", "--left-right", "--count", "HEAD...@{u}"],
-        PromptPolicy::SilentRead,
-        Duration::from_secs(4),
-    ) else {
-        return (Some(upstream), 0, 0);
-    };
-    let mut parts = lr.split_whitespace();
-    let ahead = parts
-        .next()
-        .and_then(|s| s.parse::<u32>().ok())
-        .unwrap_or(0);
-    let behind = parts
-        .next()
-        .and_then(|s| s.parse::<u32>().ok())
-        .unwrap_or(0);
-    (Some(upstream), ahead, behind)
+
+    ParsedPorcelainV2 {
+        entries,
+        counts,
+        truncated,
+        head_oid,
+        branch,
+        detached,
+        has_commit,
+        upstream,
+        ahead,
+        behind,
+    }
 }
 
 fn parse_remotes(repo: &Path) -> Vec<VcsRemoteInfo> {
@@ -404,60 +635,82 @@ impl VcsService {
         self.snapshots.lock().unwrap().values().cloned().collect()
     }
 
+    pub fn cached_snapshot_for(&self, root: &str) -> Option<VcsSnapshot> {
+        let ctx = resolve_repo_context(Path::new(root)).ok().flatten()?;
+        self.snapshots
+            .lock()
+            .unwrap()
+            .get(&path_key(Path::new(&ctx.worktree_root)))
+            .cloned()
+    }
+
+    fn cached_or_load_repo_meta(
+        &self,
+        repo: &Path,
+        common_git_dir: &str,
+    ) -> (Vec<VcsRemoteInfo>, bool) {
+        let now = std::time::Instant::now();
+        if let Some(cached) = self
+            .repo_meta_cache
+            .lock()
+            .unwrap()
+            .get(common_git_dir)
+            .filter(|entry| entry.expires_at > now)
+            .cloned()
+        {
+            return (cached.remotes, cached.author_configured);
+        }
+        let remotes = parse_remotes(repo);
+        let author_configured = read_git_config(Some(repo), "user.name").is_some()
+            && read_git_config(Some(repo), "user.email").is_some();
+        self.repo_meta_cache.lock().unwrap().insert(
+            common_git_dir.to_string(),
+            CachedRepoMeta {
+                remotes: remotes.clone(),
+                author_configured,
+                expires_at: std::time::Instant::now() + REPO_META_TTL,
+            },
+        );
+        (remotes, author_configured)
+    }
+
+    pub fn invalidate_repo_meta(&self, root: Option<&str>) {
+        if let Some(r) = root {
+            if let Ok(Some(ctx)) = resolve_repo_context(Path::new(r)) {
+                self.repo_meta_cache
+                    .lock()
+                    .unwrap()
+                    .remove(&ctx.common_git_dir);
+                return;
+            }
+        }
+        self.repo_meta_cache.lock().unwrap().clear();
+    }
+
     pub fn snapshot(&self, root: &str) -> Result<Option<VcsSnapshot>, String> {
         let Some(ctx) = resolve_repo_context(Path::new(root))? else {
             return Ok(None);
         };
         let repo = PathBuf::from(&ctx.worktree_root);
         let git_dir = PathBuf::from(&ctx.git_dir);
-        let has_commit = has_head(&repo)?;
-        let head_oid = if has_commit {
-            git(&repo, &["rev-parse", "--short=12", "HEAD"], PromptPolicy::SilentRead, READ_TIMEOUT)
-                .map(|s| s.trim().to_string())
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-        let branch_name = git(
-            &repo,
-            &["symbolic-ref", "--short", "-q", "HEAD"],
-            PromptPolicy::SilentRead,
-            READ_TIMEOUT,
-        )
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
-        let detached = has_commit && branch_name.is_empty();
-        let branch = if !branch_name.is_empty() {
-            branch_name.clone()
-        } else if !head_oid.is_empty() {
-            format!("HEAD@{head_oid}")
-        } else {
-            git(
-                &repo,
-                &["branch", "--show-current"],
-                PromptPolicy::SilentRead,
-                READ_TIMEOUT,
-            )
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|_| "main".into())
-        };
         let raw_status = git(
             &repo,
-            &["status", "--porcelain=v1", "-z", "-uall"],
+            &["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"],
             PromptPolicy::SilentRead,
             READ_TIMEOUT,
         )?;
-        let (entries, counts, truncated) = parse_status_z(&raw_status);
-        let empty = !has_commit && entries.is_empty();
-        let repo_state = detect_repo_state(&git_dir, &branch_name, empty, detached);
-        let (upstream, ahead, behind) = if has_commit && !detached {
-            parse_tracking_counts(&repo)
+        let parsed = parse_porcelain_v2_z(&raw_status);
+        let empty = !parsed.has_commit && parsed.entries.is_empty();
+        let branch = if !parsed.branch.is_empty() {
+            parsed.branch.clone()
+        } else if !parsed.head_oid.is_empty() {
+            format!("HEAD@{}", parsed.head_oid)
         } else {
-            (None, 0, 0)
+            "main".into()
         };
-        let remotes = parse_remotes(&repo);
-        let author_configured = read_git_config(Some(&repo), "user.name").is_some()
-            && read_git_config(Some(&repo), "user.email").is_some();
+        let repo_state = detect_repo_state(&git_dir, &parsed.branch, empty, parsed.detached);
+        let (remotes, author_configured) =
+            self.cached_or_load_repo_meta(&repo, &ctx.common_git_dir);
 
         let snapshot = VcsSnapshot {
             snapshot_id: self.snapshot_seq.fetch_add(1, Ordering::Relaxed),
@@ -466,18 +719,18 @@ impl VcsService {
             is_worktree: ctx.is_worktree,
             repo_name: ctx.repo_name,
             repo_state,
-            head_oid,
+            head_oid: parsed.head_oid,
             branch,
-            detached,
+            detached: parsed.detached,
             empty,
-            upstream,
-            ahead,
-            behind,
-            counts,
-            entries,
+            upstream: parsed.upstream,
+            ahead: parsed.ahead,
+            behind: parsed.behind,
+            counts: parsed.counts,
+            entries: parsed.entries,
             remotes,
             author_configured,
-            truncated,
+            truncated: parsed.truncated,
         };
         self.snapshots
             .lock()
@@ -1627,7 +1880,7 @@ impl VcsService {
     }
 
     pub fn doctor_check(&self, root: Option<&str>) -> Result<VcsDoctorReport, String> {
-        let mut ver_cmd = std::process::Command::new(git_binary());
+        let mut ver_cmd = std::process::Command::new(refresh_git_binary());
         ver_cmd.arg("--version");
         crate::modules::proc::hide_console(&mut ver_cmd);
         let (git_installed, ver_out) = match run_raw(ver_cmd, None, Duration::from_secs(4)) {
@@ -1758,13 +2011,42 @@ impl VcsService {
                 set_global("core.autocrlf", "input")?;
             }
         }
+        self.invalidate_repo_meta(None);
         Ok(())
     }
 
-    pub fn capture_turn_baseline(&self, session_id: &str, turn_id: &str, cwd: &str) {
-        let Ok(Some(snap)) = self.snapshot(cwd) else {
-            return;
+    pub fn begin_turn_baseline(&self, session_id: &str, turn_id: &str, cwd: &str) -> bool {
+        self.suppressed_turns.lock().unwrap().remove(session_id);
+        self.turn_baselines.lock().unwrap().remove(session_id);
+        let Some(snap) = self.cached_snapshot_for(cwd) else {
+            return false;
         };
+        self.record_turn_baseline_from_snapshot(session_id, turn_id, snap);
+        true
+    }
+
+    pub fn suppress_turn_baseline(&self, session_id: &str, turn_id: &str) {
+        self.suppressed_turns
+            .lock()
+            .unwrap()
+            .insert(session_id.to_string(), turn_id.to_string());
+    }
+
+    pub fn record_turn_baseline_from_snapshot(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        snap: VcsSnapshot,
+    ) {
+        if self
+            .suppressed_turns
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .is_some_and(|suppressed| suppressed == turn_id)
+        {
+            return;
+        }
         let dirty_paths = snap
             .entries
             .into_iter()
@@ -1783,23 +2065,64 @@ impl VcsService {
         );
     }
 
+    pub fn capture_turn_baseline(&self, session_id: &str, turn_id: &str, cwd: &str) {
+        self.suppressed_turns.lock().unwrap().remove(session_id);
+        let Ok(Some(snap)) = self.snapshot(cwd) else {
+            return;
+        };
+        self.record_turn_baseline_from_snapshot(session_id, turn_id, snap);
+    }
+
     pub fn compute_turn_diff(&self, session_id: &str, cwd: &str) -> Option<VcsTurnDiffSummary> {
+        self.compute_turn_diff_with_snapshot(session_id, cwd).map(|(diff, _)| diff)
+    }
+
+    pub fn compute_turn_diff_with_snapshot(
+        &self,
+        session_id: &str,
+        cwd: &str,
+    ) -> Option<(VcsTurnDiffSummary, VcsSnapshot)> {
         let baseline = self.turn_baselines.lock().unwrap().get(session_id)?.clone();
+        self.suppressed_turns
+            .lock()
+            .unwrap()
+            .insert(session_id.to_string(), baseline.turn_id.clone());
         let snap = self.snapshot(cwd).ok().flatten()?;
         if snap.worktree_root != baseline.worktree_root {
             return None;
         }
         let repo = PathBuf::from(&snap.worktree_root);
+        let numstat_worktree = collect_numstat(&repo, &["diff", "--numstat", "--"]);
+        let numstat_staged = collect_numstat(&repo, &["diff", "--numstat", "--cached", "--"]);
+        let numstat_head = if !baseline.head_oid.is_empty()
+            && !snap.head_oid.is_empty()
+            && baseline.head_oid != snap.head_oid
+        {
+            collect_numstat(&repo, &["diff", "--numstat", &baseline.head_oid, "HEAD"])
+        } else {
+            HashMap::new()
+        };
+
         let mut changed_files = Vec::new();
         for entry in &snap.entries {
             let sig = format!("{}{}", entry.index_status, entry.worktree_status);
             let existed_same = baseline.dirty_paths.get(&entry.path) == Some(&sig);
             if !existed_same {
+                let (additions, deletions) = if entry.untracked {
+                    (count_untracked_lines(&repo.join(&entry.path)), 0)
+                } else if let Some(&(a, d)) = numstat_worktree.get(&entry.path) {
+                    let (sa, sd) = numstat_staged.get(&entry.path).copied().unwrap_or((0, 0));
+                    (a.saturating_add(sa), d.saturating_add(sd))
+                } else {
+                    numstat_staged.get(&entry.path).copied().unwrap_or((0, 0))
+                };
                 changed_files.push(VcsTurnFileSummary {
                     path: entry.path.clone(),
                     status: sig,
                     staged: entry.staged,
                     untracked: entry.untracked,
+                    additions,
+                    deletions,
                 });
             }
         }
@@ -1826,28 +2149,34 @@ impl VcsService {
                     if parts.len() >= 2 {
                         let path = parts.last().unwrap().to_string();
                         if !existing.contains(&path) {
+                            let (additions, deletions) =
+                                numstat_head.get(&path).copied().unwrap_or((0, 0));
                             changed_files.push(VcsTurnFileSummary {
                                 path,
                                 status: parts[0].chars().take(2).collect(),
                                 staged: false,
                                 untracked: false,
+                                additions,
+                                deletions,
                             });
                         }
                     }
                 }
             }
         }
-        Some(VcsTurnDiffSummary {
+        let dirty_after = snap.entries.len();
+        let summary = VcsTurnDiffSummary {
             turn_id: baseline.turn_id,
-            worktree_root: snap.worktree_root,
-            branch: snap.branch,
-            base_head_oid: baseline.head_oid,
-            head_oid: snap.head_oid,
+            worktree_root: snap.worktree_root.clone(),
+            branch: snap.branch.clone(),
+            base_head_oid: baseline.head_oid.clone(),
+            head_oid: snap.head_oid.clone(),
             changed_files,
             new_commits,
             dirty_before: baseline.dirty_before,
-            dirty_after: snap.entries.len(),
-        })
+            dirty_after,
+        };
+        Some((summary, snap))
     }
 
     pub async fn revert_turn_changes(&self, session_id: &str, cwd: &str) -> Result<(), String> {
@@ -1939,10 +2268,12 @@ mod tests {
         assert_eq!(wt_ctx.common_git_dir, main_ctx.common_git_dir);
 
         svc.capture_turn_baseline("sess-1", "turn-1", &wt.path);
-        std::fs::write(Path::new(&wt.path).join("README.md"), "wt change\n").unwrap();
+        std::fs::write(Path::new(&wt.path).join("README.md"), "hello\nwt change\n").unwrap();
         let summary = svc.compute_turn_diff("sess-1", &wt.path).unwrap();
         assert_eq!(summary.changed_files.len(), 1);
         assert_eq!(summary.changed_files[0].path, "README.md");
+        assert_eq!(summary.changed_files[0].additions, 1);
+        assert_eq!(summary.changed_files[0].deletions, 0);
 
         svc.worktree_remove(&root, wt.path, true).await.unwrap();
     }
@@ -1951,5 +2282,44 @@ mod tests {
     fn reject_path_traversal_outside_repo() {
         let err = validate_rel_path("../secret.txt").unwrap_err();
         assert!(err.contains("非法"));
+    }
+
+    #[test]
+    fn porcelain_v2_parses_branch_head_ab_and_entries() {
+        let raw = concat!(
+            "# branch.oid 0123456789abcdef0123456789abcdef01234567\0",
+            "# branch.head feat/fast-git\0",
+            "# branch.upstream origin/feat/fast-git\0",
+            "# branch.ab +2 -1\0",
+            "1 .M N... 100644 100644 100644 1111111 1111111 src/main.rs\0",
+            "1 A. N... 000000 100644 100644 0000000 2222222 src/added.rs\0",
+            "? new_dir/file.txt\0"
+        );
+        let parsed = parse_porcelain_v2_z(raw);
+        assert!(parsed.has_commit);
+        assert_eq!(parsed.head_oid, "0123456789ab");
+        assert_eq!(parsed.branch, "feat/fast-git");
+        assert_eq!(parsed.upstream.as_deref(), Some("origin/feat/fast-git"));
+        assert_eq!(parsed.ahead, 2);
+        assert_eq!(parsed.behind, 1);
+        assert_eq!(parsed.counts.modified, 1);
+        assert_eq!(parsed.counts.staged, 1);
+        assert_eq!(parsed.counts.untracked, 1);
+        assert_eq!(parsed.entries.len(), 3);
+        assert_eq!(parsed.entries[0].path, "src/main.rs");
+        assert_eq!(parsed.entries[0].index_status, " ");
+        assert_eq!(parsed.entries[0].worktree_status, "M");
+        assert!(parsed.entries[2].untracked);
+    }
+
+    #[test]
+    fn late_baseline_does_not_overwrite_suppressed_finished_turn() {
+        let dir = init_sample_repo();
+        let root = dir.path().to_string_lossy().into_owned();
+        let svc = VcsService::default();
+        let snap = svc.snapshot(&root).unwrap().unwrap();
+        svc.suppress_turn_baseline("sess-race", "turn-fast");
+        svc.record_turn_baseline_from_snapshot("sess-race", "turn-fast", snap);
+        assert!(svc.compute_turn_diff("sess-race", &root).is_none());
     }
 }

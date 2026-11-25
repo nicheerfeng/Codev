@@ -3,9 +3,11 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 static RUNNING: AtomicUsize = AtomicUsize::new(0);
+static CACHED_GIT_BIN: Mutex<Option<String>> = Mutex::new(None);
 pub const MAX_STDOUT_BYTES: u64 = 4 * 1024 * 1024;
 pub const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_STATUS_ENTRIES: usize = 1_200;
@@ -99,7 +101,7 @@ impl VcsError {
     }
 }
 
-pub fn git_binary() -> String {
+fn probe_git_binary() -> String {
     #[cfg(windows)]
     {
         for candidate in [
@@ -119,6 +121,21 @@ pub fn git_binary() -> String {
         }
     }
     "git".to_string()
+}
+
+pub fn git_binary() -> String {
+    if let Some(cached) = CACHED_GIT_BIN.lock().unwrap().as_ref() {
+        return cached.clone();
+    }
+    let resolved = probe_git_binary();
+    *CACHED_GIT_BIN.lock().unwrap() = Some(resolved.clone());
+    resolved
+}
+
+pub fn refresh_git_binary() -> String {
+    let resolved = probe_git_binary();
+    *CACHED_GIT_BIN.lock().unwrap() = Some(resolved.clone());
+    resolved
 }
 
 pub fn command(repo: &Path, args: &[&str], policy: PromptPolicy, has_stdin: bool) -> Command {

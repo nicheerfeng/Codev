@@ -147,6 +147,23 @@ pub struct Message {
     pub source_event_id: Option<String>,
 }
 
+impl Message {
+    pub fn clamp_arguments_size(&mut self) -> bool {
+        if self.arguments.is_null() || matches!(self.arguments, Value::Bool(_) | Value::Number(_)) {
+            return false;
+        }
+        if let Value::String(ref text) = self.arguments {
+            if text.len() <= 128 * 1024 {
+                return false;
+            }
+        } else if self.arguments.to_string().len() <= 128 * 1024 {
+            return false;
+        }
+        self.arguments = serde_json::json!("参数过长，实时视图只展示摘要；原生历史保留完整内容");
+        true
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct HostToolsPolicy {
@@ -230,6 +247,31 @@ impl SessionView {
             history_offset: 0,
             history_available: false,
             truncated: false,
+        }
+    }
+    pub fn clone_without_messages(&self) -> Self {
+        Self {
+            binding: self.binding.clone(),
+            instance_id: self.instance_id.clone(),
+            revision: self.revision,
+            state: self.state.clone(),
+            capabilities: self.capabilities.clone(),
+            messages: Vec::new(),
+            models: self.models.clone(),
+            model: self.model.clone(),
+            thinking_levels: self.thinking_levels.clone(),
+            thinking_level: self.thinking_level.clone(),
+            config_options: self.config_options.clone(),
+            commands: self.commands.clone(),
+            pending_requests: self.pending_requests.clone(),
+            queue: self.queue.clone(),
+            context: self.context.clone(),
+            statuses: self.statuses.clone(),
+            error: self.error.clone(),
+            history_loaded: self.history_loaded,
+            history_offset: self.history_offset,
+            history_available: self.history_available,
+            truncated: self.truncated,
         }
     }
     pub fn busy(&self) -> bool {

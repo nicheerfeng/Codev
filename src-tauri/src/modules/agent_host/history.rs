@@ -188,19 +188,23 @@ pub fn message_parts(value: &Value, id: &str) -> Vec<Message> {
                     };
                     message.images.push(image);
                 }
-                "toolCall" => tools.push(Message {
-                    id: format!("{id}:tool:{i}"),
-                    kind: "toolCall".into(),
-                    role: "tool".into(),
-                    tool_name: text(part, "name"),
-                    tool_call_id: text(part, "id"),
-                    arguments: part.get("arguments").cloned().unwrap_or(Value::Null),
-                    status: "completed".into(),
-                    created_at,
-                    raw_kind: "message".into(),
-                    source_event_id: Some(id.into()),
-                    ..Message::default()
-                }),
+                "toolCall" => {
+                    let mut tool = Message {
+                        id: format!("{id}:tool:{i}"),
+                        kind: "toolCall".into(),
+                        role: "tool".into(),
+                        tool_name: text(part, "name"),
+                        tool_call_id: text(part, "id"),
+                        arguments: part.get("arguments").cloned().unwrap_or(Value::Null),
+                        status: "completed".into(),
+                        created_at,
+                        raw_kind: "message".into(),
+                        source_event_id: Some(id.into()),
+                        ..Message::default()
+                    };
+                    tool.clamp_arguments_size();
+                    tools.push(tool);
+                }
                 _ => {}
             }
         }
@@ -412,7 +416,7 @@ pub fn read_codex(path: &Path, before: Option<usize>) -> Result<(Vec<Message>, u
                 } else {
                     None
                 };
-                output.push(Message {
+                let mut tool = Message {
                     id: format!("codex:{i}"),
                     kind: "toolCall".into(),
                     role: "tool".into(),
@@ -424,7 +428,9 @@ pub fn read_codex(path: &Path, before: Option<usize>) -> Result<(Vec<Message>, u
                     created_at: ts,
                     raw_kind: ptype,
                     ..Message::default()
-                });
+                };
+                tool.clamp_arguments_size();
+                output.push(tool);
             }
             "function_call_output" | "custom_tool_call_output" => {
                 let call_id = text(payload, "call_id");

@@ -1,7 +1,10 @@
+import type { VcsTurnDiffSummary } from "@/modules/vcs/types";
 import { splitInlineThinking } from "./inlineThinking";
 import {
+  agentPathKey,
   collectTurnFileChanges,
   describeToolCall,
+  normalizeAgentPath,
   summarizeProcessBlock,
   type ToolCategory,
   type TurnFileChange,
@@ -164,11 +167,15 @@ function buildStepsAndTicker(
   rawMessages: AgentMessage[];
   toolCount: number;
   liveStepTitle: string;
+  unresolvedErrorCount: number;
+  recoveredErrorCount: number;
 } {
   const steps: TurnStep[] = [];
   const tickerItems: LiveTickerLine[] = [];
   const rawMessages: AgentMessage[] = [];
   const failedCats = new Set<ToolCategory>();
+  const failedNoticeIds = new Set<string>();
+  let recoveredErrorCount = 0;
   let toolCount = 0;
 
   for (const entry of processEntries) {
@@ -210,6 +217,7 @@ function buildStepsAndTicker(
 
     if (m.kind === "notice") {
       steps.push({ kind: "notice", id: `notice:${m.id}`, message: m });
+      if (m.isError) failedNoticeIds.add(m.id);
       const preview = singleLinePreview(m.text, 90);
       if (preview) {
         tickerItems.push({
@@ -239,6 +247,17 @@ function buildStepsAndTicker(
         text: desc.target || desc.title,
       });
 
+      const failed = status === "error";
+      const succeeded = m.status === "completed";
+      let recoveredAfterFailure = false;
+      if (succeeded && failedCats.has(desc.category)) {
+        recoveredAfterFailure = true;
+        recoveredErrorCount += 1;
+        failedCats.delete(desc.category);
+      } else if (failed) {
+        failedCats.add(desc.category);
+      }
+
       const lastStep = steps[steps.length - 1];
       if (isExplore) {
         if (lastStep?.kind === "explore") {
@@ -253,15 +272,6 @@ function buildStepsAndTicker(
         continue;
       }
 
-      const failed = status === "error";
-      const succeeded = m.status === "completed";
-      let recoveredAfterFailure = false;
-      if (succeeded && failedCats.has(desc.category)) {
-        recoveredAfterFailure = true;
-        failedCats.delete(desc.category);
-      } else if (failed) {
-        failedCats.add(desc.category);
-      }
       steps.push({
         kind: "tool",
         id: m.id,
@@ -322,7 +332,60 @@ function buildStepsAndTicker(
     else if (latestTick?.verb === "说明") liveStepTitle = "正在组织输出";
   }
 
-  return { steps, tickerItems, rawMessages, toolCount, liveStepTitle };
+  return {
+    steps,
+    tickerItems,
+    rawMessages,
+    toolCount,
+    liveStepTitle,
+    unresolvedErrorCount: failedCats.size + failedNoticeIds.size,
+    recoveredErrorCount,
+  };
+}
+
+export function mergeTurnGitChanges(
+  toolChanges: TurnFileChange[],
+  turnGit?: VcsTurnDiffSummary | null,
+  cwd = "",
+): TurnFileChange[] {
+  if (!turnGit?.changedFiles?.length) return toolChanges;
+  const byKey = new Map<string, TurnFileChange>();
+  for (const item of toolChanges) {
+    byKey.set(agentPathKey(item.path, cwd), item);
+  }
+  const root = turnGit.worktreeRoot.replace(/\\/g, "/").replace(/\/+$/u, "");
+  for (const gf of turnGit.changedFiles) {
+    const absPath = normalizeAgentPath(
+      root ? `${root}/${gf.path}` : gf.path,
+      cwd,
+    );
+    const key = agentPathKey(absPath, cwd);
+    const existing = byKey.get(key);
+    const op: TurnFileChange["operation"] =
+      gf.untracked || gf.status.includes("A") || gf.status.includes("?")
+        ? "新增"
+        : gf.status.includes("D")
+          ? "删除"
+          : "修改";
+    const adds = gf.additions ?? 0;
+    const dels = gf.deletions ?? 0;
+    if (existing) {
+      byKey.set(key, {
+        ...existing,
+        adds: adds > 0 || dels > 0 ? adds : existing.adds,
+        dels: adds > 0 || dels > 0 ? dels : existing.dels,
+      });
+    } else {
+      byKey.set(key, {
+        path: absPath,
+        operation: op,
+        adds,
+        dels,
+        diffText: null,
+      });
+    }
+  }
+  return [...byKey.values()];
 }
 
 /**
@@ -334,12 +397,13 @@ export function buildTranscriptBlocks(
   messages: AgentMessage[],
   running: boolean,
   cwd: string,
+  turnGit?: VcsTurnDiffSummary | null,
 ): TranscriptBlock[] {
   const blocks: TranscriptBlock[] = [];
   let turn: AgentMessage[] = [];
   let turnStartedAt: number | undefined;
 
-  const flushTurn = (isLiveTurn: boolean) => {
+  const flushTurn = (isLiveTurn: boolean, isFinalTurn: boolean) => {
     const visible = turn.filter(isVisibleMessage);
     if (!visible.length) {
       turn = [];
@@ -375,8 +439,15 @@ export function buildTranscriptBlocks(
     }
 
     if (processEntries.length > 0) {
-      const { steps, tickerItems, rawMessages, toolCount, liveStepTitle } =
-        buildStepsAndTicker(processEntries);
+      const {
+        steps,
+        tickerItems,
+        rawMessages,
+        toolCount,
+        liveStepTitle,
+        unresolvedErrorCount,
+        recoveredErrorCount,
+      } = buildStepsAndTicker(processEntries);
       const times = rawMessages
         .map((m) => m.createdAt ?? 0)
         .filter((t) => t > 0);
@@ -389,9 +460,12 @@ export function buildTranscriptBlocks(
         : lastIsDeliverable && last.createdAt && last.createdAt > 0
           ? last.createdAt
           : lastTime;
-      const fileChanges = collectTurnFileChanges(rawMessages, cwd);
+      const toolChanges = collectTurnFileChanges(rawMessages, cwd);
+      const fileChanges =
+        isFinalTurn && !processLive
+          ? mergeTurnGitChanges(toolChanges, turnGit, cwd)
+          : toolChanges;
       const toolSummary = summarizeProcessBlock(rawMessages, false);
-      const hasError = tickerItems.some((item) => item.status === "error");
       const summaryParts: string[] = [];
       if (toolCount > 0) summaryParts.push(toolSummary);
       else if (steps.length > 0) summaryParts.push(`${steps.length} 个推理步骤`);
@@ -408,9 +482,11 @@ export function buildTranscriptBlocks(
         running: processLive,
         statusTitle: processLive
           ? liveStepTitle
-          : hasError
+          : unresolvedErrorCount > 0
             ? "已执行（含失败）"
-            : "已完成",
+            : recoveredErrorCount > 0
+              ? "已完成（已恢复）"
+              : "已完成",
         summaryText: summaryParts.join(" · ") || "执行完成",
         stepCount: Math.max(steps.length, tickerItems.length),
         toolCount,
@@ -437,7 +513,7 @@ export function buildTranscriptBlocks(
   for (const m of messages) {
     if (!isVisibleMessage(m)) continue;
     if (m.kind === "message" && m.role === "user") {
-      flushTurn(false);
+      flushTurn(false, false);
       blocks.push({ id: m.id, kind: "message", message: m });
       turnStartedAt = m.createdAt && m.createdAt > 0 ? m.createdAt : undefined;
       lastUserTime = turnStartedAt;
@@ -445,7 +521,7 @@ export function buildTranscriptBlocks(
       turn.push(m);
     }
   }
-  flushTurn(running);
+  flushTurn(running, true);
 
   // 发送后若模型尚未返回任何事件，立即呈现即时响应过程占位。
   if (

@@ -234,7 +234,7 @@ export function SkillMentionInput({
         value={value}
         placeholder={placeholder}
         className={cn(
-          "relative z-10 min-h-18 bg-transparent! caret-sky-600",
+          "relative z-10 min-h-24 bg-transparent! caret-sky-600",
           TYPEFACE,
           className,
         )}

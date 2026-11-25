@@ -188,7 +188,11 @@ export function HarnessModelsPanel({
     const result = await run<Inventory>(resource.id, "activate", { id: resource.id });
     if (!result) return;
     setData(result);
-    if (codex) setPendingApply((previous) => previous.filter((id) => id !== resource.id));
+    if (codex) {
+      setPendingApply((previous) => previous.filter((id) => id !== resource.id));
+    } else {
+      setPendingApply([resource.id]);
+    }
   };
 
   const apply = async (resource: Resource) => {
@@ -445,7 +449,7 @@ export function HarnessModelsPanel({
         description={
           codex
             ? "在此切换 Codex 激活的 API 供应商；未保存修改需点击“保存资源”后应用到线程。"
-            : "选择新建 Antigravity 线程时默认使用的账号或自定义供应商资源。"
+            : "选择 Antigravity 使用的账号或中转资源（选定中转时同时接管桌面端与 CLI 会话；历史按来源就地写回原目录，切回官方登录即退让回原生账号）。"
         }
         actions={
           <>

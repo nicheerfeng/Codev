@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import { Streamdown } from "streamdown";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowDown01Icon,
@@ -15,8 +16,16 @@ import {
   File01Icon,
   PencilEdit01Icon,
 } from "@hugeicons/core-free-icons";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuShortcut,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
   Dialog,
   DialogContent,
@@ -43,7 +52,11 @@ import {
   StructuredRequestCard,
   TurnFileChangesBar,
 } from "./PlanAndRequest";
-import { collectTurnFileChanges, describeToolCall } from "./toolFormat";
+import {
+  collectTurnFileChanges,
+  compactToolTitlePaths,
+  describeToolCall,
+} from "./toolFormat";
 import {
   buildTranscriptBlocks,
   type TurnProcessBlock,
@@ -133,10 +146,15 @@ const Message = memo(function Message({
           : "is-done";
     const summaryTarget =
       desc.category === "command" && desc.commandText
-        ? `${message.toolName || "bash"} · ${desc.commandText}`
+        ? `${desc.badge} · ${desc.commandText}`
         : desc.target
-          ? `${message.toolName || desc.badge} · ${desc.target}`
-          : desc.title;
+          ? `${desc.badge} · ${desc.target}`
+          : compactToolTitlePaths(desc.title);
+    const fullTargetTitle =
+      desc.paths[0] ??
+      (message.toolName && message.toolName !== summaryTarget
+        ? message.toolName
+        : undefined);
     const tailLines =
       desc.category === "command" && message.text
         ? message.text.trimEnd().split(/\r?\n/u).slice(-14).join("\n")
@@ -147,7 +165,7 @@ const Message = memo(function Message({
         data-agent-message-id={message.id}
         className={`agent-step-row ${toneClass}`}
       >
-        <summary className="agent-step-summary">
+        <summary className="agent-step-summary" title={fullTargetTitle}>
           <HugeiconsIcon
             icon={File01Icon}
             size={13}
@@ -215,6 +233,22 @@ const Message = memo(function Message({
     : splitInlineThinking(message.text, message.thinking, message.streaming);
   const clock = formatClockTime(message.createdAt);
   const isPlaying = speakingThis && voice.status === "playing";
+  const imageList = !!message.images?.length && (
+    <div className="agent-message-images">
+      {message.images.map((image) =>
+        image.data ? (
+          <ZoomableImage
+            key={image.id ?? `${image.mimeType}:${image.data.slice(-32)}`}
+            src={`data:${image.mimeType};base64,${image.data}`}
+            alt="消息附件"
+            loading="lazy"
+          />
+        ) : (
+          <span key={`${message.id}:native-image`}>原生历史中的图片</span>
+        ),
+      )}
+    </div>
+  );
   return (
     <article
       className={`agent-message ${user ? "agent-user" : "agent-assistant"} ${message.status === "error" ? "agent-message-error" : ""}`}
@@ -233,6 +267,7 @@ const Message = memo(function Message({
           </div>
         </details>
       )}
+      {user && imageList}
       {resolved.text && (
         <div className={user ? "agent-user-bubble" : "agent-markdown"}>
           {user ? (
@@ -264,22 +299,7 @@ const Message = memo(function Message({
           ))}
         </div>
       )}
-      {!!message.images?.length && (
-        <div className="agent-message-images">
-          {message.images.map((image) =>
-            image.data ? (
-              <ZoomableImage
-                key={image.id ?? `${image.mimeType}:${image.data.slice(-32)}`}
-                src={`data:${image.mimeType};base64,${image.data}`}
-                alt="消息附件"
-                loading="lazy"
-              />
-            ) : (
-              <span key={`${message.id}:native-image`}>原生历史中的图片</span>
-            ),
-          )}
-        </div>
-      )}
+      {!user && imageList}
       {!message.streaming && (resolved.text || clock) && (
         <div className="agent-message-actions">
           {clock && <span className="agent-msg-time">{clock}</span>}
@@ -404,9 +424,53 @@ function renderTurnStep(
     );
   }
   if (step.kind === "explore") {
-    return step.messages.map((m) => (
-      <Message key={m.id} message={m} onOpenDiff={onOpenDiff} />
-    ));
+    if (step.messages.length === 1) {
+      return (
+        <Message
+          key={step.messages[0].id}
+          message={step.messages[0]}
+          onOpenDiff={onOpenDiff}
+        />
+      );
+    }
+    const sampleTargets = step.messages
+      .map((m) => describeToolCall(m).target)
+      .filter(Boolean);
+    const uniqueTargets = [...new Set(sampleTargets)];
+    const preview =
+      uniqueTargets.length > 0
+        ? uniqueTargets.slice(0, 2).join("、") +
+          (uniqueTargets.length > 2 ? " 等" : "")
+        : `${step.messages.length} 个文件或检索`;
+    const allRunning = step.messages.some(
+      (m) =>
+        m.status === "running" ||
+        m.status === "in_progress" ||
+        m.status === "pending",
+    );
+    return (
+      <details key={step.id} className="agent-step-row agent-explore-sub">
+        <summary className="agent-step-summary">
+          <HugeiconsIcon
+            icon={File01Icon}
+            size={13}
+            className="agent-step-icon"
+          />
+          <span className="agent-step-status">
+            {allRunning ? "正在探索" : "已探索"}
+          </span>
+          <span aria-hidden="true">·</span>
+          <span className="agent-step-target">
+            {step.messages.length} 项 · {preview}
+          </span>
+        </summary>
+        <div className="agent-explore-sublist">
+          {step.messages.map((m) => (
+            <Message key={m.id} message={m} onOpenDiff={onOpenDiff} />
+          ))}
+        </div>
+      </details>
+    );
   }
   return (
     <Message
@@ -421,6 +485,7 @@ function renderTurnStep(
 export function TurnProcessView({
   block,
   now,
+  cwd,
   mobile,
   searchQuery,
   onOpenFile,
@@ -428,10 +493,11 @@ export function TurnProcessView({
 }: {
   block: TurnProcessBlock;
   now: number;
+  cwd: string;
   mobile?: boolean;
   searchQuery?: string;
   onOpenFile: (path: string) => void;
-  onOpenDiff?: (path: string, diff: string) => void;
+  onOpenDiff?: (path: string, diff: string, options?: { activate?: boolean }) => void;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -455,13 +521,22 @@ export function TurnProcessView({
     if (searchMatched) setOpen(true);
   }, [searchMatched]);
 
+  const elapsedMs = !block.startedAt
+    ? 0
+    : block.running
+      ? Math.max(0, now - block.startedAt)
+      : block.finishedAt && block.finishedAt > block.startedAt
+        ? block.finishedAt - block.startedAt
+        : 0;
   const elapsed = !block.startedAt
     ? ""
     : block.running
-      ? `用时 ${formatElapsed(Math.max(0, now - block.startedAt))}`
-      : block.finishedAt && block.finishedAt > block.startedAt
-        ? `用时 ${formatElapsed(block.finishedAt - block.startedAt)}`
-        : "";
+      ? `用时 ${formatElapsed(elapsedMs)}`
+      : elapsedMs >= 1000
+        ? `用时 ${formatElapsed(elapsedMs)}`
+        : block.finishedAt && block.finishedAt > block.startedAt
+          ? "用时 <1秒"
+          : "";
 
   const visibleTicker = block.tickerItems.slice(-3);
   const stepSummary =
@@ -551,6 +626,7 @@ export function TurnProcessView({
       {!block.running && block.fileChanges.length > 0 && (
         <TurnFileChangesBar
           changes={block.fileChanges}
+          cwd={cwd}
           mobile={mobile}
           onOpenFile={onOpenFile}
           onOpenDiff={onOpenDiff}
@@ -570,7 +646,7 @@ export function AgentTranscript({
 }: {
   session: SessionView;
   onOpenFile?: (path: string) => void;
-  onOpenDiff?: (path: string, diff: string) => void;
+  onOpenDiff?: (path: string, diff: string, options?: { activate?: boolean }) => void;
   onFork?: (entryId: string) => void;
   searchOpen: boolean;
   onCloseSearch: () => void;
@@ -592,6 +668,8 @@ export function AgentTranscript({
   const [file, setFile] = useState<{ path: string; content: string } | null>(
     null,
   );
+  const selectedText = useRef("");
+  const [hasSelection, setHasSelection] = useState(false);
   const restored = useRef(false);
   const rememberScroll = (node: HTMLElement) => {
     if (!node.clientHeight) return;
@@ -765,9 +843,11 @@ export function AgentTranscript({
     useAgentStore(
       (s) => s.workspaces.find((w) => w.id === session.workspaceId)?.cwd,
     ) ?? "";
+  const turnGit =
+    (session.statuses?.turnGit as VcsTurnDiffSummary | undefined) ?? null;
   const blocks = useMemo(
-    () => buildTranscriptBlocks(session.messages, turnRunning, cwd),
-    [session.messages, turnRunning, cwd],
+    () => buildTranscriptBlocks(session.messages, turnRunning, cwd, turnGit),
+    [session.messages, turnRunning, cwd, turnGit],
   );
   const hasTurnChanges = useMemo(
     () => blocks.some((b) => b.kind === "process" && b.fileChanges.length > 0),
@@ -839,15 +919,22 @@ export function AgentTranscript({
           </>
         </div>
       )}
-      <section
-        ref={scroll}
-        tabIndex={-1}
-        aria-label="对话记录"
-        className="agent-transcript reader-scrollbar outline-none"
-        onLoadCapture={() => {
-          if (following.current && scroll.current)
-            scroll.current.scrollTop = scroll.current.scrollHeight;
-        }}
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <section
+            ref={scroll}
+            tabIndex={-1}
+            aria-label="对话记录"
+            className="agent-transcript reader-scrollbar select-text outline-none"
+            onContextMenuCapture={() => {
+              const text = window.getSelection()?.toString() ?? "";
+              selectedText.current = text;
+              setHasSelection(text.length > 0);
+            }}
+            onLoadCapture={() => {
+              if (following.current && scroll.current)
+                scroll.current.scrollTop = scroll.current.scrollHeight;
+            }}
         onClickCapture={(event) => {
           const anchor = (event.target as Element).closest<HTMLAnchorElement>(
             "a[href]",
@@ -945,7 +1032,7 @@ export function AgentTranscript({
           if (restored.current) rememberScroll(node);
         }}
       >
-        <div ref={content} className="agent-transcript-content">
+        <div ref={content} className="agent-transcript-content select-text">
           {session.historyOffset > 0 && (
             <Button
               variant="ghost"
@@ -991,6 +1078,7 @@ export function AgentTranscript({
                 key={block.id}
                 block={block}
                 now={now}
+                cwd={cwd}
                 mobile={mobile}
                 searchQuery={query}
                 onOpenFile={openPath}
@@ -1020,6 +1108,7 @@ export function AgentTranscript({
           )}
           <TurnFileChangesBar
             changes={fallbackTurnChanges}
+            cwd={cwd}
             mobile={mobile}
             onOpenFile={openPath}
             onOpenDiff={onOpenDiff}
@@ -1027,10 +1116,7 @@ export function AgentTranscript({
           {gitUiEnabled && (
             <TurnGitCard
               sessionId={session.id}
-              summary={
-                (session.statuses?.turnGit as VcsTurnDiffSummary | undefined) ??
-                null
-              }
+              summary={turnGit}
               mobile={mobile}
               onOpenDiff={onOpenDiff}
             />
@@ -1056,7 +1142,23 @@ export function AgentTranscript({
             </div>
           )}
         </div>
-      </section>
+          </section>
+        </ContextMenuTrigger>
+        <ContextMenuContent onCloseAutoFocus={(event) => event.preventDefault()}>
+          <ContextMenuItem
+            disabled={!hasSelection}
+            onSelect={() => {
+              const text = selectedText.current;
+              if (!text) return;
+              void writeText(text).catch((error) => {
+                toast.error(`复制失败：${String(error)}`);
+              });
+            }}
+          >
+            复制<ContextMenuShortcut>Ctrl+C</ContextMenuShortcut>
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
       {userTurns.length >= 4 && (
         <nav className="agent-conv-nav" aria-label="对话回合快速跳转">
           {userTurns.slice(-12).map((turn) => (

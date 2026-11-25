@@ -787,8 +787,10 @@ export function useTabs(initial?: Partial<TerminalTab>) {
       staged?: boolean;
       conflict?: boolean;
       commitHash?: string;
+      activate?: boolean;
     }) => {
       const diffText = input.diff ?? "";
+      const shouldActivate = input.activate !== false;
       const title = input.path.split(/[\\/]/).pop() || input.path;
       const existing = tabsRef.current.find(
         (tab) =>
@@ -813,7 +815,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
         );
         tabsRef.current = tabs;
         setTabs(tabs);
-        setActiveId(existing.id);
+        if (shouldActivate) setActiveId(existing.id);
         return existing.id;
       }
       const id = nextIdRef.current++;
@@ -832,7 +834,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
       const tabs = [...tabsRef.current, tab];
       tabsRef.current = tabs;
       setTabs(tabs);
-      setActiveId(id);
+      if (shouldActivate) setActiveId(id);
       return id;
     },
     [],

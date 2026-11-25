@@ -286,13 +286,81 @@ describe("agent Phase 2 semantic formatting & inline thinking", () => {
     });
     const editDesc = describeToolCall(editTool);
     expect(editDesc.category).toBe("edit");
-    expect(editDesc.diff?.adds).toBe(3);
-    expect(editDesc.diff?.dels).toBe(2);
+    expect(editDesc.diff?.adds).toBe(2);
+    expect(editDesc.diff?.dels).toBe(1);
 
     const changes = collectTurnFileChanges([editTool], "/repo");
     expect(changes).toHaveLength(1);
     expect(changes[0].operation).toBe("修改");
     expect(changes[0].path).toBe("/repo/src/app.ts");
+  });
+
+  it("deduplicates Windows leading-slash drive paths and extracts diffs from ACP tool arguments", () => {
+    const t1 = makeMessage({
+      id: "w1",
+      kind: "toolCall",
+      toolName: "replace_file_content",
+      arguments: {
+        TargetFile: "d:/repo/src/a.ts",
+        TargetContent: "line1\nline2",
+        ReplacementContent: "line1\nline2b\nline3",
+      },
+      status: "completed",
+    });
+    const t2 = makeMessage({
+      id: "w2",
+      kind: "toolCall",
+      toolName: "multi_replace_file_content",
+      arguments: {
+        TargetFile: "/d:/repo/src/a.ts",
+        ReplacementChunks: [
+          { TargetContent: "foo\nbar", ReplacementContent: "foo\nbaz" },
+        ],
+      },
+      status: "completed",
+    });
+    const changes = collectTurnFileChanges([t1, t2], "d:/repo");
+    expect(changes).toHaveLength(1);
+    expect(changes[0].path).toBe("d:/repo/src/a.ts");
+    expect(changes[0].adds).toBe(3);
+    expect(changes[0].dels).toBe(2);
+    expect(changes[0].diffText).toContain("+line2b");
+    expect(changes[0].diffText).toContain("+baz");
+  });
+
+  it("compacts Antigravity ACP file paths and formats line ranges cleanly", () => {
+    const agyRead = makeMessage({
+      id: "agy-r1",
+      kind: "toolCall",
+      toolName: "File C:/Users/79988/Desktop/iris-analysis-report/commands.rs",
+      toolKind: "read",
+      arguments: {
+        Path: "C:\\Users\\79988\\Desktop\\iris-analysis-report\\commands.rs",
+        StartLine: 1670,
+        EndLine: 1795,
+      },
+      status: "completed",
+    });
+    const agyReadDesc = describeToolCall(agyRead);
+    expect(agyReadDesc.category).toBe("read");
+    expect(agyReadDesc.target).toBe("commands.rs #L1670-1795");
+    expect(agyReadDesc.title).toBe("读取 commands.rs #L1670-1795");
+    expect(agyReadDesc.title).not.toContain("79988");
+
+    const agySearch = makeMessage({
+      id: "agy-s1",
+      kind: "toolCall",
+      toolName: "Search /Users/alice/repo/src",
+      toolKind: "search",
+      arguments: {
+        Query: "applyComposerHeight",
+        SearchPath: "d:\\software\\codev-dev\\src\\modules",
+      },
+      status: "completed",
+    });
+    const agySearchDesc = describeToolCall(agySearch);
+    expect(agySearchDesc.category).toBe("search");
+    expect(agySearchDesc.target).toBe('"applyComposerHeight" · modules');
   });
 
   it("groups explore steps and marks failure recovery", () => {
@@ -417,5 +485,63 @@ describe("agent Turn timeline aggregation & compact ticker", () => {
     expect(resolveContextPercent({ used: 0, size: 1048576 })).toBe(0);
     const pct = resolveContextPercent({ used: 524288, size: 1048576 });
     expect(pct).toBeCloseTo(50, 5);
+  });
+
+  it("distinguishes recovered intermediate failures from unresolved failures and merges turnGit stats", () => {
+    const recoveredTurn: AgentMessage[] = [
+      makeMessage({ id: "u1", role: "user", text: "跑测", createdAt: 1000 }),
+      makeMessage({
+        id: "t1",
+        kind: "toolCall",
+        toolName: "bash",
+        arguments: { command: "pnpm test" },
+        status: "error",
+        isError: true,
+        createdAt: 1200,
+      }),
+      makeMessage({
+        id: "t2",
+        kind: "toolCall",
+        toolName: "replace_file_content",
+        arguments: {
+          TargetFile: "/d:/repo/src/a.ts",
+          TargetContent: "x",
+          ReplacementContent: "y\nz",
+        },
+        status: "completed",
+        createdAt: 1500,
+      }),
+      makeMessage({
+        id: "t3",
+        kind: "toolCall",
+        toolName: "bash",
+        arguments: { command: "pnpm test" },
+        status: "completed",
+        createdAt: 2200,
+      }),
+      makeMessage({ id: "a1", role: "assistant", text: "已修复通过", createdAt: 2500 }),
+    ];
+    const blocks = buildTranscriptBlocks(recoveredTurn, false, "d:/repo", {
+      turnId: "turn-1",
+      worktreeRoot: "d:/repo",
+      branch: "main",
+      baseHeadOid: "abc",
+      headOid: "abc",
+      newCommits: 0,
+      dirtyBefore: 0,
+      dirtyAfter: 2,
+      changedFiles: [
+        { path: "src/a.ts", status: " M", staged: false, untracked: false, additions: 4, deletions: 1 },
+        { path: "src/generated.txt", status: "??", staged: false, untracked: true, additions: 10, deletions: 0 },
+      ],
+    });
+    const proc = blocks[1];
+    expect(proc.kind).toBe("process");
+    if (proc.kind === "process") {
+      expect(proc.statusTitle).toBe("已完成（已恢复）");
+      expect(proc.fileChanges).toHaveLength(2);
+      expect(proc.fileChanges[0]).toMatchObject({ path: "d:/repo/src/a.ts", adds: 4, dels: 1 });
+      expect(proc.fileChanges[1]).toMatchObject({ path: "d:/repo/src/generated.txt", adds: 10, dels: 0, operation: "新增" });
+    }
   });
 });
