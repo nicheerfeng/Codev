@@ -4,13 +4,13 @@ use super::{
     bridge::lock,
     coordinator::{Host, Runtime},
     history,
+    metadata,
     protocol::*,
 };
 use serde_json::{json, Value};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 const TIMEOUT: Duration = Duration::from_secs(120);
-const REPLAY_IDLE_GAP: Duration = Duration::from_millis(2000);
 const TOOL_TEXT_LIMIT: usize = 8_000;
 const TOOL_PAYLOAD_MAX_NODES: usize = 512;
 const TOOL_PAYLOAD_MAX_TEXT: usize = 64_000;
@@ -111,7 +111,10 @@ fn sanitize_tool_value(
     budget.nodes -= 1;
     match value {
         Value::String(s) => {
-            if s.len() >= 11 && s[..11].eq_ignore_ascii_case("data:image/") {
+            if s.as_bytes()
+                .get(..11)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"data:image/"))
+            {
                 return None;
             }
             if budget.text == 0 {
@@ -430,6 +433,13 @@ fn split_tiered_model(
     (best, tier)
 }
 
+fn known_agy_thinking_tier(suffix: &str) -> bool {
+    matches!(
+        suffix.trim().to_ascii_lowercase().as_str(),
+        "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+    )
+}
+
 fn resolve_acp_model(
     configured: &str,
     view_models: &[Value],
@@ -459,7 +469,7 @@ fn resolve_acp_model(
             return Some(AcpModelResolution::AvailableModel {
                 model_id,
                 base_value,
-                thought_level,
+                thought_level: thought_level.filter(|t| known_agy_thinking_tier(t)),
             });
         }
     }
@@ -467,7 +477,7 @@ fn resolve_acp_model(
         return Some(AcpModelResolution::AvailableModel {
             model_id: target.to_string(),
             base_value: Some(base_value),
-            thought_level: Some(thought_level),
+            thought_level: known_agy_thinking_tier(&thought_level).then_some(thought_level),
         });
     }
     if let Some((base_part, tier_part)) = target.rsplit_once(" (").and_then(|(b, r)| r.strip_suffix(')').map(|t| (b.trim(), t.trim().to_ascii_lowercase()))) {
@@ -479,7 +489,7 @@ fn resolve_acp_model(
             return Some(AcpModelResolution::AvailableModel {
                 model_id: format!("{base}-{tier_part}"),
                 base_value: Some(base),
-                thought_level: Some(tier_part),
+                thought_level: known_agy_thinking_tier(&tier_part).then_some(tier_part),
             });
         }
     }
@@ -492,28 +502,137 @@ fn apply_provider_scope_to_view(
     configured_models: Option<&[String]>,
     available_models: Option<&[Value]>,
 ) {
+    apply_provider_scope_with_preferred(view, provider_label, configured_models, available_models, None);
+}
+
+fn apply_provider_scope_with_preferred(
+    view: &mut SessionView,
+    provider_label: &str,
+    configured_models: Option<&[String]>,
+    available_models: Option<&[Value]>,
+    preferred_model_id: Option<&str>,
+) {
     if view.binding.harness_id == "acp:antigravity" {
         if let Some(configured) = configured_models {
-            let mut allowed_ids: Vec<String> = Vec::new();
+            let acp_models = view.models.clone();
+            let config_id = acp_models
+                .iter()
+                .find_map(|m| m.get("configId").and_then(Value::as_str))
+                .unwrap_or("model")
+                .to_string();
+            let current_id = view
+                .model
+                .as_ref()
+                .map(|m| text(m, "id"))
+                .unwrap_or_default();
+            let pref_id = preferred_model_id
+                .filter(|s| !s.is_empty())
+                .or_else(|| view.binding.preferences.model_id.as_deref().filter(|s| !s.is_empty()));
+            let mut scoped_models: Vec<Value> = Vec::new();
+            let mut matched_preferred: Option<Value> = None;
+            let mut matched_exact: Option<Value> = None;
+            let mut matched_base: Option<Value> = None;
+            let mut seen_ids: Vec<String> = Vec::new();
             for entry in configured {
-                let matched = match resolve_acp_model(entry, &view.models, available_models) {
-                    Some(AcpModelResolution::ConfigValue(id)) => Some(id),
-                    Some(AcpModelResolution::AvailableModel { base_value: Some(id), .. }) => Some(id),
-                    Some(AcpModelResolution::AvailableModel { model_id, .. }) => view
-                        .models
-                        .iter()
-                        .find(|m| text(m, "id") == model_id)
-                        .map(|m| text(m, "id")),
-                    None => None,
+                let cleaned = strip_models_prefix(entry);
+                if cleaned.is_empty() {
+                    continue;
+                }
+                let resolved = resolve_acp_model(cleaned, &acp_models, available_models);
+                let (id, name, base_id) = match resolved {
+                    Some(AcpModelResolution::ConfigValue(base)) => {
+                        let base_name = acp_models
+                            .iter()
+                            .find(|m| text(m, "id") == base)
+                            .map(|m| text(m, "name"))
+                            .filter(|s| !s.is_empty());
+                        (
+                            base.clone(),
+                            base_name.unwrap_or_else(|| base.clone()),
+                            Some(base),
+                        )
+                    }
+                    Some(AcpModelResolution::AvailableModel {
+                        base_value: Some(base),
+                        thought_level: Some(_),
+                        ..
+                    }) => {
+                        let base_name = acp_models
+                            .iter()
+                            .find(|m| text(m, "id") == base)
+                            .map(|m| text(m, "name"))
+                            .filter(|s| !s.is_empty());
+                        (
+                            base.clone(),
+                            base_name.unwrap_or_else(|| base.clone()),
+                            Some(base),
+                        )
+                    }
+                    Some(AcpModelResolution::AvailableModel {
+                        base_value: Some(base),
+                        thought_level: None,
+                        ..
+                    }) => {
+                        let base_name = acp_models
+                            .iter()
+                            .find(|m| text(m, "id") == base)
+                            .map(|m| text(m, "name"))
+                            .filter(|s| !s.is_empty());
+                        (
+                            cleaned.to_string(),
+                            base_name.unwrap_or_else(|| cleaned.to_string()),
+                            Some(base),
+                        )
+                    }
+                    Some(AcpModelResolution::AvailableModel { model_id, .. }) => {
+                        let found_name = acp_models
+                            .iter()
+                            .find(|m| text(m, "id") == model_id)
+                            .map(|m| text(m, "name"))
+                            .filter(|s| !s.is_empty());
+                        (
+                            model_id.clone(),
+                            found_name.unwrap_or_else(|| model_id.clone()),
+                            None,
+                        )
+                    }
+                    None => (cleaned.to_string(), cleaned.to_string(), None),
                 };
-                if let Some(id) = matched {
-                    if !allowed_ids.contains(&id) {
-                        allowed_ids.push(id);
+                if seen_ids.iter().any(|seen| seen == &id) {
+                    continue;
+                }
+                seen_ids.push(id.clone());
+                let mut item = json!({
+                    "id": id,
+                    "name": name,
+                    "provider": provider_label,
+                    "configId": config_id,
+                });
+                if let Some(base) = base_id.as_ref() {
+                    item["acpValue"] = json!(base);
+                }
+                let matches_current =
+                    id == current_id || base_id.as_deref() == Some(current_id.as_str());
+                if matches_current {
+                    if matched_preferred.is_none()
+                        && pref_id.is_some_and(|p| id.eq_ignore_ascii_case(p))
+                    {
+                        matched_preferred = Some(item.clone());
+                    }
+                    if matched_exact.is_none() && id == current_id {
+                        matched_exact = Some(item.clone());
+                    }
+                    if matched_base.is_none() && base_id.as_deref() == Some(current_id.as_str()) {
+                        matched_base = Some(item.clone());
                     }
                 }
+                scoped_models.push(item);
             }
-            if !allowed_ids.is_empty() {
-                view.models.retain(|m| allowed_ids.iter().any(|id| id == &text(m, "id")));
+            if !scoped_models.is_empty() {
+                view.models = scoped_models;
+                if let Some(matched) = matched_preferred.or(matched_exact).or(matched_base) {
+                    view.model = Some(matched);
+                }
             }
         }
     }
@@ -525,6 +644,78 @@ fn apply_provider_scope_to_view(
     if let Some(obj) = view.model.as_mut().and_then(Value::as_object_mut) {
         obj.insert("provider".into(), json!(provider_label));
     }
+}
+
+pub(super) fn refresh_view_provider_scope(
+    view: &mut SessionView,
+    provider_label: &str,
+    configured_models: Option<&[String]>,
+) {
+    let previous_model_id = view
+        .model
+        .as_ref()
+        .map(|m| text(m, "id"))
+        .filter(|s| !s.is_empty());
+    let previous_acp_value = view
+        .model
+        .as_ref()
+        .and_then(|m| m.get("acpValue"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if let Some(opt) = view
+        .config_options
+        .iter()
+        .find(|o| text(o, "category") == "model" || text(o, "id") == "model")
+        .cloned()
+    {
+        let id_str = text(&opt, "id");
+        let current = text(&opt, "currentValue");
+        let choices = options(opt.get("options").unwrap_or(&Value::Null));
+        let raw_models: Vec<Value> = choices
+            .iter()
+            .map(|c| {
+                json!({
+                    "id": c.get("value"),
+                    "name": c.get("name").or_else(|| c.get("label")),
+                    "provider": view.binding.harness_id,
+                    "configId": id_str,
+                })
+            })
+            .collect();
+        if !raw_models.is_empty() {
+            view.models = raw_models;
+            let raw_current = if !current.is_empty() {
+                current
+            } else {
+                previous_acp_value
+                    .or_else(|| previous_model_id.clone())
+                    .unwrap_or_default()
+            };
+            view.model = view
+                .models
+                .iter()
+                .find(|m| text(m, "id") == raw_current)
+                .cloned()
+                .or_else(|| {
+                    (!raw_current.is_empty()).then(|| {
+                        json!({
+                            "id": raw_current,
+                            "name": raw_current,
+                            "provider": view.binding.harness_id,
+                            "configId": id_str,
+                        })
+                    })
+                });
+        }
+    }
+    apply_provider_scope_with_preferred(
+        view,
+        provider_label,
+        configured_models,
+        None,
+        previous_model_id.as_deref(),
+    );
+    view.capabilities.supports_model_selection = !view.models.is_empty();
 }
 
 fn apply_session(view: &mut SessionView, response: &Value) {
@@ -976,38 +1167,21 @@ impl Host {
                     runtime.loading_history.store(true, std::sync::atomic::Ordering::Release);
                 }
                 runtime.touch_activity();
-                let mut load_fut = Box::pin(runtime.bridge.request(
-                    "session/load",
-                    json!({"sessionId":native,"cwd":cwd,"mcpServers":[]}),
-                    TIMEOUT,
-                ));
-                let load_start_ms = now_ms();
-                let mut replay_provisional = false;
-                let mut poll = tokio::time::interval(Duration::from_millis(200));
-                poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                let loaded = loop {
-                    tokio::select! {
-                        res = &mut load_fut => break res,
-                        _ = poll.tick() => {
-                            let last = runtime.last_activity_ms.load(std::sync::atomic::Ordering::Acquire);
-                            if last > load_start_ms
-                                && now_ms().saturating_sub(last) >= REPLAY_IDLE_GAP.as_millis() as u64
-                            {
-                                replay_provisional = true;
-                                break Ok(json!({ "sessionId": native }));
-                            }
-                        }
-                    }
-                };
+                let loaded = runtime
+                    .bridge
+                    .request(
+                        "session/load",
+                        json!({"sessionId":native,"cwd":cwd,"mcpServers":[]}),
+                        TIMEOUT,
+                    )
+                    .await;
                 let drained = runtime.bridge.drain_events().await;
                 if desktop {
                     runtime.loading_desktop_history.store(false, std::sync::atomic::Ordering::Release);
-                    if !replay_provisional {
-                        drained?;
-                    }
+                    drained?;
                 } else {
                     runtime.loading_history.store(false, std::sync::atomic::Ordering::Release);
-                    if loaded.is_ok() && !replay_provisional {
+                    if loaded.is_ok() {
                         drained?;
                     }
                 }
@@ -1099,6 +1273,21 @@ impl Host {
             .cloned();
         self.update(id, Some(&runtime.instance), |v| {
             v.binding.native_session_id = Some(native);
+            if is_antigravity && v.binding.native_session_path.is_none() {
+                if let Some(sid) = v.binding.native_session_id.as_deref() {
+                    let app_subdir = if desktop { "antigravity" } else { "antigravity-cli" };
+                    if let Some(home) = dirs::home_dir() {
+                        let path = home
+                            .join(".gemini")
+                            .join(app_subdir)
+                            .join("conversations")
+                            .join(format!("{sid}.db"));
+                        if path.is_file() {
+                            v.binding.native_session_path = Some(metadata::display_path(&path));
+                        }
+                    }
+                }
+            }
             apply_session(v, &response);
             apply_provider_scope_to_view(
                 v,
@@ -1185,7 +1374,16 @@ impl Host {
             {
                 let already = match &target {
                     AcpModelResolution::ConfigValue(mid) => {
-                        view.model.as_ref().map(|m| text(m, "id")) == Some(mid.clone())
+                        let acp_target = view
+                            .models
+                            .iter()
+                            .find(|m| text(m, "id") == *mid)
+                            .and_then(|m| m.get("acpValue"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+                        let cur = view.model.as_ref().map(|m| text(m, "id"));
+                        cur == Some(mid.clone())
+                            || acp_target.is_some_and(|v| cur == Some(v))
                     }
                     AcpModelResolution::AvailableModel {
                         model_id,
@@ -1197,12 +1395,24 @@ impl Host {
                             || (base_value.is_some() && cur == *base_value)
                     }
                 };
-                if already
-                    || self
-                        .apply_acp_model_target(id, runtime, &native_for_model, target)
+                let applied = if already {
+                    self.update(id, Some(&runtime.instance), |v| {
+                        if let Some(matched) = v
+                            .models
+                            .iter()
+                            .find(|m| text(m, "id").eq_ignore_ascii_case(candidate) || text(m, "name").eq_ignore_ascii_case(candidate))
+                            .cloned()
+                        {
+                            v.model = Some(matched);
+                        }
+                    });
+                    true
+                } else {
+                    self.apply_acp_model_target(id, runtime, &native_for_model, target)
                         .await
                         .is_ok()
-                {
+                };
+                if applied {
                     applied_explicit_model = true;
                 }
             }
@@ -1333,24 +1543,42 @@ impl Host {
             .unwrap_or_default();
         match target {
             AcpModelResolution::ConfigValue(model_id) => {
+                let selected_model = view
+                    .models
+                    .iter()
+                    .find(|m| text(m, "id") == model_id)
+                    .cloned();
+                let target_value = selected_model
+                    .as_ref()
+                    .and_then(|m| m.get("acpValue"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| model_id.clone());
                 if config_id.is_empty() {
                     runtime
                         .bridge
                         .request(
                             "session/set_model",
-                            json!({"sessionId":native_for_model,"modelId":model_id}),
+                            json!({"sessionId":native_for_model,"modelId":target_value}),
                             TIMEOUT,
                         )
                         .await?;
                     self.update(id, Some(&runtime.instance), |v| {
-                        v.model = v
-                            .models
-                            .iter()
-                            .find(|m| text(m, "id") == model_id)
-                            .cloned();
+                        v.model = selected_model.or_else(|| {
+                            v.models
+                                .iter()
+                                .find(|m| text(m, "id") == model_id)
+                                .cloned()
+                        });
                     });
                 } else {
-                    self.set_acp_config(id, runtime, &config_id, &model_id).await?;
+                    self.set_acp_config(id, runtime, &config_id, &target_value).await?;
+                    if let Some(model_obj) = selected_model {
+                        self.update(id, Some(&runtime.instance), |v| {
+                            v.model = Some(model_obj);
+                        });
+                    }
                 }
             }
             AcpModelResolution::AvailableModel {
@@ -1370,6 +1598,19 @@ impl Host {
                                     .await;
                             }
                         }
+                        self.update(id, Some(&runtime.instance), |v| {
+                            if let Some(matched) = v
+                                .models
+                                .iter()
+                                .find(|m| {
+                                    text(m, "id").eq_ignore_ascii_case(&model_id)
+                                        || text(m, "acpValue").eq_ignore_ascii_case(&base)
+                                })
+                                .cloned()
+                            {
+                                v.model = Some(matched);
+                            }
+                        });
                     } else {
                         runtime
                             .bridge
@@ -1656,9 +1897,20 @@ impl Host {
                     "config_option_update" => {
                         if let Some(config) = update.get("configOptions").and_then(Value::as_array)
                         {
+                            let previous_model_id = v
+                                .model
+                                .as_ref()
+                                .map(|m| text(m, "id"))
+                                .filter(|s| !s.is_empty());
                             apply_config(v, config.clone());
                             if let Some((ref label, ref allowed)) = config_scope {
-                                apply_provider_scope_to_view(v, label, allowed.as_deref(), None);
+                                apply_provider_scope_with_preferred(
+                                    v,
+                                    label,
+                                    allowed.as_deref(),
+                                    None,
+                                    previous_model_id.as_deref(),
+                                );
                             }
                             pending_overlay.overlay_on_view(v);
                         }
@@ -1828,6 +2080,11 @@ impl Host {
             },
         );
         self.update(id, Some(&runtime.instance), |v| {
+            let previous_model_id = v
+                .model
+                .as_ref()
+                .map(|m| text(m, "id"))
+                .filter(|s| !s.is_empty());
             if let Some(config) = response.get("configOptions").and_then(Value::as_array) {
                 apply_config(v, config.clone());
             } else if let Some(option) = v
@@ -1840,11 +2097,12 @@ impl Host {
                 apply_config(v, config);
             }
             if !provider_label.is_empty() {
-                apply_provider_scope_to_view(
+                apply_provider_scope_with_preferred(
                     v,
                     &provider_label,
                     allowed_models.as_deref(),
                     None,
+                    previous_model_id.as_deref(),
                 );
             }
         });
@@ -2042,11 +2300,13 @@ mod tests {
     fn sample_agy_options() -> (Vec<Value>, Vec<Value>) {
         let view_models = vec![
             json!({"id": "gemini-4-neon", "name": "Gemini 4 Neon", "provider": "acp:antigravity", "configId": "model"}),
+            json!({"id": "gemini-4-carbon", "name": "Gemini 4 Carbon", "provider": "acp:antigravity", "configId": "model"}),
             json!({"id": "gemini-4-hydrogen", "name": "Gemini 4 Hydrogen", "provider": "acp:antigravity", "configId": "model"}),
             json!({"id": "gemini-3.1-pro", "name": "Gemini 3.1 Pro", "provider": "acp:antigravity", "configId": "model"}),
         ];
         let available = vec![
             json!({"modelId": "gemini-4-neon-high", "name": "Gemini 4 Neon (High)"}),
+            json!({"modelId": "gemini-4-carbon-high", "name": "Gemini 4 Carbon (High)"}),
             json!({"modelId": "gemini-4-hydrogen-xhigh", "name": "Gemini 4 Hydrogen (XHigh)"}),
             json!({"modelId": "gemini-4-hydrogen-low", "name": "Gemini 4 Hydrogen (Low)"}),
         ];
@@ -2106,12 +2366,45 @@ mod tests {
         view.models = view_models;
         view.model = Some(json!({"id": "gemini-4-hydrogen", "name": "Gemini 4 Hydrogen", "provider": "acp:antigravity"}));
 
-        let configured = vec!["gemini-4-hydrogen".to_string()];
+        let configured = vec![
+            "gemini-4-hydrogen-GLOBALAI_GEMINI".to_string(),
+            "gemini-4-carbon-GLOBALAI_GEMINI".to_string(),
+            "my-custom-alias".to_string(),
+        ];
         apply_provider_scope_to_view(&mut view, "gemini-魔方", Some(&configured), Some(&available));
-        assert_eq!(view.models.len(), 1);
-        assert_eq!(text(&view.models[0], "id"), "gemini-4-hydrogen");
+        assert_eq!(view.models.len(), 3);
+        assert_eq!(text(&view.models[0], "id"), "gemini-4-hydrogen-GLOBALAI_GEMINI");
+        assert_eq!(text(&view.models[0], "name"), "Gemini 4 Hydrogen");
+        assert_eq!(text(&view.models[0], "acpValue"), "gemini-4-hydrogen");
         assert_eq!(text(&view.models[0], "provider"), "gemini-魔方");
+        assert_eq!(text(&view.models[1], "id"), "gemini-4-carbon-GLOBALAI_GEMINI");
+        assert_eq!(text(&view.models[1], "name"), "Gemini 4 Carbon");
+        assert_eq!(text(&view.models[1], "acpValue"), "gemini-4-carbon");
+        assert_eq!(text(&view.models[2], "id"), "my-custom-alias");
+        assert!(view.models[2].get("acpValue").is_none());
+        assert_eq!(view.model.as_ref().map(|m| text(m, "id")).as_deref(), Some("gemini-4-hydrogen-GLOBALAI_GEMINI"));
         assert_eq!(view.model.as_ref().map(|m| text(m, "provider")).as_deref(), Some("gemini-魔方"));
+
+        // Preserves custom display id/name when config_option_update refreshes options.
+        let mut view_refresh = SessionView::new(SessionBinding {
+            id: "s2".into(),
+            workspace_id: "w1".into(),
+            harness_id: "acp:antigravity".into(),
+            title: "新会话".into(),
+            native_session_id: None,
+            native_session_path: None,
+            archived: false,
+            pinned: false,
+            read_only: false,
+            imported: false,
+            updated_at: 1,
+            preferences: SessionPreferences::default(),
+        });
+        view_refresh.models = sample_agy_options().0;
+        view_refresh.model = Some(json!({"id": "gemini-4-carbon", "name": "Gemini 4 Carbon", "provider": "acp:antigravity"}));
+        apply_provider_scope_to_view(&mut view_refresh, "gemini-魔方", Some(&configured), None);
+        assert_eq!(view_refresh.models.len(), 3);
+        assert_eq!(view_refresh.model.as_ref().map(|m| text(m, "id")).as_deref(), Some("gemini-4-carbon-GLOBALAI_GEMINI"));
     }
 
     #[test]

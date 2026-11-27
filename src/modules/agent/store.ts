@@ -335,10 +335,26 @@ function consume(frame: Frame) {
     >;
     useAgentStore.setState((s) => {
       const nextSessions = Object.fromEntries(
-        value.sessions.map((v) => [
-          v.id,
-          s.sessions[v.id] ? { ...s.sessions[v.id], ...v } : v,
-        ]),
+        value.sessions.map((v) => {
+          const prevSummary = s.sessions[v.id];
+          const prevView = s.views[v.id];
+          const merged = prevSummary ? { ...prevSummary, ...v } : v;
+          if (
+            prevView &&
+            prevView.instanceId === v.instanceId &&
+            (prevView.revision ?? 0) > (v.revision ?? 0)
+          ) {
+            return [
+              v.id,
+              {
+                ...merged,
+                state: prevView.state,
+                revision: prevView.revision,
+              },
+            ];
+          }
+          return [v.id, merged];
+        }),
       );
       const nextViews = Object.fromEntries(
         Object.entries(s.views).filter(([id]) => !!nextSessions[id]),

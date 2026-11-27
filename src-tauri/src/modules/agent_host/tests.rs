@@ -865,6 +865,7 @@ fn agy_update_steps_converts_to_plan_and_sanitizes_tool_payloads() {
     assert_eq!(parsed[1]["status"], json!("in_progress"));
 
     // Payload sanitization keeps CommandLine head, output tail, strips data:image/ & binary blobs
+    // and must never panic when byte offset 11 falls inside a multibyte UTF-8 character.
     let long_cmd = format!("git diff {}", "a".repeat(9000));
     let long_out = format!("{}{}", "X".repeat(9000), "TAIL_MARKER");
     host.handle_acp_frame(
@@ -880,11 +881,14 @@ fn agy_update_steps_converts_to_plan_and_sanitizes_tool_payloads() {
                     "kind": "execute",
                     "rawInput": {
                         "CommandLine": long_cmd,
-                        "preview": "data:image/png;base64,AAAA"
+                        "preview": "data:image/png;base64,AAAA",
+                        "chinesePath": "C:\\项目资料\\测试文档\\readme.md",
+                        "splitAt11": "1234567890中文路径"
                     },
                     "rawOutput": {
                         "combinedOutput": long_out,
-                        "formatted_output": long_out
+                        "formatted_output": long_out,
+                        "中文输出": "前十个字节1234后面接中文输出内容"
                     }
                 }
             }
@@ -893,9 +897,169 @@ fn agy_update_steps_converts_to_plan_and_sanitizes_tool_payloads() {
     let view = host.view(&sid).unwrap();
     let tool = view.messages.last().unwrap();
     assert!(tool.arguments["CommandLine"].as_str().unwrap().starts_with("git diff "));
+    assert_eq!(
+        tool.arguments["chinesePath"].as_str(),
+        Some("C:\\项目资料\\测试文档\\readme.md")
+    );
+    assert_eq!(
+        tool.arguments["splitAt11"].as_str(),
+        Some("1234567890中文路径")
+    );
     assert!(tool.arguments.get("preview").is_none());
     assert!(tool.text.contains("TAIL_MARKER"));
+    assert!(tool.text.contains("中文输出"));
     assert!(!tool.text.contains("formatted_output"));
+}
+
+#[tokio::test]
+async fn agy_provider_models_preserve_custom_entries_refresh_views_and_send_acp_base_value() {
+    let dir = TempDir::new().expect("tmp");
+    let host = test_host(&dir);
+    let ws_dir = dir.path().join("repo");
+    std::fs::create_dir_all(&ws_dir).unwrap();
+    let ws = host.workspace(&ws_dir.to_string_lossy()).unwrap();
+    let sid = host.create(&ws.id, "acp:antigravity", "agy-models").unwrap();
+    let (runtime, rx) = attach_runtime(&host, &sid, Wire::Acp);
+
+    host.update(&sid, Some(&runtime.instance), |v| {
+        super::acp::apply_session_for_test(
+            v,
+            &json!({
+                "sessionId": "native-agy-1",
+                "models": {
+                    "currentModelId": "gemini-4-hydrogen-high",
+                    "availableModels": [
+                        { "modelId": "gemini-4-hydrogen-high", "name": "Gemini 4 Hydrogen (High)" },
+                        { "modelId": "gemini-4-carbon-high", "name": "Gemini 4 Carbon (High)" }
+                    ]
+                },
+                "configOptions": [
+                    {
+                        "id": "model",
+                        "name": "Model",
+                        "category": "model",
+                        "type": "select",
+                        "currentValue": "gemini-4-hydrogen",
+                        "options": [
+                            { "value": "gemini-4-hydrogen", "name": "Gemini 4 Hydrogen" },
+                            { "value": "gemini-4-carbon", "name": "Gemini 4 Carbon" }
+                        ]
+                    },
+                    {
+                        "id": "thought_level",
+                        "name": "Thinking",
+                        "category": "thought_level",
+                        "type": "select",
+                        "currentValue": "high",
+                        "options": [{ "value": "low" }, { "value": "high" }]
+                    }
+                ]
+            }),
+        );
+    });
+
+    // Save provider settings directly into SQLite preference (avoids touching Windows Credential Manager in test)
+    lock(&host.store)
+        .set_preference(
+            "providers:acp:antigravity",
+            &json!({
+                "active": "prov-1",
+                "items": [{
+                    "id": "prov-1",
+                    "name": "gemini-魔方",
+                    "baseUrl": "http://139.9.157.145:5000",
+                    "model": "gemini-4-hydrogen-GLOBALAI_GEMINI",
+                    "models": [
+                        "gemini-4-hydrogen-GLOBALAI_GEMINI",
+                        "gemini-4-carbon-GLOBALAI_GEMINI"
+                    ]
+                }]
+            }),
+        )
+        .unwrap();
+
+    // Refresh existing active session models without restarting runtime
+    super::providers::refresh_agy_session_models_for_test(&host);
+    let refreshed = host.view(&sid).unwrap();
+    assert_eq!(refreshed.models.len(), 2);
+    assert_eq!(refreshed.models[0]["id"], json!("gemini-4-hydrogen-GLOBALAI_GEMINI"));
+    assert_eq!(refreshed.models[0]["acpValue"], json!("gemini-4-hydrogen"));
+    assert_eq!(refreshed.models[1]["id"], json!("gemini-4-carbon-GLOBALAI_GEMINI"));
+    assert_eq!(refreshed.models[1]["acpValue"], json!("gemini-4-carbon"));
+    assert_eq!(
+        refreshed.model.as_ref().map(|m| text(m, "id")).as_deref(),
+        Some("gemini-4-hydrogen-GLOBALAI_GEMINI")
+    );
+
+    // Selecting the second model sends base acpValue ("gemini-4-carbon") over ACP
+    // while keeping custom model id ("gemini-4-carbon-GLOBALAI_GEMINI") in view.model,
+    // including after config_option_update arrives.
+    let responder_bridge = runtime.bridge.clone();
+    let seen_rpc = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+    let seen_rpc_ref = seen_rpc.clone();
+    std::thread::spawn(move || {
+        while let Ok(req) = rx.recv() {
+            let req_id = req["id"].as_str().unwrap_or("").to_string();
+            let config_id = req["params"]["configId"].as_str().unwrap_or("").to_string();
+            let value = req["params"]["value"].as_str().unwrap_or("").to_string();
+            lock(&seen_rpc_ref).push((config_id, value.clone()));
+            responder_bridge.resolve_test(&req_id, Ok(json!({ "ok": true })));
+        }
+    });
+
+    let desktop = Principal { id: "desktop".into(), desktop: true };
+    host.dispatch(
+        &desktop,
+        Command {
+            request_id: "pick-carbon".into(),
+            operation: "session.model".into(),
+            session_id: Some(sid.clone()),
+            instance_id: None,
+            payload: json!({
+                "provider": "gemini-魔方",
+                "modelId": "gemini-4-carbon-GLOBALAI_GEMINI"
+            }),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        *lock(&seen_rpc),
+        vec![("model".into(), "gemini-4-carbon".into())]
+    );
+    assert_eq!(
+        host.view(&sid).unwrap().model.as_ref().map(|m| text(m, "id")).as_deref(),
+        Some("gemini-4-carbon-GLOBALAI_GEMINI")
+    );
+
+    host.handle_acp_frame(
+        &sid,
+        &runtime,
+        json!({
+            "method": "session/update",
+            "params": {
+                "update": {
+                    "sessionUpdate": "config_option_update",
+                    "configOptions": [{
+                        "id": "model",
+                        "name": "Model",
+                        "category": "model",
+                        "type": "select",
+                        "currentValue": "gemini-4-carbon",
+                        "options": [
+                            { "value": "gemini-4-hydrogen", "name": "Gemini 4 Hydrogen" },
+                            { "value": "gemini-4-carbon", "name": "Gemini 4 Carbon" }
+                        ]
+                    }]
+                }
+            }
+        }),
+    );
+    assert_eq!(
+        host.view(&sid).unwrap().model.as_ref().map(|m| text(m, "id")).as_deref(),
+        Some("gemini-4-carbon-GLOBALAI_GEMINI")
+    );
 }
 
 #[tokio::test]

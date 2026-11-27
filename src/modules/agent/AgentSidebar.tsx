@@ -633,14 +633,9 @@ export function AgentSidebar({
                   const list = rows.filter(
                     (s) => s.workspaceId === workspace.id,
                   );
-                  const runCount = list.filter((s) => isBusy(s)).length;
-                  const waitCount = list.filter(
-                    (s) => !!views[s.id]?.pendingRequests?.length,
-                  ).length;
                   const isOpen =
                     !!search ||
                     (expanded[workspace.id] ?? workspace.id === workspaceId);
-                  const liveProject = !isOpen && (runCount > 0 || waitCount > 0);
                   const visible = isOpen
                     ? list.slice(
                         0,
@@ -655,7 +650,7 @@ export function AgentSidebar({
                         <ContextMenuTrigger asChild>
                           <div
                             data-agent-workspace-id={workspace.id}
-                            className={`agent-project-heading ${workspace.id === workspaceId ? "is-selected" : ""} ${liveProject ? "is-live" : ""} ${dropTarget?.kind === "workspace" && dropTarget.id === workspace.id ? (dropTarget.after ? "agent-drop-after" : "agent-drop-before") : ""}`}
+                            className={`agent-project-heading ${workspace.id === workspaceId ? "is-selected" : ""} ${dropTarget?.kind === "workspace" && dropTarget.id === workspace.id ? (dropTarget.after ? "agent-drop-after" : "agent-drop-before") : ""}`}
                           >
                             <button
                               type="button"
@@ -718,24 +713,6 @@ export function AgentSidebar({
                               />
                               {workspace.title}
                             </button>
-                            {(runCount > 0 || waitCount > 0) && (
-                              <span
-                                className={`agent-ws-running ${waitCount > 0 ? "is-waiting" : ""}`}
-                                title={
-                                  waitCount > 0
-                                    ? `${waitCount} 个任务等待确认`
-                                    : `${runCount} 个任务运行中`
-                                }
-                              >
-                                {!isOpen && (
-                                  <span
-                                    aria-hidden="true"
-                                    className={`agent-state-dot ${waitCount > 0 ? "is-waiting" : "is-working"}`}
-                                  />
-                                )}
-                                {waitCount > 0 ? waitCount : runCount}
-                              </span>
-                            )}
                             {!mobile && (
                               <div className="agent-project-actions">
                                 {(
@@ -864,7 +841,9 @@ export function AgentSidebar({
                           {archive ? "暂无归档会话" : "暂无会话"}
                         </p>
                       )}
-                      {visible.map((session) => (
+                      {visible.map((session) => {
+                        const liveSession = views[session.id] ?? session;
+                        return (
                         <ContextMenu key={session.id}>
                           <ContextMenuTrigger asChild>
                             <div
@@ -942,20 +921,20 @@ export function AgentSidebar({
                                       choose(session);
                                     }, 220);
                                   }}
-                                  title={`${session.title}\n${harnesses.find((h) => h.id === session.harnessId)?.displayName ?? session.harnessId} · ${statusLabel(session.state)}\n可拖拽排序或拖入视口；双击或 F2 重命名`}
+                                  title={`${session.title}\n${harnesses.find((h) => h.id === session.harnessId)?.displayName ?? session.harnessId} · ${statusLabel(liveSession.state)}\n可拖拽排序或拖入视口；双击或 F2 重命名`}
                                 >
                                   <span
                                     role="img"
                                     aria-label={
                                       views[session.id]?.pendingRequests?.length
                                         ? "等待输入"
-                                        : isBusy(session)
+                                        : isBusy(liveSession)
                                           ? "运行中"
                                           : unread.includes(session.id)
                                             ? "已完成，待查看"
                                             : "就绪"
                                     }
-                                    className={`agent-state-dot ${views[session.id]?.pendingRequests?.length ? "is-waiting" : isBusy(session) ? "is-working" : unread.includes(session.id) ? "is-unread" : ""}`}
+                                    className={`agent-state-dot ${views[session.id]?.pendingRequests?.length ? "is-waiting" : isBusy(liveSession) ? "is-working" : unread.includes(session.id) ? "is-unread" : ""}`}
                                   />
                                   <HarnessIcon
                                     harnessId={session.harnessId}
@@ -986,7 +965,7 @@ export function AgentSidebar({
                               session.harnessId === "pi") &&
                               !session.readOnly && (
                                 <ContextMenuItem
-                                  disabled={isBusy(session)}
+                                  disabled={isBusy(liveSession)}
                                   onSelect={() => {
                                     const state = useAgentStore.getState();
                                     if (
@@ -1073,7 +1052,7 @@ export function AgentSidebar({
                               {session.pinned ? "取消置顶" : "置顶"}
                             </ContextMenuItem>
                             <ContextMenuItem
-                              disabled={isBusy(session)}
+                              disabled={isBusy(liveSession)}
                               onSelect={() =>
                                 command(
                                   "session.archive",
@@ -1089,7 +1068,7 @@ export function AgentSidebar({
                                 <ContextMenuItem
                                   onSelect={() => {
                                     if (
-                                      isBusy(session) &&
+                                      isBusy(liveSession) &&
                                       !window.confirm(
                                         "该线程正在运行，确定要断开并终止任务吗？",
                                       )
@@ -1097,12 +1076,14 @@ export function AgentSidebar({
                                       return;
                                     command(
                                       "session.close",
-                                      isBusy(session) ? { force: true } : {},
+                                      isBusy(liveSession)
+                                        ? { force: true }
+                                        : {},
                                       session.id,
                                     );
                                   }}
                                 >
-                                  {isBusy(session)
+                                  {isBusy(liveSession)
                                     ? "强制断开并终止任务"
                                     : "断开代理进程"}
                                 </ContextMenuItem>
@@ -1110,7 +1091,8 @@ export function AgentSidebar({
                             )}
                           </ContextMenuContent>
                         </ContextMenu>
-                      ))}
+                        );
+                      })}
                       {isOpen && list.length > visible.length && (
                         <button
                           type="button"

@@ -685,7 +685,7 @@ impl Host {
             }
             "session.prompt" => {
                 let id = command.session_id.as_deref().ok_or("缺少会话标识")?;
-                self.ensure_runtime(id).await?;
+                self.ensure_runtime_for_prompt(id).await?;
                 let _gate = self.provider_gate.read().await;
                 self.accept_prompt(id, payload.clone())?;
                 Ok(json!({"accepted":true}))
@@ -1608,11 +1608,27 @@ impl Host {
                 lock(&runtime.pending_config).thinking = None;
                 return self.apply_codex_thinking_fallback(id, runtime, &value).await;
             }
+            if operation == "session.model" {
+                let model_id = text(payload, "modelId");
+                let selected_model = view.models.iter().find(|m| text(m, "id") == model_id);
+                let target_value = selected_model
+                    .and_then(|m| m.get("acpValue"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| model_id.clone());
+                lock(&runtime.pending_config).model = None;
+                let res = self.set_acp_config(id, runtime, &config_id, &target_value).await?;
+                if let Some(model_obj) = selected_model.cloned() {
+                    self.update(id, Some(&runtime.instance), |v| {
+                        v.model = Some(model_obj);
+                    });
+                }
+                return Ok(res);
+            }
             {
                 let mut pending = lock(&runtime.pending_config);
-                if operation == "session.model" {
-                    pending.model = None;
-                } else if operation == "session.thinking" {
+                if operation == "session.thinking" {
                     pending.thinking = None;
                 } else {
                     pending.configs.retain(|(cid, _)| cid != &config_id);

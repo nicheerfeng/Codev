@@ -172,7 +172,7 @@ impl Host {
                 binding
                     .native_session_path
                     .as_ref()
-                    .map_or(true, |path| !std::fs::metadata(path)
+                    .is_none_or(|path| !std::fs::metadata(path)
                         .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound))
             })
             .map(|mut b| {
@@ -943,7 +943,29 @@ impl Host {
         Ok(id)
     }
     pub async fn load_history(&self, id: &str, before: Option<usize>) -> Result<Value, String> {
-        let view = self.view(id)?;
+        let mut view = self.view(id)?;
+        if view.binding.native_session_path.is_none()
+            && view.binding.harness_id == "acp:antigravity"
+            && !antigravity_history::is_desktop(&view.binding)
+        {
+            if let Some(sid) = view.binding.native_session_id.as_deref() {
+                if let Some(inferred) = dirs::home_dir().map(|home| {
+                    home.join(".gemini")
+                        .join("antigravity-cli")
+                        .join("conversations")
+                        .join(format!("{sid}.db"))
+                }) {
+                    if inferred.is_file() {
+                        let inferred_str = metadata::display_path(&inferred);
+                        self.update(id, None, |v| {
+                            v.binding.native_session_path = Some(inferred_str);
+                        });
+                        self.persist(id)?;
+                        view = self.view(id)?;
+                    }
+                }
+            }
+        }
         let Some(ref path) = view.binding.native_session_path else {
             self.update(id, None, |v| {
                 v.history_loaded = true;
@@ -998,21 +1020,25 @@ impl Host {
         Ok(json!({"offset":offset}))
     }
     pub async fn ensure_runtime(self: &Arc<Self>, id: &str) -> Result<Arc<Runtime>, String> {
-        self.ensure_runtime_with_policy(id, false).await
+        self.ensure_runtime_with_policy(id, false, false).await
+    }
+    pub async fn ensure_runtime_for_prompt(self: &Arc<Self>, id: &str) -> Result<Arc<Runtime>, String> {
+        self.ensure_runtime_with_policy(id, false, true).await
     }
     pub(super) async fn ensure_fork_runtime(
         self: &Arc<Self>,
         id: &str,
     ) -> Result<Arc<Runtime>, String> {
-        self.ensure_runtime_with_policy(id, true).await
+        self.ensure_runtime_with_policy(id, true, false).await
     }
     async fn ensure_runtime_with_policy(
         self: &Arc<Self>,
         id: &str,
         allow_readonly: bool,
+        keep_busy: bool,
     ) -> Result<Arc<Runtime>, String> {
         let _providers = self.provider_gate.read().await;
-        self.start_runtime(id, allow_readonly, false).await
+        self.start_runtime(id, allow_readonly, false, keep_busy).await
     }
 
     // Provider mutations hold provider_gate write lock across stop, startup and rollback,
@@ -1022,6 +1048,7 @@ impl Host {
         id: &str,
         allow_readonly: bool,
         require_resume: bool,
+        keep_busy: bool,
     ) -> Result<Arc<Runtime>, String> {
         let gate = {
             let mut gates = self.opening.lock().await;
@@ -1221,7 +1248,7 @@ impl Host {
         }
         self.update(id, Some(&instance), |v| {
             if v.state == "starting" {
-                v.state = "idle".into();
+                v.state = if keep_busy { "working" } else { "idle" }.into();
             }
         });
         self.persist(id)?;

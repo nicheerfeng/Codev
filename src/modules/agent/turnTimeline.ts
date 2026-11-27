@@ -417,10 +417,10 @@ export function buildTranscriptBlocks(
         ? splitInlineThinking(last.text, last.thinking, last.streaming)
         : null;
     const lastIsDeliverable =
+      !isLiveTurn &&
       last?.kind === "message" &&
       last.role === "assistant" &&
-      (hasVisibleText(lastResolved?.text) || Boolean(last.images?.length)) &&
-      (!last.streaming || (isLiveTurn && hasVisibleText(lastResolved?.text)));
+      (hasVisibleText(lastResolved?.text) || Boolean(last.images?.length));
 
     const processSlice = lastIsDeliverable ? visible.slice(0, -1) : visible;
     const processEntries: Array<

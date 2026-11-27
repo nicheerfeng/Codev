@@ -497,7 +497,11 @@ export function TurnProcessView({
   mobile?: boolean;
   searchQuery?: string;
   onOpenFile: (path: string) => void;
-  onOpenDiff?: (path: string, diff: string, options?: { activate?: boolean }) => void;
+  onOpenDiff?: (
+    path: string,
+    diff: string,
+    options?: { activate?: boolean },
+  ) => void;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -538,7 +542,14 @@ export function TurnProcessView({
           ? "用时 <1秒"
           : "";
 
-  const visibleTicker = block.tickerItems.slice(-3);
+  const tickerWindow = useRef<HTMLDivElement>(null);
+  const tickerFollowing = useRef(true);
+  const visibleTicker = block.tickerItems;
+  useLayoutEffect(() => {
+    const node = tickerWindow.current;
+    if (!node || !block.running || open || !tickerFollowing.current) return;
+    node.scrollTop = node.scrollHeight;
+  }, [block.running, open, visibleTicker]);
   const stepSummary =
     block.stepCount > 0
       ? `${block.stepCount} 个步骤${block.toolCount > 0 ? ` · ${block.toolCount} 次工具调用` : ""}`
@@ -556,7 +567,9 @@ export function TurnProcessView({
       >
         <summary
           className="agent-turn-summary"
-          title={!block.running && block.summaryText ? block.summaryText : undefined}
+          title={
+            !block.running && block.summaryText ? block.summaryText : undefined
+          }
         >
           <span className="agent-turn-chevron" aria-hidden="true">
             ▸
@@ -582,45 +595,68 @@ export function TurnProcessView({
       </details>
 
       {block.running && !open && visibleTicker.length > 0 && (
-        <button
-          type="button"
-          className="agent-ticker-window"
-          onClick={() => setOpen(true)}
-          title="点击展开本轮完整执行过程"
-        >
-          {visibleTicker.map((item, idx) => {
-            const isCurrent = idx === visibleTicker.length - 1;
-            const statusWord =
-              item.status === "running"
-                ? item.verb === "思考"
-                  ? "思考中"
-                  : "执行中"
-                : item.status === "error"
-                  ? "执行失败"
-                  : item.verb === "思考"
-                    ? "已思考"
-                    : "已完成";
-            return (
-              <div
-                key={item.id}
-                className={`agent-ticker-row is-${item.status} ${isCurrent ? "is-current" : "is-past"}`}
-              >
-                <HugeiconsIcon
-                  icon={item.verb === "思考" ? PencilEdit01Icon : File01Icon}
-                  size={12}
-                  className="agent-step-icon"
-                />
-                <span className="agent-ticker-status">{statusWord}</span>
-                <span aria-hidden="true">·</span>
-                <span className="agent-ticker-text">
-                  {item.verb === "思考" || item.verb === "说明"
-                    ? item.text
-                    : `${item.verb} · ${item.text}`}
-                </span>
-              </div>
-            );
-          })}
-        </button>
+        <div className="agent-ticker-shell">
+          <div
+            ref={tickerWindow}
+            className="agent-ticker-window reader-scrollbar"
+            role="log"
+            aria-label="当前执行步骤"
+            onWheel={(event) => {
+              if (event.deltaY < 0) tickerFollowing.current = false;
+              const node = event.currentTarget;
+              if (node.scrollHeight > node.clientHeight) {
+                event.stopPropagation();
+              }
+            }}
+            onScroll={(event) => {
+              const node = event.currentTarget;
+              tickerFollowing.current =
+                node.scrollHeight - node.clientHeight - node.scrollTop < 12;
+            }}
+          >
+            {visibleTicker.map((item, idx) => {
+              const isCurrent = idx === visibleTicker.length - 1;
+              const statusWord =
+                item.status === "running"
+                  ? item.verb === "思考"
+                    ? "思考中"
+                    : "执行中"
+                  : item.status === "error"
+                    ? "执行失败"
+                    : item.verb === "思考"
+                      ? "已思考"
+                      : "已完成";
+              return (
+                <div
+                  key={item.id}
+                  className={`agent-ticker-row is-${item.status} ${isCurrent ? "is-current" : "is-past"}`}
+                >
+                  <HugeiconsIcon
+                    icon={item.verb === "思考" ? PencilEdit01Icon : File01Icon}
+                    size={12}
+                    className="agent-step-icon"
+                  />
+                  <span className="agent-ticker-status">{statusWord}</span>
+                  <span aria-hidden="true">·</span>
+                  <span className="agent-ticker-text">
+                    {item.verb === "思考" || item.verb === "说明"
+                      ? item.text
+                      : `${item.verb} · ${item.text}`}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          {block.tickerItems.length > 3 && (
+            <button
+              type="button"
+              className="agent-ticker-expand"
+              onClick={() => setOpen(true)}
+            >
+              展开全部 {block.tickerItems.length} 步
+            </button>
+          )}
+        </div>
       )}
 
       {!block.running && block.fileChanges.length > 0 && (
@@ -646,7 +682,11 @@ export function AgentTranscript({
 }: {
   session: SessionView;
   onOpenFile?: (path: string) => void;
-  onOpenDiff?: (path: string, diff: string, options?: { activate?: boolean }) => void;
+  onOpenDiff?: (
+    path: string,
+    diff: string,
+    options?: { activate?: boolean },
+  ) => void;
   onFork?: (entryId: string) => void;
   searchOpen: boolean;
   onCloseSearch: () => void;
@@ -656,6 +696,7 @@ export function AgentTranscript({
   const sendRevision = useAgentStore((s) => s.sendRevisions[session.id] ?? 0);
   const seenSend = useRef(sendRevision);
   const userUntil = useRef(0);
+  const lastScrollTop = useRef(0);
   const saved = useRef<ScrollMemoryEntry | null>(
     scrollMemory.get(session.id) ?? null,
   );
@@ -706,6 +747,13 @@ export function AgentTranscript({
       .then((result) => setFile({ path, content: result.content }))
       .catch((error) => useAgentStore.getState().report(error));
   };
+  const detachFollowing = (node: HTMLElement) => {
+    if (following.current) {
+      following.current = false;
+      setAway(true);
+    }
+    if (restored.current) rememberScroll(node);
+  };
   useLayoutEffect(() => {
     const node = scroll.current;
     const body = content.current;
@@ -713,6 +761,7 @@ export function AgentTranscript({
     const observer = new ResizeObserver(() => {
       if (following.current && node.clientHeight > 0) {
         node.scrollTop = node.scrollHeight;
+        lastScrollTop.current = node.scrollTop;
       }
     });
     observer.observe(node);
@@ -728,7 +777,10 @@ export function AgentTranscript({
     scrollMemory.set(session.id, { id: "", offset: 0, following: true });
     const pin = () => {
       const node = scroll.current;
-      if (node) node.scrollTop = node.scrollHeight;
+      if (node) {
+        node.scrollTop = node.scrollHeight;
+        lastScrollTop.current = node.scrollTop;
+      }
     };
     pin();
     const frame = requestAnimationFrame(() => {
@@ -769,6 +821,7 @@ export function AgentTranscript({
     } else if (following.current) {
       node.scrollTop = node.scrollHeight;
     }
+    lastScrollTop.current = node.scrollTop;
     previous.current = { first, height: node.scrollHeight };
   }, [session.messages, session.pendingRequests, session.state]);
   const bottom = () => {
@@ -919,22 +972,17 @@ export function AgentTranscript({
           </>
         </div>
       )}
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <section
-            ref={scroll}
-            tabIndex={-1}
-            aria-label="对话记录"
-            className="agent-transcript reader-scrollbar select-text outline-none"
-            onContextMenuCapture={() => {
-              const text = window.getSelection()?.toString() ?? "";
-              selectedText.current = text;
-              setHasSelection(text.length > 0);
-            }}
-            onLoadCapture={() => {
-              if (following.current && scroll.current)
-                scroll.current.scrollTop = scroll.current.scrollHeight;
-            }}
+      <section
+        ref={scroll}
+        tabIndex={-1}
+        aria-label="对话记录"
+        className="agent-transcript reader-scrollbar select-text outline-none"
+        onLoadCapture={() => {
+          if (following.current && scroll.current) {
+            scroll.current.scrollTop = scroll.current.scrollHeight;
+            lastScrollTop.current = scroll.current.scrollTop;
+          }
+        }}
         onClickCapture={(event) => {
           const anchor = (event.target as Element).closest<HTMLAnchorElement>(
             "a[href]",
@@ -981,15 +1029,8 @@ export function AgentTranscript({
         }}
         onWheel={(event) => {
           userUntil.current = performance.now() + 1000;
-          const node = event.currentTarget;
-          if (
-            event.deltaY < 0 &&
-            node.scrollHeight - node.clientHeight - node.scrollTop >= 48
-          ) {
-            if (following.current) {
-              following.current = false;
-              setAway(true);
-            }
+          if (event.deltaY < 0) {
+            detachFollowing(event.currentTarget);
           }
         }}
         onPointerDown={() => {
@@ -1011,15 +1052,24 @@ export function AgentTranscript({
             ].includes(event.key)
           ) {
             userUntil.current = performance.now() + 1000;
+            if (["PageUp", "ArrowUp", "Home"].includes(event.key)) {
+              detachFollowing(event.currentTarget);
+            }
           }
         }}
         onScroll={(event) => {
           const node = event.currentTarget;
           if (!node.clientHeight) return;
+          const prevTop = lastScrollTop.current;
+          lastScrollTop.current = node.scrollTop;
           const nearBottom =
             node.scrollHeight - node.clientHeight - node.scrollTop < 48;
           const userScrolling = performance.now() < userUntil.current;
           if (userScrolling) userUntil.current = performance.now() + 200;
+          if (userScrolling && node.scrollTop < prevTop - 1) {
+            detachFollowing(node);
+            return;
+          }
           if (nearBottom) {
             if (!following.current) {
               following.current = true;
@@ -1032,133 +1082,147 @@ export function AgentTranscript({
           if (restored.current) rememberScroll(node);
         }}
       >
-        <div ref={content} className="agent-transcript-content select-text">
-          {session.historyOffset > 0 && (
-            <Button
-              variant="ghost"
-              className="mx-auto block text-xs"
-              onClick={() =>
-                void useAgentStore
-                  .getState()
-                  .command(
-                    "session.history",
-                    { before: session.historyOffset },
-                    session.id,
-                  )
-                  .catch((error) => useAgentStore.getState().report(error))
-              }
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <div
+              ref={content}
+              className="agent-transcript-content select-text"
+              onContextMenuCapture={() => {
+                const text = window.getSelection()?.toString() ?? "";
+                selectedText.current = text;
+                setHasSelection(text.length > 0);
+              }}
             >
-              加载更早的原生历史
-            </Button>
-          )}
-          {session.truncated && (
-            <p className="agent-notice">
-              为保持阅读流畅，较早内容已从实时视图释放；原生历史保留。
-            </p>
-          )}
-          {!session.messages.length && !running && (
-            <div className="agent-empty">
-              <h3>从一个任务开始</h3>
-              <p>
-                {session.readOnly
-                  ? "这份原生历史当前以只读方式打开。"
-                  : "在下方输入任务。模型、权限和会话由当前代理管理。"}
-              </p>
-            </div>
-          )}
-          {!session.historyAvailable &&
-            session.imported &&
-            session.harnessId !== "pi" &&
-            !session.readOnly && (
-              <p className="agent-notice">历史展示由代理的会话恢复结果提供。</p>
-            )}
-          {blocks.map((block) =>
-            block.kind === "process" ? (
-              <TurnProcessView
-                key={block.id}
-                block={block}
-                now={now}
+              {session.historyOffset > 0 && (
+                <Button
+                  variant="ghost"
+                  className="mx-auto block text-xs"
+                  onClick={() =>
+                    void useAgentStore
+                      .getState()
+                      .command(
+                        "session.history",
+                        { before: session.historyOffset },
+                        session.id,
+                      )
+                      .catch((error) => useAgentStore.getState().report(error))
+                  }
+                >
+                  加载更早的原生历史
+                </Button>
+              )}
+              {session.truncated && (
+                <p className="agent-notice">
+                  为保持阅读流畅，较早内容已从实时视图释放；原生历史保留。
+                </p>
+              )}
+              {!session.messages.length && !running && (
+                <div className="agent-empty">
+                  <h3>从一个任务开始</h3>
+                  <p>
+                    {session.readOnly
+                      ? "这份原生历史当前以只读方式打开。"
+                      : "在下方输入任务。模型、权限和会话由当前代理管理。"}
+                  </p>
+                </div>
+              )}
+              {!session.historyAvailable &&
+                session.imported &&
+                session.harnessId !== "pi" &&
+                !session.readOnly && (
+                  <p className="agent-notice">
+                    历史展示由代理的会话恢复结果提供。
+                  </p>
+                )}
+              {blocks.map((block) =>
+                block.kind === "process" ? (
+                  <TurnProcessView
+                    key={block.id}
+                    block={block}
+                    now={now}
+                    cwd={cwd}
+                    mobile={mobile}
+                    searchQuery={query}
+                    onOpenFile={openPath}
+                    onOpenDiff={onOpenDiff}
+                  />
+                ) : (
+                  <div
+                    key={block.message.id}
+                    data-agent-message-id={block.message.id}
+                    className={
+                      query && block.message.text.toLowerCase().includes(query)
+                        ? "agent-search-hit"
+                        : undefined
+                    }
+                  >
+                    <Message
+                      message={block.message}
+                      hideThinking={block.hideThinking}
+                      canFork={
+                        !session.readOnly && !!session.capabilities.supportsFork
+                      }
+                      onFork={onFork}
+                      onOpenDiff={onOpenDiff}
+                    />
+                  </div>
+                ),
+              )}
+              <TurnFileChangesBar
+                changes={fallbackTurnChanges}
                 cwd={cwd}
                 mobile={mobile}
-                searchQuery={query}
                 onOpenFile={openPath}
                 onOpenDiff={onOpenDiff}
               />
-            ) : (
-              <div
-                key={block.message.id}
-                data-agent-message-id={block.message.id}
-                className={
-                  query && block.message.text.toLowerCase().includes(query)
-                    ? "agent-search-hit"
-                    : undefined
-                }
-              >
-                <Message
-                  message={block.message}
-                  hideThinking={block.hideThinking}
-                  canFork={
-                    !session.readOnly && !!session.capabilities.supportsFork
-                  }
-                  onFork={onFork}
+              {gitUiEnabled && (
+                <TurnGitCard
+                  sessionId={session.id}
+                  summary={turnGit}
+                  mobile={mobile}
                   onOpenDiff={onOpenDiff}
                 />
-              </div>
-            ),
-          )}
-          <TurnFileChangesBar
-            changes={fallbackTurnChanges}
-            cwd={cwd}
-            mobile={mobile}
-            onOpenFile={openPath}
-            onOpenDiff={onOpenDiff}
-          />
-          {gitUiEnabled && (
-            <TurnGitCard
-              sessionId={session.id}
-              summary={turnGit}
-              mobile={mobile}
-              onOpenDiff={onOpenDiff}
-            />
-          )}
-          {session.pendingRequests.map((request) => (
-            <StructuredRequestCard
-              key={request.id}
-              request={request}
-              session={session}
-            />
-          ))}
-          {((turnRunning &&
-            !blocks.some((b) => b.kind === "process" && b.running)) ||
-            session.state === "starting") && (
-              <div className="agent-activity">
-                <span className="agent-state-dot is-working" />
-                {statusLabel(session.state)}
-              </div>
-            )}
-          {session.error && (
-            <div className="agent-error" role="alert">
-              {session.error}
+              )}
+              {session.pendingRequests.map((request) => (
+                <StructuredRequestCard
+                  key={request.id}
+                  request={request}
+                  session={session}
+                />
+              ))}
+              {((turnRunning &&
+                !blocks.some((b) => b.kind === "process" && b.running)) ||
+                session.state === "starting") && (
+                <div className="agent-activity">
+                  <span className="agent-state-dot is-working" />
+                  {statusLabel(session.state)}
+                </div>
+              )}
+              {session.error && (
+                <div className="agent-error" role="alert">
+                  {session.error}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-          </section>
-        </ContextMenuTrigger>
-        <ContextMenuContent onCloseAutoFocus={(event) => event.preventDefault()}>
-          <ContextMenuItem
-            disabled={!hasSelection}
-            onSelect={() => {
-              const text = selectedText.current;
-              if (!text) return;
-              void writeText(text).catch((error) => {
-                toast.error(`复制失败：${String(error)}`);
-              });
-            }}
+          </ContextMenuTrigger>
+          <ContextMenuContent
+            onCloseAutoFocus={(event) => event.preventDefault()}
           >
-            复制<ContextMenuShortcut>Ctrl+C</ContextMenuShortcut>
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
+            <ContextMenuItem
+              disabled={!hasSelection}
+              onSelect={() => {
+                const text = selectedText.current;
+                if (!text) return;
+                void writeText(text).catch((error) => {
+                  toast.error(`复制失败：${String(error)}`);
+                });
+              }}
+            >
+              复制<ContextMenuShortcut>Ctrl+C</ContextMenuShortcut>
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+      </section>
       {userTurns.length >= 4 && (
         <nav className="agent-conv-nav" aria-label="对话回合快速跳转">
           {userTurns.slice(-12).map((turn) => (

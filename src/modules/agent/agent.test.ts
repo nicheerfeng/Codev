@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   splitUserAttachmentText,
@@ -543,5 +545,63 @@ describe("agent Turn timeline aggregation & compact ticker", () => {
       expect(proc.fileChanges[0]).toMatchObject({ path: "d:/repo/src/a.ts", adds: 4, dels: 1 });
       expect(proc.fileChanges[1]).toMatchObject({ path: "d:/repo/src/generated.txt", adds: 10, dels: 0, operation: "新增" });
     }
+  });
+
+  it("removes sidebar running count badge and avoids locking transcript scroll or wrapping section with ContextMenuTrigger", () => {
+    const sidebarSource = readFileSync(
+      resolve(__dirname, "AgentSidebar.tsx"),
+      "utf8",
+    );
+    expect(sidebarSource).not.toContain("agent-ws-running");
+    expect(sidebarSource).not.toContain("个任务运行中");
+    expect(sidebarSource).toContain("const liveSession = views[session.id] ?? session");
+
+    const transcriptSource = readFileSync(
+      resolve(__dirname, "AgentTranscript.tsx"),
+      "utf8",
+    );
+    expect(transcriptSource).toContain("detachFollowing(event.currentTarget)");
+    expect(transcriptSource).not.toMatch(/<ContextMenuTrigger[^>]*>\s*<section/);
+    expect(transcriptSource).toContain('role="log"');
+  });
+
+  it("keeps live process block running when assistant streams intermediate text/code during an active turn", () => {
+    const msgs: AgentMessage[] = [
+      makeMessage({ id: "u1", role: "user", text: "评估下路径", createdAt: 1000 }),
+      makeMessage({
+        id: "t1",
+        kind: "toolCall",
+        toolName: "read",
+        arguments: { path: "a.ts" },
+        status: "completed",
+        createdAt: 1200,
+      }),
+      makeMessage({
+        id: "a1",
+        role: "assistant",
+        streaming: true,
+        text: "```python\nimport os\nprint(os.path.exists('x'))\n```",
+        createdAt: 1500,
+      }),
+    ];
+
+    const liveBlocks = buildTranscriptBlocks(msgs, true, "/repo");
+    expect(liveBlocks.map((b) => b.kind)).toEqual(["message", "process"]);
+    const liveProc = liveBlocks[1];
+    expect(liveProc.kind).toBe("process");
+    if (liveProc.kind === "process") {
+      expect(liveProc.running).toBe(true);
+    }
+
+    const finishedBlocks = buildTranscriptBlocks(
+      msgs.map((m) => (m.id === "a1" ? { ...m, streaming: false } : m)),
+      false,
+      "/repo",
+    );
+    expect(finishedBlocks.map((b) => b.kind)).toEqual([
+      "message",
+      "process",
+      "message",
+    ]);
   });
 });

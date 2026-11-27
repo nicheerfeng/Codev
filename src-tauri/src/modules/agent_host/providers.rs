@@ -336,7 +336,11 @@ pub fn save(host: &Host, harness: &str, payload: &Value) -> Result<Value, String
         }
         return Err(error);
     }
-    list(host, harness)
+    let result = list(host, harness);
+    if harness == "acp:antigravity" {
+        refresh_agy_session_models(host);
+    }
+    result
 }
 
 pub fn remove(host: &Host, harness: &str, id: &str) -> Result<Value, String> {
@@ -612,5 +616,38 @@ pub async fn activate(host: &Arc<Host>, harness: &str, id: &str) -> Result<Value
     }
     settings.active = id.into();
     write(host, harness, &settings)?;
-    list(host, harness)
+    let result = list(host, harness);
+    if harness == "acp:antigravity" {
+        refresh_agy_session_models(host);
+    }
+    result
+}
+
+#[cfg(test)]
+pub(super) fn refresh_agy_session_models_for_test(host: &Host) {
+    refresh_agy_session_models(host);
+}
+
+fn refresh_agy_session_models(host: &Host) {
+    let ids: Vec<String> = {
+        let state = lock(&host.state);
+        state
+            .sessions
+            .iter()
+            .filter(|(_, v)| {
+                v.binding.harness_id == "acp:antigravity"
+                    && (!v.config_options.is_empty() || !v.models.is_empty())
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
+    };
+    for sid in ids {
+        let Ok(view) = host.view(&sid) else { continue };
+        let desktop = super::antigravity_history::is_desktop(&view.binding);
+        let native = view.binding.native_session_id.is_some();
+        let (label, allowed) = acp_provider_scope(host, &sid, "acp:antigravity", native, desktop);
+        host.update(&sid, None, |v| {
+            super::acp::refresh_view_provider_scope(v, &label, allowed.as_deref());
+        });
+    }
 }
