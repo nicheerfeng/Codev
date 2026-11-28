@@ -52,11 +52,152 @@ pub fn fs_rename(from: String, to: String, workspace: Option<WorkspaceEnv>) -> R
     })
 }
 
+/// 判断单个文件名是否为 Windows 保留设备名或以点/空格结尾的异常名称。
+#[cfg(any(windows, test))]
+fn is_windows_reserved_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    if name.ends_with('.') || name.ends_with(' ') {
+        return true;
+    }
+    let stem = name.split('.').next().unwrap_or(name);
+    let upper = stem.to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+}
+
+#[cfg(windows)]
+fn strip_verbatim_prefix(path: &std::path::Path) -> std::path::PathBuf {
+    let raw = path.to_string_lossy();
+    if let Some(unc) = raw.strip_prefix(r"\\?\UNC\") {
+        std::path::PathBuf::from(format!(r"\\{unc}"))
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        std::path::PathBuf::from(rest)
+    } else {
+        path.to_path_buf()
+    }
+}
+
+#[cfg(windows)]
+fn ensure_verbatim_dir(dir: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    let canonical = std::fs::canonicalize(dir)?;
+    let raw = canonical.to_string_lossy();
+    if raw.starts_with(r"\\?\") {
+        return Ok(canonical);
+    }
+    let normalized = raw.replace('/', r"\");
+    if let Some(unc) = normalized.strip_prefix(r"\\") {
+        Ok(std::path::PathBuf::from(format!(r"\\?\UNC\{unc}")))
+    } else {
+        Ok(std::path::PathBuf::from(format!(r"\\?\{normalized}")))
+    }
+}
+
+/// 通过 Windows 原样扩展路径将保留名文件在同目录原子改名后再移入系统回收站。
+#[cfg(windows)]
+fn delete_windows_reserved_entry(p: &std::path::Path) -> Result<(), String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let file_name = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| format!("无效路径：{}", p.display()))?;
+    let parent = p
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .ok_or_else(|| format!("无法确定父目录：{}", p.display()))?;
+
+    let verbatim_parent = ensure_verbatim_dir(parent).map_err(|e| {
+        log::debug!("fs_delete canonicalize parent({}) failed: {e}", parent.display());
+        e.to_string()
+    })?;
+    let verbatim_target = verbatim_parent.join(file_name);
+
+    std::fs::symlink_metadata(&verbatim_target).map_err(|e| {
+        log::debug!("fs_delete stat({}) failed: {e}", verbatim_target.display());
+        e.to_string()
+    })?;
+
+    let normal_parent = strip_verbatim_prefix(&verbatim_parent);
+    let safe_label: String = file_name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .take(24)
+        .collect();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let pid = std::process::id();
+
+    let mut chosen_name = None;
+    for attempt in 0..32u32 {
+        let candidate = format!(".codev-trash-{safe_label}-{stamp}-{pid}-{attempt}");
+        if std::fs::symlink_metadata(verbatim_parent.join(&candidate)).is_err() {
+            chosen_name = Some(candidate);
+            break;
+        }
+    }
+    let temp_name = chosen_name.ok_or_else(|| "无法生成临时文件名以移入回收站".to_string())?;
+    let verbatim_temp = verbatim_parent.join(&temp_name);
+    let normal_temp = normal_parent.join(&temp_name);
+
+    std::fs::rename(&verbatim_target, &verbatim_temp).map_err(|e| {
+        log::warn!(
+            "fs_delete reserved rename({} -> {}) failed: {e}",
+            verbatim_target.display(),
+            verbatim_temp.display()
+        );
+        format!("准备移入回收站失败：{e}")
+    })?;
+
+    if let Err(e) = trash::delete(&normal_temp) {
+        let _ = std::fs::rename(&verbatim_temp, &verbatim_target);
+        log::warn!("fs_delete reserved trash({}) failed: {e}", normal_temp.display());
+        return Err(format!("移入回收站失败：{e}"));
+    }
+
+    Ok(())
+}
+
 /// 将文件或目录移入系统回收站；失败时返回错误，不执行永久删除。
 #[tauri::command]
 pub fn fs_delete(path: String, workspace: Option<WorkspaceEnv>) -> Result<(), String> {
     let workspace = WorkspaceEnv::from_option(workspace);
     let p = resolve_path(&path, &workspace);
+
+    #[cfg(windows)]
+    if p.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(is_windows_reserved_name)
+    {
+        return delete_windows_reserved_entry(&p);
+    }
+
     std::fs::symlink_metadata(&p).map_err(|e| {
         log::debug!("fs_delete stat({}) failed: {e}", p.display());
         e.to_string()
