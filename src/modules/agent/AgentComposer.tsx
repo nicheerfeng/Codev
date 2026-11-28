@@ -202,6 +202,7 @@ export function AgentComposer({ session }: { session: SessionView }) {
     if (!prompts.length) return;
     const next = historyIndex.current + direction;
     if (next < -1 || next >= prompts.length) return;
+    setTrigger(null);
     if (next === -1) {
       update(historyDraft.current ?? EMPTY);
       historyDraft.current = null;
@@ -665,6 +666,8 @@ export function AgentComposer({ session }: { session: SessionView }) {
           disabled={session.readOnly || !connected}
           onChange={(e) => {
             const text = e.target.value;
+            historyIndex.current = -1;
+            historyDraft.current = null;
             const localCommand =
               draft.localCommand &&
               new RegExp(`^/${draft.localCommand}(?:\\s|$)`).test(text)
@@ -679,6 +682,32 @@ export function AgentComposer({ session }: { session: SessionView }) {
           onCompositionStart={() => setIme(true)}
           onCompositionEnd={() => setIme(false)}
           onKeyDown={(e) => {
+            const inHistoryRecall = historyIndex.current >= 0;
+            const node = e.currentTarget;
+            const atStart =
+              node.selectionStart === 0 && node.selectionEnd === 0;
+            const atEnd =
+              node.selectionStart === node.value.length &&
+              node.selectionEnd === node.value.length;
+            if (
+              (e.key === "ArrowUp" || e.key === "ArrowDown") &&
+              !e.shiftKey &&
+              !e.altKey &&
+              !e.ctrlKey &&
+              !e.metaKey &&
+              !ime &&
+              !e.nativeEvent.isComposing &&
+              ((inHistoryRecall &&
+                ((e.key === "ArrowUp" && atStart) ||
+                  (e.key === "ArrowDown" && atEnd))) ||
+                (!trigger &&
+                  ((e.key === "ArrowUp" && atStart) ||
+                    (e.key === "ArrowDown" && atEnd))))
+            ) {
+              e.preventDefault();
+              recall(e.key === "ArrowUp" ? 1 : -1);
+              return;
+            }
             if (trigger && !ime && !e.nativeEvent.isComposing) {
               if (e.key === "Escape") {
                 e.preventDefault();
@@ -700,30 +729,6 @@ export function AgentComposer({ session }: { session: SessionView }) {
               if ((e.key === "Enter" || e.key === "Tab") && matches.length) {
                 e.preventDefault();
                 chooseInvocation(matches[menuIndex % matches.length]);
-                return;
-              }
-            }
-            if (
-              (e.key === "ArrowUp" || e.key === "ArrowDown") &&
-              !e.shiftKey &&
-              !e.altKey &&
-              !e.ctrlKey &&
-              !e.metaKey &&
-              !ime &&
-              !e.nativeEvent.isComposing
-            ) {
-              const node = e.currentTarget;
-              const atStart =
-                node.selectionStart === 0 && node.selectionEnd === 0;
-              const atEnd =
-                node.selectionStart === node.value.length &&
-                node.selectionEnd === node.value.length;
-              if (
-                (e.key === "ArrowUp" && atStart) ||
-                (e.key === "ArrowDown" && atEnd)
-              ) {
-                e.preventDefault();
-                recall(e.key === "ArrowUp" ? 1 : -1);
                 return;
               }
             }

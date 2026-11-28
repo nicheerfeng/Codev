@@ -45,6 +45,7 @@ import { useFileTransfer } from "./lib/useFileTransfer";
 import { useSelectedFileMeta } from "./lib/useSelectedFileMeta";
 import { useWorkspaceFolderDrop } from "./lib/useWorkspaceFolderDrop";
 import { ExplorerStatusBar } from "./ExplorerStatusBar";
+import { ExplorerPropertiesDialog } from "./ExplorerPropertiesDialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { InlineInput } from "./InlineInput";
 import { cacheRenamedExpansion } from "./lib/useFileTree";
@@ -190,6 +191,7 @@ function RootSection({
   onSearchInFolder,
   onOpenTerminal,
   onPaste,
+  onShowProperties,
   open,
   onOpenChange,
   pathDropTarget,
@@ -213,6 +215,7 @@ function RootSection({
   onSearchInFolder?: () => void;
   onOpenTerminal?: () => void;
   onPaste?: () => void;
+  onShowProperties?: () => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   pathDropTarget?: RootTreeProps["pathDropTarget"];
@@ -410,6 +413,14 @@ function RootSection({
           >
             {t("Reveal in Finder")}
           </ContextMenuItem>
+          {onShowProperties ? (
+            <ContextMenuItem
+              className={COMPACT_ITEM}
+              onSelect={onShowProperties}
+            >
+              属性
+            </ContextMenuItem>
+          ) : null}
           <ContextMenuSeparator className="my-0.5" />
           <ContextMenuItem className={COMPACT_ITEM} onSelect={onRemove}>
             {t("Remove from workspace")}
@@ -443,6 +454,7 @@ export const FileExplorer = memo(
     const [collapsedRoots, setCollapsedRoots] = useState<Set<string>>(
       () => storedRootCollapsed.current.keys,
     );
+    const [propertiesPath, setPropertiesPath] = useState<string | null>(null);
     const knownCollapsedRoots = useRef(
       new Set(storedRootCollapsed.current.keys),
     );
@@ -1268,6 +1280,7 @@ export const FileExplorer = memo(
                           ? () => void pasteClipboard(root)
                           : undefined
                       }
+                      onShowProperties={() => setPropertiesPath(root)}
                       open={!collapsedRoots.has(rootCollapseKey(root))}
                       onOpenChange={(nextOpen) => setRootOpen(root, nextOpen)}
                       pathDropTarget={treeProps.pathDropTarget}
@@ -1293,6 +1306,9 @@ export const FileExplorer = memo(
                         onCopyPaths={copyPaths}
                         onCutPaths={cutPaths}
                         onDeletePaths={deletePaths}
+                        onShowProperties={(targetPath) =>
+                          setPropertiesPath(targetPath)
+                        }
                         clipboardAvailable={pasteAvailable}
                         onPasteTo={(path) => void pasteClipboard(path)}
                         sharedScroll
@@ -1320,6 +1336,10 @@ export const FileExplorer = memo(
           onCancel={() => void transfer.cancel()}
           onUndo={() => void transfer.undo()}
           onClear={transfer.clear}
+        />
+        <ExplorerPropertiesDialog
+          path={propertiesPath}
+          onClose={() => setPropertiesPath(null)}
         />
       </div>
     );

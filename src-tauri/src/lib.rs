@@ -157,12 +157,52 @@ fn keep_main_webview_on_minimize(
                 size: (*size).into(),
             });
         }
+        tauri::WindowEvent::ScaleFactorChanged {
+            scale_factor,
+            new_inner_size,
+            ..
+        } => {
+            let minimized = window.is_minimized().unwrap_or(false);
+            let too_small = main_window_below_min_size(&window, *new_inner_size);
+            log::info!(
+                "[Codev] main webview scale changed {}x{} scale={:.2} minimized={minimized} skip={}",
+                new_inner_size.width,
+                new_inner_size.height,
+                scale_factor,
+                minimized || too_small
+            );
+            if minimized || too_small {
+                return;
+            }
+            let _ = webview.set_bounds(tauri::Rect {
+                position: tauri::PhysicalPosition::new(0, 0).into(),
+                size: (*new_inner_size).into(),
+            });
+        }
+        tauri::WindowEvent::Moved(_) => {
+            if window.is_minimized().unwrap_or(false) {
+                return;
+            }
+            if let Ok(size) = window.inner_size() {
+                if !main_window_below_min_size(&window, size) {
+                    let _ = webview.set_bounds(tauri::Rect {
+                        position: tauri::PhysicalPosition::new(0, 0).into(),
+                        size: size.into(),
+                    });
+                }
+            }
+        }
         tauri::WindowEvent::Focused(true) => {
             if window.is_minimized().unwrap_or(false) {
                 return;
             }
             if let Ok(size) = window.inner_size() {
-                let _ = restore_collapsed_main_window(&window, size, false);
+                if !restore_collapsed_main_window(&window, size, false) {
+                    let _ = webview.set_bounds(tauri::Rect {
+                        position: tauri::PhysicalPosition::new(0, 0).into(),
+                        size: size.into(),
+                    });
+                }
             }
         }
         _ => {}
@@ -584,6 +624,7 @@ pub fn run() {
         .manage(pty::PtyState::default())
         .manage(fs::watch::FsWatchState::default())
         .manage(fs::search::SearchState::default())
+        .manage(fs::properties::PropertiesScanState::default())
         .manage(fs::transfer::TransferState::default())
         .manage(history::HistoryState::default())
         .manage(app_db::AppDbState::default())
@@ -627,6 +668,9 @@ pub fn run() {
             fs::file::fs_write_file,
             fs::file::fs_stat,
             fs::file::fs_canonicalize,
+            fs::properties::fs_properties_inspect,
+            fs::properties::fs_properties_scan_start,
+            fs::properties::fs_properties_scan_cancel,
             fs::mutate::fs_create_file,
             fs::mutate::fs_create_dir,
             fs::mutate::fs_rename,

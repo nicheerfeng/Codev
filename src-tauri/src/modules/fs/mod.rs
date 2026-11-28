@@ -2,6 +2,7 @@ pub mod clipboard;
 pub mod file;
 pub mod grep;
 pub mod mutate;
+pub mod properties;
 pub mod search;
 pub mod transfer;
 pub mod tree;

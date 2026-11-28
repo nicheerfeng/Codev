@@ -88,6 +88,8 @@ export type RootTreeProps = {
   onCutPaths?: (paths: string[]) => void;
   /** Deletes selected paths through the shared explorer action. */
   onDeletePaths?: (paths: string[]) => void;
+  /** Opens the properties dialog for a file or folder. */
+  onShowProperties?: (path: string) => void;
   clipboardAvailable?: boolean;
   onPasteTo?: (directory: string) => void;
   onRevealInTerminal?: (path: string) => void;
@@ -252,6 +254,7 @@ export const RootTree = memo(
       onOpenFileToSide,
       onOpenGitDiff,
       onSearchInFolder,
+      onShowProperties,
       pathDropTarget,
       sharedScroll = false,
     },
@@ -1106,6 +1109,15 @@ export const RootTree = memo(
                   >
                     {t("Copy Relative Path")}
                   </ContextMenuItem>
+                  {onShowProperties ? (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      disabled={menuPaths.length > 1}
+                      onSelect={() => onShowProperties(menuTarget.path)}
+                    >
+                      属性
+                    </ContextMenuItem>
+                  ) : null}
                   <ContextMenuSeparator className="my-0.5" />
                   <ContextMenuItem
                     className={COMPACT_ITEM}
