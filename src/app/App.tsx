@@ -30,7 +30,7 @@ import {
 import { PanelErrorBoundary } from "@/components/PanelErrorBoundary";
 import { FileExplorer, type FileExplorerHandle } from "@/modules/explorer";
 import { VcsModal } from "@/modules/vcs/VcsModal";
-import { useVcsStore } from "@/modules/vcs/store";
+import { useForgeStore } from "@/modules/forge/store";
 import { agentClient } from "@/modules/agent/client";
 import { useAgentStore } from "@/modules/agent/store";
 import { NotepadPopover } from "@/modules/notepad/NotepadPopover";
@@ -262,7 +262,7 @@ export default function App() {
     uiState.setItem("codev.dock.order", JSON.stringify(dockOrder));
   }, [dockOrder]);
 
-  const totalForgeUnread = useVcsStore((state) => state.totalForgeUnread);
+  const totalForgeUnread = useForgeStore((state) => state.totalForgeUnread);
   const availableDockTabs = useMemo<DockTab[]>(
     () => [
       "terminal",

@@ -5,9 +5,8 @@ import { uiState } from "@/lib/uiState";
 import {
   buildRepoBadgeIndex,
   findSnapshotForPath,
-  forgeCommentsCacheKey,
-  useVcsStore,
 } from "./store";
+import { forgeCommentsCacheKey, useForgeStore } from "@/modules/forge/store";
 import { parseVcsError, type VcsCommit, type VcsSnapshot } from "./types";
 
 describe("VCS frontend utilities", () => {
@@ -163,8 +162,8 @@ describe("VCS frontend utilities", () => {
       forgeCommentsCacheKey({ repoFullName: "Nicheerfeng/Trade-Pharma" }, 16),
     ).toBe("nicheerfeng/trade-pharma#16");
 
-    useVcsStore.getState().setActiveInboxRepo("nicheerfeng/trade-pharma");
-    useVcsStore.getState().applyForgeInbox({
+    useForgeStore.getState().setActiveInboxRepo("nicheerfeng/trade-pharma");
+    useForgeStore.getState().applyForgeInbox({
       repo: {
         provider: "github",
         host: "github.com",
@@ -193,13 +192,13 @@ describe("VCS frontend utilities", () => {
       "nicheerfeng/trade-pharma",
     );
 
-    useVcsStore.setState({ activeInboxRepo: null, inboxes: {} });
-    useVcsStore.getState().hydrateForgeCache();
-    expect(useVcsStore.getState().activeInboxRepo).toBe(
+    useForgeStore.setState({ activeInboxRepo: null, inboxes: {} });
+    useForgeStore.getState().hydrateForgeCache();
+    expect(useForgeStore.getState().activeInboxRepo).toBe(
       "nicheerfeng/trade-pharma",
     );
     expect(
-      useVcsStore.getState().inboxes["nicheerfeng/trade-pharma"]?.repo?.fullName,
+      useForgeStore.getState().inboxes["nicheerfeng/trade-pharma"]?.repo?.fullName,
     ).toBe("nicheerfeng/trade-pharma");
   });
 });

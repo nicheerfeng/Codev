@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { agentClient, type ConnectionOptions } from "./client";
+import { emitHostEvent } from "./hostEvents";
 import {
   isBusy,
   type AgentImage,
@@ -291,13 +292,10 @@ function restore(snapshot: HostSnapshot) {
     opened: nextOpened,
   });
   if (snapshot.vcsSnapshots?.length || snapshot.forgeInboxes?.length) {
-    void import("@/modules/vcs/store")
-      .then((m) =>
-        m.useVcsStore
-          .getState()
-          .applyHostSnapshots(snapshot.vcsSnapshots, snapshot.forgeInboxes),
-      )
-      .catch(() => undefined);
+    emitHostEvent("host.snapshot", {
+      vcsSnapshots: snapshot.vcsSnapshots,
+      forgeInboxes: snapshot.forgeInboxes,
+    });
   }
 }
 function consume(frame: Frame) {
@@ -312,9 +310,7 @@ function consume(frame: Frame) {
       event.payload as { snapshot?: import("@/modules/vcs/types").VcsSnapshot }
     )?.snapshot;
     if (snap) {
-      void import("@/modules/vcs/store")
-        .then((m) => m.useVcsStore.getState().applyVcsSnapshot(snap))
-        .catch(() => undefined);
+      emitHostEvent("vcs.changed", { snapshot: snap });
     }
     return;
   }
@@ -325,9 +321,7 @@ function consume(frame: Frame) {
       }
     )?.inbox;
     if (inbox) {
-      void import("@/modules/vcs/store")
-        .then((m) => m.useVcsStore.getState().applyForgeInbox(inbox))
-        .catch(() => undefined);
+      emitHostEvent("forge.updated", { inbox });
     }
     return;
   }

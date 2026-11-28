@@ -5,6 +5,7 @@ import { AgentPane } from "./AgentPane";
 import { agentClient } from "./client";
 import { useAgentStore } from "./store";
 import { useVcsStore } from "@/modules/vcs/store";
+import { useForgeStore } from "@/modules/forge/store";
 
 const TOKEN_KEY = "codev.agent.deviceToken";
 const nonceFromLink = () =>
@@ -39,10 +40,10 @@ export function MobileApp() {
   const [retryTick, setRetryTick] = useState(0);
   const [mobileTab, setMobileTab] = useState<"agent" | "vcs">("agent");
   const snapshotsMap = useVcsStore((s) => s.snapshots);
-  const inboxesMap = useVcsStore((s) => s.inboxes);
+  const inboxesMap = useForgeStore((s) => s.inboxes);
   const vcsSnapshots = useMemo(() => Object.values(snapshotsMap), [snapshotsMap]);
   const forgeInboxes = useMemo(() => Object.values(inboxesMap), [inboxesMap]);
-  const totalUnread = useVcsStore((s) => s.totalForgeUnread);
+  const totalUnread = useForgeStore((s) => s.totalForgeUnread);
   const save = useCallback((token: string) => {
     try {
       localStorage.setItem(TOKEN_KEY, token);
