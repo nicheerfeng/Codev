@@ -2,6 +2,10 @@ export type NoteItem = {
   id: string;
   text: string;
   done: boolean;
+  createdAt?: number;
+  updatedAt?: number;
+  doneAt?: number | null;
+  deletedAt?: number | null;
 };
 
 export type NoteProject = {
@@ -9,6 +13,11 @@ export type NoteProject = {
   name: string;
   items: NoteItem[];
   locked?: boolean;
+  collapsed?: boolean;
+  doneCollapsed?: boolean;
+  createdAt?: number;
+  updatedAt?: number;
+  deletedAt?: number | null;
 };
 
 export type NotePad = {

@@ -33,6 +33,14 @@ pub struct NoteItemRecord {
     pub id: String,
     pub text: String,
     pub done: bool,
+    #[serde(default)]
+    pub created_at: i64,
+    #[serde(default)]
+    pub updated_at: i64,
+    #[serde(default)]
+    pub done_at: Option<i64>,
+    #[serde(default)]
+    pub deleted_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -42,6 +50,16 @@ pub struct NoteProjectRecord {
     pub name: String,
     #[serde(default)]
     pub locked: bool,
+    #[serde(default)]
+    pub collapsed: bool,
+    #[serde(default)]
+    pub done_collapsed: bool,
+    #[serde(default)]
+    pub created_at: i64,
+    #[serde(default)]
+    pub updated_at: i64,
+    #[serde(default)]
+    pub deleted_at: Option<i64>,
     #[serde(default)]
     pub items: Vec<NoteItemRecord>,
 }
@@ -83,8 +101,12 @@ impl AppDb {
                      id TEXT PRIMARY KEY,
                      name TEXT NOT NULL,
                      locked INTEGER NOT NULL DEFAULT 0,
+                     collapsed INTEGER NOT NULL DEFAULT 0,
+                     done_collapsed INTEGER NOT NULL DEFAULT 1,
                      sort_order INTEGER NOT NULL DEFAULT 0,
-                     updated_at INTEGER NOT NULL DEFAULT 0
+                     created_at INTEGER NOT NULL DEFAULT 0,
+                     updated_at INTEGER NOT NULL DEFAULT 0,
+                     deleted_at INTEGER DEFAULT NULL
                  );
                  CREATE TABLE IF NOT EXISTS notepad_items(
                      id TEXT PRIMARY KEY,
@@ -93,7 +115,10 @@ impl AppDb {
                      text TEXT NOT NULL,
                      done INTEGER NOT NULL DEFAULT 0,
                      sort_order INTEGER NOT NULL DEFAULT 0,
-                     updated_at INTEGER NOT NULL DEFAULT 0
+                     created_at INTEGER NOT NULL DEFAULT 0,
+                     updated_at INTEGER NOT NULL DEFAULT 0,
+                     done_at INTEGER DEFAULT NULL,
+                     deleted_at INTEGER DEFAULT NULL
                  );
                  CREATE INDEX IF NOT EXISTS idx_notepad_items_proj
                      ON notepad_items(project_id, sort_order);
@@ -123,13 +148,50 @@ impl AppDb {
                      meta_value TEXT NOT NULL,
                      updated_at INTEGER NOT NULL DEFAULT 0
                  );
-                 PRAGMA user_version=1;",
+                 PRAGMA user_version=2;",
             )
             .map_err(|e| e.to_string())?;
+        Self::ensure_notepad_columns(&connection)?;
         Ok(Self {
             connection,
             data_dir: directory.to_path_buf(),
         })
+    }
+
+    fn ensure_column(
+        connection: &Connection,
+        table: &str,
+        column: &str,
+        definition: &str,
+    ) -> Result<(), String> {
+        let mut stmt = connection
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .map_err(|e| e.to_string())?;
+        let exists = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .any(|name| name == column);
+        if !exists {
+            connection
+                .execute(
+                    &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn ensure_notepad_columns(connection: &Connection) -> Result<(), String> {
+        Self::ensure_column(connection, "notepad_projects", "collapsed", "INTEGER NOT NULL DEFAULT 0")?;
+        Self::ensure_column(connection, "notepad_projects", "done_collapsed", "INTEGER NOT NULL DEFAULT 1")?;
+        Self::ensure_column(connection, "notepad_projects", "created_at", "INTEGER NOT NULL DEFAULT 0")?;
+        Self::ensure_column(connection, "notepad_projects", "deleted_at", "INTEGER DEFAULT NULL")?;
+        Self::ensure_column(connection, "notepad_items", "created_at", "INTEGER NOT NULL DEFAULT 0")?;
+        Self::ensure_column(connection, "notepad_items", "done_at", "INTEGER DEFAULT NULL")?;
+        Self::ensure_column(connection, "notepad_items", "deleted_at", "INTEGER DEFAULT NULL")?;
+        Ok(())
     }
 
     fn meta(&self, key: &str) -> Option<String> {
@@ -158,7 +220,10 @@ impl AppDb {
         self.maybe_migrate_legacy_notepad()?;
         let mut proj_stmt = self
             .connection
-            .prepare("SELECT id, name, locked FROM notepad_projects ORDER BY sort_order ASC")
+            .prepare(
+                "SELECT id, name, locked, collapsed, done_collapsed, created_at, updated_at, deleted_at
+                 FROM notepad_projects ORDER BY sort_order ASC",
+            )
             .map_err(|e| e.to_string())?;
         let mut projects: Vec<NoteProjectRecord> = proj_stmt
             .query_map([], |r| {
@@ -166,6 +231,11 @@ impl AppDb {
                     id: r.get(0)?,
                     name: r.get(1)?,
                     locked: r.get::<_, i64>(2)? != 0,
+                    collapsed: r.get::<_, i64>(3)? != 0,
+                    done_collapsed: r.get::<_, i64>(4)? != 0,
+                    created_at: r.get::<_, i64>(5)?,
+                    updated_at: r.get::<_, i64>(6)?,
+                    deleted_at: r.get::<_, Option<i64>>(7)?,
                     items: Vec::new(),
                 })
             })
@@ -177,7 +247,8 @@ impl AppDb {
             let mut item_stmt = self
                 .connection
                 .prepare(
-                    "SELECT id, project_id, text, done FROM notepad_items ORDER BY sort_order ASC",
+                    "SELECT id, project_id, text, done, created_at, updated_at, done_at, deleted_at
+                     FROM notepad_items ORDER BY sort_order ASC",
                 )
                 .map_err(|e| e.to_string())?;
             let rows = item_stmt
@@ -188,6 +259,10 @@ impl AppDb {
                             id: r.get(0)?,
                             text: r.get(2)?,
                             done: r.get::<_, i64>(3)? != 0,
+                            created_at: r.get::<_, i64>(4)?,
+                            updated_at: r.get::<_, i64>(5)?,
+                            done_at: r.get::<_, Option<i64>>(6)?,
+                            deleted_at: r.get::<_, Option<i64>>(7)?,
                         },
                     ))
                 })
@@ -211,27 +286,76 @@ impl AppDb {
     pub fn save_notepad(&mut self, pad: &NotePadPayload) -> Result<(), String> {
         let ts = now_ms();
         let tx = self.connection.transaction().map_err(|e| e.to_string())?;
-        tx.execute("DELETE FROM notepad_items", [])
-            .map_err(|e| e.to_string())?;
-        tx.execute("DELETE FROM notepad_projects", [])
-            .map_err(|e| e.to_string())?;
+        let mut keep_project_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut keep_item_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
         for (p_idx, project) in pad.projects.iter().enumerate() {
+            keep_project_ids.insert(project.id.clone());
+            let created_at = if project.created_at > 0 {
+                project.created_at
+            } else {
+                ts
+            };
+            let updated_at = if project.updated_at > 0 {
+                project.updated_at
+            } else {
+                ts
+            };
             tx.execute(
-                "INSERT INTO notepad_projects(id, name, locked, sort_order, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO notepad_projects(
+                     id, name, locked, collapsed, done_collapsed, sort_order, created_at, updated_at, deleted_at
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(id) DO UPDATE SET
+                     name=excluded.name,
+                     locked=excluded.locked,
+                     collapsed=excluded.collapsed,
+                     done_collapsed=excluded.done_collapsed,
+                     sort_order=excluded.sort_order,
+                     updated_at=excluded.updated_at,
+                     deleted_at=excluded.deleted_at",
                 params![
                     project.id,
                     project.name,
                     if project.locked { 1 } else { 0 },
+                    if project.collapsed { 1 } else { 0 },
+                    if project.done_collapsed { 1 } else { 0 },
                     p_idx as i64,
-                    ts
+                    created_at,
+                    updated_at,
+                    project.deleted_at
                 ],
             )
             .map_err(|e| e.to_string())?;
+
             for (i_idx, item) in project.items.iter().enumerate() {
+                keep_item_ids.insert(item.id.clone());
+                let item_created = if item.created_at > 0 {
+                    item.created_at
+                } else {
+                    ts
+                };
+                let item_updated = if item.updated_at > 0 {
+                    item.updated_at
+                } else {
+                    ts
+                };
                 tx.execute(
-                    "INSERT INTO notepad_items(id, project_id, project_name, text, done, sort_order, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    "INSERT INTO notepad_items(
+                         id, project_id, project_name, text, done, sort_order, created_at, updated_at, done_at, deleted_at
+                     )
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                     ON CONFLICT(id) DO UPDATE SET
+                         project_id=excluded.project_id,
+                         project_name=excluded.project_name,
+                         text=excluded.text,
+                         done=excluded.done,
+                         sort_order=excluded.sort_order,
+                         updated_at=excluded.updated_at,
+                         done_at=excluded.done_at,
+                         deleted_at=excluded.deleted_at",
                     params![
                         item.id,
                         project.id,
@@ -239,12 +363,49 @@ impl AppDb {
                         item.text,
                         if item.done { 1 } else { 0 },
                         i_idx as i64,
-                        ts
+                        item_created,
+                        item_updated,
+                        item.done_at,
+                        item.deleted_at
                     ],
                 )
                 .map_err(|e| e.to_string())?;
             }
         }
+
+        // Remove only records explicitly purged from the payload (e.g., emptying trash).
+        let existing_items: Vec<String> = {
+            let mut stmt = tx
+                .prepare("SELECT id FROM notepad_items")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            rows.filter_map(Result::ok).collect()
+        };
+        for id in existing_items {
+            if !keep_item_ids.contains(&id) {
+                tx.execute("DELETE FROM notepad_items WHERE id=?1", [id])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+
+        let existing_projects: Vec<String> = {
+            let mut stmt = tx
+                .prepare("SELECT id FROM notepad_projects")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            rows.filter_map(Result::ok).collect()
+        };
+        for id in existing_projects {
+            if !keep_project_ids.contains(&id) {
+                tx.execute("DELETE FROM notepad_projects WHERE id=?1", [id])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+
         tx.commit().map_err(|e| e.to_string())?;
         Ok(())
     }

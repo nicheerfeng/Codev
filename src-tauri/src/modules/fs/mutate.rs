@@ -132,7 +132,10 @@ fn delete_windows_reserved_entry(p: &std::path::Path) -> Result<(), String> {
         .ok_or_else(|| format!("无法确定父目录：{}", p.display()))?;
 
     let verbatim_parent = ensure_verbatim_dir(parent).map_err(|e| {
-        log::debug!("fs_delete canonicalize parent({}) failed: {e}", parent.display());
+        log::debug!(
+            "fs_delete canonicalize parent({}) failed: {e}",
+            parent.display()
+        );
         e.to_string()
     })?;
     let verbatim_target = verbatim_parent.join(file_name);
@@ -177,7 +180,10 @@ fn delete_windows_reserved_entry(p: &std::path::Path) -> Result<(), String> {
 
     if let Err(e) = trash::delete(&normal_temp) {
         let _ = std::fs::rename(&verbatim_temp, &verbatim_target);
-        log::warn!("fs_delete reserved trash({}) failed: {e}", normal_temp.display());
+        log::warn!(
+            "fs_delete reserved trash({}) failed: {e}",
+            normal_temp.display()
+        );
         return Err(format!("移入回收站失败：{e}"));
     }
 

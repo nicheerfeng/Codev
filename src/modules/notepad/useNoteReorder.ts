@@ -68,15 +68,14 @@ export function useNoteReorder(onMove: (from: number, to: number) => void) {
 
 export function useNoteItemReorder(
   listId: NoteListId,
-  onMove: (
-    fromList: NoteListId,
-    from: number,
-    toList: NoteListId,
-    to: number,
+  onMoveById: (
+    itemId: string,
+    toProjectId: NoteListId,
+    targetIndex: number,
   ) => void,
 ) {
   const drag = useRef<{
-    from: number;
+    itemId: string;
     pointerId: number;
     startY: number;
     active: boolean;
@@ -91,12 +90,12 @@ export function useNoteItemReorder(
     }
   }, []);
 
-  const props = (index: number) => ({
+  const props = (itemId: string) => ({
     onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
       if (event.button !== 0) return;
       event.stopPropagation();
       drag.current = {
-        from: index,
+        itemId,
         pointerId: event.pointerId,
         startY: event.clientY,
         active: false,
@@ -141,7 +140,7 @@ export function useNoteItemReorder(
         });
         if (before >= 0) to = before;
       }
-      if (current.active) onMove(listId, current.from, toList, to);
+      if (current.active) onMoveById(current.itemId, toList, to);
       end();
     },
     onPointerCancel: end,
