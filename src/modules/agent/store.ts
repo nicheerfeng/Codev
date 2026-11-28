@@ -4,6 +4,7 @@ import {
   removeKey,
   writeString,
 } from "@/lib/clientStorage";
+import { toast } from "sonner";
 import { create } from "zustand";
 import { agentClient, type ConnectionOptions } from "./client";
 import { emitHostEvent } from "./hostEvents";
@@ -71,8 +72,53 @@ type State = {
     payload?: unknown,
     id?: string,
   ) => Promise<T>;
-  report: (error: unknown) => void;
+  report: (error: unknown, level?: AgentNoticeLevel) => void;
 };
+export const MAX_AGENT_VIEWPORTS = 6;
+
+export type AgentNoticeLevel = "info" | "warning" | "error";
+
+export function notifyAgent(
+  message: string,
+  level: AgentNoticeLevel = "info",
+) {
+  const text = message.trim();
+  if (!text) return;
+  if (level === "info") {
+    toast.info(text, { duration: 3000 });
+  } else if (level === "warning") {
+    toast.warning(text, { duration: 4000 });
+  } else {
+    toast.error(text, { duration: 5000 });
+  }
+}
+
+function classifyAgentNotice(text: string): AgentNoticeLevel {
+  if (
+    /最多支持\s*\d+\s*个视口|视口已满|已自动新增视口|已复制|已归档|已恢复|分叉命令不接受参数/.test(
+      text,
+    )
+  ) {
+    return "info";
+  }
+  if (
+    /请先选择|请先等待|只读|不支持|无法|尚未|未安装|未配置|不能为空|待确认|正在运行/.test(
+      text,
+    )
+  ) {
+    return "warning";
+  }
+  return "error";
+}
+
+export function canAcceptViewportSlot(slots: Array<string | null>): boolean {
+  return (
+    slots.length <= 1 ||
+    slots.includes(null) ||
+    slots.length < MAX_AGENT_VIEWPORTS
+  );
+}
+
 let desktopInit: Promise<void> | null = null;
 let stopReady: (() => void) | null = null;
 const readLocal = (key: string) => readNullableString(key);
@@ -571,7 +617,8 @@ export const useAgentStore = create<State>((set, get) => ({
       state.selected === null && state.slots[state.activeViewport] === null
         ? state.activeViewport
         : -1;
-    const index =
+    let slots = [...state.slots];
+    let index =
       viewport ??
       (existing >= 0
         ? existing
@@ -579,12 +626,20 @@ export const useAgentStore = create<State>((set, get) => ({
           ? activeEmpty
           : empty >= 0
             ? empty
-            : state.slots.length > 1
+            : slots.length > 1
               ? -1
               : 0);
-    if (index < 0 || index >= state.slots.length)
-      throw new Error("视口已满，请新增视口或拖动线程到目标视口替换");
-    const slots = [...state.slots];
+    if (viewport === undefined && index < 0 && slots.length < MAX_AGENT_VIEWPORTS) {
+      index = slots.length;
+      slots = [...slots, null];
+    }
+    if (index < 0 || index >= slots.length) {
+      notifyAgent(
+        `最多支持 ${MAX_AGENT_VIEWPORTS} 个视口，请拖拽线程到目标视口替换或先清空一个视口`,
+        "info",
+      );
+      return;
+    }
     const previous = slots.indexOf(id);
     if (previous >= 0 && previous !== index)
       [slots[index], slots[previous]] = [slots[previous], slots[index]];
@@ -603,10 +658,18 @@ export const useAgentStore = create<State>((set, get) => ({
   },
   createSession: async (workspaceId, harnessId) => {
     const state = get();
-    if (state.slots.length > 1 && !state.slots.includes(null))
-      throw new Error("视口已满，请先新增或清空视口");
+    if (!canAcceptViewportSlot(state.slots)) {
+      notifyAgent(
+        `最多支持 ${MAX_AGENT_VIEWPORTS} 个视口，请先清空或关闭一个视口后再新建`,
+        "info",
+      );
+      return;
+    }
     const targetWorkspace = workspaceId ?? state.workspaceId;
-    if (!targetWorkspace) throw new Error("请先选择工作目录");
+    if (!targetWorkspace) {
+      notifyAgent("请先选择工作目录", "warning");
+      return;
+    }
     const view = await agentClient.request<SessionView>("session.create", {
       workspaceId: targetWorkspace,
       harnessId: harnessId ?? state.harnessId,
@@ -746,6 +809,8 @@ export const useAgentStore = create<State>((set, get) => ({
     }
     return result;
   },
-  report: (error) =>
-    set({ error: error instanceof Error ? error.message : String(error) }),
+  report: (error, level?: AgentNoticeLevel) => {
+    const message = error instanceof Error ? error.message : String(error);
+    notifyAgent(message, level ?? classifyAgentNotice(message));
+  },
 }));

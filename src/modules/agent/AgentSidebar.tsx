@@ -40,7 +40,12 @@ import {
   moveDisplayedItem,
   promoteLiveOrder,
 } from "@/modules/agent/sidebarOrder";
-import { useAgentStore } from "./store";
+import {
+  canAcceptViewportSlot,
+  MAX_AGENT_VIEWPORTS,
+  notifyAgent,
+  useAgentStore,
+} from "./store";
 import { ArchivedSessionsSection } from "./ArchivedSessionsSection";
 import { HarnessIcon } from "./HarnessIcon";
 import {
@@ -967,14 +972,10 @@ export function AgentSidebar({
                                     disabled={isBusy(liveSession)}
                                     onSelect={() => {
                                       const state = useAgentStore.getState();
-                                      if (
-                                        state.slots.length > 1 &&
-                                        !state.slots.includes(null)
-                                      ) {
-                                        report(
-                                          new Error(
-                                            "视口已满，请先新增或清空视口",
-                                          ),
+                                      if (!canAcceptViewportSlot(state.slots)) {
+                                        notifyAgent(
+                                          `最多支持 ${MAX_AGENT_VIEWPORTS} 个视口，请先清空或关闭一个视口后再分叉`,
+                                          "info",
                                         );
                                         return;
                                       }

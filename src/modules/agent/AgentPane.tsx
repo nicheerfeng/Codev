@@ -27,7 +27,13 @@ import { AgentTranscript } from "./AgentTranscript";
 import { AgentComposer } from "./AgentComposer";
 import { AgentSettings } from "./AgentSettings";
 import { UsageDialog } from "./UsageDialog";
-import { focusAgentSession, useAgentStore } from "./store";
+import {
+  canAcceptViewportSlot,
+  focusAgentSession,
+  MAX_AGENT_VIEWPORTS,
+  notifyAgent,
+  useAgentStore,
+} from "./store";
 import {
   finishAgentProjectRequest,
   useAgentProjectRequest,
@@ -543,18 +549,6 @@ export function AgentPane({
           </button>
         </div>
       )}
-      {state.error && (
-        <div className="agent-global-error" role="alert">
-          <span>{state.error}</span>
-          <button
-            type="button"
-            aria-label="关闭提示"
-            onClick={() => useAgentStore.setState({ error: "" })}
-          >
-            ×
-          </button>
-        </div>
-      )}
       <div className="agent-body">
         <main className="agent-main">
           {!state.selected &&
@@ -736,11 +730,11 @@ export function AgentPane({
                         onOpenFile={onOpenFile}
                         onOpenDiff={onOpenDiff}
                         onFork={(entryId) => {
-                          if (
-                            state.slots.length > 1 &&
-                            !state.slots.includes(null)
-                          ) {
-                            report(new Error("视口已满，请先新增或清空视口"));
+                          if (!canAcceptViewportSlot(state.slots)) {
+                            notifyAgent(
+                              `最多支持 ${MAX_AGENT_VIEWPORTS} 个视口，请先清空或关闭一个视口后再分叉`,
+                              "info",
+                            );
                             return;
                           }
                           void state

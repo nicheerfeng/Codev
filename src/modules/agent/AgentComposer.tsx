@@ -24,7 +24,13 @@ import {
   PencilEdit01Icon,
   StopIcon,
 } from "@hugeicons/core-free-icons";
-import { useAgentStore, type Draft } from "./store";
+import {
+  canAcceptViewportSlot,
+  MAX_AGENT_VIEWPORTS,
+  notifyAgent,
+  useAgentStore,
+  type Draft,
+} from "./store";
 import { ContextViz } from "./ContextViz";
 import { BranchDropdown } from "@/modules/vcs/BranchDropdown";
 import { choices, isBusy, type AgentImage, type SessionView } from "./types";
@@ -406,10 +412,18 @@ export function AgentComposer({ session }: { session: SessionView }) {
               session.id,
             );
         } else {
-          if (localMatch?.[2]?.trim()) throw new Error("分叉命令不接受参数");
+          if (localMatch?.[2]?.trim()) {
+            notifyAgent("分叉命令不接受参数", "info");
+            return;
+          }
           const state = useAgentStore.getState();
-          if (state.slots.length > 1 && !state.slots.includes(null))
-            throw new Error("视口已满，请先新增或清空视口");
+          if (!canAcceptViewportSlot(state.slots)) {
+            notifyAgent(
+              `最多支持 ${MAX_AGENT_VIEWPORTS} 个视口，请先清空或关闭一个视口后再分叉`,
+              "info",
+            );
+            return;
+          }
           const view = await state.command<SessionView>(
             "session.fork",
             {},
