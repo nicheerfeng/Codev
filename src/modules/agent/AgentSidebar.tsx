@@ -1,3 +1,8 @@
+import {
+  STORAGE_KEYS,
+  readJson,
+  writeJson,
+} from "@/lib/clientStorage";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   useEffect,
@@ -49,9 +54,9 @@ import {
   type SessionView,
 } from "./types";
 
-const WS_ORDER_KEY = "codev.agent.workspaceOrder";
-const SESSION_ORDER_KEY = "codev.agent.sessionOrder";
-const ORGANIZATION_KEY = "codev.agent.projectOrganization";
+const WS_ORDER_KEY = STORAGE_KEYS.agentWorkspaceOrder;
+const SESSION_ORDER_KEY = STORAGE_KEYS.agentSessionOrder;
+const ORGANIZATION_KEY = STORAGE_KEYS.agentProjectOrganization;
 const SESSION_PAGE = 5;
 const SESSION_MORE = 50;
 
@@ -61,47 +66,35 @@ type Organization = {
 };
 
 function readOrganization(): Organization {
-  try {
-    const value = JSON.parse(localStorage.getItem(ORGANIZATION_KEY) ?? "{}");
-    return {
-      groups: Array.isArray(value.groups)
-        ? value.groups.filter(
-            (group: unknown) =>
-              typeof group === "object" &&
-              group !== null &&
-              typeof (group as { id?: unknown }).id === "string" &&
-              typeof (group as { name?: unknown }).name === "string",
-          )
-        : [],
-      projectGroups:
-        value.projectGroups &&
-        typeof value.projectGroups === "object" &&
-        !Array.isArray(value.projectGroups)
-          ? value.projectGroups
-          : {},
-    };
-  } catch {
-    return { groups: [], projectGroups: {} };
-  }
+  const value = readJson<Record<string, unknown>>(ORGANIZATION_KEY, {});
+  return {
+    groups: Array.isArray(value.groups)
+      ? value.groups.filter(
+          (group: unknown): group is { id: string; name: string } =>
+            typeof group === "object" &&
+            group !== null &&
+            typeof (group as { id?: unknown }).id === "string" &&
+            typeof (group as { name?: unknown }).name === "string",
+        )
+      : [],
+    projectGroups:
+      value.projectGroups &&
+      typeof value.projectGroups === "object" &&
+      !Array.isArray(value.projectGroups)
+        ? (value.projectGroups as Record<string, string>)
+        : {},
+  };
 }
 
 function readOrder(key: string): string[] {
-  try {
-    const raw = JSON.parse(localStorage.getItem(key) ?? "[]");
-    return Array.isArray(raw)
-      ? raw.filter((v): v is string => typeof v === "string")
-      : [];
-  } catch {
-    return [];
-  }
+  const raw = readJson<unknown>(key, []);
+  return Array.isArray(raw)
+    ? raw.filter((v): v is string => typeof v === "string")
+    : [];
 }
 
 function saveOrder(key: string, order: string[]) {
-  try {
-    localStorage.setItem(key, JSON.stringify(order));
-  } catch {
-    /* optional UI order */
-  }
+  writeJson(key, order);
 }
 
 function exportSessionMarkdown(
@@ -186,11 +179,7 @@ export function AgentSidebar({
 
   const updateOrganization = (next: Organization) => {
     setOrganization(next);
-    try {
-      localStorage.setItem(ORGANIZATION_KEY, JSON.stringify(next));
-    } catch {
-      /* optional UI persistence */
-    }
+    writeJson(ORGANIZATION_KEY, next);
   };
   useEffect(
     () => () => {

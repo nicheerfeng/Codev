@@ -1,3 +1,9 @@
+import {
+  STORAGE_KEYS,
+  readNullableString,
+  removeKey,
+  writeString,
+} from "@/lib/clientStorage";
 import { create } from "zustand";
 import { agentClient, type ConnectionOptions } from "./client";
 import { emitHostEvent } from "./hostEvents";
@@ -69,20 +75,8 @@ type State = {
 };
 let desktopInit: Promise<void> | null = null;
 let stopReady: (() => void) | null = null;
-const readLocal = (key: string) => {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-};
-const saveLocal = (key: string, value: string) => {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    /* optional UI persistence */
-  }
-};
+const readLocal = (key: string) => readNullableString(key);
+const saveLocal = (key: string, value: string) => writeString(key, value);
 
 function readStored<T>(key: string, fallback: T): T {
   try {
@@ -688,14 +682,8 @@ export const useAgentStore = create<State>((set, get) => ({
         nextSlots[s.activeViewport] === null
           ? s.activeViewport
           : nextSlots.indexOf(null);
-      if (nextSelected) saveLocal("codev.agent.selected", nextSelected);
-      else {
-        try {
-          localStorage.removeItem("codev.agent.selected");
-        } catch {
-          /* optional UI persistence */
-        }
-      }
+      if (nextSelected) saveLocal(STORAGE_KEYS.agentSelected, nextSelected);
+      else removeKey(STORAGE_KEYS.agentSelected);
       return {
         slots: nextSlots,
         opened: s.opened.filter(
@@ -715,11 +703,7 @@ export const useAgentStore = create<State>((set, get) => ({
     if (id) focusAgentSession(id);
     else {
       discardEmptySession(state.selected, state.slots);
-      try {
-        localStorage.removeItem("codev.agent.selected");
-      } catch {
-        /* optional UI persistence */
-      }
+      removeKey(STORAGE_KEYS.agentSelected);
       set({ selected: null, activeViewport: index });
     }
   },

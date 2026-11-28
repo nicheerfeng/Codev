@@ -1,3 +1,4 @@
+import { STORAGE_KEYS, readString, writeString } from "@/lib/clientStorage";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   isPermissionGranted,
@@ -5,23 +6,14 @@ import {
   sendNotification,
 } from "@tauri-apps/plugin-notification";
 
-const NOTIFY_KEY = "codev.agent.notify";
 let permissionAsked = false;
 
 export function agentNotifyEnabled(): boolean {
-  try {
-    return localStorage.getItem(NOTIFY_KEY) !== "0";
-  } catch {
-    return true;
-  }
+  return readString(STORAGE_KEYS.agentNotify, "1") !== "0";
 }
 
 export function setAgentNotifyEnabled(enabled: boolean): void {
-  try {
-    localStorage.setItem(NOTIFY_KEY, enabled ? "1" : "0");
-  } catch {
-    /* optional persistence */
-  }
+  writeString(STORAGE_KEYS.agentNotify, enabled ? "1" : "0");
 }
 
 async function ensurePermission(): Promise<boolean> {

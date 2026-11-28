@@ -16,6 +16,7 @@ pub(super) const ACP_CANCEL_TIMEOUT: Duration = Duration::from_secs(15);
 pub(super) const ACP_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// Explicit session lifecycle state transitions enforced by the coordinator.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionPhase {
     Idle,
@@ -25,6 +26,7 @@ pub enum SessionPhase {
     Crashed,
 }
 
+#[allow(dead_code)]
 impl SessionPhase {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -60,6 +62,7 @@ pub enum HarnessAdapter {
     GenericAcp,
 }
 
+#[allow(dead_code)]
 impl HarnessAdapter {
     pub fn for_harness_id(harness_id: &str) -> Self {
         match harness_id {
