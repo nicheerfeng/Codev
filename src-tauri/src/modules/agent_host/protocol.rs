@@ -290,11 +290,18 @@ fn serialize_queue<S: serde::Serializer>(
         .iter()
         .enumerate()
         .map(|(index, item)| {
+            let images = item
+                .get("images")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
             serde_json::json!({
                 "id": item.get("id").and_then(Value::as_str).unwrap_or(""),
                 "index": index,
                 "text": text(item, "text").chars().take(2000).collect::<String>(),
-                "imageCount": item.get("images").and_then(Value::as_array).map(Vec::len).unwrap_or(0)
+                "imageCount": images.len(),
+                "images": images,
+                "steer": item.get("steer").and_then(Value::as_bool).unwrap_or(false),
             })
         })
         .collect::<Vec<_>>();

@@ -142,19 +142,27 @@ impl ForgeService {
             })
     }
 
-    pub fn cached_for(&self, repo_full_name: &str) -> Option<ForgeInboxSnapshot> {
-        self.cached.lock().unwrap().get(repo_full_name).cloned()
+    fn cache_key(repo_full_name: &str, state_filter: &str) -> String {
+        format!(
+            "{repo_full_name}::{}",
+            state_filter.trim().to_ascii_lowercase()
+        )
+    }
+
+    pub fn cached_for(
+        &self,
+        repo_full_name: &str,
+        state_filter: &str,
+    ) -> Option<ForgeInboxSnapshot> {
+        let key = Self::cache_key(repo_full_name, state_filter);
+        self.cached.lock().unwrap().get(&key).cloned()
     }
 
     pub fn all_cached(&self) -> Vec<ForgeInboxSnapshot> {
         self.cached.lock().unwrap().values().cloned().collect()
     }
 
-    pub fn sync_repo(
-        &self,
-        repo: Option<ForgeRepoRef>,
-        state_filter: &str,
-    ) -> ForgeInboxSnapshot {
+    pub fn sync_repo(&self, repo: Option<ForgeRepoRef>, state_filter: &str) -> ForgeInboxSnapshot {
         let (auth, token) = self.resolve_token();
         let Some(repo_ref) = repo else {
             return ForgeInboxSnapshot {
@@ -179,9 +187,10 @@ impl ForgeService {
                 Some(tok) => github::fetch_notifications(&repo_ref, tok),
                 None => Ok(vec![]),
             });
-            let issues_handle =
-                scope.spawn(|| github::fetch_issues(&repo_ref, tok_ref, state_filter, viewer_login));
-            let pulls_handle = scope.spawn(|| github::fetch_pulls(&repo_ref, tok_ref, state_filter));
+            let issues_handle = scope
+                .spawn(|| github::fetch_issues(&repo_ref, tok_ref, state_filter, viewer_login));
+            let pulls_handle =
+                scope.spawn(|| github::fetch_pulls(&repo_ref, tok_ref, state_filter));
             (
                 notif_handle
                     .join()
@@ -235,10 +244,10 @@ impl ForgeService {
             last_synced_at: now(),
             error: (!error_notes.is_empty()).then(|| error_notes.join("；")),
         };
-        self.cached
-            .lock()
-            .unwrap()
-            .insert(repo_ref.full_name, snap.clone());
+        self.cached.lock().unwrap().insert(
+            Self::cache_key(&repo_ref.full_name, state_filter),
+            snap.clone(),
+        );
         snap
     }
 }

@@ -310,31 +310,44 @@ export function AgentSidebar({
   const loadSession = (id: string) =>
     useAgentStore.getState().command<SessionView>("session.open", {}, id);
 
-  const rows = useMemo(() => {
+  const matchesSearch = (s: SessionSummary) =>
+    `${s.title} ${s.preview ?? ""}`
+      .toLowerCase()
+      .includes(search.toLowerCase()) ||
+    workspaces.some(
+      (workspace) =>
+        workspace.id === s.workspaceId &&
+        `${workspace.title} ${workspace.cwd}`
+          .toLowerCase()
+          .includes(search.toLowerCase()),
+    );
+
+  const sortSessions = (list: SessionSummary[]) => {
     const rank = new Map(sessionOrder.map((id, idx) => [id, idx]));
-    return Object.values(sessions)
-      .filter(
-        (s) =>
-          s.archived === archive &&
-          (`${s.title} ${s.preview ?? ""}`
-            .toLowerCase()
-            .includes(search.toLowerCase()) ||
-            workspaces.some(
-              (workspace) =>
-                workspace.id === s.workspaceId &&
-                `${workspace.title} ${workspace.cwd}`
-                  .toLowerCase()
-                  .includes(search.toLowerCase()),
-            )),
-      )
-      .sort(
-        (a, b) =>
-          Number(b.pinned) - Number(a.pinned) ||
-          (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
-            (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER) ||
-          b.updatedAt - a.updatedAt,
-      );
-  }, [sessions, archive, search, sessionOrder, workspaces]);
+    return list.sort(
+      (a, b) =>
+        Number(b.pinned) - Number(a.pinned) ||
+        (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+          (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER) ||
+        b.updatedAt - a.updatedAt,
+    );
+  };
+
+  const rows = useMemo(
+    () =>
+      sortSessions(
+        Object.values(sessions).filter((s) => !s.archived && matchesSearch(s)),
+      ),
+    [sessions, search, sessionOrder, workspaces],
+  );
+
+  const archivedRows = useMemo(
+    () =>
+      sortSessions(
+        Object.values(sessions).filter((s) => s.archived && matchesSearch(s)),
+      ),
+    [sessions, search, sessionOrder, workspaces],
+  );
 
   const latest = (workspace: string) =>
     rows
@@ -837,260 +850,260 @@ export function AgentSidebar({
                         )}
                       </ContextMenu>
                       {!list.length && isOpen && (
-                        <p className="agent-sidebar-empty">
-                          {archive ? "暂无归档会话" : "暂无会话"}
-                        </p>
+                        <p className="agent-sidebar-empty">暂无会话</p>
                       )}
                       {visible.map((session) => {
                         const liveSession = views[session.id] ?? session;
                         return (
-                        <ContextMenu key={session.id}>
-                          <ContextMenuTrigger asChild>
-                            <div
-                              className={`agent-session-row ${session.id === selected ? "is-selected" : ""} ${dropTarget?.kind === "session" && dropTarget.id === session.id ? (dropTarget.after ? "agent-drop-after" : "agent-drop-before") : ""}`}
-                              data-agent-session-row={session.id}
-                              onContextMenu={() => {
-                                if (selectTimer.current)
-                                  clearTimeout(selectTimer.current);
-                                selectTimer.current = null;
-                              }}
-                            >
-                              {renaming === session.id ? (
-                                <form
-                                  className="flex min-w-0 flex-1"
-                                  onSubmit={(e) => {
-                                    e.preventDefault();
-                                    finishRename(session);
-                                  }}
-                                >
-                                  <Input
-                                    autoFocus
-                                    aria-label="重命名会话"
-                                    value={name}
-                                    onChange={(e) => setName(e.target.value)}
-                                    onBlur={() => finishRename(session)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Escape") setRenaming(null);
-                                    }}
-                                    className="h-6 text-xs!"
-                                  />
-                                </form>
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="agent-session-select"
-                                  onPointerDown={(e) =>
-                                    startPointerReorder(
-                                      e,
-                                      "session",
-                                      session.id,
-                                    )
-                                  }
-                                  onPointerMove={movePointerReorder}
-                                  onPointerUp={endPointerReorder}
-                                  onPointerCancel={cancelPointerReorder}
-                                  onLostPointerCapture={cancelPointerReorder}
-                                  onDoubleClick={(event) => {
-                                    event.preventDefault();
-                                    event.stopPropagation();
-                                    if (selectTimer.current)
-                                      clearTimeout(selectTimer.current);
-                                    selectTimer.current = null;
-                                    setRenaming(session.id);
-                                    setName(session.title);
-                                  }}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "F2") {
+                          <ContextMenu key={session.id}>
+                            <ContextMenuTrigger asChild>
+                              <div
+                                className={`agent-session-row ${session.id === selected ? "is-selected" : ""} ${dropTarget?.kind === "session" && dropTarget.id === session.id ? (dropTarget.after ? "agent-drop-after" : "agent-drop-before") : ""}`}
+                                data-agent-session-row={session.id}
+                                onContextMenu={() => {
+                                  if (selectTimer.current)
+                                    clearTimeout(selectTimer.current);
+                                  selectTimer.current = null;
+                                }}
+                              >
+                                {renaming === session.id ? (
+                                  <form
+                                    className="flex min-w-0 flex-1"
+                                    onSubmit={(e) => {
                                       e.preventDefault();
+                                      finishRename(session);
+                                    }}
+                                  >
+                                    <Input
+                                      autoFocus
+                                      aria-label="重命名会话"
+                                      value={name}
+                                      onChange={(e) => setName(e.target.value)}
+                                      onBlur={() => finishRename(session)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Escape")
+                                          setRenaming(null);
+                                      }}
+                                      className="h-6 text-xs!"
+                                    />
+                                  </form>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="agent-session-select"
+                                    onPointerDown={(e) =>
+                                      startPointerReorder(
+                                        e,
+                                        "session",
+                                        session.id,
+                                      )
+                                    }
+                                    onPointerMove={movePointerReorder}
+                                    onPointerUp={endPointerReorder}
+                                    onPointerCancel={cancelPointerReorder}
+                                    onLostPointerCapture={cancelPointerReorder}
+                                    onDoubleClick={(event) => {
+                                      event.preventDefault();
+                                      event.stopPropagation();
                                       if (selectTimer.current)
                                         clearTimeout(selectTimer.current);
                                       selectTimer.current = null;
                                       setRenaming(session.id);
                                       setName(session.title);
-                                    }
-                                  }}
-                                  onClick={() => {
-                                    if (suppressClick.current) {
-                                      suppressClick.current = false;
-                                      return;
-                                    }
-                                    if (selectTimer.current)
-                                      clearTimeout(selectTimer.current);
-                                    selectTimer.current = setTimeout(() => {
-                                      selectTimer.current = null;
-                                      choose(session);
-                                    }, 220);
-                                  }}
-                                  title={`${session.title}\n${harnesses.find((h) => h.id === session.harnessId)?.displayName ?? session.harnessId} · ${statusLabel(liveSession.state)}\n可拖拽排序或拖入视口；双击或 F2 重命名`}
-                                >
-                                  <span
-                                    role="img"
-                                    aria-label={
-                                      views[session.id]?.pendingRequests?.length
-                                        ? "等待输入"
-                                        : isBusy(liveSession)
-                                          ? "运行中"
-                                          : unread.includes(session.id)
-                                            ? "已完成，待查看"
-                                            : "就绪"
-                                    }
-                                    className={`agent-state-dot ${views[session.id]?.pendingRequests?.length ? "is-waiting" : isBusy(liveSession) ? "is-working" : unread.includes(session.id) ? "is-unread" : ""}`}
-                                  />
-                                  <HarnessIcon
-                                    harnessId={session.harnessId}
-                                    harness={harnesses.find(
-                                      (h) => h.id === session.harnessId,
-                                    )}
-                                    readOnly={session.readOnly}
-                                    size={14}
-                                  />
-                                  <span className="min-w-0 flex-1 truncate">
-                                    {session.pinned ? "· " : ""}
-                                    {session.title || "新会话"}
-                                  </span>
-                                </button>
-                              )}
-                            </div>
-                          </ContextMenuTrigger>
-                          <ContextMenuContent className="rounded-xl">
-                            <ContextMenuItem
-                              onSelect={() => {
-                                setRenaming(session.id);
-                                setName(session.title);
-                              }}
-                            >
-                              重命名
-                            </ContextMenuItem>
-                            {(views[session.id]?.capabilities.supportsFork ??
-                              session.harnessId === "pi") &&
-                              !session.readOnly && (
-                                <ContextMenuItem
-                                  disabled={isBusy(liveSession)}
-                                  onSelect={() => {
-                                    const state = useAgentStore.getState();
-                                    if (
-                                      state.slots.length > 1 &&
-                                      !state.slots.includes(null)
-                                    ) {
-                                      report(
-                                        new Error(
-                                          "视口已满，请先新增或清空视口",
-                                        ),
-                                      );
-                                      return;
-                                    }
-                                    void loadSession(session.id)
-                                      .then(() =>
-                                        useAgentStore
-                                          .getState()
-                                          .command<SessionView>(
-                                            "session.fork",
-                                            {},
-                                            session.id,
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "F2") {
+                                        e.preventDefault();
+                                        if (selectTimer.current)
+                                          clearTimeout(selectTimer.current);
+                                        selectTimer.current = null;
+                                        setRenaming(session.id);
+                                        setName(session.title);
+                                      }
+                                    }}
+                                    onClick={() => {
+                                      if (suppressClick.current) {
+                                        suppressClick.current = false;
+                                        return;
+                                      }
+                                      if (selectTimer.current)
+                                        clearTimeout(selectTimer.current);
+                                      selectTimer.current = setTimeout(() => {
+                                        selectTimer.current = null;
+                                        choose(session);
+                                      }, 220);
+                                    }}
+                                    title={`${session.title}\n${harnesses.find((h) => h.id === session.harnessId)?.displayName ?? session.harnessId} · ${statusLabel(liveSession.state)}\n可拖拽排序或拖入视口；双击或 F2 重命名`}
+                                  >
+                                    <span
+                                      role="img"
+                                      aria-label={
+                                        views[session.id]?.pendingRequests
+                                          ?.length
+                                          ? "等待输入"
+                                          : isBusy(liveSession)
+                                            ? "运行中"
+                                            : unread.includes(session.id)
+                                              ? "已完成，待查看"
+                                              : "就绪"
+                                      }
+                                      className={`agent-state-dot ${views[session.id]?.pendingRequests?.length ? "is-waiting" : isBusy(liveSession) ? "is-working" : unread.includes(session.id) ? "is-unread" : ""}`}
+                                    />
+                                    <HarnessIcon
+                                      harnessId={session.harnessId}
+                                      harness={harnesses.find(
+                                        (h) => h.id === session.harnessId,
+                                      )}
+                                      readOnly={session.readOnly}
+                                      size={14}
+                                    />
+                                    <span className="min-w-0 flex-1 truncate">
+                                      {session.pinned ? "· " : ""}
+                                      {session.title || "新会话"}
+                                    </span>
+                                  </button>
+                                )}
+                              </div>
+                            </ContextMenuTrigger>
+                            <ContextMenuContent className="rounded-xl">
+                              <ContextMenuItem
+                                onSelect={() => {
+                                  setRenaming(session.id);
+                                  setName(session.title);
+                                }}
+                              >
+                                重命名
+                              </ContextMenuItem>
+                              {(views[session.id]?.capabilities.supportsFork ??
+                                session.harnessId === "pi") &&
+                                !session.readOnly && (
+                                  <ContextMenuItem
+                                    disabled={isBusy(liveSession)}
+                                    onSelect={() => {
+                                      const state = useAgentStore.getState();
+                                      if (
+                                        state.slots.length > 1 &&
+                                        !state.slots.includes(null)
+                                      ) {
+                                        report(
+                                          new Error(
+                                            "视口已满，请先新增或清空视口",
                                           ),
-                                      )
-                                      .then((view) => {
-                                        useAgentStore.setState((state) => ({
-                                          sessions: {
-                                            ...state.sessions,
-                                            [view.id]: view,
-                                          },
-                                          views: {
-                                            ...state.views,
-                                            [view.id]: view,
-                                          },
-                                        }));
-                                        return useAgentStore
-                                          .getState()
-                                          .select(view.id);
-                                      })
-                                      .catch(report);
-                                  }}
-                                >
-                                  分叉线程
-                                </ContextMenuItem>
-                              )}
-                            <ContextMenuItem
-                              onSelect={() =>
-                                void loadSession(session.id)
-                                  .then((view) => {
-                                    if (!view.nativeSessionPath)
-                                      throw new Error(
-                                        "当前线程没有本地会话路径",
+                                        );
+                                        return;
+                                      }
+                                      void loadSession(session.id)
+                                        .then(() =>
+                                          useAgentStore
+                                            .getState()
+                                            .command<SessionView>(
+                                              "session.fork",
+                                              {},
+                                              session.id,
+                                            ),
+                                        )
+                                        .then((view) => {
+                                          useAgentStore.setState((state) => ({
+                                            sessions: {
+                                              ...state.sessions,
+                                              [view.id]: view,
+                                            },
+                                            views: {
+                                              ...state.views,
+                                              [view.id]: view,
+                                            },
+                                          }));
+                                          return useAgentStore
+                                            .getState()
+                                            .select(view.id);
+                                        })
+                                        .catch(report);
+                                    }}
+                                  >
+                                    分叉线程
+                                  </ContextMenuItem>
+                                )}
+                              <ContextMenuItem
+                                onSelect={() =>
+                                  void loadSession(session.id)
+                                    .then((view) => {
+                                      if (!view.nativeSessionPath)
+                                        throw new Error(
+                                          "当前线程没有本地会话路径",
+                                        );
+                                      return navigator.clipboard.writeText(
+                                        view.nativeSessionPath,
                                       );
-                                    return navigator.clipboard.writeText(
-                                      view.nativeSessionPath,
-                                    );
-                                  })
-                                  .then(() => toast.success("已复制会话路径"))
-                                  .catch(report)
-                              }
-                            >
-                              复制会话路径
-                            </ContextMenuItem>
-                            <ContextMenuItem
-                              onSelect={() =>
-                                void loadSession(session.id)
-                                  .then((view) =>
-                                    exportSessionMarkdown(view, session),
-                                  )
-                                  .catch(report)
-                              }
-                            >
-                              导出 Markdown
-                            </ContextMenuItem>
-                            <ContextMenuSeparator />
-                            <ContextMenuItem
-                              onSelect={() =>
-                                command(
-                                  "session.pin",
-                                  { value: !session.pinned },
-                                  session.id,
-                                )
-                              }
-                            >
-                              {session.pinned ? "取消置顶" : "置顶"}
-                            </ContextMenuItem>
-                            <ContextMenuItem
-                              disabled={isBusy(liveSession)}
-                              onSelect={() =>
-                                command(
-                                  "session.archive",
-                                  { value: !session.archived },
-                                  session.id,
-                                )
-                              }
-                            >
-                              {session.archived ? "恢复线程" : "归档线程"}
-                            </ContextMenuItem>
-                            {!mobile && (
-                              <>
-                                <ContextMenuItem
-                                  onSelect={() => {
-                                    if (
-                                      isBusy(liveSession) &&
-                                      !window.confirm(
-                                        "该线程正在运行，确定要断开并终止任务吗？",
-                                      )
+                                    })
+                                    .then(() => toast.success("已复制会话路径"))
+                                    .catch(report)
+                                }
+                              >
+                                复制会话路径
+                              </ContextMenuItem>
+                              <ContextMenuItem
+                                onSelect={() =>
+                                  void loadSession(session.id)
+                                    .then((view) =>
+                                      exportSessionMarkdown(view, session),
                                     )
-                                      return;
-                                    command(
-                                      "session.close",
-                                      isBusy(liveSession)
-                                        ? { force: true }
-                                        : {},
-                                      session.id,
-                                    );
-                                  }}
-                                >
-                                  {isBusy(liveSession)
-                                    ? "强制断开并终止任务"
-                                    : "断开代理进程"}
-                                </ContextMenuItem>
-                              </>
-                            )}
-                          </ContextMenuContent>
-                        </ContextMenu>
+                                    .catch(report)
+                                }
+                              >
+                                导出 Markdown
+                              </ContextMenuItem>
+                              <ContextMenuSeparator />
+                              <ContextMenuItem
+                                onSelect={() =>
+                                  command(
+                                    "session.pin",
+                                    { value: !session.pinned },
+                                    session.id,
+                                  )
+                                }
+                              >
+                                {session.pinned ? "取消置顶" : "置顶"}
+                              </ContextMenuItem>
+                              <ContextMenuItem
+                                disabled={isBusy(liveSession)}
+                                onSelect={() =>
+                                  command(
+                                    "session.archive",
+                                    { value: !session.archived },
+                                    session.id,
+                                  )
+                                }
+                              >
+                                {session.archived ? "恢复线程" : "归档线程"}
+                              </ContextMenuItem>
+                              {!mobile && (
+                                <>
+                                  <ContextMenuItem
+                                    onSelect={() => {
+                                      if (
+                                        isBusy(liveSession) &&
+                                        !window.confirm(
+                                          "该线程正在运行，确定要断开并终止任务吗？",
+                                        )
+                                      )
+                                        return;
+                                      command(
+                                        "session.close",
+                                        isBusy(liveSession)
+                                          ? { force: true }
+                                          : {},
+                                        session.id,
+                                      );
+                                    }}
+                                  >
+                                    {isBusy(liveSession)
+                                      ? "强制断开并终止任务"
+                                      : "断开代理进程"}
+                                  </ContextMenuItem>
+                                </>
+                              )}
+                            </ContextMenuContent>
+                          </ContextMenu>
                         );
                       })}
                       {isOpen && list.length > visible.length && (
@@ -1119,15 +1132,92 @@ export function AgentSidebar({
             {mobile ? "请先在桌面添加工作目录。" : "添加工作目录。"}
           </div>
         )}
+        <section className="mx-1.5 mt-2 border-t border-border pt-2">
+          <button
+            type="button"
+            className="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-expanded={archive}
+            onClick={() => setArchive(!archive)}
+          >
+            <HugeiconsIcon
+              icon={archive ? ArrowDown01Icon : ArrowRight01Icon}
+              size={12}
+            />
+            <span>已归档</span>
+            <span className="ml-auto tabular-nums">
+              {Object.values(sessions).filter((s) => s.archived).length}
+            </span>
+          </button>
+          {(archive || search.trim().length > 0) && (
+            <div className="mt-1 flex flex-col gap-0.5">
+              {archivedRows.length === 0 ? (
+                <p className="agent-sidebar-empty">暂无归档会话</p>
+              ) : (
+                archivedRows.map((session) => {
+                  const ws = workspaces.find(
+                    (w) => w.id === session.workspaceId,
+                  );
+                  return (
+                    <ContextMenu key={session.id}>
+                      <ContextMenuTrigger asChild>
+                        <div
+                          className={`agent-session-row ${session.id === selected ? "is-selected" : ""}`}
+                          data-agent-session-row={session.id}
+                        >
+                          <button
+                            type="button"
+                            className="agent-session-select"
+                            onClick={() => choose(session)}
+                          >
+                            <HarnessIcon
+                              harnessId={session.harnessId}
+                              size={12}
+                              readOnly={session.readOnly}
+                            />
+                            <span className="min-w-0 flex-1 truncate">
+                              {session.title}
+                            </span>
+                            {ws?.title && <small>{ws.title}</small>}
+                          </button>
+                        </div>
+                      </ContextMenuTrigger>
+                      <ContextMenuContent>
+                        <ContextMenuItem
+                          onSelect={() =>
+                            command(
+                              "session.archive",
+                              { value: false },
+                              session.id,
+                            )
+                          }
+                        >
+                          恢复线程
+                        </ContextMenuItem>
+                        {!mobile && (
+                          <ContextMenuItem
+                            className="text-destructive"
+                            onSelect={() => {
+                              if (
+                                window.confirm(
+                                  `确认永久删除「${session.title}」？`,
+                                )
+                              ) {
+                                command("session.delete", {}, session.id);
+                              }
+                            }}
+                          >
+                            删除线程
+                          </ContextMenuItem>
+                        )}
+                      </ContextMenuContent>
+                    </ContextMenu>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </section>
       </div>
-      <Button
-        variant="ghost"
-        className="agent-archive-toggle"
-        onClick={() => setArchive(!archive)}
-      >
-        {archive ? "返回会话" : "已归档"}{" "}
-        <span>{Object.values(sessions).filter((s) => s.archived).length}</span>
-      </Button>
       <Dialog
         open={!!groupEdit}
         onOpenChange={(open) => {

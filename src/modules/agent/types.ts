@@ -110,7 +110,12 @@ export type SessionView = SessionSummary & {
   thinkingLevels: string[];
   thinkingLevel: string;
   configOptions: ConfigOption[];
-  commands: Array<{ name: string; description?: string; source?: string; input?: { hint?: string } | null }>;
+  commands: Array<{
+    name: string;
+    description?: string;
+    source?: string;
+    input?: { hint?: string } | null;
+  }>;
   pendingRequests: PendingRequest[];
   queue: Array<{
     id?: string;
@@ -118,6 +123,7 @@ export type SessionView = SessionSummary & {
     text: string;
     imageCount?: number;
     images?: AgentImage[];
+    steer?: boolean;
   }>;
   context: {
     tokens?: number;

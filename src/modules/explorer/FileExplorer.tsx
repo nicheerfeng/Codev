@@ -183,7 +183,6 @@ function RootSection({
   onRename,
   onCreateFile,
   onCreateFolder,
-  onAddFolder,
   onOpenTerminal,
   onPaste,
   open,
@@ -206,7 +205,6 @@ function RootSection({
   onRename: (name: string) => void;
   onCreateFile: () => void;
   onCreateFolder: () => void;
-  onAddFolder: () => void;
   onOpenTerminal?: () => void;
   onPaste?: () => void;
   open: boolean;
@@ -367,9 +365,6 @@ function RootSection({
               {t("Paste")}
             </ContextMenuItem>
           ) : null}
-          <ContextMenuItem className={COMPACT_ITEM} onSelect={onAddFolder}>
-            {t("Add folder to workspace")}
-          </ContextMenuItem>
           <AgentProjectMenuItems cwd={root} />
           {onOpenGit ? (
             <ContextMenuItem
@@ -1029,7 +1024,11 @@ export const FileExplorer = memo(
                   title="打开 Git 工作台"
                   aria-label="打开 Git 工作台"
                 >
-                  <HugeiconsIcon icon={GitBranchIcon} size={13} strokeWidth={2} />
+                  <HugeiconsIcon
+                    icon={GitBranchIcon}
+                    size={13}
+                    strokeWidth={2}
+                  />
                 </Button>
               )}
             </div>
@@ -1143,7 +1142,6 @@ export const FileExplorer = memo(
                       onCreateFolder={() =>
                         treeRefs.current.get(root)?.createFolder()
                       }
-                      onAddFolder={requestAddFolder}
                       onOpenTerminal={
                         treeProps.onRevealInTerminal
                           ? () => treeProps.onRevealInTerminal?.(root)

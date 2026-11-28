@@ -1494,7 +1494,7 @@ export function PiAgentPane({
                   <div className="flex h-7 items-center gap-1 px-2 text-[10px] text-muted-foreground">
                     <button
                       type="button"
-                      className={`min-w-0 flex-1 max-w-[140px] truncate text-left ${
+                      className={`min-w-0 flex-1 truncate text-left ${
                         canDragPiTitles ? "cursor-grab touch-none" : ""
                       }`}
                       onPointerDown={(event) =>

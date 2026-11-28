@@ -601,8 +601,12 @@ export const RootTree = memo(
         case "entry":
         case "rename": {
           const norm = normalizeVcsPath(row.path);
-          const vcsBadge = !row.isDir ? (vcsBadges?.files.get(norm) ?? null) : null;
-          const vcsDirTone = row.isDir ? (vcsBadges?.dirs.get(norm) ?? null) : null;
+          const vcsBadge = !row.isDir
+            ? (vcsBadges?.files.get(norm) ?? null)
+            : null;
+          const vcsDirTone = row.isDir
+            ? (vcsBadges?.dirs.get(norm) ?? null)
+            : null;
           return (
             <EntryRow
               path={row.path}
@@ -979,20 +983,6 @@ export const RootTree = memo(
                     }
                     isFile={!menuTarget.isDir}
                   />
-                  {onAddAsRoot && (
-                    <ContextMenuItem
-                      className={COMPACT_ITEM}
-                      onSelect={() =>
-                        onAddAsRoot(
-                          menuTarget.isDir
-                            ? menuTarget.path
-                            : parentOf(menuTarget.path, rootPath),
-                        )
-                      }
-                    >
-                      {t("Add folder to workspace")}
-                    </ContextMenuItem>
-                  )}
                   {onCopyPaths && (
                     <ContextMenuItem
                       className={COMPACT_ITEM}

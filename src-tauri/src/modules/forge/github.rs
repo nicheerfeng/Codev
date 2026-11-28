@@ -175,8 +175,7 @@ fn api_request_with_accept(
     if status == 204 || status == 205 {
         return Ok(Value::Null);
     }
-    resp.into_json::<Value>()
-        .or_else(|_| Ok(Value::Null))
+    resp.into_json::<Value>().or(Ok(Value::Null))
 }
 
 fn body_with_resolved_assets(item: &Value) -> String {
@@ -325,7 +324,12 @@ fn should_send_bearer(host: &str) -> bool {
 
 fn sniff_image_mime(header_ct: Option<&str>, bytes: &[u8]) -> Option<String> {
     if let Some(ct) = header_ct {
-        let base = ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+        let base = ct
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
         if base.starts_with("image/") {
             return Some(base);
         }
@@ -363,10 +367,10 @@ pub fn fetch_github_image(raw_url: &str, token: Option<&str>) -> Result<String, 
         if !is_allowed_forge_image_host(host) {
             return Err(format!("不支持的图片域名：{host}"));
         }
-        let mut req = agent
-            .get(current.as_str())
-            .set("User-Agent", "Codev")
-            .set("Accept", "image/avif,image/webp,image/png,image/jpeg,image/gif,*/*;q=0.8");
+        let mut req = agent.get(current.as_str()).set("User-Agent", "Codev").set(
+            "Accept",
+            "image/avif,image/webp,image/png,image/jpeg,image/gif,*/*;q=0.8",
+        );
         if should_send_bearer(host) {
             if let Some(tok) = token.filter(|s| !s.is_empty()) {
                 req = req.set("Authorization", &format!("Bearer {tok}"));
@@ -420,7 +424,12 @@ fn parse_number_from_api_url(url: &str) -> Option<u64> {
         .ok()
 }
 
-fn api_url_to_html(api_url: &str, repo_full_name: &str, subject_type: &str, number: Option<u64>) -> String {
+fn api_url_to_html(
+    api_url: &str,
+    repo_full_name: &str,
+    subject_type: &str,
+    number: Option<u64>,
+) -> String {
     if let Some(num) = number {
         let seg = match subject_type {
             "PullRequest" => "pull",
@@ -446,7 +455,10 @@ pub fn fetch_notifications(
     token: &str,
 ) -> Result<Vec<ForgeNotification>, String> {
     let base = api_base(repo);
-    let url = format!("{base}/repos/{}/{}/notifications?all=true&per_page=30", repo.owner, repo.repo);
+    let url = format!(
+        "{base}/repos/{}/{}/notifications?all=true&per_page=30",
+        repo.owner, repo.repo
+    );
     let arr = api_request("GET", &url, Some(token), None)?;
     let list = arr
         .as_array()
@@ -487,7 +499,11 @@ pub fn fetch_issues(
     viewer_login: Option<&str>,
 ) -> Result<Vec<ForgeIssue>, String> {
     let base = api_base(repo);
-    let state_param = if matches!(state, "closed" | "all") { state } else { "open" };
+    let state_param = if matches!(state, "closed" | "all") {
+        state
+    } else {
+        "open"
+    };
     let url = format!(
         "{base}/repos/{}/{}/issues?state={state_param}&sort=updated&direction=desc&per_page=40",
         repo.owner, repo.repo
@@ -544,7 +560,11 @@ pub fn fetch_pulls(
     state: &str,
 ) -> Result<Vec<ForgePullRequest>, String> {
     let base = api_base(repo);
-    let state_param = if matches!(state, "closed" | "all") { state } else { "open" };
+    let state_param = if matches!(state, "closed" | "all") {
+        state
+    } else {
+        "open"
+    };
     let url = format!(
         "{base}/repos/{}/{}/pulls?state={state_param}&sort=updated&direction=desc&per_page=25",
         repo.owner, repo.repo
@@ -693,7 +713,10 @@ pub fn fetch_pr_checks(
             id: r.get("id").and_then(Value::as_u64).unwrap_or(0),
             name: str_field(&r, "name"),
             status: str_field(&r, "status"),
-            conclusion: r.get("conclusion").and_then(Value::as_str).map(str::to_string),
+            conclusion: r
+                .get("conclusion")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             html_url: str_field(&r, "html_url"),
         })
         .collect())
@@ -862,14 +885,18 @@ mod tests {
         let html = r#"<p>前文</p><p><a href="https://private-user-images.githubusercontent.com/1/abc12345-dead-beef.png?jwt=tok1"><img src="https://private-user-images.githubusercontent.com/1/abc12345-dead-beef.png?jwt=tok1&amp;v=2"></a></p><p><img width="600" src="https://private-user-images.githubusercontent.com/1/def67890-feed-face.png?jwt=tok2"></p>"#;
         let resolved = resolve_attachment_urls(md, html);
         assert!(resolved.contains("https://private-user-images.githubusercontent.com/1/abc12345-dead-beef.png?jwt=tok1&v=2"));
-        assert!(resolved.contains("https://private-user-images.githubusercontent.com/1/def67890-feed-face.png?jwt=tok2"));
+        assert!(resolved.contains(
+            "https://private-user-images.githubusercontent.com/1/def67890-feed-face.png?jwt=tok2"
+        ));
         assert!(!resolved.contains("https://github.com/user-attachments/assets/"));
     }
 
     #[test]
     fn restricts_forge_image_proxy_to_github_hosts() {
         assert!(is_allowed_forge_image_host("github.com"));
-        assert!(is_allowed_forge_image_host("private-user-images.githubusercontent.com"));
+        assert!(is_allowed_forge_image_host(
+            "private-user-images.githubusercontent.com"
+        ));
         assert!(is_allowed_forge_image_host("raw.githubusercontent.com"));
         assert!(is_allowed_forge_image_host(
             "github-production-user-asset-6210df.s3.amazonaws.com"

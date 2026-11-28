@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { VoiceInputButton } from "@/modules/voice/VoiceInputButton";
 import { SkillMentionInput } from "@/modules/plugins/SkillMentionInput";
 import { ZoomableImage } from "@/modules/reader/ZoomableImage";
@@ -15,13 +21,23 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ArrowUp01Icon, StopIcon } from "@hugeicons/core-free-icons";
+import {
+  ArrowUp01Icon,
+  Delete02Icon,
+  PencilEdit01Icon,
+  StopIcon,
+} from "@hugeicons/core-free-icons";
 import { useAgentStore, type Draft } from "./store";
 import { ContextViz } from "./ContextViz";
 import { BranchDropdown } from "@/modules/vcs/BranchDropdown";
 import { choices, isBusy, type AgentImage, type SessionView } from "./types";
 
-type Skill = { name: string; path: string; source?: string; description?: string };
+type Skill = {
+  name: string;
+  path: string;
+  source?: string;
+  description?: string;
+};
 type Invocation = {
   token: string;
   label: string;
@@ -30,14 +46,28 @@ type Invocation = {
   source: string;
   local?: "compact" | "fork";
 };
-type InvocationTrigger = { prefix: "/" | "$"; start: number; end: number; query: string };
+type InvocationTrigger = {
+  prefix: "/" | "$";
+  start: number;
+  end: number;
+  query: string;
+};
 
-function invocationTrigger(text: string, cursor: number): InvocationTrigger | null {
+function invocationTrigger(
+  text: string,
+  cursor: number,
+): InvocationTrigger | null {
   const before = text.slice(0, cursor);
   const slash = before.match(/^\/([^\s/]*)$/u);
   if (slash) return { prefix: "/", start: 0, end: cursor, query: slash[1] };
   const dollar = before.match(/(?:^|\s)\$([^\s$]*)$/u);
-  if (dollar) return { prefix: "$", start: cursor - dollar[1].length - 1, end: cursor, query: dollar[1] };
+  if (dollar)
+    return {
+      prefix: "$",
+      start: cursor - dollar[1].length - 1,
+      end: cursor,
+      query: dollar[1],
+    };
   return null;
 }
 
@@ -60,7 +90,12 @@ async function readImage(file: File): Promise<AgentImage> {
   let binary = "";
   for (let i = 0; i < data.length; i += 8192)
     binary += String.fromCharCode(...data.subarray(i, i + 8192));
-  const id = typeof crypto.randomUUID === "function" ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const id =
+    typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) =>
+          byte.toString(16).padStart(2, "0"),
+        ).join("");
   return { type: "image", id, data: btoa(binary), mimeType: file.type };
 }
 export function AgentComposer({ session }: { session: SessionView }) {
@@ -79,8 +114,6 @@ export function AgentComposer({ session }: { session: SessionView }) {
   const [skillsLoading, setSkillsLoading] = useState(false);
   const [trigger, setTrigger] = useState<InvocationTrigger | null>(null);
   const [menuIndex, setMenuIndex] = useState(0);
-  const [editingQueueIdx, setEditingQueueIdx] = useState<number | null>(null);
-  const [editingQueueText, setEditingQueueText] = useState("");
   const [pasteNotice, setPasteNotice] = useState<string | null>(null);
   const historyIndex = useRef(-1);
   const historyDraft = useRef<typeof EMPTY | null>(null);
@@ -88,38 +121,76 @@ export function AgentComposer({ session }: { session: SessionView }) {
   useEffect(() => {
     setSkills([]);
     setSkillsLoading(false);
-    if (!connected || !session.workspaceId || session.harnessId !== "acp:antigravity") return;
+    if (
+      !connected ||
+      !session.workspaceId ||
+      session.harnessId !== "acp:antigravity"
+    )
+      return;
     let cancelled = false;
     setSkillsLoading(true);
     void useAgentStore
       .getState()
-      .command<{ skills?: Skill[] }>("workspace.skills", {
-        workspaceId: session.workspaceId,
-        harnessId: session.harnessId,
-      }, session.id)
+      .command<{ skills?: Skill[] }>(
+        "workspace.skills",
+        {
+          workspaceId: session.workspaceId,
+          harnessId: session.harnessId,
+        },
+        session.id,
+      )
       .then((res) => {
         if (!cancelled && Array.isArray(res?.skills)) setSkills(res.skills);
       })
-      .catch((error) => { if (!cancelled) useAgentStore.getState().report(error); })
-      .finally(() => { if (!cancelled) setSkillsLoading(false); });
+      .catch((error) => {
+        if (!cancelled) useAgentStore.getState().report(error);
+      })
+      .finally(() => {
+        if (!cancelled) setSkillsLoading(false);
+      });
     return () => {
       cancelled = true;
     };
-  }, [connected, session.id, session.instanceId, session.harnessId, session.workspaceId]);
+  }, [
+    connected,
+    session.id,
+    session.instanceId,
+    session.harnessId,
+    session.workspaceId,
+  ]);
 
   const readHistory = () => {
     try {
-      const saved = JSON.parse(localStorage.getItem(`codev.agent.prompts:${session.id}`) ?? "[]");
-      return Array.isArray(saved) ? saved.filter((item): item is string => typeof item === "string" && !!item.trim()).slice(0, 50) : [];
-    } catch { return []; }
+      const saved = JSON.parse(
+        localStorage.getItem(`codev.agent.prompts:${session.id}`) ?? "[]",
+      );
+      return Array.isArray(saved)
+        ? saved
+            .filter(
+              (item): item is string =>
+                typeof item === "string" && !!item.trim(),
+            )
+            .slice(0, 50)
+        : [];
+    } catch {
+      return [];
+    }
   };
   const recordPrompt = (text: string) => {
     const value = text.trim();
     if (!value) return;
     try {
-      const next = [value, ...readHistory().filter((item) => item !== value)].slice(0, 50);
-      localStorage.setItem(`codev.agent.prompts:${session.id}`, JSON.stringify(next));
-    } catch { /* optional prompt history */ }
+      const next = [
+        value,
+        ...readHistory().filter((item) => item !== value),
+      ].slice(0, 50);
+      localStorage.setItem(
+        `codev.agent.prompts:${session.id}`,
+        JSON.stringify(next),
+      );
+    } catch {
+      /* optional prompt history */
+    }
     historyIndex.current = -1;
     historyDraft.current = null;
   };
@@ -139,7 +210,12 @@ export function AgentComposer({ session }: { session: SessionView }) {
           files: [...(draft.files ?? [])],
           localCommand: draft.localCommand ?? null,
         };
-      update({ text: prompts[next], images: [], files: [], localCommand: null });
+      update({
+        text: prompts[next],
+        images: [],
+        files: [],
+        localCommand: null,
+      });
     }
     historyIndex.current = next;
     requestAnimationFrame(() => {
@@ -160,18 +236,31 @@ export function AgentComposer({ session }: { session: SessionView }) {
       .getState()
       .command(operation, payload, session.id)
       .catch(report);
-  const nativeCommands = (session.commands ?? []).filter((command) =>
-    command.name && !(session.harnessId === "pi" && ["picot-config", "picot-custom-ui", "llama"].includes(command.name)),
+  const nativeCommands = (session.commands ?? []).filter(
+    (command) =>
+      command.name &&
+      !(
+        session.harnessId === "pi" &&
+        ["picot-config", "picot-custom-ui", "llama"].includes(command.name)
+      ),
   );
   const entries: Invocation[] = nativeCommands.map((command) => {
     const name = command.name.replace(/^\//u, "");
-    const skill = name.startsWith("$") || command.source === "skill" || name.startsWith("skill:");
+    const skill =
+      name.startsWith("$") ||
+      command.source === "skill" ||
+      name.startsWith("skill:");
     return {
       token: name.startsWith("$") ? name : `/${name}`,
       label: name.startsWith("$") ? name : `/${name}`,
       description: command.description || command.input?.hint,
       group: skill ? "技能" : "命令",
-      source: session.harnessId === "pi" ? "Pi" : session.harnessId === "acp:codex" ? "Codex" : "Antigravity",
+      source:
+        session.harnessId === "pi"
+          ? "Pi"
+          : session.harnessId === "acp:codex"
+            ? "Codex"
+            : "Antigravity",
     };
   });
   if (session.harnessId === "acp:antigravity") {
@@ -179,35 +268,77 @@ export function AgentComposer({ session }: { session: SessionView }) {
     for (const skill of skills) {
       const token = `/${skill.name}`;
       if (!existing.has(token.toLowerCase())) {
-        entries.push({ token, label: token, description: skill.description, group: "技能", source: skill.source || "Antigravity" });
+        entries.push({
+          token,
+          label: token,
+          description: skill.description,
+          group: "技能",
+          source: skill.source || "Antigravity",
+        });
         existing.add(token.toLowerCase());
       }
     }
   }
   if (session.harnessId === "pi") {
-    if (session.capabilities.supportsCompaction) entries.push({ token: "/compact", label: "/compact", description: "压缩上下文", group: "命令", source: "Codev", local: "compact" });
-    if (session.capabilities.supportsFork) entries.push({ token: "/fork", label: "/fork", description: "分叉当前线程", group: "命令", source: "Codev", local: "fork" });
+    if (session.capabilities.supportsCompaction)
+      entries.push({
+        token: "/compact",
+        label: "/compact",
+        description: "压缩上下文",
+        group: "命令",
+        source: "Codev",
+        local: "compact",
+      });
+    if (session.capabilities.supportsFork)
+      entries.push({
+        token: "/fork",
+        label: "/fork",
+        description: "分叉当前线程",
+        group: "命令",
+        source: "Codev",
+        local: "fork",
+      });
   }
-  const matches = trigger ? entries
-    .filter((entry) => trigger.prefix === "/" || entry.group === "技能")
-    .filter((entry) => `${entry.label} ${entry.description ?? ""} ${entry.source}`.toLowerCase().includes(trigger.query.toLowerCase()))
-    .sort((a, b) => Number(a.group === "技能") - Number(b.group === "技能")) : [];
+  const matches = trigger
+    ? entries
+        .filter((entry) => trigger.prefix === "/" || entry.group === "技能")
+        .filter((entry) =>
+          `${entry.label} ${entry.description ?? ""} ${entry.source}`
+            .toLowerCase()
+            .includes(trigger.query.toLowerCase()),
+        )
+        .sort((a, b) => Number(a.group === "技能") - Number(b.group === "技能"))
+    : [];
   const chooseInvocation = (entry: Invocation) => {
     if (!trigger || (entry.local && busy)) return;
     let before = draft.text.slice(0, trigger.start);
-    let after = draft.text.slice(trigger.end);
+    const after = draft.text.slice(trigger.end);
     if (entry.group === "技能" && session.harnessId !== "acp:codex") {
       const existing = before.match(/^(\/[^\s]+)\s*/u);
-      if (existing && entries.some((item) => item.group === "技能" && item.token === existing[1]))
+      if (
+        existing &&
+        entries.some(
+          (item) => item.group === "技能" && item.token === existing[1],
+        )
+      )
         before = before.slice(existing[0].length);
       const body = `${before}${after}`.trimStart();
       update({ text: `${entry.token} ${body}`, localCommand: null });
-      requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(entry.token.length + 1, entry.token.length + 1); });
+      requestAnimationFrame(() => {
+        input.current?.focus();
+        input.current?.setSelectionRange(
+          entry.token.length + 1,
+          entry.token.length + 1,
+        );
+      });
     } else {
       const text = `${before}${entry.token} ${after.replace(/^\s+/u, "")}`;
       update({ text, localCommand: entry.local ?? null });
       const caret = before.length + entry.token.length + 1;
-      requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(caret, caret); });
+      requestAnimationFrame(() => {
+        input.current?.focus();
+        input.current?.setSelectionRange(caret, caret);
+      });
     }
     setTrigger(null);
   };
@@ -231,44 +362,77 @@ export function AgentComposer({ session }: { session: SessionView }) {
     }
   };
   const send = async (steer = false) => {
-    if (
-      sending ||
-      !connected ||
-      session.readOnly ||
-      !draftHasPayload(draft)
-    )
+    if (sending || !connected || session.readOnly || !draftHasPayload(draft))
       return;
     const original = {
       text: draft.text,
       images: [...draft.images],
       files: [...(draft.files ?? [])],
     };
-    const localMatch = draft.text.trim().match(/^\/(compact|fork)(?:\s+([\s\S]*))?$/u);
-    const nativeCollision = localMatch && nativeCommands.some((command) => command.name.replace(/^\//u, "") === localMatch[1]);
-    const localSupported = localMatch?.[1] === "compact"
-      ? session.capabilities.supportsCompaction
-      : session.capabilities.supportsFork;
-    const local = session.harnessId === "pi" && localSupported && localMatch && (draft.localCommand === localMatch[1] || (!draft.localCommand && !nativeCollision))
-      ? localMatch[1] : null;
+    const localMatch = draft.text
+      .trim()
+      .match(/^\/(compact|fork)(?:\s+([\s\S]*))?$/u);
+    const nativeCollision =
+      localMatch &&
+      nativeCommands.some(
+        (command) => command.name.replace(/^\//u, "") === localMatch[1],
+      );
+    const localSupported =
+      localMatch?.[1] === "compact"
+        ? session.capabilities.supportsCompaction
+        : session.capabilities.supportsFork;
+    const local =
+      session.harnessId === "pi" &&
+      localSupported &&
+      localMatch &&
+      (draft.localCommand === localMatch[1] ||
+        (!draft.localCommand && !nativeCollision))
+        ? localMatch[1]
+        : null;
     if (local) {
-      if (busy) { report(new Error("当前会话正在运行，请稍后执行命令")); return; }
-      if (original.images.length || original.files.length) { report(new Error("请先移除附件再执行会话命令")); return; }
+      if (busy) {
+        report(new Error("当前会话正在运行，请稍后执行命令"));
+        return;
+      }
+      if (original.images.length || original.files.length) {
+        report(new Error("请先移除附件再执行会话命令"));
+        return;
+      }
       setSending(true);
       try {
         if (local === "compact") {
-          await useAgentStore.getState().command("session.compact", { instructions: localMatch?.[2] ?? "" }, session.id);
+          await useAgentStore
+            .getState()
+            .command(
+              "session.compact",
+              { instructions: localMatch?.[2] ?? "" },
+              session.id,
+            );
         } else {
           if (localMatch?.[2]?.trim()) throw new Error("分叉命令不接受参数");
           const state = useAgentStore.getState();
-          if (state.slots.length > 1 && !state.slots.includes(null)) throw new Error("视口已满，请先新增或清空视口");
-          const view = await state.command<SessionView>("session.fork", {}, session.id);
-          useAgentStore.setState((current) => ({ sessions: { ...current.sessions, [view.id]: view }, views: { ...current.views, [view.id]: view } }));
+          if (state.slots.length > 1 && !state.slots.includes(null))
+            throw new Error("视口已满，请先新增或清空视口");
+          const view = await state.command<SessionView>(
+            "session.fork",
+            {},
+            session.id,
+          );
+          useAgentStore.setState((current) => ({
+            sessions: { ...current.sessions, [view.id]: view },
+            views: { ...current.views, [view.id]: view },
+          }));
           await useAgentStore.getState().select(view.id);
         }
         recordPrompt(original.text);
-        if (useAgentStore.getState().drafts[session.id]?.text === original.text) update({ ...EMPTY, localCommand: null });
+        if (useAgentStore.getState().drafts[session.id]?.text === original.text)
+          update({ ...EMPTY, localCommand: null });
         setTrigger(null);
-      } catch (error) { report(error); } finally { setSending(false); }
+      } catch (error) {
+        report(error);
+      } finally {
+        setSending(false);
+      }
       return;
     }
     const finalText = withAttachmentPrompt(original.text, original.files);
@@ -303,97 +467,120 @@ export function AgentComposer({ session }: { session: SessionView }) {
   return (
     <footer className="agent-composer-wrap">
       {session.state === "compacting" && (
-        <div className="agent-compacting" role="status"><span className="agent-state-dot is-working" />正在压缩上下文…</div>
+        <div className="agent-compacting" role="status">
+          <span className="agent-state-dot is-working" />
+          正在压缩上下文…
+        </div>
       )}
       {!!session.queue.length && (
-        <div className="agent-queue-list">
-          {session.queue.slice(0, 6).map((item, idx) => (
-            <div className="agent-queue" key={item.id || `${idx}:${item.text.slice(0, 80)}`}>
-              <span className="shrink-0">
-                {item.imageCount ? `图片 ${item.imageCount}` : `#${idx + 1}`}
-              </span>
-              {editingQueueIdx === idx ? (
-                <form
-                  className="flex min-w-0 flex-1 items-center gap-1"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void action("session.queue.update", {
-                      id: item.id,
-                      index: idx,
-                      text: editingQueueText,
-                    });
-                    setEditingQueueIdx(null);
-                  }}
+        <div className="agent-queue-card" data-testid="agent-queue-card">
+          <div className="agent-queue-head">
+            <span>待发送 · {session.queue.length}</span>
+            <div className="agent-queue-head-actions">
+              {!busy && (
+                <button
+                  type="button"
+                  className="agent-queue-head-btn"
+                  onClick={() => void action("session.queue.flush")}
                 >
-                  <Input
-                    autoFocus
-                    className="h-6 flex-1 text-xs!"
-                    value={editingQueueText}
-                    onChange={(e) => setEditingQueueText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Escape") setEditingQueueIdx(null);
-                    }}
-                  />
-                  <button type="submit">保存</button>
-                </form>
-              ) : (
-                <>
-                  <span className="min-w-0 flex-1 truncate">{item.text}</span>
-                  <button
-                    type="button"
-                    title="立即插队发送给当前代理"
-                    onClick={() =>
-                      void action("session.queue.steer", { id: item.id, index: idx })
-                    }
-                  >
-                    插队
-                  </button>
-                  <button
-                    type="button"
-                    title="编辑排队内容"
-                    onClick={() => {
-                      setEditingQueueIdx(idx);
-                      setEditingQueueText(item.text);
-                    }}
-                  >
-                    编辑
-                  </button>
-                  {idx > 0 && (
-                    <button
-                      type="button"
-                      title="上移"
-                      onClick={() =>
-                        void action("session.queue.move", { from: idx, to: idx - 1 })
-                      }
-                    >
-                      ↑
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    title="移除此条排队消息"
-                    onClick={() =>
-                      void action("session.queue.remove", { id: item.id, index: idx })
-                    }
-                  >
-                    ×
-                  </button>
-                </>
+                  继续发送
+                </button>
               )}
+              <button
+                type="button"
+                className="agent-queue-head-btn"
+                onClick={() => void action("session.queue.clear")}
+              >
+                清空
+              </button>
             </div>
-          ))}
-          <div className="agent-queue">
-            <span>共 {session.queue.length} 条待发送</span>
-            <span className="min-w-0 flex-1" />
-            <button type="button" onClick={() => void action("session.queue.clear")}>清空队列</button>
           </div>
+          {session.queue.map((item, idx) => {
+            const firstImage = item.images?.[0];
+            return (
+              <div
+                className="agent-queue-row"
+                key={item.id || `${idx}:${item.text.slice(0, 80)}`}
+              >
+                {firstImage?.data && firstImage?.mimeType && (
+                  <img
+                    className="agent-queue-thumb"
+                    src={`data:${firstImage.mimeType};base64,${firstImage.data}`}
+                    alt="待发送图片"
+                  />
+                )}
+                <div className="agent-queue-text">
+                  {item.steer && (
+                    <span className="agent-queue-badge">插队</span>
+                  )}
+                  <span>
+                    {item.text ||
+                      (item.imageCount ? `图片附件 (${item.imageCount})` : "")}
+                  </span>
+                </div>
+                <div className="agent-queue-actions">
+                  <button
+                    type="button"
+                    title="插队优先发送"
+                    aria-label="插队优先发送"
+                    disabled={Boolean(item.steer && idx === 0 && !busy)}
+                    onClick={() =>
+                      void action("session.queue.steer", {
+                        id: item.id,
+                        index: idx,
+                      })
+                    }
+                  >
+                    <HugeiconsIcon icon={ArrowUp01Icon} size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    title="退回输入框编辑"
+                    aria-label="退回输入框编辑"
+                    onClick={() => {
+                      update({
+                        text: draft.text
+                          ? `${draft.text}\n${item.text}`
+                          : item.text,
+                        images: item.images?.length
+                          ? [...draft.images, ...item.images]
+                          : draft.images,
+                      });
+                      void action("session.queue.remove", {
+                        id: item.id,
+                        index: idx,
+                      });
+                      input.current?.focus();
+                    }}
+                  >
+                    <HugeiconsIcon icon={PencilEdit01Icon} size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    title="删除待发送消息"
+                    aria-label="删除待发送消息"
+                    onClick={() =>
+                      void action("session.queue.remove", {
+                        id: item.id,
+                        index: idx,
+                      })
+                    }
+                  >
+                    <HugeiconsIcon icon={Delete02Icon} size={13} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
       <div className="agent-composer" data-agent-composer={session.id}>
         {!!draft.images.length && (
           <div className="agent-images">
             {draft.images.map((image, index) => (
-              <div key={image.id ?? `${image.mimeType}:${image.data.slice(-24)}`}>
+              <div
+                key={image.id ?? `${image.mimeType}:${image.data.slice(-24)}`}
+              >
                 <ZoomableImage
                   src={`data:${image.mimeType};base64,${image.data}`}
                   alt={`待发送图片 ${index + 1}`}
@@ -416,15 +603,23 @@ export function AgentComposer({ session }: { session: SessionView }) {
         {!!draft.files?.length && (
           <div className="agent-draft-files">
             {draft.files.map((item) => (
-              <span key={item.path} className="agent-draft-file-chip" title={item.path}>
-                <span className="opacity-65">{item.kind === "dir" ? "目录" : "文件"}</span>
+              <span
+                key={item.path}
+                className="agent-draft-file-chip"
+                title={item.path}
+              >
+                <span className="opacity-65">
+                  {item.kind === "dir" ? "目录" : "文件"}
+                </span>
                 <span className="max-w-44 truncate">{item.name}</span>
                 <button
                   type="button"
                   aria-label={`移除 ${item.name}`}
                   onClick={() =>
                     update({
-                      files: (draft.files ?? []).filter((f) => f.path !== item.path),
+                      files: (draft.files ?? []).filter(
+                        (f) => f.path !== item.path,
+                      ),
                     })
                   }
                 >
@@ -459,20 +654,36 @@ export function AgentComposer({ session }: { session: SessionView }) {
           disabled={session.readOnly || !connected}
           onChange={(e) => {
             const text = e.target.value;
-            const localCommand = draft.localCommand && new RegExp(`^/${draft.localCommand}(?:\\s|$)`).test(text) ? draft.localCommand : null;
+            const localCommand =
+              draft.localCommand &&
+              new RegExp(`^/${draft.localCommand}(?:\\s|$)`).test(text)
+                ? draft.localCommand
+                : null;
             update({ text, localCommand });
-            setTrigger(invocationTrigger(text, e.target.selectionStart ?? text.length));
+            setTrigger(
+              invocationTrigger(text, e.target.selectionStart ?? text.length),
+            );
             setMenuIndex(0);
           }}
           onCompositionStart={() => setIme(true)}
           onCompositionEnd={() => setIme(false)}
           onKeyDown={(e) => {
             if (trigger && !ime && !e.nativeEvent.isComposing) {
-              if (e.key === "Escape") { e.preventDefault(); setTrigger(null); return; }
-              if ((e.key === "ArrowDown" || e.key === "ArrowUp") && matches.length) {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setTrigger(null);
+                return;
+              }
+              if (
+                (e.key === "ArrowDown" || e.key === "ArrowUp") &&
+                matches.length
+              ) {
                 e.preventDefault();
                 const direction = e.key === "ArrowDown" ? 1 : -1;
-                setMenuIndex((index) => (index + direction + matches.length) % matches.length);
+                setMenuIndex(
+                  (index) =>
+                    (index + direction + matches.length) % matches.length,
+                );
                 return;
               }
               if ((e.key === "Enter" || e.key === "Tab") && matches.length) {
@@ -481,11 +692,25 @@ export function AgentComposer({ session }: { session: SessionView }) {
                 return;
               }
             }
-            if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !ime && !e.nativeEvent.isComposing) {
+            if (
+              (e.key === "ArrowUp" || e.key === "ArrowDown") &&
+              !e.shiftKey &&
+              !e.altKey &&
+              !e.ctrlKey &&
+              !e.metaKey &&
+              !ime &&
+              !e.nativeEvent.isComposing
+            ) {
               const node = e.currentTarget;
-              const atStart = node.selectionStart === 0 && node.selectionEnd === 0;
-              const atEnd = node.selectionStart === node.value.length && node.selectionEnd === node.value.length;
-              if ((e.key === "ArrowUp" && atStart) || (e.key === "ArrowDown" && atEnd)) {
+              const atStart =
+                node.selectionStart === 0 && node.selectionEnd === 0;
+              const atEnd =
+                node.selectionStart === node.value.length &&
+                node.selectionEnd === node.value.length;
+              if (
+                (e.key === "ArrowUp" && atStart) ||
+                (e.key === "ArrowDown" && atEnd)
+              ) {
                 e.preventDefault();
                 recall(e.key === "ArrowUp" ? 1 : -1);
                 return;
@@ -518,25 +743,45 @@ export function AgentComposer({ session }: { session: SessionView }) {
           }}
         />
         {trigger && (
-          <div className="agent-invocation-menu reader-scrollbar" role="listbox" aria-label={trigger.prefix === "$" ? "技能" : "命令与技能"}>
+          <div
+            className="agent-invocation-menu reader-scrollbar"
+            role="listbox"
+            aria-label={trigger.prefix === "$" ? "技能" : "命令与技能"}
+          >
             {session.state === "starting" || skillsLoading ? (
               <div className="agent-invocation-empty">正在加载…</div>
             ) : !session.instanceId ? (
               <div className="agent-invocation-empty">代理未连接</div>
             ) : matches.length === 0 ? (
-              <div className="agent-invocation-empty">没有匹配的{trigger.prefix === "$" ? "技能" : "命令或技能"}</div>
-            ) : matches.map((entry, index) => (
-              <button key={`${entry.source}:${entry.token}`} type="button" role="option"
-                aria-selected={index === menuIndex % matches.length}
-                disabled={!!entry.local && busy}
-                onMouseDown={(event) => event.preventDefault()}
-                onMouseEnter={() => setMenuIndex(index)}
-                onClick={() => chooseInvocation(entry)}>
-                <span className="agent-invocation-name">{entry.label}</span>
-                <span className="agent-invocation-description">{entry.description}</span>
-                <span className="agent-invocation-source">{entry.local ? "Codev" : entry.group === "技能" ? `${entry.source} · 技能` : entry.source}</span>
-              </button>
-            ))}
+              <div className="agent-invocation-empty">
+                没有匹配的{trigger.prefix === "$" ? "技能" : "命令或技能"}
+              </div>
+            ) : (
+              matches.map((entry, index) => (
+                <button
+                  key={`${entry.source}:${entry.token}`}
+                  type="button"
+                  role="option"
+                  aria-selected={index === menuIndex % matches.length}
+                  disabled={!!entry.local && busy}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onMouseEnter={() => setMenuIndex(index)}
+                  onClick={() => chooseInvocation(entry)}
+                >
+                  <span className="agent-invocation-name">{entry.label}</span>
+                  <span className="agent-invocation-description">
+                    {entry.description}
+                  </span>
+                  <span className="agent-invocation-source">
+                    {entry.local
+                      ? "Codev"
+                      : entry.group === "技能"
+                        ? `${entry.source} · 技能`
+                        : entry.source}
+                  </span>
+                </button>
+              ))
+            )}
           </div>
         )}
         <div className="agent-composer-controls">
@@ -605,7 +850,9 @@ export function AgentComposer({ session }: { session: SessionView }) {
             <Select
               disabled={configDisabled}
               value={session.thinkingLevel || undefined}
-              onValueChange={(level) => void action("session.thinking", { level })}
+              onValueChange={(level) =>
+                void action("session.thinking", { level })
+              }
             >
               <SelectTrigger
                 size="sm"
@@ -632,8 +879,10 @@ export function AgentComposer({ session }: { session: SessionView }) {
                 o.category !== "thinking" &&
                 !o.id.includes("thinking") &&
                 o.id !== "model" &&
-                !(session.harnessId === "acp:codex" &&
-                  (o.id === "collaboration_mode" || o.id === "fast-mode")),
+                !(
+                  session.harnessId === "acp:codex" &&
+                  (o.id === "collaboration_mode" || o.id === "fast-mode")
+                ),
             )
             .map((option) => {
               const optionChoices = choices(option);
@@ -656,11 +905,15 @@ export function AgentComposer({ session }: { session: SessionView }) {
                         })
                       }
                     />
-                    <span className="agent-setting-pill-label">{option.name}</span>
+                    <span className="agent-setting-pill-label">
+                      {option.name}
+                    </span>
                   </label>
                 );
               }
-              const selectableChoices = optionChoices.filter((choice) => choice.value);
+              const selectableChoices = optionChoices.filter(
+                (choice) => choice.value,
+              );
               if (!selectableChoices.length) return null;
               return (
                 <Select
@@ -668,7 +921,10 @@ export function AgentComposer({ session }: { session: SessionView }) {
                   disabled={configDisabled}
                   value={option.currentValue || undefined}
                   onValueChange={(value) =>
-                    void action("session.config", { configId: option.id, value })
+                    void action("session.config", {
+                      configId: option.id,
+                      value,
+                    })
                   }
                 >
                   <SelectTrigger

@@ -193,7 +193,10 @@ async function openSession(id: string) {
     const message = error instanceof Error ? error.message : String(error);
     useAgentStore.setState((state) => ({
       views: { ...state.views, [id]: { ...state.views[id], error: message } },
-      sessions: { ...state.sessions, [id]: { ...state.sessions[id], error: message } },
+      sessions: {
+        ...state.sessions,
+        [id]: { ...state.sessions[id], error: message },
+      },
     }));
   }
 }
@@ -406,7 +409,14 @@ function consume(frame: Frame) {
     };
   } else view = event.payload as SessionView;
   const previous = state.sessions[view.id];
-  if (
+  if (view.archived) {
+    markTaskRead(`agent:${view.id}`);
+    if (state.unread.includes(view.id)) {
+      useAgentStore.setState({
+        unread: state.unread.filter((v) => v !== view.id),
+      });
+    }
+  } else if (
     previous &&
     isBusy(previous) &&
     (view.state === "idle" || view.state === "crashed")

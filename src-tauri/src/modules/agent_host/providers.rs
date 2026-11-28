@@ -433,7 +433,7 @@ fn is_dir_link(path: &std::path::Path) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        return (meta.file_attributes() & 0x400) != 0;
+        (meta.file_attributes() & 0x400) != 0
     }
     #[cfg(not(windows))]
     false
@@ -448,12 +448,11 @@ fn merge_dir_into(src: &std::path::Path, dst: &std::path::Path) -> Result<(), St
         if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
             merge_dir_into(&from, &to)?;
             let _ = std::fs::remove_dir(&from);
-        } else if !to.exists() {
-            if std::fs::rename(&from, &to).is_err() {
+        } else if !to.exists()
+            && std::fs::rename(&from, &to).is_err() {
                 std::fs::copy(&from, &to).map_err(|e| e.to_string())?;
                 std::fs::remove_file(&from).map_err(|e| e.to_string())?;
             }
-        }
     }
     Ok(())
 }

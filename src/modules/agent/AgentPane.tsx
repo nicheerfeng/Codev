@@ -46,7 +46,11 @@ function Conversation({
 }: {
   id: string;
   onOpenFile?: (path: string) => void;
-  onOpenDiff?: (path: string, diff: string, options?: { activate?: boolean }) => void;
+  onOpenDiff?: (
+    path: string,
+    diff: string,
+    options?: { activate?: boolean },
+  ) => void;
   onFork?: (entryId: string) => void;
   searchOpen: boolean;
   onCloseSearch: () => void;
@@ -92,7 +96,11 @@ export function AgentPane({
   active?: boolean;
   workspaceRoots?: string[];
   onOpenFile?: (path: string) => void;
-  onOpenDiff?: (path: string, diff: string, options?: { activate?: boolean }) => void;
+  onOpenDiff?: (
+    path: string,
+    diff: string,
+    options?: { activate?: boolean },
+  ) => void;
   onAddWorkspaceRoot?: (cwd: string) => void;
   mobile?: boolean;
 }) {
@@ -517,7 +525,8 @@ export function AgentPane({
       {!mobile && !welcomeDismissed && (
         <div className="agent-welcome-tip" role="note">
           <span>
-            提示：在右侧项目上选择代理即可新建会话。输入框支持拖放图片/文件与 <code>Ctrl+F</code> 搜索。
+            提示：在右侧项目上选择代理即可新建会话。输入框支持拖放图片/文件与{" "}
+            <code>Ctrl+F</code> 搜索。
           </span>
           <button
             type="button"
@@ -583,11 +592,9 @@ export function AgentPane({
                 const summary = state.sessions[id];
                 const liveSummary = state.views[id] ?? summary;
                 const slotBusy = isBusy(liveSummary);
-                const slotWaiting = !!(
-                  state.views[id]?.pendingRequests?.length
-                );
-                const slotUnread = state.unread.includes(id);
-                const slotTitleText = liveSummary?.title ?? summary?.title ?? "";
+                const slotWaiting = !!state.views[id]?.pendingRequests?.length;
+                const slotTitleText =
+                  liveSummary?.title ?? summary?.title ?? "";
                 return (
                   <div
                     key={id}
@@ -610,21 +617,6 @@ export function AgentPane({
                       <div
                         className={`agent-viewport-heading ${state.selected === id ? "is-active" : ""}`}
                       >
-                        {renamingSlot !== id && (
-                          <span
-                            role="img"
-                            aria-label={
-                              slotWaiting
-                                ? "等待输入"
-                                : slotBusy
-                                  ? "运行中"
-                                  : slotUnread
-                                    ? "已完成，待查看"
-                                    : "就绪"
-                            }
-                            className={`agent-state-dot agent-viewport-heading-dot ${slotWaiting ? "is-waiting" : slotBusy ? "is-working" : slotUnread ? "is-unread" : ""}`}
-                          />
-                        )}
                         {renamingSlot === id ? (
                           <form
                             className="flex min-w-0 flex-1"
@@ -679,14 +671,21 @@ export function AgentPane({
                             }}
                             title={`${slotTitleText}${slotWaiting ? " · 等待确认" : slotBusy ? " · 运行中" : ""}（双击或 F2 重命名，拖动标题交换格子）`}
                           >
-                            <span>
-                              {slotTitleText}
-                              {state.workspaces.find(
-                                (workspace) =>
-                                  workspace.id === summary.workspaceId,
-                              )?.title
-                                ? ` (${state.workspaces.find((workspace) => workspace.id === summary.workspaceId)?.title})`
-                                : ""}
+                            <span className="agent-viewport-pill">
+                              <span className="agent-viewport-pill-name">
+                                {slotTitleText}
+                              </span>
+                              {(() => {
+                                const wsTitle = state.workspaces.find(
+                                  (workspace) =>
+                                    workspace.id === summary.workspaceId,
+                                )?.title;
+                                return wsTitle ? (
+                                  <span className="agent-viewport-pill-ws">
+                                    ({wsTitle})
+                                  </span>
+                                ) : null;
+                              })()}
                             </span>
                           </button>
                         )}

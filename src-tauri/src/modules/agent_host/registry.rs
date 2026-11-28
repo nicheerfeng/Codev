@@ -53,7 +53,13 @@ pub fn command_for(path: &Path, args: &[String]) -> Command {
         if ext == "ps1" {
             let mut command = Command::new("powershell.exe");
             command
-                .args(["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+                .args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                ])
                 .arg(path)
                 .args(args);
             command
@@ -102,8 +108,8 @@ fn managed_codex() -> Option<(PathBuf, PathBuf)> {
     let root = std::env::var_os("CODEV_AGENT_TOOLS_DIR")
         .map(PathBuf::from)
         .or_else(|| dirs::data_local_dir().map(|path| path.join("codev-agent-tools")))?;
-    let entry = root
-        .join("codex-acp-2.6.0/node_modules/@agentclientprotocol/codex-acp/dist/index.js");
+    let entry =
+        root.join("codex-acp-2.6.0/node_modules/@agentclientprotocol/codex-acp/dist/index.js");
     if !entry.is_file() {
         return None;
     }
@@ -229,8 +235,60 @@ pub fn defaults() -> Vec<HarnessDescriptor> {
     .collect()
 }
 
+fn codex_config_has_auth(codex_dir: &Path) -> bool {
+    let Ok(raw) = std::fs::read_to_string(codex_dir.join("config.toml")) else {
+        return false;
+    };
+    let Ok(doc) = raw.parse::<toml::Table>() else {
+        return false;
+    };
+    let Some(providers) = doc.get("model_providers").and_then(toml::Value::as_table) else {
+        return false;
+    };
+    let check_provider = |table: &toml::Table| -> bool {
+        for key in ["experimental_bearer_token", "api_key"] {
+            if table
+                .get(key)
+                .and_then(toml::Value::as_str)
+                .is_some_and(|v| !v.trim().is_empty())
+            {
+                return true;
+            }
+        }
+        if let Some(env_key) = table
+            .get("env_key")
+            .and_then(toml::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if std::env::var_os(env_key).is_some_and(|v| !v.is_empty()) {
+                return true;
+            }
+        }
+        false
+    };
+    if let Some(active) = doc
+        .get("model_provider")
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if let Some(table) = providers.get(active).and_then(toml::Value::as_table) {
+            if check_provider(table) {
+                return true;
+            }
+        }
+    }
+    providers
+        .values()
+        .filter_map(toml::Value::as_table)
+        .any(check_provider)
+}
+
 pub fn diagnose_harness(d: &HarnessDescriptor) -> serde_json::Value {
-    let resolved = launch(d).ok().map(|(p, _)| super::metadata::display_path(&p));
+    let resolved = launch(d)
+        .ok()
+        .map(|(p, _)| super::metadata::display_path(&p));
     let node_path = resolve_binary("node").map(|p| super::metadata::display_path(&p));
     let managed = d.id == "acp:codex" && managed_codex().is_some();
     let mut hints: Vec<String> = vec![];
@@ -241,7 +299,9 @@ pub fn diagnose_harness(d: &HarnessDescriptor) -> serde_json::Value {
                 .as_ref()
                 .is_some_and(|p| p.join("models.json").is_file());
             if resolved.is_none() {
-                hints.push("未找到 pi 可执行程序，请确认已全局安装 Pi CLI 或在下方填写完整路径。".into());
+                hints.push(
+                    "未找到 pi 可执行程序，请确认已全局安装 Pi CLI 或在下方填写完整路径。".into(),
+                );
                 if node_path.is_some() {
                     hints.push("已检测到 Node 运行时；若终端能运行 pi 但此处找不到，请检查 GUI PATH 与 npm 全局目录。".into());
                 }
@@ -254,9 +314,13 @@ pub fn diagnose_harness(d: &HarnessDescriptor) -> serde_json::Value {
             }
         }
         "acp:codex" => {
-            let codex_auth = dirs::home_dir().is_some_and(|h| h.join(".codex/auth.json").is_file());
-            let has_api_key = std::env::var_os("OPENAI_API_KEY")
-                .is_some_and(|v| !v.is_empty());
+            let codex_dir = std::env::var_os("CODEX_HOME")
+                .map(PathBuf::from)
+                .or_else(|| dirs::home_dir().map(|h| h.join(".codex")));
+            let codex_auth = codex_dir
+                .as_ref()
+                .is_some_and(|dir| dir.join("auth.json").is_file() || codex_config_has_auth(dir));
+            let has_api_key = std::env::var_os("OPENAI_API_KEY").is_some_and(|v| !v.is_empty());
             let codex_native = resolve_binary("codex").is_some();
             if resolved.is_none() {
                 if node_path.is_none() {
@@ -265,16 +329,15 @@ pub fn diagnose_harness(d: &HarnessDescriptor) -> serde_json::Value {
                 if codex_native && !managed {
                     hints.push("检测到本机已安装 codex CLI，但缺少 codex-acp 桥接器；可运行 pnpm agent:prepare 准备托管适配器。".into());
                 } else {
-                    hints.push("未找到 Codex ACP 启动程序，请在下方配置或运行 pnpm agent:prepare。".into());
+                    hints.push(
+                        "未找到 Codex ACP 启动程序，请在下方配置或运行 pnpm agent:prepare。".into(),
+                    );
                 }
                 "missing_binary"
             } else if !codex_auth && !has_api_key {
                 hints.push("已检测到启动环境，但未在 ~/.codex/auth.json 或 OPENAI_API_KEY 发现凭证；如首次连接报错，请在终端运行 codex login。".into());
                 "needs_auth"
             } else {
-                if managed {
-                    hints.push("已使用 Codev 本地托管版 codex-acp 适配器（无需每次通过 npx 临时拉取）。".into());
-                }
                 "ready"
             }
         }
@@ -283,7 +346,10 @@ pub fn diagnose_harness(d: &HarnessDescriptor) -> serde_json::Value {
                 hints.push("未找到 agy 命令，请安装 Antigravity CLI 或填写完整路径（Windows 通常位于 %LOCALAPPDATA%\\agy\\bin）。".into());
                 "missing_binary"
             } else {
-                hints.push("凭证归 agy CLI 所有；如遇未登录提示，请在 CMD 运行 agy 完成 Google 登录。".into());
+                hints.push(
+                    "凭证归 agy CLI 所有；如遇未登录提示，请在 CMD 运行 agy 完成 Google 登录。"
+                        .into(),
+                );
                 "ready"
             }
         }

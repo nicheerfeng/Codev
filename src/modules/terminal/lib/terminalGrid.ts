@@ -1,11 +1,23 @@
 export const MAX_TERMINAL_VIEWS = 6;
 
-/** 计算用户显式创建的终端视口布局，不自动填入其他终端。 */
-export function terminalGrid(slots: (number | null)[], wide = false) {
+/** 计算用户显式创建的终端视口布局，按容器宽度自动换行，不自动填入其他终端。 */
+export function terminalGrid(
+  slots: (number | null)[],
+  widthOrWide: number | boolean = false,
+) {
   const viewSlots = slots.slice(0, MAX_TERMINAL_VIEWS);
   const count = Math.max(1, viewSlots.length);
-  const columns =
-    count === 4 && wide ? 3 : count <= 3 ? count : count === 4 ? 2 : 3;
+  const maxCols =
+    typeof widthOrWide === "number"
+      ? widthOrWide > 0 && widthOrWide < 720
+        ? 1
+        : widthOrWide >= 1200
+          ? 3
+          : 2
+      : widthOrWide
+        ? 3
+        : 2;
+  const columns = count === 1 ? 1 : Math.min(maxCols, count);
   return {
     slots: viewSlots,
     visibleIds: viewSlots.filter((id): id is number => id !== null),

@@ -207,7 +207,7 @@ export function TerminalStack({
           ? activeId
           : (tabs[0]?.id ?? null),
       ];
-  const grid = terminalGrid(displaySlots, viewportWidth >= 1200);
+  const grid = terminalGrid(displaySlots, viewportWidth);
   const positions = [
     ...terminals.map((terminal) => {
       const position = grid.slots.indexOf(terminal.id);
@@ -418,13 +418,13 @@ export function TerminalStack({
               </div>
             )}
             <div className="min-h-0 flex-1">
-                <PaneTreeView
-                  node={t.paneTree}
-                  tabVisible={tabVisible}
-                  activeLeafId={t.id === activeId ? t.activeLeafId : -1}
-                  onFocusLeaf={(leafId) => onFocusLeaf(t.id, leafId)}
-                  getBundle={getBundle}
-                />
+              <PaneTreeView
+                node={t.paneTree}
+                tabVisible={tabVisible}
+                activeLeafId={t.id === activeId ? t.activeLeafId : -1}
+                onFocusLeaf={(leafId) => onFocusLeaf(t.id, leafId)}
+                getBundle={getBundle}
+              />
             </div>
           </div>
         );

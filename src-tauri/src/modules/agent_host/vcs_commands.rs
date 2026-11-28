@@ -643,7 +643,7 @@ impl Host {
                     };
                     if !force {
                         if let Some(ref r) = repo {
-                            if let Some(cached) = forge.cached_for(&r.full_name) {
+                            if let Some(cached) = forge.cached_for(&r.full_name, &state_filter) {
                                 return Ok(cached);
                             }
                         }

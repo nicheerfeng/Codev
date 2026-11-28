@@ -1190,9 +1190,7 @@ export function AgentTranscript({
                   session={session}
                 />
               ))}
-              {((turnRunning &&
-                !blocks.some((b) => b.kind === "process" && b.running)) ||
-                session.state === "starting") && (
+              {session.state === "starting" && (
                 <div className="agent-activity">
                   <span className="agent-state-dot is-working" />
                   {statusLabel(session.state)}

@@ -7,11 +7,23 @@ import {
 
 describe("terminal viewport slots", () => {
   it("keeps new viewports empty and only includes explicitly assigned terminals", () => {
-    expect(terminalGrid([11, null, null])).toMatchObject({
+    expect(terminalGrid([11, null, null], 1400)).toMatchObject({
       slots: [11, null, null],
       visibleIds: [11],
       columns: 3,
       rows: 1,
+    });
+    expect(terminalGrid([11, null, null], 900)).toMatchObject({
+      slots: [11, null, null],
+      visibleIds: [11],
+      columns: 2,
+      rows: 2,
+    });
+    expect(terminalGrid([11, null, null], 600)).toMatchObject({
+      slots: [11, null, null],
+      visibleIds: [11],
+      columns: 1,
+      rows: 3,
     });
   });
 
@@ -35,8 +47,8 @@ describe("terminal viewport slots", () => {
   });
 
   it("limits layouts to six and computes the existing row arrangement", () => {
-    expect(terminalGrid([1, 2, 3, 4, 5, 6, 7]).slots).toHaveLength(6);
-    expect(terminalGrid([1, 2, 3, 4]).columns).toBe(2);
-    expect(terminalGrid([1, 2, 3, 4, 5, 6]).columns).toBe(3);
+    expect(terminalGrid([1, 2, 3, 4, 5, 6, 7], 1400).slots).toHaveLength(6);
+    expect(terminalGrid([1, 2, 3, 4], 900).columns).toBe(2);
+    expect(terminalGrid([1, 2, 3, 4, 5, 6], 1400).columns).toBe(3);
   });
 });

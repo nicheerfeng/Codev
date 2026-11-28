@@ -192,7 +192,10 @@ function HarnessGeneralPanel({
   onSavePolicy: (harnessId: string, patch: PolicyEntry) => Promise<void>;
 }) {
   const verdict = verdictMeta(diagnosis);
-  const docDirty = !!docConfig && !docConfig.disabled && docConfig.value !== (docConfig.savedValue ?? "");
+  const docDirty =
+    !!docConfig &&
+    !docConfig.disabled &&
+    docConfig.value !== (docConfig.savedValue ?? "");
   const permissionMode = policy?.permission ?? "ask";
   const allowOutside =
     policy?.allowOutsideWorkspace ?? permissionMode === "allow_all";
@@ -204,7 +207,8 @@ function HarnessGeneralPanel({
           title="运行环境"
           description={
             <span className="font-mono text-[11px]">
-              {diagnosis?.resolvedPath || (diagnosis ? "未找到启动程序" : "正在定位程序…")}
+              {diagnosis?.resolvedPath ||
+                (diagnosis ? "未找到启动程序" : "正在定位程序…")}
             </span>
           }
           control={
@@ -300,7 +304,8 @@ function HarnessGeneralPanel({
                       read: policy?.read ?? "allow",
                       write: value,
                       permission: permissionMode,
-                      allowOutsideWorkspace: policy?.allowOutsideWorkspace ?? false,
+                      allowOutsideWorkspace:
+                        policy?.allowOutsideWorkspace ?? false,
                     })
                   }
                 >
@@ -312,7 +317,9 @@ function HarnessGeneralPanel({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="allow">最大权限（自动允许写入）</SelectItem>
+                    <SelectItem value="allow">
+                      最大权限（自动允许写入）
+                    </SelectItem>
                     <SelectItem value="ask">执行前询问</SelectItem>
                     <SelectItem value="deny">禁止代理写入</SelectItem>
                   </SelectContent>
@@ -324,7 +331,9 @@ function HarnessGeneralPanel({
       </SettingCard>
 
       {diagnosis?.hints?.length ? (
-        <SettingNote tone={diagnosis.verdict === "ready" ? "default" : "warning"}>
+        <SettingNote
+          tone={diagnosis.verdict === "ready" ? "default" : "warning"}
+        >
           {diagnosis.hints[0]}
         </SettingNote>
       ) : null}
@@ -591,9 +600,15 @@ export function AgentSettings({
       case "acp:codex":
         return { title: "Codex", subtitle: "OpenAI Codex CLI (ACP)" };
       case "acp:antigravity":
-        return { title: "Antigravity", subtitle: "Google Antigravity CLI (ACP)" };
+        return {
+          title: "Antigravity",
+          subtitle: "Google Antigravity CLI (ACP)",
+        };
       case "projects":
-        return { title: "项目配置", subtitle: "每个工作区的快捷创建入口与信任边界" };
+        return {
+          title: "项目配置",
+          subtitle: "每个工作区的快捷创建入口与信任边界",
+        };
       case "general":
         return { title: "通用设置", subtitle: "桌面通知与统一工作区行为" };
       case "remote":
@@ -620,7 +635,10 @@ export function AgentSettings({
           配置代理、项目和工作区。
         </DialogDescription>
         <div className="agent-settings-layout">
-          <nav className="agent-settings-nav reader-scrollbar" aria-label="Agent 设置导航">
+          <nav
+            className="agent-settings-nav reader-scrollbar"
+            aria-label="Agent 设置导航"
+          >
             <div className="agent-settings-brand">
               <h2>Agent 设置</h2>
               <p>代理 · 项目 · 工作区</p>
@@ -638,7 +656,9 @@ export function AgentSettings({
                     variant={selected ? "secondary" : "ghost"}
                     className={cn(
                       "w-full justify-start gap-2 px-2.5 text-xs",
-                      selected ? "font-medium text-foreground" : "text-muted-foreground",
+                      selected
+                        ? "font-medium text-foreground"
+                        : "text-muted-foreground",
                     )}
                     onClick={() => setPanel(id)}
                   >
@@ -647,7 +667,10 @@ export function AgentSettings({
                     {diag && (
                       <span
                         aria-hidden="true"
-                        className={cn("size-1.5 shrink-0 rounded-full", verdictMeta(diag).dot)}
+                        className={cn(
+                          "size-1.5 shrink-0 rounded-full",
+                          verdictMeta(diag).dot,
+                        )}
                       />
                     )}
                   </Button>
@@ -728,6 +751,46 @@ export function AgentSettings({
 
           <div className="agent-settings-main">
             <header className="agent-settings-header">
+              {isHarnessPanel && (
+                <div
+                  className="inline-flex shrink-0 items-center gap-0.5 rounded-lg border border-border/75 bg-muted/40 p-0.5"
+                  role="tablist"
+                  aria-label={`${headerInfo.title} 设置`}
+                >
+                  {HARNESS_TABS.map(([id, label]) => {
+                    const selected = activeTab === id;
+                    return (
+                      <Button
+                        key={id}
+                        role="tab"
+                        aria-selected={selected}
+                        size="xs"
+                        variant={selected ? "secondary" : "ghost"}
+                        className={cn(
+                          "px-2.5 text-xs",
+                          selected
+                            ? "font-medium shadow-xs"
+                            : "text-muted-foreground",
+                        )}
+                        onClick={() => {
+                          if (panel === "pi") {
+                            setPiTab(id);
+                            if (id === "models") setModelsOpened(true);
+                          } else {
+                            setAcpTabs((current) => ({
+                              ...current,
+                              [panel]: id,
+                            }));
+                          }
+                        }}
+                      >
+                        {label}
+                      </Button>
+                    );
+                  })}
+                </div>
+              )}
+
               <div className="flex min-w-0 items-center gap-2.5">
                 {isHarnessPanel && <HarnessIcon harnessId={panel} size={18} />}
                 <div className="min-w-0">
@@ -759,47 +822,15 @@ export function AgentSettings({
                   )}
                 </div>
               </div>
-
-              {isHarnessPanel && (
-                <div
-                  className="inline-flex shrink-0 items-center gap-0.5 rounded-lg border border-border/75 bg-muted/40 p-0.5"
-                  role="tablist"
-                  aria-label={`${headerInfo.title} 设置`}
-                >
-                  {HARNESS_TABS.map(([id, label]) => {
-                    const selected = activeTab === id;
-                    return (
-                      <Button
-                        key={id}
-                        role="tab"
-                        aria-selected={selected}
-                        size="xs"
-                        variant={selected ? "secondary" : "ghost"}
-                        className={cn(
-                          "px-2.5 text-xs",
-                          selected ? "font-medium shadow-xs" : "text-muted-foreground",
-                        )}
-                        onClick={() => {
-                          if (panel === "pi") {
-                            setPiTab(id);
-                            if (id === "models") setModelsOpened(true);
-                          } else {
-                            setAcpTabs((current) => ({ ...current, [panel]: id }));
-                          }
-                        }}
-                      >
-                        {label}
-                      </Button>
-                    );
-                  })}
-                </div>
-              )}
             </header>
 
             <div className="agent-settings-body reader-scrollbar">
               <div className="agent-settings-content">
                 {settingsError && (
-                  <div role="alert" className="agent-global-error rounded-xl border border-destructive/30">
+                  <div
+                    role="alert"
+                    className="agent-global-error rounded-xl border border-destructive/30"
+                  >
                     <span>{settingsError}</span>
                     <button
                       type="button"
@@ -820,7 +851,8 @@ export function AgentSettings({
                     />
                   )}
                 {(panel === "acp:codex" || panel === "acp:antigravity") &&
-                  (acpTabs[panel] === "skills" || acpTabs[panel] === "plugins") && (
+                  (acpTabs[panel] === "skills" ||
+                    acpTabs[panel] === "plugins") && (
                     <HarnessAssetsPanel
                       key={`${panel}:${acpTabs[panel]}`}
                       harnessId={panel}
@@ -832,9 +864,10 @@ export function AgentSettings({
                     <PiModelsPanel onDirtyChange={setModelsDirty} />
                   </div>
                 )}
-                {panel === "pi" && (piTab === "skills" || piTab === "plugins") && (
-                  <PiAssetsPanel kind={piTab} />
-                )}
+                {panel === "pi" &&
+                  (piTab === "skills" || piTab === "plugins") && (
+                    <PiAssetsPanel kind={piTab} />
+                  )}
 
                 {harnesses
                   .filter((harness) =>
@@ -852,7 +885,10 @@ export function AgentSettings({
                             disabled: !docsInfo,
                             onChange: setPiAppendDraft,
                             onSave: () =>
-                              void saveDocument("piAppendSystem", piAppendDraft),
+                              void saveDocument(
+                                "piAppendSystem",
+                                piAppendDraft,
+                              ),
                           }
                         : harness.id === "acp:codex"
                           ? {
@@ -864,7 +900,10 @@ export function AgentSettings({
                               disabled: !docsInfo,
                               onChange: setCodexAgentsDraft,
                               onSave: () =>
-                                void saveDocument("codexAgents", codexAgentsDraft),
+                                void saveDocument(
+                                  "codexAgents",
+                                  codexAgentsDraft,
+                                ),
                             }
                           : {
                               id: "agent-antigravity-instructions",
@@ -972,7 +1011,10 @@ export function AgentSettings({
                                     </SelectTrigger>
                                     <SelectContent>
                                       {workspaces.map((item) => (
-                                        <SelectItem key={item.id} value={item.id}>
+                                        <SelectItem
+                                          key={item.id}
+                                          value={item.id}
+                                        >
                                           {item.title}
                                         </SelectItem>
                                       ))}
@@ -987,7 +1029,9 @@ export function AgentSettings({
                               >
                                 <div className="flex flex-wrap gap-2">
                                   {harnesses.map((harness) => {
-                                    const checked = enabled.includes(harness.id);
+                                    const checked = enabled.includes(
+                                      harness.id,
+                                    );
                                     return (
                                       <button
                                         key={harness.id}
@@ -1005,7 +1049,9 @@ export function AgentSettings({
                                               : [...enabled, harness.id],
                                           )
                                             .catch(showError)
-                                            .finally(() => setSavingProject(false));
+                                            .finally(() =>
+                                              setSavingProject(false),
+                                            );
                                         }}
                                         className={cn(
                                           "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors disabled:opacity-50",
@@ -1116,7 +1162,10 @@ export function AgentSettings({
 
                 {open && voiceOpened && (
                   <div hidden={panel !== "voice"}>
-                    <VoiceSettingsPanel embedded onDirtyChange={setVoiceDirty} />
+                    <VoiceSettingsPanel
+                      embedded
+                      onDirtyChange={setVoiceDirty}
+                    />
                   </div>
                 )}
 
@@ -1208,7 +1257,8 @@ export function AgentSettings({
 
                     {remote.enabled && (
                       <SettingNote tone="warning">
-                        当前为局域网 HTTP 连接。若需公网访问请通过 HTTPS 入口或安全隧道，不要将本机端口直接暴露在公网。
+                        当前为局域网 HTTP 连接。若需公网访问请通过 HTTPS
+                        入口或安全隧道，不要将本机端口直接暴露在公网。
                       </SettingNote>
                     )}
 
@@ -1236,7 +1286,10 @@ export function AgentSettings({
                             </div>
                             <p className="text-[11px] leading-relaxed text-muted-foreground">
                               手机扫码后输入上方验证码，并在桌面端批准连接。有效期至{" "}
-                              {new Date(pair.expiresAt * 1000).toLocaleTimeString()}。
+                              {new Date(
+                                pair.expiresAt * 1000,
+                              ).toLocaleTimeString()}
+                              。
                             </p>
                             <label
                               htmlFor="agent-pair-address"

@@ -62,11 +62,10 @@ impl Bridge {
             .map_err(|e| format!("无法启动 {}：{e}", path.display()))?;
         #[cfg(windows)]
         let job = match crate::modules::proc::job::ProcessJob::create_for(child.id()) {
-            Ok(job) => job,
+            Ok(job) => Some(job),
             Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("无法保护代理子进程树：{e}"));
+                log::warn!("agent_host job-object setup failed for pid={}: {e}", child.id());
+                None
             }
         };
         let stdin = child.stdin.take().ok_or("无法连接代理输入")?;
@@ -85,7 +84,7 @@ impl Bridge {
             temp_dir: Mutex::new(None),
             closed: std::sync::atomic::AtomicBool::new(false),
             #[cfg(windows)]
-            job: Mutex::new(Some(job)),
+            job: Mutex::new(job),
         });
         let weak = Arc::downgrade(&bridge);
         std::thread::Builder::new()

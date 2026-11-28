@@ -293,7 +293,8 @@ function buildStepsAndTicker(
       });
       tickerItems.push({
         id: `think:${m.id}`,
-        status: m.streaming && !hasVisibleText(resolved.text) ? "running" : "done",
+        status:
+          m.streaming && !hasVisibleText(resolved.text) ? "running" : "done",
         verb: "思考",
         text: singleLinePreview(resolved.thinking, 110),
       });
@@ -325,7 +326,9 @@ function buildStepsAndTicker(
           m.status === "pending"),
     );
   if (runningTool) {
-    liveStepTitle = activeVerbForCategory(describeToolCall(runningTool).category);
+    liveStepTitle = activeVerbForCategory(
+      describeToolCall(runningTool).category,
+    );
   } else {
     const latestTick = tickerItems[tickerItems.length - 1];
     if (latestTick?.verb === "思考") liveStepTitle = "正在思考";
@@ -429,7 +432,11 @@ export function buildTranscriptBlocks(
     > = processSlice.map((message) => ({ kind: "raw", message }));
 
     let hideFinalThinking = false;
-    if (lastIsDeliverable && lastResolved && hasVisibleText(lastResolved.thinking)) {
+    if (
+      lastIsDeliverable &&
+      lastResolved &&
+      hasVisibleText(lastResolved.thinking)
+    ) {
       processEntries.push({
         kind: "thinkingOnly",
         message: last,
@@ -454,7 +461,7 @@ export function buildTranscriptBlocks(
       const startedAt =
         turnStartedAt ?? (times.length ? Math.min(...times) : undefined);
       const lastTime = times.length ? Math.max(...times) : undefined;
-      const processLive = isLiveTurn && !lastIsDeliverable;
+      const processLive = isLiveTurn;
       const finishedAt = processLive
         ? undefined
         : lastIsDeliverable && last.createdAt && last.createdAt > 0
@@ -468,7 +475,8 @@ export function buildTranscriptBlocks(
       const toolSummary = summarizeProcessBlock(rawMessages, false);
       const summaryParts: string[] = [];
       if (toolCount > 0) summaryParts.push(toolSummary);
-      else if (steps.length > 0) summaryParts.push(`${steps.length} 个推理步骤`);
+      else if (steps.length > 0)
+        summaryParts.push(`${steps.length} 个推理步骤`);
       if (fileChanges.length > 0) {
         summaryParts.push(`变更 ${fileChanges.length} 文件`);
       }
@@ -523,14 +531,8 @@ export function buildTranscriptBlocks(
   }
   flushTurn(running, true);
 
-  // 发送后若模型尚未返回任何事件，立即呈现即时响应过程占位。
-  if (
-    running &&
-    !blocks.some((b) => b.kind === "process" && b.running) &&
-    blocks[blocks.length - 1]?.kind === "message" &&
-    (blocks[blocks.length - 1] as { message: AgentMessage }).message.role ===
-      "user"
-  ) {
+  // 会话运行中但尚未产生运行态过程块时，在当前末尾补齐顶部运行态占位，避免退化到底部。
+  if (running && !blocks.some((b) => b.kind === "process" && b.running)) {
     blocks.push({
       id: "process:live-wait",
       kind: "process",

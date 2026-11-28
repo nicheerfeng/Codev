@@ -135,8 +135,8 @@ impl Host {
                     .filter(|s| !s.is_empty())
             });
         if let Some(level) = desired_thinking {
-            if view.thinking_levels.iter().any(|l| l == level) && view.thinking_level != level {
-                if runtime
+            if view.thinking_levels.iter().any(|l| l == level) && view.thinking_level != level
+                && runtime
                     .bridge
                     .request("set_thinking_level", json!({"level": level}), QUERY_TIMEOUT)
                     .await
@@ -144,7 +144,6 @@ impl Host {
                 {
                     changed = true;
                 }
-            }
         }
         if changed {
             let _ = self.refresh_pi(id, runtime, false).await;
@@ -469,9 +468,11 @@ impl Host {
                         .unwrap_or_else(new_id);
                     let parts = history::message_parts(m, &message_id);
                     let final_msg = parts.into_iter().find(|p| p.kind == "message");
+                    let mut rendered_error_message = false;
                     if let Some(mut part) = final_msg {
                         part.streaming = false;
                         part.status = if part.is_error { "error" } else { "completed" }.into();
+                        rendered_error_message = part.is_error;
                         if part.created_at == 0 {
                             part.created_at = streaming_idx
                                 .map(|i| v.messages[i].created_at)
@@ -496,13 +497,15 @@ impl Host {
                             v.messages[idx].status = "completed".into();
                         }
                     }
-                    if let Some(error) = m
-                        .get("errorMessage")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                    {
-                        v.error = Some(error.into());
+                    if !rendered_error_message {
+                        if let Some(error) = m
+                            .get("errorMessage")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        {
+                            v.error = Some(error.into());
+                        }
                     }
                     if let Some(usage) = m.get("usage") {
                         v.context = build_context_value(usage, &v.model);
@@ -642,6 +645,15 @@ impl Host {
                             v.statuses.remove(&format!("widget:{key}"));
                         }
                     }
+                } else if matches!(method.as_str(), "setTitle" | "setEditorText" | "set_editor_text") {
+                    // Fire-and-forget UI hints from extensions; no RPC reply required.
+                } else if !request_id.is_empty() {
+                    // Cancel unknown interactive extension_ui_request instead of letting the extension hang and abort.
+                    let _ = runtime.bridge.send(json!({
+                        "type": "extension_ui_response",
+                        "id": request_id,
+                        "cancelled": true
+                    }));
                 }
             }
             "extension_error" => {
@@ -750,7 +762,6 @@ impl Host {
                     .filter(|v| {
                         v.instance_id.as_deref() == Some(runtime.instance.as_str())
                             && !v.busy()
-                            && v.error.is_none()
                     })
                     .and_then(|v| {
                         if v.queue.is_empty() {

@@ -758,6 +758,27 @@ impl Host {
                 }
                 Ok(json!({}))
             }
+            "session.queue.flush" => {
+                let id = command.session_id.as_deref().ok_or("缺少会话标识")?;
+                self.ensure_runtime_for_prompt(id).await?;
+                let next = {
+                    let mut state = lock(&self.state);
+                    state
+                        .sessions
+                        .get_mut(id)
+                        .filter(|v| !v.busy() && !v.queue.is_empty())
+                        .map(|v| {
+                            v.state = "working".into();
+                            v.error = None;
+                            v.queue.remove(0)
+                        })
+                };
+                if let Some(next) = next {
+                    self.schedule_prompt(id.to_string(), next);
+                    return Ok(json!({ "flushed": true }));
+                }
+                Ok(json!({ "flushed": false }))
+            }
             "session.queue.clear" => {
                 let id = command.session_id.as_deref().ok_or("缺少会话标识")?;
                 self.update(id, None, |v| v.queue.clear());
@@ -1842,6 +1863,12 @@ impl Host {
             }
         }
         if runtime.bridge.wire == Wire::Pi {
+            // Sync live Pi state before prompting so a stale streaming turn does not collide and abort.
+            if let Ok(state) = runtime.bridge.request("get_state", json!({}), QUERY).await {
+                if state.get("isStreaming") == Some(&json!(true)) {
+                    let _ = runtime.bridge.request("abort", json!({}), QUERY).await;
+                }
+            }
             let reply = match runtime
                 .bridge
                 .request(

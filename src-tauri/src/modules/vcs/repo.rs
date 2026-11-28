@@ -956,15 +956,14 @@ impl VcsService {
             }
             for rel in untracked {
                 let target = repo.join(&rel);
-                if target.exists() {
-                    if let Err(_) = trash::delete(&target) {
+                if target.exists()
+                    && trash::delete(&target).is_err() {
                         if target.is_dir() {
                             std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?;
                         } else {
                             std::fs::remove_file(&target).map_err(|e| e.to_string())?;
                         }
                     }
-                }
             }
             Ok::<(), String>(())
         })
