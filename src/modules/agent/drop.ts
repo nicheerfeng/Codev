@@ -1,8 +1,4 @@
-import {
-  addPathAttachments,
-  isImagePath,
-  readPathImage,
-} from "@/modules/plugins/pi-agent/piAttachments";
+import { addPathAttachments, isImagePath, readPathImage } from "./attachments";
 import type { ExplorerPathDropTarget } from "@/modules/explorer/lib/useExplorerDnd";
 import { useEffect } from "react";
 import { useAgentStore } from "./store";

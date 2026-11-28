@@ -16,7 +16,7 @@ import {
   markUnreadTask,
 } from "@/modules/plugins/taskbar-unread/unreadTasks";
 
-import type { PiPathAttachment } from "@/modules/plugins/pi-agent/piAttachments";
+import type { PiPathAttachment } from "./attachments";
 
 export type Draft = {
   text: string;

@@ -23,13 +23,5 @@
     }
   },
   "include": ["src"],
-  "exclude": [
-    "src/modules/plugins/pi-agent/**",
-    "src/modules/plugins/codex-agent/**",
-    "src/modules/plugins/antigravity-agent/**",
-    "src/modules/plugins/workbench/**",
-    "src/modules/plugins/browser/**",
-    "src/modules/plugins/turnNotification.test.ts"
-  ],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

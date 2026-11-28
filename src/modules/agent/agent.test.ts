@@ -1,10 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  splitUserAttachmentText,
-  withAttachmentPrompt,
-} from "@/modules/plugins/pi-agent/piAttachments";
+import { splitUserAttachmentText, withAttachmentPrompt } from "./attachments";
 import {
   moveDisplayedItem,
   promoteLiveOrder,
@@ -108,7 +105,10 @@ describe("agent Phase 1 store & transport contracts", () => {
     expect(withDiff).not.toBe(prev);
     expect(withDiff.diff).toEqual({ patch: "@@ -1 +1 @@\n-a\n+b" });
 
-    const withSource = shareMessage(prev, { ...prev, sourceEventId: "entry-9" });
+    const withSource = shareMessage(prev, {
+      ...prev,
+      sourceEventId: "entry-9",
+    });
     expect(withSource).not.toBe(prev);
     expect(withSource.sourceEventId).toBe("entry-9");
   });
@@ -116,7 +116,11 @@ describe("agent Phase 1 store & transport contracts", () => {
   it("mergeView keeps newer local revision while filling missing messages", () => {
     const m1 = makeMessage({ id: "m1", text: "first" });
     const m2 = makeMessage({ id: "m2", text: "second" });
-    const local = makeView({ revision: 5, _messageOrder: ["m1", "m2"], messages: [m1] });
+    const local = makeView({
+      revision: 5,
+      _messageOrder: ["m1", "m2"],
+      messages: [m1],
+    });
     const stale = makeView({ revision: 3, messages: [m1, m2] });
     const merged = mergeView(local, stale);
     expect(merged.revision).toBe(5);
@@ -159,7 +163,11 @@ describe("agent Phase 1 store & transport contracts", () => {
         harnesses: [],
       },
     });
-    const patchedView = makeView({ revision: 2, state: "working", messages: [makeMessage()] });
+    const patchedView = makeView({
+      revision: 2,
+      state: "working",
+      messages: [makeMessage()],
+    });
     consumeFrameForTest({
       type: "event",
       event: {
@@ -188,7 +196,10 @@ describe("agent Phase 1 store & transport contracts", () => {
       onerror: (() => void) | null = null;
       onmessage: ((event: { data: string }) => void) | null = null;
       closed = false;
-      constructor(public url: string, public protocols?: string[]) {
+      constructor(
+        public url: string,
+        public protocols?: string[],
+      ) {
         lastSocket = this;
       }
       send(data: string) {
@@ -227,7 +238,12 @@ describe("agent Phase 1 store & transport contracts", () => {
       lastSocket!.onmessage?.({
         data: JSON.stringify({
           type: "event",
-          event: { protocolVersion: 1, sequence: 5, kind: "host.changed", payload: {} },
+          event: {
+            protocolVersion: 1,
+            sequence: 5,
+            kind: "host.changed",
+            payload: {},
+          },
         }),
       });
       expect(lastSocket!.closed).toBe(false);
@@ -261,9 +277,9 @@ describe("agent Phase 1 store & transport contracts", () => {
 
 describe("agent Phase 2 semantic formatting & inline thinking", () => {
   it("normalizes tool calls, grep exit-1 empty matches, and shell prefixes", () => {
-    expect(displayCommand(`powershell.exe -NoProfile -Command "pnpm cargo test"`)).toBe(
-      "pnpm cargo test",
-    );
+    expect(
+      displayCommand(`powershell.exe -NoProfile -Command "pnpm cargo test"`),
+    ).toBe("pnpm cargo test");
     const grepFail = makeMessage({
       id: "g1",
       kind: "toolCall",
@@ -367,24 +383,59 @@ describe("agent Phase 2 semantic formatting & inline thinking", () => {
 
   it("groups explore steps and marks failure recovery", () => {
     const msgs = [
-      makeMessage({ id: "t1", kind: "toolCall", toolName: "read", arguments: { path: "a.ts" }, status: "completed" }),
-      makeMessage({ id: "t2", kind: "toolCall", toolName: "grep", arguments: { pattern: "foo" }, status: "completed" }),
-      makeMessage({ id: "t3", kind: "toolCall", toolName: "bash", arguments: { command: "pnpm build" }, status: "error", isError: true }),
-      makeMessage({ id: "t4", kind: "toolCall", toolName: "bash", arguments: { command: "pnpm check-types" }, status: "completed" }),
+      makeMessage({
+        id: "t1",
+        kind: "toolCall",
+        toolName: "read",
+        arguments: { path: "a.ts" },
+        status: "completed",
+      }),
+      makeMessage({
+        id: "t2",
+        kind: "toolCall",
+        toolName: "grep",
+        arguments: { pattern: "foo" },
+        status: "completed",
+      }),
+      makeMessage({
+        id: "t3",
+        kind: "toolCall",
+        toolName: "bash",
+        arguments: { command: "pnpm build" },
+        status: "error",
+        isError: true,
+      }),
+      makeMessage({
+        id: "t4",
+        kind: "toolCall",
+        toolName: "bash",
+        arguments: { command: "pnpm check-types" },
+        status: "completed",
+      }),
     ];
     const groups = groupProcessSteps(msgs);
     expect(groups).toHaveLength(3);
     expect(groups[0].kind).toBe("explore");
-    expect(groups[2].kind === "single" && groups[2].recoveredAfterFailure).toBe(true);
-    expect(summarizeProcessBlock(msgs, false)).toContain("读取 1 · 搜索 1 · 命令 2");
+    expect(groups[2].kind === "single" && groups[2].recoveredAfterFailure).toBe(
+      true,
+    );
+    expect(summarizeProcessBlock(msgs, false)).toContain(
+      "读取 1 · 搜索 1 · 命令 2",
+    );
   });
 
   it("splits leading <think> tags and parses plan entries", () => {
-    const split = splitInlineThinking("<think>step 1</think>\nFinal answer", "", false);
+    const split = splitInlineThinking(
+      "<think>step 1</think>\nFinal answer",
+      "",
+      false,
+    );
     expect(split.thinking).toBe("step 1");
     expect(split.text).toBe("Final answer");
 
-    const plan = parsePlanEntries(JSON.stringify([{ content: "Step A", status: "completed" }]));
+    const plan = parsePlanEntries(
+      JSON.stringify([{ content: "Step A", status: "completed" }]),
+    );
     expect(plan?.[0].content).toBe("Step A");
   });
 });
@@ -398,33 +449,79 @@ describe("agent Phase 3 attachment & sidebar order contracts", () => {
     const parsed = splitUserAttachmentText(prompt);
     expect(parsed.body).toBe("请检查这两个文件");
     expect(parsed.attachments).toHaveLength(2);
-    expect(parsed.attachments[0]).toMatchObject({ kind: "file", path: "/repo/src/a.ts" });
-    expect(parsed.attachments[1]).toMatchObject({ kind: "dir", path: "/repo/docs" });
+    expect(parsed.attachments[0]).toMatchObject({
+      kind: "file",
+      path: "/repo/src/a.ts",
+    });
+    expect(parsed.attachments[1]).toMatchObject({
+      kind: "dir",
+      path: "/repo/docs",
+    });
   });
 
   it("promotes live sessions and reorders displayed items deterministically", () => {
     expect(promoteLiveOrder(["a", "b", "c"], ["c"])).toEqual(["c", "a", "b"]);
-    expect(moveDisplayedItem(["a", "b", "c"], ["a", "b", "c"], "c", 0)).toEqual([
-      "c",
-      "a",
-      "b",
-    ]);
+    expect(moveDisplayedItem(["a", "b", "c"], ["a", "b", "c"], "c", 0)).toEqual(
+      ["c", "a", "b"],
+    );
   });
 });
 
 describe("agent Turn timeline aggregation & compact ticker", () => {
   it("folds intermediate thinking, tools, and narratives into one Turn process while keeping final answer standalone", () => {
     const msgs: AgentMessage[] = [
-      makeMessage({ id: "u1", role: "user", text: "统计并导出", createdAt: 1000 }),
-      makeMessage({ id: "a1", role: "assistant", thinking: "先查看表结构", text: "接下来精确统计。", createdAt: 1500 }),
-      makeMessage({ id: "t1", kind: "toolCall", toolName: "bash", arguments: { command: "python stats.py" }, status: "completed", createdAt: 2000 }),
-      makeMessage({ id: "a2", role: "assistant", thinking: "读结果", text: "统计已写好。", createdAt: 3000 }),
-      makeMessage({ id: "t2", kind: "toolCall", toolName: "edit", arguments: { path: "export.py" }, diff: { oldText: "a", newText: "b" }, status: "completed", createdAt: 4000 }),
-      makeMessage({ id: "a3", role: "assistant", thinking: "验证最终交付", text: "已导出完成，共 26,758 条。", createdAt: 5000 }),
+      makeMessage({
+        id: "u1",
+        role: "user",
+        text: "统计并导出",
+        createdAt: 1000,
+      }),
+      makeMessage({
+        id: "a1",
+        role: "assistant",
+        thinking: "先查看表结构",
+        text: "接下来精确统计。",
+        createdAt: 1500,
+      }),
+      makeMessage({
+        id: "t1",
+        kind: "toolCall",
+        toolName: "bash",
+        arguments: { command: "python stats.py" },
+        status: "completed",
+        createdAt: 2000,
+      }),
+      makeMessage({
+        id: "a2",
+        role: "assistant",
+        thinking: "读结果",
+        text: "统计已写好。",
+        createdAt: 3000,
+      }),
+      makeMessage({
+        id: "t2",
+        kind: "toolCall",
+        toolName: "edit",
+        arguments: { path: "export.py" },
+        diff: { oldText: "a", newText: "b" },
+        status: "completed",
+        createdAt: 4000,
+      }),
+      makeMessage({
+        id: "a3",
+        role: "assistant",
+        thinking: "验证最终交付",
+        text: "已导出完成，共 26,758 条。",
+        createdAt: 5000,
+      }),
     ];
 
     const blocks = buildTranscriptBlocks(msgs, false, "/repo");
-    expect(blocks.map((b) => b.kind)).toEqual(["message", "process", "message"]);
+    expect(blocks.map((b) => b.kind)).toEqual([
+      "message",
+      "process",
+      "message",
+    ]);
 
     const proc = blocks[1];
     expect(proc.kind).toBe("process");
@@ -457,7 +554,14 @@ describe("agent Turn timeline aggregation & compact ticker", () => {
 
   it("shows immediate live wait ticker right after user prompt while running", () => {
     const blocks = buildTranscriptBlocks(
-      [makeMessage({ id: "u1", role: "user", text: "开始分析", createdAt: 2000 })],
+      [
+        makeMessage({
+          id: "u1",
+          role: "user",
+          text: "开始分析",
+          createdAt: 2000,
+        }),
+      ],
       true,
       "/repo",
     );
@@ -473,7 +577,11 @@ describe("agent Turn timeline aggregation & compact ticker", () => {
     const blocks = buildTranscriptBlocks(
       [
         makeMessage({ id: "u1", role: "user", text: "你好" }),
-        makeMessage({ id: "a1", role: "assistant", text: "你好，有什么可以帮您？" }),
+        makeMessage({
+          id: "a1",
+          role: "assistant",
+          text: "你好，有什么可以帮您？",
+        }),
       ],
       false,
       "/repo",
@@ -521,7 +629,12 @@ describe("agent Turn timeline aggregation & compact ticker", () => {
         status: "completed",
         createdAt: 2200,
       }),
-      makeMessage({ id: "a1", role: "assistant", text: "已修复通过", createdAt: 2500 }),
+      makeMessage({
+        id: "a1",
+        role: "assistant",
+        text: "已修复通过",
+        createdAt: 2500,
+      }),
     ];
     const blocks = buildTranscriptBlocks(recoveredTurn, false, "d:/repo", {
       turnId: "turn-1",
@@ -533,8 +646,22 @@ describe("agent Turn timeline aggregation & compact ticker", () => {
       dirtyBefore: 0,
       dirtyAfter: 2,
       changedFiles: [
-        { path: "src/a.ts", status: " M", staged: false, untracked: false, additions: 4, deletions: 1 },
-        { path: "src/generated.txt", status: "??", staged: false, untracked: true, additions: 10, deletions: 0 },
+        {
+          path: "src/a.ts",
+          status: " M",
+          staged: false,
+          untracked: false,
+          additions: 4,
+          deletions: 1,
+        },
+        {
+          path: "src/generated.txt",
+          status: "??",
+          staged: false,
+          untracked: true,
+          additions: 10,
+          deletions: 0,
+        },
       ],
     });
     const proc = blocks[1];
@@ -542,8 +669,17 @@ describe("agent Turn timeline aggregation & compact ticker", () => {
     if (proc.kind === "process") {
       expect(proc.statusTitle).toBe("已完成（已恢复）");
       expect(proc.fileChanges).toHaveLength(2);
-      expect(proc.fileChanges[0]).toMatchObject({ path: "d:/repo/src/a.ts", adds: 4, dels: 1 });
-      expect(proc.fileChanges[1]).toMatchObject({ path: "d:/repo/src/generated.txt", adds: 10, dels: 0, operation: "新增" });
+      expect(proc.fileChanges[0]).toMatchObject({
+        path: "d:/repo/src/a.ts",
+        adds: 4,
+        dels: 1,
+      });
+      expect(proc.fileChanges[1]).toMatchObject({
+        path: "d:/repo/src/generated.txt",
+        adds: 10,
+        dels: 0,
+        operation: "新增",
+      });
     }
   });
 
@@ -554,20 +690,29 @@ describe("agent Turn timeline aggregation & compact ticker", () => {
     );
     expect(sidebarSource).not.toContain("agent-ws-running");
     expect(sidebarSource).not.toContain("个任务运行中");
-    expect(sidebarSource).toContain("const liveSession = views[session.id] ?? session");
+    expect(sidebarSource).toContain(
+      "const liveSession = views[session.id] ?? session",
+    );
 
     const transcriptSource = readFileSync(
       resolve(__dirname, "AgentTranscript.tsx"),
       "utf8",
     );
     expect(transcriptSource).toContain("detachFollowing(event.currentTarget)");
-    expect(transcriptSource).not.toMatch(/<ContextMenuTrigger[^>]*>\s*<section/);
+    expect(transcriptSource).not.toMatch(
+      /<ContextMenuTrigger[^>]*>\s*<section/,
+    );
     expect(transcriptSource).toContain('role="log"');
   });
 
   it("keeps live process block running when assistant streams intermediate text/code during an active turn", () => {
     const msgs: AgentMessage[] = [
-      makeMessage({ id: "u1", role: "user", text: "评估下路径", createdAt: 1000 }),
+      makeMessage({
+        id: "u1",
+        role: "user",
+        text: "评估下路径",
+        createdAt: 1000,
+      }),
       makeMessage({
         id: "t1",
         kind: "toolCall",

@@ -11,10 +11,7 @@ import {
 import { VoiceInputButton } from "@/modules/voice/VoiceInputButton";
 import { SkillMentionInput } from "@/modules/plugins/SkillMentionInput";
 import { ZoomableImage } from "@/modules/reader/ZoomableImage";
-import {
-  draftHasPayload,
-  withAttachmentPrompt,
-} from "@/modules/plugins/pi-agent/piAttachments";
+import { draftHasPayload, withAttachmentPrompt } from "./attachments";
 import {
   Popover,
   PopoverContent,

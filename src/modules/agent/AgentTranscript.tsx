@@ -35,7 +35,7 @@ import {
 import { MarkdownLink } from "@/modules/markdown/MarkdownLink";
 import { MarkdownTable } from "@/modules/markdown/MarkdownTable";
 import { ZoomableImage } from "@/modules/reader/ZoomableImage";
-import { splitUserAttachmentText } from "@/modules/plugins/pi-agent/piAttachments";
+import { splitUserAttachmentText } from "./attachments";
 import {
   speakVoice,
   stopVoiceOutput,

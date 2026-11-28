@@ -6,8 +6,13 @@ import { Button } from "@/components/ui/button";
 import {
   RECOMMENDED_PI_PLUGINS,
   isRecommendedPluginInstalled,
-} from "@/modules/plugins/pi-agent/recommendedPlugins";
-import { SettingCard, SettingNote, SettingRow, SettingSectionHeader } from "./SettingPrimitives";
+} from "./recommendedPlugins";
+import {
+  SettingCard,
+  SettingNote,
+  SettingRow,
+  SettingSectionHeader,
+} from "./SettingPrimitives";
 import { useAgentStore } from "./store";
 
 type Asset = { name: string; path: string; source: string };
@@ -129,9 +134,7 @@ export function PiAssetsPanel({ kind }: { kind: "skills" | "plugins" }) {
         </SettingCard>
       ) : (
         <>
-          {!items.length && !busy && (
-            <SettingNote>暂无{title}</SettingNote>
-          )}
+          {!items.length && !busy && <SettingNote>暂无{title}</SettingNote>}
           {items.length > 0 && (
             <SettingCard>
               {items.map((item) => (
@@ -145,7 +148,11 @@ export function PiAssetsPanel({ kind }: { kind: "skills" | "plugins" }) {
                       </span>
                     </span>
                   }
-                  description={item.path ? <span className="font-mono text-[10px]">{item.path}</span> : undefined}
+                  description={
+                    item.path ? (
+                      <span className="font-mono text-[10px]">{item.path}</span>
+                    ) : undefined
+                  }
                   control={
                     item.path && (
                       <Button

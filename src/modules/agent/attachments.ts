@@ -1,6 +1,6 @@
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
-import type { PiImage } from "./types";
+import type { AgentImage } from "./types";
 
 export type PiPathAttachment = {
   kind: "file" | "dir";
@@ -16,7 +16,7 @@ export type PiSkill = {
 
 export type PiDraft = {
   text: string;
-  images: PiImage[];
+  images: AgentImage[];
   files: PiPathAttachment[];
   skills: PiSkill[];
 };
@@ -46,14 +46,14 @@ export function attachmentName(path: string): string {
   return normalized.split("/").pop() || normalized;
 }
 
-/** 图片仍走 Pi 原生 images，其余扩展名一律当路径芯片。 */
+/** 图片仍走原生 images，其余扩展名一律当路径芯片。 */
 export function isImagePath(path: string): boolean {
   const extension = path.split(".").pop()?.toLowerCase() ?? "";
   return IMAGE_EXTENSIONS.has(extension);
 }
 
-/** 把本地图片读成 Pi 原生 image part。 */
-export async function readPathImage(path: string): Promise<PiImage> {
+/** 把本地图片读成原生 image part。 */
+export async function readPathImage(path: string): Promise<AgentImage> {
   const bytes = await invoke<number[]>("fs_read_asset_bytes", {
     path,
     workspace: currentWorkspaceEnv(),
@@ -103,7 +103,7 @@ export function draftHasPayload(
   draft:
     | {
         text: string;
-        images: PiImage[];
+        images: AgentImage[];
         files?: PiPathAttachment[];
         skills?: PiSkill[];
       }
