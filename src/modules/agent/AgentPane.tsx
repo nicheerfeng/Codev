@@ -161,31 +161,12 @@ export function AgentPane({
   const handledRequest = useRef<number | null>(null);
   const initializedWorkspace = useRef(false);
   useEffect(() => {
-    if (
-      !projectRequest ||
-      mobile ||
-      !active ||
-      state.connection !== "connected" ||
-      handledRequest.current === projectRequest.id
-    )
-      return;
+    if (!projectRequest || mobile || !active) return;
+    if (handledRequest.current === projectRequest.id) return;
     handledRequest.current = projectRequest.id;
-    void state
-      .addWorkspace(projectRequest.cwd)
-      .then(() => {
-        setSidebar(true);
-        toast.success("已添加到 Agent 工作区");
-        finishAgentProjectRequest(projectRequest.id);
-      })
-      .catch(report);
-  }, [
-    projectRequest,
-    mobile,
-    active,
-    state.connection,
-    state.addWorkspace,
-    report,
-  ]);
+    setSidebar(true);
+    finishAgentProjectRequest(projectRequest.id);
+  }, [projectRequest, mobile, active]);
   useEffect(() => {
     if (mobile) return;
     const timer = setTimeout(() => {
@@ -309,8 +290,9 @@ export function AgentPane({
       title: "选择 Agent 工作目录",
     });
     if (typeof cwd === "string") {
-      await state.addWorkspace(cwd);
+      const workspace = await state.addWorkspace(cwd);
       onAddWorkspaceRoot?.(cwd);
+      toast.success(`已添加「${workspace.title}」到 Agent 工作区`);
     }
   };
   const create = async () => {

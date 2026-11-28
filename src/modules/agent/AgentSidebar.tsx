@@ -40,6 +40,7 @@ import {
   moveDisplayedItem,
   promoteLiveOrder,
 } from "@/modules/agent/sidebarOrder";
+import { useAgentProjectRequest } from "./agentProjectRequest";
 import {
   canAcceptViewportSlot,
   MAX_AGENT_VIEWPORTS,
@@ -250,13 +251,41 @@ export function AgentSidebar({
       .catch(report);
   };
 
+  const projectRequest = useAgentProjectRequest((s) => s.request);
+  useEffect(() => {
+    if (!projectRequest) return;
+    setSearch("");
+    const targetKey = projectRequest.cwd
+      .replace(/\\/g, "/")
+      .replace(/\/+$/, "")
+      .toLowerCase();
+    const matched = workspaces.find(
+      (workspace) =>
+        workspace.cwd.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase() ===
+        targetKey,
+    );
+    const targetId = matched?.id ?? workspaceId;
+    if (!targetId) return;
+    const groupId = organization.projectGroups[targetId] ?? "";
+    setCollapsedGroups((current) => current.filter((id) => id !== groupId));
+    setExpanded((prev) =>
+      prev[targetId] ? prev : { ...prev, [targetId]: true },
+    );
+  }, [projectRequest, workspaces, workspaceId, organization.projectGroups]);
+
   useEffect(() => {
     if (workspaceId) {
+      const groupId = organization.projectGroups[workspaceId] ?? "";
+      setCollapsedGroups((current) =>
+        current.includes(groupId)
+          ? current.filter((id) => id !== groupId)
+          : current,
+      );
       setExpanded((prev) =>
         prev[workspaceId] ? prev : { ...prev, [workspaceId]: true },
       );
     }
-  }, [workspaceId]);
+  }, [workspaceId, organization.projectGroups]);
 
   const liveSessionIds = useMemo(
     () =>

@@ -60,7 +60,7 @@ type State = {
     workspaceId: string,
     harnessIds: string[],
   ) => Promise<void>;
-  addWorkspace: (cwd: string) => Promise<void>;
+  addWorkspace: (cwd: string) => Promise<Workspace>;
   setWorkspace: (id: string) => void;
   setHarness: (id: string) => void;
   setDraft: (id: string, draft: Partial<Draft>) => void;
@@ -698,6 +698,9 @@ export const useAgentStore = create<State>((set, get) => ({
     }));
   },
   addWorkspace: async (cwd) => {
+    if (!get().mobile && get().connection !== "connected") {
+      await get().initDesktop();
+    }
     const workspace = await agentClient.request<Workspace>("workspace.add", {
       cwd,
     });
@@ -708,6 +711,7 @@ export const useAgentStore = create<State>((set, get) => ({
         workspace,
       ],
     }));
+    return workspace;
   },
   setWorkspace: (id) => set({ workspaceId: id }),
   setHarness: (id) => set({ harnessId: id }),
