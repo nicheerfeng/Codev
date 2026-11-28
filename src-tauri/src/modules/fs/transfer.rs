@@ -260,7 +260,7 @@ fn execute(
         let name = source
             .file_name()
             .ok_or_else(|| transfer_error("invalid_source", &source, "源路径无效".to_string()))?;
-        let target = allocate_target(&destination, name, mode, &mut names)?;
+        let target = allocate_target(&destination, name, metadata.is_dir(), mode, &mut names)?;
         if source == target || inside(&target, &source) {
             return Err(transfer_error(
                 "recursive_target",
@@ -366,6 +366,7 @@ fn undo(record: UndoRecord) -> Result<(), TransferError> {
 fn allocate_target(
     destination: &Path,
     name: &std::ffi::OsStr,
+    is_dir: bool,
     mode: TransferMode,
     names: &mut HashSet<String>,
 ) -> Result<PathBuf, TransferError> {
@@ -382,8 +383,16 @@ fn allocate_target(
         return Ok(original);
     }
 
-    let stem = Path::new(name).file_stem().unwrap_or(name);
-    let extension = Path::new(name).extension();
+    let stem = if is_dir {
+        name
+    } else {
+        Path::new(name).file_stem().unwrap_or(name)
+    };
+    let extension = if is_dir {
+        None
+    } else {
+        Path::new(name).extension()
+    };
     for index in 0u64.. {
         let candidate_name = if index == 0 {
             name.to_os_string()

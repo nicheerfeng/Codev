@@ -9,6 +9,7 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuShortcut,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
@@ -606,6 +607,12 @@ export const RootTree = memo(
           else onOpenFile(row.path);
           break;
         }
+        case "F2": {
+          if (currentIdx < 0 || selectedPaths.length > 1) return;
+          e.preventDefault();
+          tree.beginRename(entryPaths[currentIdx]);
+          break;
+        }
       }
     };
 
@@ -1006,37 +1013,6 @@ export const RootTree = memo(
                     }
                     isFile={!menuTarget.isDir}
                   />
-                  {onCopyPaths && (
-                    <ContextMenuItem
-                      className={COMPACT_ITEM}
-                      onSelect={() => onCopyPaths(menuPaths)}
-                    >
-                      {t("Copy")}
-                    </ContextMenuItem>
-                  )}
-                  {onCutPaths && (
-                    <ContextMenuItem
-                      className={COMPACT_ITEM}
-                      onSelect={() => onCutPaths(menuPaths)}
-                    >
-                      {t("Cut")}
-                    </ContextMenuItem>
-                  )}
-                  {clipboardAvailable && onPasteTo && menuTarget.isDir ? (
-                    <ContextMenuItem
-                      className={COMPACT_ITEM}
-                      onSelect={() => onPasteTo(menuTarget.path)}
-                    >
-                      {t("Paste")}
-                    </ContextMenuItem>
-                  ) : null}
-                  <ContextMenuItem
-                    className={COMPACT_ITEM}
-                    disabled={menuPaths.length > 1}
-                    onSelect={() => tree.beginRename(menuTarget.path)}
-                  >
-                    {t("Rename")}
-                  </ContextMenuItem>
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     onSelect={() => void revealInFinder(menuTarget.path)}
@@ -1069,6 +1045,47 @@ export const RootTree = memo(
                     }
                   >
                     {t("New folder")}
+                  </ContextMenuItem>
+                  {onCopyPaths && (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={() => onCopyPaths(menuPaths)}
+                    >
+                      <span>{t("Copy")}</span>
+                      <ContextMenuShortcut>Ctrl+C</ContextMenuShortcut>
+                    </ContextMenuItem>
+                  )}
+                  {onCutPaths && (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={() => onCutPaths(menuPaths)}
+                    >
+                      <span>{t("Cut")}</span>
+                      <ContextMenuShortcut>Ctrl+X</ContextMenuShortcut>
+                    </ContextMenuItem>
+                  )}
+                  {clipboardAvailable && onPasteTo ? (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={() =>
+                        onPasteTo(
+                          menuTarget.isDir
+                            ? menuTarget.path
+                            : parentOf(menuTarget.path, rootPath),
+                        )
+                      }
+                    >
+                      <span>{t("Paste")}</span>
+                      <ContextMenuShortcut>Ctrl+V</ContextMenuShortcut>
+                    </ContextMenuItem>
+                  ) : null}
+                  <ContextMenuItem
+                    className={COMPACT_ITEM}
+                    disabled={menuPaths.length > 1}
+                    onSelect={() => tree.beginRename(menuTarget.path)}
+                  >
+                    <span>{t("Rename")}</span>
+                    <ContextMenuShortcut>双击 / F2</ContextMenuShortcut>
                   </ContextMenuItem>
                   <ContextMenuSeparator className="my-0.5" />
                   <ContextMenuItem
@@ -1115,7 +1132,8 @@ export const RootTree = memo(
                       className={COMPACT_ITEM}
                       onSelect={() => onPasteTo(rootPath)}
                     >
-                      {t("Paste")}
+                      <span>{t("Paste")}</span>
+                      <ContextMenuShortcut>Ctrl+V</ContextMenuShortcut>
                     </ContextMenuItem>
                   ) : null}
                   {onRequestAddRoot && (

@@ -5,6 +5,7 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuShortcut,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
@@ -157,7 +158,8 @@ function EmptyExplorerContextMenu({
       <ContextMenuContent className={COMPACT_CONTENT}>
         {onPaste ? (
           <ContextMenuItem className={COMPACT_ITEM} onSelect={onPaste}>
-            {t("Paste")}
+            <span>{t("Paste")}</span>
+            <ContextMenuShortcut>Ctrl+V</ContextMenuShortcut>
           </ContextMenuItem>
         ) : null}
         <ContextMenuItem className={COMPACT_ITEM} onSelect={onAddFolder}>
@@ -366,7 +368,8 @@ function RootSection({
           </ContextMenuItem>
           {onPaste ? (
             <ContextMenuItem className={COMPACT_ITEM} onSelect={onPaste}>
-              {t("Paste")}
+              <span>{t("Paste")}</span>
+              <ContextMenuShortcut>Ctrl+V</ContextMenuShortcut>
             </ContextMenuItem>
           ) : null}
           {onSearchInFolder ? (
@@ -680,6 +683,22 @@ export const FileExplorer = memo(
               { path: destination, workspace: currentWorkspaceEnv() },
             );
             toDir = stat.kind === "dir" ? destination : parentPath(destination);
+          }
+          const norm = (value: string) =>
+            value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+          const normDest = norm(toDir);
+          const includesSelf = pending.paths.some(
+            (source) => norm(source) === normDest,
+          );
+          if (includesSelf) {
+            if (pending.mode === "move") {
+              toast.info("项目已在当前目录中");
+              return;
+            }
+            const parent = parentPath(toDir);
+            if (norm(parent) !== normDest) {
+              toDir = parent;
+            }
           }
           const result = await transfer.start(
             pending.paths,
@@ -1102,7 +1121,8 @@ export const FileExplorer = memo(
                 className={COMPACT_ITEM}
                 onSelect={() => void pasteClipboard(activeRoot)}
               >
-                {t("Paste")}
+                <span>{t("Paste")}</span>
+                <ContextMenuShortcut>Ctrl+V</ContextMenuShortcut>
               </ContextMenuItem>
             ) : null}
             <ContextMenuItem
