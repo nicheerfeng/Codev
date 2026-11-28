@@ -458,6 +458,56 @@ export function planCloseOtherTabs(
   };
 }
 
+/** 按指定标签栏显示顺序关闭目标左侧全部标签，默认沿用空间范围。 */
+export function planCloseTabsToLeft(
+  tabs: Tab[],
+  anchorId: number,
+  activeId: number,
+  scopeIds?: number[],
+): CloseTabsPlan {
+  const anchor = tabs.find((t) => t.id === anchorId);
+  if (!anchor) return { closeIds: [], nextActiveId: activeId };
+  const sameSpace = scopeIds
+    ? scopeIds.flatMap((id) => tabs.filter((tab) => tab.id === id))
+    : tabs.filter((t) => t.spaceId === anchor.spaceId);
+  const idx = sameSpace.findIndex((t) => t.id === anchorId);
+  if (idx <= 0) return { closeIds: [], nextActiveId: activeId };
+  const closeIds = sameSpace.slice(0, idx).map((t) => t.id);
+  if (closeIds.length === 0) return { closeIds, nextActiveId: activeId };
+  return {
+    closeIds,
+    nextActiveId: closeIds.includes(activeId) ? anchorId : activeId,
+    ...(scopeIds ? { scopeIds } : {}),
+  };
+}
+
+/** 按指定标签栏显示顺序关闭范围内全部可关闭标签（保留仅剩的终端会话）。 */
+export function planCloseAllTabs(
+  tabs: Tab[],
+  anchorId: number,
+  activeId: number,
+  scopeIds?: number[],
+): CloseTabsPlan {
+  const anchor = tabs.find((t) => t.id === anchorId);
+  if (!anchor) return { closeIds: [], nextActiveId: activeId };
+  const sameSpace = scopeIds
+    ? scopeIds.flatMap((id) => tabs.filter((tab) => tab.id === id))
+    : tabs.filter((t) => t.spaceId === anchor.spaceId);
+  const closeIds = sameSpace.map((t) => t.id);
+  if (closeIds.length === 0) return { closeIds, nextActiveId: activeId };
+  const remaining = tabs.filter((t) => !closeIds.includes(t.id));
+  const nextActiveId = closeIds.includes(activeId)
+    ? (remaining.find((t) => t.spaceId === anchor.spaceId)?.id ??
+      remaining[0]?.id ??
+      -1)
+    : activeId;
+  return {
+    closeIds,
+    nextActiveId,
+    ...(scopeIds ? { scopeIds } : {}),
+  };
+}
+
 /** 按已确定的标签栏范围批量关闭；未指定范围时保留原空间边界。 */
 export function applyCloseTabsPlan(
   tabs: Tab[],
@@ -470,11 +520,9 @@ export function applyCloseTabsPlan(
   const requested = new Set(plan.closeIds);
   const closing = tabs.filter(
     (tab) =>
-      tab.id !== anchorId &&
       (plan.scopeIds
         ? plan.scopeIds.includes(tab.id)
-        : tab.spaceId === anchor.spaceId) &&
-      requested.has(tab.id),
+        : tab.spaceId === anchor.spaceId) && requested.has(tab.id),
   );
   if (closing.length === 0) return null;
 
@@ -483,7 +531,9 @@ export function applyCloseTabsPlan(
   const next = tabs.filter((tab) => !close.has(tab.id));
   const nextActiveId = next.some((tab) => tab.id === plan.nextActiveId)
     ? plan.nextActiveId
-    : anchorId;
+    : (next.find((tab) => tab.spaceId === anchor.spaceId)?.id ??
+      next[0]?.id ??
+      -1);
   const disposeLeafIds = closing
     .filter((tab) => tab.kind === "terminal")
     .flatMap((tab) => leafIds(tab.paneTree));

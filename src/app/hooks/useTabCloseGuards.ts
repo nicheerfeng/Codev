@@ -10,7 +10,9 @@ import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
   type CloseTabsPlan,
   nextActiveInSpace,
+  planCloseAllTabs,
   planCloseOtherTabs,
+  planCloseTabsToLeft,
   planCloseTabsToRight,
   type Tab,
 } from "@/modules/tabs";
@@ -144,9 +146,31 @@ export function useTabCloseGuards({
       const source = scopeIds
         ? tabsRef.current.filter((tab) => scopeIds.includes(tab.id))
         : tabsRef.current;
-      return kind === "right"
-        ? planCloseTabsToRight(source, anchorId, activeIdRef.current, scopeIds)
-        : planCloseOtherTabs(source, anchorId, activeIdRef.current);
+      if (kind === "left") {
+        return planCloseTabsToLeft(
+          source,
+          anchorId,
+          activeIdRef.current,
+          scopeIds,
+        );
+      }
+      if (kind === "right") {
+        return planCloseTabsToRight(
+          source,
+          anchorId,
+          activeIdRef.current,
+          scopeIds,
+        );
+      }
+      if (kind === "all") {
+        return planCloseAllTabs(
+          tabsRef.current,
+          anchorId,
+          activeIdRef.current,
+          scopeIds,
+        );
+      }
+      return planCloseOtherTabs(source, anchorId, activeIdRef.current);
     },
     [],
   );
@@ -197,9 +221,23 @@ export function useTabCloseGuards({
     [handleCloseMany],
   );
 
+  const handleCloseTabsToLeftInGroup = useCallback(
+    (groupIds: number[], anchorId: number) => {
+      void handleCloseMany("left", anchorId, groupIds);
+    },
+    [handleCloseMany],
+  );
+
   const handleCloseTabsToRightInGroup = useCallback(
     (groupIds: number[], anchorId: number) => {
       void handleCloseMany("right", anchorId, groupIds);
+    },
+    [handleCloseMany],
+  );
+
+  const handleCloseAllTabsInGroup = useCallback(
+    (groupIds: number[], anchorId: number) => {
+      void handleCloseMany("all", anchorId, groupIds);
     },
     [handleCloseMany],
   );
@@ -299,7 +337,9 @@ export function useTabCloseGuards({
     handleClose,
     handleCloseTabsToRight,
     handleCloseOtherTabs,
+    handleCloseTabsToLeftInGroup,
     handleCloseTabsToRightInGroup,
+    handleCloseAllTabsInGroup,
     handleCloseOtherTabsInGroup,
     confirmTerminalClose,
     cancelTerminalClose,

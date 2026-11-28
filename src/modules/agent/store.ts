@@ -78,10 +78,7 @@ export const MAX_AGENT_VIEWPORTS = 6;
 
 export type AgentNoticeLevel = "info" | "warning" | "error";
 
-export function notifyAgent(
-  message: string,
-  level: AgentNoticeLevel = "info",
-) {
+export function notifyAgent(message: string, level: AgentNoticeLevel = "info") {
   const text = message.trim();
   if (!text) return;
   if (level === "info") {
@@ -629,7 +626,11 @@ export const useAgentStore = create<State>((set, get) => ({
             : slots.length > 1
               ? -1
               : 0);
-    if (viewport === undefined && index < 0 && slots.length < MAX_AGENT_VIEWPORTS) {
+    if (
+      viewport === undefined &&
+      index < 0 &&
+      slots.length < MAX_AGENT_VIEWPORTS
+    ) {
       index = slots.length;
       slots = [...slots, null];
     }

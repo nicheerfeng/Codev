@@ -703,7 +703,9 @@ export default function App() {
     pendingCloseMany,
     closeManyConfirming,
     handleClose,
+    handleCloseTabsToLeftInGroup,
     handleCloseTabsToRightInGroup,
+    handleCloseAllTabsInGroup,
     confirmTerminalClose,
     cancelTerminalClose,
     confirmDeleteClose,
@@ -1411,7 +1413,9 @@ export default function App() {
                     onSelectPrimary={selectPrimaryEditor}
                     onSelectSecondary={selectSecondaryEditor}
                     onClose={handleClose}
+                    onCloseTabsToLeft={handleCloseTabsToLeftInGroup}
                     onCloseTabsToRight={handleCloseTabsToRightInGroup}
+                    onCloseAllTabs={handleCloseAllTabsInGroup}
                     onPin={pinTab}
                     onRename={handleRenameTab}
                     onReorderPrimary={reorderPrimaryEditors}

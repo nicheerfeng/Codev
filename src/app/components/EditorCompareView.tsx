@@ -25,7 +25,9 @@ type EditorGroupProps = {
   labelScopeTabs: Tab[];
   onSelect: (id: number) => void;
   onClose: (id: number) => void;
+  onCloseTabsToLeft: (groupIds: number[], id: number) => void;
   onCloseTabsToRight: (groupIds: number[], id: number) => void;
+  onCloseAllTabs: (groupIds: number[], id: number) => void;
   onPin: (id: number) => void;
   onRename: (id: number, title: string) => void;
   onReorder: (fromId: number, toGapIndex: number) => void;
@@ -53,7 +55,9 @@ function EditorGroup({
   labelScopeTabs,
   onSelect,
   onClose,
+  onCloseTabsToLeft,
   onCloseTabsToRight,
+  onCloseAllTabs,
   onPin,
   onRename,
   onReorder,
@@ -106,8 +110,20 @@ function EditorGroup({
             activeId={activeId}
             onSelect={onSelect}
             onClose={onClose}
+            onCloseTabsToLeft={(id) =>
+              onCloseTabsToLeft(
+                tabs.map((tab) => tab.id),
+                id,
+              )
+            }
             onCloseTabsToRight={(id) =>
               onCloseTabsToRight(
+                tabs.map((tab) => tab.id),
+                id,
+              )
+            }
+            onCloseAllTabs={(id) =>
+              onCloseAllTabs(
                 tabs.map((tab) => tab.id),
                 id,
               )
@@ -210,7 +226,9 @@ type Props = {
   onSelectPrimary: (id: number) => void;
   onSelectSecondary: (id: number) => void;
   onClose: (id: number) => void;
+  onCloseTabsToLeft: (groupIds: number[], id: number) => void;
   onCloseTabsToRight: (groupIds: number[], id: number) => void;
+  onCloseAllTabs: (groupIds: number[], id: number) => void;
   onPin: (id: number) => void;
   onRename: (id: number, title: string) => void;
   onReorderPrimary: (fromId: number, toGapIndex: number) => void;
@@ -240,7 +258,9 @@ export function EditorCompareView({
   onSelectPrimary,
   onSelectSecondary,
   onClose,
+  onCloseTabsToLeft,
   onCloseTabsToRight,
+  onCloseAllTabs,
   onPin,
   onRename,
   onReorderPrimary,
@@ -265,7 +285,9 @@ export function EditorCompareView({
       labelScopeTabs={labelScopeTabs}
       onSelect={onSelectPrimary}
       onClose={onClose}
+      onCloseTabsToLeft={onCloseTabsToLeft}
       onCloseTabsToRight={onCloseTabsToRight}
+      onCloseAllTabs={onCloseAllTabs}
       onPin={onPin}
       onRename={onRename}
       onReorder={onReorderPrimary}
@@ -290,7 +312,9 @@ export function EditorCompareView({
       labelScopeTabs={labelScopeTabs}
       onSelect={onSelectSecondary}
       onClose={onClose}
+      onCloseTabsToLeft={onCloseTabsToLeft}
       onCloseTabsToRight={onCloseTabsToRight}
+      onCloseAllTabs={onCloseAllTabs}
       onPin={onPin}
       onRename={onRename}
       onReorder={onReorderSecondary}

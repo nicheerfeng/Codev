@@ -103,7 +103,11 @@ function closeManyMessage(pending: CloseManyPending): string {
     busyCount === 1 ? "A process is" : `${busyCount} processes are`;
   return kind === "right"
     ? `${process} running in ${busyCount === 1 ? "a tab" : "tabs"} to the right. Closing will terminate ${busyCount === 1 ? "it" : "them"}. Close anyway?`
-    : `${process} running in ${busyCount === 1 ? "another tab" : "other tabs"}. Closing will terminate ${busyCount === 1 ? "it" : "them"}. Close anyway?`;
+    : kind === "left"
+      ? `${process} running in ${busyCount === 1 ? "a tab" : "tabs"} to the left. Closing will terminate ${busyCount === 1 ? "it" : "them"}. Close anyway?`
+      : kind === "all"
+        ? `${process} running in ${busyCount === 1 ? "this tab" : "these tabs"}. Closing all will terminate ${busyCount === 1 ? "it" : "them"}. Close anyway?`
+        : `${process} running in ${busyCount === 1 ? "another tab" : "other tabs"}. Closing will terminate ${busyCount === 1 ? "it" : "them"}. Close anyway?`;
 }
 
 /** Confirmation dialogs for closing dirty editors and terminals with live processes. */

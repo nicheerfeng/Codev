@@ -12,7 +12,9 @@ type Props = {
   onSelectPrimary: (id: number) => void;
   onSelectSecondary: (id: number) => void;
   onClose: (id: number) => void;
+  onCloseTabsToLeft: (groupIds: number[], id: number) => void;
   onCloseTabsToRight: (groupIds: number[], id: number) => void;
+  onCloseAllTabs: (groupIds: number[], id: number) => void;
   onPin: (id: number) => void;
   onRename: (id: number, title: string) => void;
   onReorderPrimary: (fromId: number, toGapIndex: number) => void;
@@ -42,7 +44,9 @@ export function WorkspaceSurface({
   onSelectPrimary,
   onSelectSecondary,
   onClose,
+  onCloseTabsToLeft,
   onCloseTabsToRight,
+  onCloseAllTabs,
   onPin,
   onRename,
   onReorderPrimary,
@@ -68,7 +72,9 @@ export function WorkspaceSurface({
         onSelectPrimary={onSelectPrimary}
         onSelectSecondary={onSelectSecondary}
         onClose={onClose}
+        onCloseTabsToLeft={onCloseTabsToLeft}
         onCloseTabsToRight={onCloseTabsToRight}
+        onCloseAllTabs={onCloseAllTabs}
         onPin={onPin}
         onRename={onRename}
         onReorderPrimary={onReorderPrimary}

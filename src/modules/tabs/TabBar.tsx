@@ -49,8 +49,12 @@ type Props = {
   activeId: number;
   onSelect: (id: number) => void;
   onClose: (id: number) => void;
+  /** Chrome-style: close every tab to the left of the given tab. */
+  onCloseTabsToLeft?: (id: number) => void;
   /** Chrome-style: close every tab to the right of the given tab. */
   onCloseTabsToRight: (id: number) => void;
+  /** Close all tabs in this tab bar. */
+  onCloseAllTabs?: (id: number) => void;
   /** Pin (promote) a preview tab to persistent on double-click. */
   onPin: (id: number) => void;
   /** Set a terminal tab's custom label; empty string resets to default. */
@@ -138,7 +142,9 @@ export function TabBar({
   activeId,
   onSelect,
   onClose,
+  onCloseTabsToLeft,
   onCloseTabsToRight,
+  onCloseAllTabs,
   onPin,
   onRename,
   onReorder,
@@ -606,6 +612,7 @@ export function TabBar({
                   </TabsTrigger>
                 );
 
+                const hasTabsToLeft = i > 0;
                 const hasTabsToRight = i < tabs.length - 1;
 
                 const tabNode = (
@@ -668,6 +675,22 @@ export function TabBar({
                           )}
                         </>
                       )}
+                      {onCloseTabsToLeft && (
+                        <ContextMenuItem
+                          className="gap-2 rounded-xl px-2.5 py-1.5 text-[13px]"
+                          disabled={!hasTabsToLeft}
+                          onSelect={() => onCloseTabsToLeft(t.id)}
+                        >
+                          <HugeiconsIcon
+                            icon={ArrowLeft01Icon}
+                            size={13}
+                            strokeWidth={1.75}
+                          />
+                          <span className="flex-1">
+                            {translate("Close tabs to the left")}
+                          </span>
+                        </ContextMenuItem>
+                      )}
                       <ContextMenuItem
                         className="gap-2 rounded-xl px-2.5 py-1.5 text-[13px]"
                         disabled={!hasTabsToRight}
@@ -682,6 +705,22 @@ export function TabBar({
                           {translate("Close tabs to the right")}
                         </span>
                       </ContextMenuItem>
+                      {onCloseAllTabs && (
+                        <ContextMenuItem
+                          className="gap-2 rounded-xl px-2.5 py-1.5 text-[13px]"
+                          disabled={tabs.length === 0}
+                          onSelect={() => onCloseAllTabs(t.id)}
+                        >
+                          <HugeiconsIcon
+                            icon={Cancel01Icon}
+                            size={13}
+                            strokeWidth={1.75}
+                          />
+                          <span className="flex-1">
+                            {translate("Close all tabs")}
+                          </span>
+                        </ContextMenuItem>
+                      )}
                     </ContextMenuContent>
                   </ContextMenu>
                 );
