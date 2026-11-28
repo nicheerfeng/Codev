@@ -927,7 +927,7 @@ export function NotepadPopover() {
           aria-label="记事本"
           title="记事本"
           aria-expanded={open}
-          className="notepad-fab pointer-events-auto relative flex size-7 cursor-grab items-center justify-center rounded-full border-[1.5px] border-sky-400/55 bg-popover text-[#8ec2e2] shadow-md hover:border-sky-400/80 hover:text-[#a8d4ef] active:cursor-grabbing dark:border-sky-400/50 dark:text-[#9ed0f0] dark:hover:text-[#bce2fa]"
+          className="notepad-fab pointer-events-auto relative flex size-7 cursor-grab items-center justify-center rounded-full border border-border/65 bg-popover text-[#8ec2e2] shadow-md hover:text-[#a8d4ef] active:cursor-grabbing dark:text-[#9ed0f0] dark:hover:text-[#bce2fa]"
           onPointerDown={(event) => {
             if (event.button !== 0) return;
             drag.current = {
@@ -970,6 +970,32 @@ export function NotepadPopover() {
             drag.current = null;
           }}
         >
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 32 32"
+            className="notepad-fab-orbit pointer-events-none absolute -inset-[2px] size-[calc(100%+4px)]"
+          >
+            <circle
+              cx="16"
+              cy="16"
+              r="14.2"
+              fill="none"
+              stroke="currentColor"
+              strokeOpacity="0.22"
+              strokeWidth="1.4"
+            />
+            <circle
+              cx="16"
+              cy="16"
+              r="14.2"
+              fill="none"
+              stroke="currentColor"
+              strokeOpacity="0.72"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeDasharray="16 74"
+            />
+          </svg>
           <HugeiconsIcon icon={CheckListIcon} size={14} />
           {stats.pending > 0 && (
             <span className="absolute -top-1 -right-1 min-w-3 rounded-sm bg-muted px-0.5 text-center text-[9px] leading-3 text-muted-foreground">
