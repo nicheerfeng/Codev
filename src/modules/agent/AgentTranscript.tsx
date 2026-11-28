@@ -907,16 +907,16 @@ export function AgentTranscript({
   }, [session.messages]);
   const handleEditToComposer = (text: string) => {
     const store = useAgentStore.getState();
-    const current = store.sessions[session.id];
+    const current = store.views[session.id];
     if (current && lastUserMessageId) {
       const idx = current.messages.findIndex((m) => m.id === lastUserMessageId);
       if (idx >= 0) {
         useAgentStore.setState((state) => {
-          const target = state.sessions[session.id];
+          const target = state.views[session.id];
           if (!target) return state;
           return {
-            sessions: {
-              ...state.sessions,
+            views: {
+              ...state.views,
               [session.id]: {
                 ...target,
                 messages: target.messages.slice(0, idx),
