@@ -86,9 +86,9 @@ function insertLineBreak(node: HTMLTextAreaElement) {
 function NoteInput({
   value,
   onChange,
-  onSubmit,
-  onEmptyBackspace,
-  onNavigate,
+  onConfirm,
+  onConfirmAndNext,
+  onCancel,
   onMultiPaste,
   placeholder,
   inputRef,
@@ -96,9 +96,9 @@ function NoteInput({
 }: {
   value: string;
   onChange: (value: string) => void;
-  onSubmit: () => void;
-  onEmptyBackspace?: () => void;
-  onNavigate?: (direction: -1 | 1) => void;
+  onConfirm: () => void;
+  onConfirmAndNext?: () => void;
+  onCancel?: () => void;
   onMultiPaste?: (entries: Array<{ text: string; done: boolean }>) => void;
   placeholder?: string;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
@@ -145,49 +145,21 @@ function NoteInput({
     if (event.nativeEvent.isComposing) return;
     if (event.key === "Escape") {
       event.preventDefault();
-      event.currentTarget.blur();
+      if (onCancel) onCancel();
+      else event.currentTarget.blur();
       return;
-    }
-    if (
-      event.key === "Backspace" &&
-      !value &&
-      onEmptyBackspace &&
-      event.currentTarget.selectionStart === 0 &&
-      event.currentTarget.selectionEnd === 0
-    ) {
-      event.preventDefault();
-      onEmptyBackspace();
-      return;
-    }
-    if (
-      (event.key === "ArrowUp" || event.key === "ArrowDown") &&
-      onNavigate &&
-      !event.shiftKey &&
-      !event.altKey &&
-      !event.ctrlKey &&
-      !event.metaKey
-    ) {
-      const node = event.currentTarget;
-      const before = node.value.slice(0, node.selectionStart);
-      const after = node.value.slice(node.selectionEnd);
-      if (event.key === "ArrowUp" && !before.includes("\n")) {
-        event.preventDefault();
-        onNavigate(-1);
-        return;
-      }
-      if (event.key === "ArrowDown" && !after.includes("\n")) {
-        event.preventDefault();
-        onNavigate(1);
-        return;
-      }
     }
     if (event.key !== "Enter") return;
     event.preventDefault();
-    if (event.shiftKey || event.ctrlKey || event.metaKey) {
+    if (event.shiftKey && !singleLine) {
       onChange(insertLineBreak(event.currentTarget));
       return;
     }
-    onSubmit();
+    if ((event.ctrlKey || event.metaKey) && onConfirmAndNext) {
+      onConfirmAndNext();
+      return;
+    }
+    onConfirm();
   };
 
   return (
@@ -210,19 +182,20 @@ function NoteRow({
   listId,
   editing,
   onEdit,
-  onNavigate,
+  onFinishEdit,
 }: {
   item: NoteItem;
   listId: NoteListId;
   editing: boolean;
   onEdit: (id: string | null) => void;
-  onNavigate: (itemId: string, direction: -1 | 1) => void;
+  onFinishEdit: (nextId: string | null) => void;
 }) {
   const moveNoteItemById = useNotePad((state) => state.moveNoteItemById);
   const handle = useNoteItemReorder(listId, moveNoteItemById);
   const setItemText = useNotePad((state) => state.setItemText);
   const toggleItem = useNotePad((state) => state.toggleItem);
   const removeItem = useNotePad((state) => state.removeItem);
+  const purgeItem = useNotePad((state) => state.purgeItem);
   const restoreItem = useNotePad((state) => state.restoreItem);
   const insertAfter = useNotePad((state) => state.insertAfter);
   const insertManyAfter = useNotePad((state) => state.insertManyAfter);
@@ -239,17 +212,23 @@ function NoteRow({
 
   const softDelete = () => {
     const label = item.text.split("\n")[0]?.trim();
+    if (!label) {
+      purgeItem(item.id);
+      if (editing) onEdit(null);
+      return;
+    }
     removeItem(item.id);
     if (editing) onEdit(null);
-    if (label) {
-      toast.info(`已移入回收站：${label.slice(0, 24)}`, {
-        action: {
-          label: "撤销",
-          onClick: () => restoreItem(item.id),
-        },
-      });
-    }
+    toast.info(`已移入回收站：${label.slice(0, 24)}`, {
+      action: {
+        label: "撤销",
+        onClick: () => restoreItem(item.id),
+      },
+    });
   };
+
+  const hasLongContent =
+    item.text.includes("\n") || item.text.trim().length > 34;
 
   return (
     <div
@@ -287,21 +266,18 @@ function NoteRow({
           <NoteInput
             value={item.text}
             inputRef={input}
-            placeholder="支持 **粗体** `代码` #标签，Shift+Enter 换行"
+            placeholder="Enter 保存退出 · Ctrl+Enter 保存并新建下一条"
             onChange={(text) => setItemText(item.id, text)}
-            onSubmit={() => {
+            onConfirm={() => onFinishEdit(null)}
+            onConfirmAndNext={() => {
               if (!item.text.trim()) {
-                removeItem(item.id);
+                purgeItem(item.id);
                 onEdit(null);
                 return;
               }
               onEdit(insertAfter(item.id));
             }}
-            onEmptyBackspace={() => {
-              onNavigate(item.id, -1);
-              removeItem(item.id);
-            }}
-            onNavigate={(dir) => onNavigate(item.id, dir)}
+            onCancel={() => onFinishEdit(null)}
             onMultiPaste={(entries) => {
               const [first, ...rest] = entries;
               if (!first) return;
@@ -318,14 +294,36 @@ function NoteRow({
             }}
           />
         </div>
+      ) : hasLongContent ? (
+        <Tooltip delayDuration={260}>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label="编辑待办内容"
+              className="min-w-0 flex-1 cursor-text text-left"
+              onClick={() => onFinishEdit(item.id)}
+            >
+              <NoteInlineMarkdown text={item.text} done={item.done} clamp />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent
+            data-note-preview=""
+            side="left"
+            align="start"
+            sideOffset={8}
+            className="z-[110] max-h-64 max-w-80 overflow-auto rounded-md border border-border bg-popover px-2.5 py-2 text-popover-foreground shadow-lg"
+          >
+            <NoteInlineMarkdown text={item.text} done={item.done} />
+          </TooltipContent>
+        </Tooltip>
       ) : (
         <button
           type="button"
           aria-label="编辑待办内容"
           className="min-w-0 flex-1 cursor-text text-left"
-          onClick={() => onEdit(item.id)}
+          onClick={() => onFinishEdit(item.id)}
         >
-          <NoteInlineMarkdown text={item.text} done={item.done} />
+          <NoteInlineMarkdown text={item.text} done={item.done} clamp />
         </button>
       )}
       <button
@@ -347,14 +345,14 @@ function ProjectBlock({
   searchQuery,
   editingId,
   onEdit,
-  onNavigate,
+  onFinishEdit,
 }: {
   project: NoteProject;
   index: number;
   searchQuery: string;
   editingId: string | null;
   onEdit: (id: string | null) => void;
-  onNavigate: (itemId: string, direction: -1 | 1) => void;
+  onFinishEdit: (nextId: string | null) => void;
 }) {
   const reorderProject = useNotePad((state) => state.reorderProject);
   const handle = useNoteReorder(reorderProject);
@@ -397,7 +395,11 @@ function ProjectBlock({
   const doneCount = totalCount - pendingCount;
   const ratio = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0;
 
-  if (query && filteredItems.length === 0 && !project.name.toLowerCase().includes(query)) {
+  if (
+    query &&
+    filteredItems.length === 0 &&
+    !project.name.toLowerCase().includes(query)
+  ) {
     return null;
   }
 
@@ -487,17 +489,19 @@ function ProjectBlock({
           type="button"
           aria-label="新增项目待办"
           title="在此分组新增待办"
-          className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-          onClick={() => onEdit(addProjectItem(project.id))}
+          className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+          onClick={() => onFinishEdit(addProjectItem(project.id))}
         >
           <HugeiconsIcon icon={PlusSignIcon} size={11} />
         </button>
-        {!project.locked && (
+        {project.locked ? (
+          <span className="size-5 shrink-0" aria-hidden="true" />
+        ) : (
           <button
             type="button"
             aria-label="软删除项目"
             title="移入回收站"
-            className="flex size-5 items-center justify-center rounded text-muted-foreground opacity-0 hover:bg-muted/60 hover:text-destructive group-hover:opacity-100"
+            className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 hover:bg-muted/60 hover:text-destructive group-hover:opacity-100"
             onClick={() => {
               removeProject(project.id);
               toast.info(`已将分组「${project.name}」移入回收站`, {
@@ -522,7 +526,7 @@ function ProjectBlock({
               listId={project.id}
               editing={editingId === item.id}
               onEdit={onEdit}
-              onNavigate={onNavigate}
+              onFinishEdit={onFinishEdit}
             />
           ))}
           {doneItems.length > 0 ? (
@@ -547,7 +551,7 @@ function ProjectBlock({
                       listId={project.id}
                       editing={editingId === item.id}
                       onEdit={onEdit}
-                      onNavigate={onNavigate}
+                      onFinishEdit={onFinishEdit}
                     />
                   ))}
                 </div>
@@ -689,8 +693,23 @@ export function NotepadPopover() {
   const addInbox = useNotePad((state) => state.addInbox);
   const addManyToProject = useNotePad((state) => state.addManyToProject);
   const addProject = useNotePad((state) => state.addProject);
+  const purgeItem = useNotePad((state) => state.purgeItem);
   const setAllCollapsed = useNotePad((state) => state.setAllCollapsed);
   const replaceFromMarkdown = useNotePad((state) => state.replaceFromMarkdown);
+
+  /** 退出或切换编辑项时，自动彻底清理空白条目（不进入回收站）。 */
+  const finishEditing = (nextId: string | null) => {
+    if (editingId && editingId !== nextId) {
+      const current = useNotePad
+        .getState()
+        .projects.flatMap((p) => p.items)
+        .find((item) => item.id === editingId);
+      if (current && !current.text.trim()) {
+        purgeItem(current.id);
+      }
+    }
+    setEditingId(nextId);
+  };
 
   const activeProjects = useMemo(
     () => projects.filter(isActiveProject),
@@ -721,33 +740,6 @@ export function NotepadPopover() {
     [activeProjects],
   );
 
-  const visibleOrder = useMemo(() => {
-    const ids: string[] = [];
-    const q = searchQuery.trim().toLowerCase();
-    for (const p of activeProjects) {
-      if (!q && p.collapsed) continue;
-      const items = p.items.filter(isActiveItem).filter((item) => {
-        if (!q) return true;
-        return (
-          p.name.toLowerCase().includes(q) ||
-          item.text.toLowerCase().includes(q)
-        );
-      });
-      for (const item of items.filter((i) => !i.done)) ids.push(item.id);
-      if (q || p.doneCollapsed === false) {
-        for (const item of items.filter((i) => i.done)) ids.push(item.id);
-      }
-    }
-    return ids;
-  }, [activeProjects, searchQuery]);
-
-  const navigateItem = (itemId: string, direction: -1 | 1) => {
-    const idx = visibleOrder.indexOf(itemId);
-    if (idx < 0) return;
-    const nextId = visibleOrder[idx + direction];
-    if (nextId) setEditingId(nextId);
-  };
-
   useEffect(() => {
     void load();
   }, [load]);
@@ -773,6 +765,7 @@ export function NotepadPopover() {
       const target = event.target as Element;
       if (target.closest?.("[data-note-preview], [data-note-panel]")) return;
       if (!root.current?.contains(target)) {
+        finishEditing(null);
         if (viewMode === "markdown" && markdownDirty) {
           replaceFromMarkdown(markdownDraft);
           setMarkdownDirty(false);
@@ -783,7 +776,7 @@ export function NotepadPopover() {
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
         if (editingId) {
-          setEditingId(null);
+          finishEditing(null);
           return;
         }
         if (viewMode === "markdown" && markdownDirty) {
@@ -799,7 +792,14 @@ export function NotepadPopover() {
       document.removeEventListener("pointerdown", close);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open, editingId, viewMode, markdownDirty, markdownDraft, replaceFromMarkdown]);
+  }, [
+    open,
+    editingId,
+    viewMode,
+    markdownDirty,
+    markdownDraft,
+    replaceFromMarkdown,
+  ]);
 
   useEffect(() => {
     const onResize = () => {
@@ -811,6 +811,7 @@ export function NotepadPopover() {
   }, []);
 
   const switchMode = (nextMode: ViewMode) => {
+    finishEditing(null);
     if (viewMode === "markdown" && markdownDirty && nextMode !== "markdown") {
       replaceFromMarkdown(markdownDraft);
       setMarkdownDirty(false);
@@ -819,7 +820,6 @@ export function NotepadPopover() {
       setMarkdownDraft(notepadToMarkdown({ projects }));
       setMarkdownDirty(false);
     }
-    setEditingId(null);
     setViewMode(nextMode);
   };
 
@@ -927,7 +927,7 @@ export function NotepadPopover() {
           aria-label="记事本"
           title="记事本"
           aria-expanded={open}
-          className="pointer-events-auto relative flex size-7 cursor-grab items-center justify-center rounded-full border border-border/70 bg-popover text-[#7aa8c4] shadow-md hover:text-[#93bbd4] active:cursor-grabbing dark:text-[#8eb6d4] dark:hover:text-[#a6cceb]"
+          className="notepad-fab pointer-events-auto relative flex size-7 cursor-grab items-center justify-center rounded-full border-[1.5px] border-sky-400/55 bg-popover text-[#8ec2e2] shadow-md hover:border-sky-400/80 hover:text-[#a8d4ef] active:cursor-grabbing dark:border-sky-400/50 dark:text-[#9ed0f0] dark:hover:text-[#bce2fa]"
           onPointerDown={(event) => {
             if (event.button !== 0) return;
             drag.current = {
@@ -994,7 +994,7 @@ export function NotepadPopover() {
             event.stopPropagation();
             const target = event.target as Element;
             if (!target.closest("[data-note-item], textarea, input, button"))
-              setEditingId(null);
+              finishEditing(null);
           }}
         >
           <button
@@ -1090,16 +1090,13 @@ export function NotepadPopover() {
               type="button"
               variant={viewMode === "trash" ? "secondary" : "ghost"}
               size="icon-xs"
-              className="relative size-5"
+              className="size-5"
               aria-label="回收站与导入导出"
               title="回收站与导入导出"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => switchMode("trash")}
             >
               <HugeiconsIcon icon={Delete02Icon} size={11} />
-              {stats.trash > 0 ? (
-                <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-amber-400" />
-              ) : null}
             </Button>
 
             {viewMode === "todo" ? (
@@ -1169,8 +1166,8 @@ export function NotepadPopover() {
                 align="end"
                 className="z-[100] max-w-64 rounded-md border border-border bg-popover px-2.5 py-1.5 text-[11px] leading-relaxed text-popover-foreground shadow-md"
               >
-                Enter 新建下一条 · Shift+Enter 换行补充 · 空行 Backspace 删除 ·
-                ↑↓ 切换上下条 · 粘贴多行自动拆分 · 删除进入回收站可撤销
+                Enter 确认并退出编辑 · Ctrl+Enter 确认并新建下一条 · Shift+Enter
+                条内换行 · Esc / 点击空白退出（空条自动清理）
               </TooltipContent>
             </Tooltip>
           </div>
@@ -1215,7 +1212,7 @@ export function NotepadPopover() {
                     searchQuery={searchQuery}
                     editingId={editingId}
                     onEdit={setEditingId}
-                    onNavigate={navigateItem}
+                    onFinishEdit={finishEditing}
                   />
                 ))}
               </div>
@@ -1230,7 +1227,7 @@ export function NotepadPopover() {
                     value={draft}
                     placeholder="速记到 tmp（Enter 提交，支持粘贴多行 - [ ] 清单）"
                     onChange={setDraft}
-                    onSubmit={() => submitInbox()}
+                    onConfirm={() => submitInbox()}
                     onMultiPaste={(entries) => {
                       addManyToProject(TMP_PROJECT_ID, entries);
                       setDraft("");
@@ -1262,7 +1259,9 @@ export function NotepadPopover() {
               />
               <div className="flex shrink-0 items-center justify-between gap-1.5">
                 <span className="text-[10px] text-muted-foreground">
-                  {markdownDirty ? "有未同步修改（切回清单自动保存）" : "已同步 SQLite"}
+                  {markdownDirty
+                    ? "有未同步修改（切回清单自动保存）"
+                    : "已同步 SQLite"}
                 </span>
                 <div className="flex items-center gap-1">
                   <Button

@@ -96,17 +96,45 @@ function renderInlineTokens(line: string, keyPrefix: string): ReactNode[] {
 export function NoteInlineMarkdown({
   text,
   done,
+  clamp = false,
 }: {
   text: string;
   done: boolean;
+  clamp?: boolean;
 }) {
   const normalized = text.replace(/\r\n/g, "\n");
   if (!normalized.trim()) {
-    return <span className="text-muted-foreground/60">未命名待办</span>;
+    return (
+      <div className="min-w-0 flex-1 text-left text-[11.5px] leading-[1.45] text-muted-foreground/60">
+        未命名待办
+      </div>
+    );
   }
   const lines = normalized.split("\n");
   const head = lines[0] ?? "";
   const rest = lines.slice(1);
+
+  if (clamp) {
+    return (
+      <div className="min-w-0 flex-1 space-y-0.5 text-left">
+        <div
+          className={`break-words text-[11.5px] leading-[1.45] ${
+            rest.length > 0 ? "line-clamp-1" : "line-clamp-2"
+          } ${done ? "text-muted-foreground line-through" : "text-foreground"}`}
+        >
+          {renderInlineTokens(head, "h")}
+        </div>
+        {rest.length > 0 ? (
+          <div className="line-clamp-1 break-words border-l border-border/60 pl-2 text-[10.5px] leading-[1.4] text-muted-foreground">
+            {renderInlineTokens(
+              rest.map((line) => line.trim()).filter(Boolean).join(" "),
+              "r",
+            )}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className="min-w-0 flex-1 space-y-0.5 text-left">
