@@ -826,3 +826,25 @@ html *::-webkit-scrollbar {
 .forge-markdown ol { margin: 0.4em 0; padding-left: 1.45em; }
 .forge-markdown pre { margin: 0.5em 0; }
 .forge-markdown [data-streamdown="code-block"] { margin: 0.5em 0; }
+
+/* Compact bottom-right toast notifications */
+[data-sonner-toast][data-styled="true"] {
+  padding: 8px 12px;
+  font-size: 12px;
+  gap: 6px;
+}
+[data-sonner-toast][data-styled="true"] [data-title] {
+  line-height: 1.35;
+}
+[data-sonner-toast][data-styled="true"] [data-description] {
+  font-size: 11px;
+  line-height: 1.35;
+}
+[data-sonner-toast][data-styled="true"] [data-icon] {
+  width: 14px;
+  height: 14px;
+}
+[data-sonner-toast][data-styled="true"] [data-close-button] {
+  width: 16px;
+  height: 16px;
+}

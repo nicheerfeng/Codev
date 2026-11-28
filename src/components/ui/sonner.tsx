@@ -9,13 +9,15 @@ const Toaster = ({ ...props }: ToasterProps) => {
       theme={resolvedMode}
       richColors
       closeButton
+      gap={8}
       className="toaster group"
       style={
         {
           "--normal-bg": "var(--popover)",
           "--normal-text": "var(--popover-foreground)",
           "--normal-border": "var(--border)",
-          "--border-radius": "var(--radius)",
+          "--border-radius": "8px",
+          "--width": "300px",
         } as React.CSSProperties
       }
       {...props}
