@@ -786,10 +786,6 @@ html *::-webkit-scrollbar {
   .codev-reveal {
     transition: none;
   }
-  .codev-shimmer {
-    animation: none;
-    background-position: 0% center;
-  }
 }
 
 .voice-wave {
@@ -820,13 +816,6 @@ html *::-webkit-scrollbar {
 .forge-indeterminate-bar {
   width: 30%;
   animation: forge-progress 1.3s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .forge-indeterminate-bar {
-    animation: none;
-    width: 100%;
-    opacity: 0.45;
-  }
 }
 
 .forge-markdown h1 { font-size: 1.25em; margin: 0.9em 0 0.45em; }

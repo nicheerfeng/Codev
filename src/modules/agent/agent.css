@@ -98,7 +98,6 @@
 .agent-step-narrative{font-size:12px;line-height:1.65;color:color-mix(in srgb,var(--foreground) 80%,var(--muted-foreground));padding:3px 0}
 .agent-explore-sublist{margin:2px 0 4px 5px;padding:2px 0 2px 10px;border-left:1px solid color-mix(in srgb,var(--border) 65%,transparent);display:flex;flex-direction:column;gap:1px}
 .agent-transcript-content button,.agent-turn-files-summary{user-select:none!important;-webkit-user-select:none!important}
-@media(prefers-reduced-motion:reduce){.agent-ticker-row.is-current{animation:none}}
 .agent-file-chips{display:flex;flex-wrap:wrap;gap:4px;margin:-2px 0 10px}
 .agent-file-chips button{display:flex;align-items:center;gap:5px;max-width:100%;padding:3px 7px;border:1px solid var(--border);border-radius:5px;font-size:10px;color:var(--muted-foreground);background:var(--background)}
 .agent-file-chips button:hover{color:var(--foreground);border-color:color-mix(in srgb,var(--primary) 45%,var(--border))}
@@ -238,7 +237,8 @@
 .dark .agent-sidebar .agent-state-dot.is-working,.dark .agent-sidebar .agent-state-dot.is-unread{background:#a6cceb;color:#a6cceb}
 .agent-sidebar .agent-ws-running .agent-state-dot{width:6px;height:6px}
 .agent-sidebar .agent-ws-running .agent-state-dot.is-working::after{inset:-3px}
-@media(prefers-reduced-motion:reduce){.agent-state-dot.is-working,.agent-state-dot.is-working::after,.agent-project-heading.is-live,.agent-viewport-title.is-running>span{animation:none}}
+/* Keep core live progress indicators spinning even when Windows disables client-area animations (prefers-reduced-motion: reduce). */
+@media(prefers-reduced-motion:reduce){.agent-project-heading.is-live{animation:none}}
 .agent-drop-before::before,.agent-drop-after::after{position:absolute;z-index:5;left:0;right:0;height:2px;background:var(--primary);content:"";pointer-events:none}
 .agent-drop-before::before{top:-1px}.agent-drop-after::after{bottom:-1px}
 .agent-header-title{font-weight:500;font-size:12px}
