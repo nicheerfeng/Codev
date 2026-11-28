@@ -350,7 +350,7 @@ pub fn find_web_directory() -> PathBuf {
             }
         }
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dist-agent-host")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dist")
 }
 
 pub async fn run_standalone() -> Result<(), String> {

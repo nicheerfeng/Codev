@@ -1,6 +1,6 @@
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { usePluginStore } from "@/modules/plugins/store";
-import { requestAgentProject } from "@/modules/plugins/agentProjectRequest";
+import { requestAgentProject } from "@/modules/agent/agentProjectRequest";
 import { COMPACT_ITEM } from "./lib/menuItemClass";
 
 export function AgentProjectMenuItems({

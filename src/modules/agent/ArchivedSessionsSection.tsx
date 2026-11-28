@@ -5,10 +5,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { HugeiconsIcon } from "@hugeicons/react";
-import {
-  ArrowDown01Icon,
-  ArrowRight01Icon,
-} from "@hugeicons/core-free-icons";
+import { ArrowDown01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons";
 import { HarnessIcon } from "./HarnessIcon";
 import type { SessionSummary, Workspace } from "./types";
 
@@ -92,9 +89,7 @@ export function ArchivedSessionsSection({
                         className="text-destructive"
                         onSelect={() => {
                           if (
-                            window.confirm(
-                              `确认永久删除「${session.title}」？`,
-                            )
+                            window.confirm(`确认永久删除「${session.title}」？`)
                           ) {
                             onDelete(session.id);
                           }

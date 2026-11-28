@@ -7,7 +7,7 @@
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build",
-    "frontendDist": "../dist-agent-host",
+    "frontendDist": "../dist",
     "removeUnusedCommands": true
   },
   "app": {
@@ -35,7 +35,7 @@
   },
   "bundle": {
     "active": true,
-    "resources": { "../dist-agent-host": "web", "../THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md" },
+    "resources": { "../dist": "web", "../THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md" },
     "targets": "all",
     "copyright": "Copyright 2026 Teague Codev",
     "license": "Apache-2.0",

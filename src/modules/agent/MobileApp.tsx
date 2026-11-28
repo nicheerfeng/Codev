@@ -41,7 +41,10 @@ export function MobileApp() {
   const [mobileTab, setMobileTab] = useState<"agent" | "vcs">("agent");
   const snapshotsMap = useVcsStore((s) => s.snapshots);
   const inboxesMap = useForgeStore((s) => s.inboxes);
-  const vcsSnapshots = useMemo(() => Object.values(snapshotsMap), [snapshotsMap]);
+  const vcsSnapshots = useMemo(
+    () => Object.values(snapshotsMap),
+    [snapshotsMap],
+  );
   const forgeInboxes = useMemo(() => Object.values(inboxesMap), [inboxesMap]);
   const totalUnread = useForgeStore((s) => s.totalForgeUnread);
   const save = useCallback((token: string) => {
@@ -89,7 +92,9 @@ export function MobileApp() {
     })
       .then(async (response) => {
         if (response.status === 401 || response.status === 403) {
-          const err = new Error("设备授权无效或已被吊销，请在桌面重新配对。") as Error & {
+          const err = new Error(
+            "设备授权无效或已被吊销，请在桌面重新配对。",
+          ) as Error & {
             revoked?: boolean;
           };
           err.revoked = true;
@@ -219,7 +224,9 @@ export function MobileApp() {
                   仓库状态投影（{vcsSnapshots.length}）
                 </h2>
                 {vcsSnapshots.length === 0 ? (
-                  <p className="text-muted-foreground">暂无活跃 Git 仓库快照。</p>
+                  <p className="text-muted-foreground">
+                    暂无活跃 Git 仓库快照。
+                  </p>
                 ) : (
                   vcsSnapshots.map((snap) => (
                     <div
@@ -236,8 +243,9 @@ export function MobileApp() {
                         </span>
                       </div>
                       <div className="text-[10px] text-muted-foreground">
-                        已暂存 {snap.counts.staged} · 修改 {snap.counts.modified} · 未跟踪{" "}
-                        {snap.counts.untracked} · 冲突 {snap.counts.conflicted}
+                        已暂存 {snap.counts.staged} · 修改{" "}
+                        {snap.counts.modified} · 未跟踪 {snap.counts.untracked}{" "}
+                        · 冲突 {snap.counts.conflicted}
                       </div>
                       {snap.entries.slice(0, 15).map((e) => (
                         <div
@@ -262,16 +270,22 @@ export function MobileApp() {
                     className="space-y-1.5 rounded border border-border/60 bg-card p-2.5"
                   >
                     <div className="font-medium">
-                      {inbox.repo?.fullName ?? "未连接远程"}（未读 {inbox.unreadCount}）
+                      {inbox.repo?.fullName ?? "未连接远程"}（未读{" "}
+                      {inbox.unreadCount}）
                     </div>
                     {inbox.notifications.slice(0, 8).map((n) => (
-                      <div key={n.id} className="text-[11px] text-foreground/85">
-                        {n.unread ? "● " : ""}
-                        [{n.subjectType}] {n.title}
+                      <div
+                        key={n.id}
+                        className="text-[11px] text-foreground/85"
+                      >
+                        {n.unread ? "● " : ""}[{n.subjectType}] {n.title}
                       </div>
                     ))}
                     {inbox.pulls.slice(0, 6).map((pr) => (
-                      <div key={pr.id} className="text-[10.5px] text-muted-foreground">
+                      <div
+                        key={pr.id}
+                        className="text-[10.5px] text-muted-foreground"
+                      >
                         PR #{pr.number}: {pr.title} ({pr.checksStatus})
                       </div>
                     ))}

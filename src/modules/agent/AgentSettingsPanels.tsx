@@ -498,10 +498,7 @@ export function RemoteSettingsPanel({
       )}
 
       <div className="space-y-2.5">
-        <SettingSectionHeader
-          title="已配对设备"
-          count={activeDevices.length}
-        />
+        <SettingSectionHeader title="已配对设备" count={activeDevices.length} />
         {activeDevices.length > 0 ? (
           <SettingCard>
             {activeDevices.map((device) => (

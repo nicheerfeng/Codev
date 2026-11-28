@@ -14,7 +14,9 @@ type HostEventMap = {
   "forge.updated": { inbox: ForgeInboxSnapshot };
 };
 
-type Listener<K extends keyof HostEventMap> = (payload: HostEventMap[K]) => void;
+type Listener<K extends keyof HostEventMap> = (
+  payload: HostEventMap[K],
+) => void;
 
 const listeners: {
   [K in keyof HostEventMap]: Set<Listener<K>>;

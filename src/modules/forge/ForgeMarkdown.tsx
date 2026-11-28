@@ -28,8 +28,7 @@ export function isProxyableGithubImage(url: string): boolean {
   try {
     const parsed = new URL(url);
     return (
-      parsed.protocol === "https:" &&
-      GITHUB_IMAGE_HOST_RE.test(parsed.hostname)
+      parsed.protocol === "https:" && GITHUB_IMAGE_HOST_RE.test(parsed.hostname)
     );
   } catch {
     return false;

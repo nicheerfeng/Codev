@@ -5,7 +5,7 @@ import { splitUserAttachmentText, withAttachmentPrompt } from "./attachments";
 import {
   moveDisplayedItem,
   promoteLiveOrder,
-} from "@/modules/plugins/sidebarOrder";
+} from "@/modules/agent/sidebarOrder";
 import { AgentHostClient } from "./client";
 import { resolveContextPercent } from "./ContextViz";
 import { splitInlineThinking } from "./inlineThinking";

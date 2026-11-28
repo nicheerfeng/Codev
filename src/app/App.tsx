@@ -1,4 +1,4 @@
-import { useAgentProjectRequest } from "@/modules/plugins/agentProjectRequest";
+import { useAgentProjectRequest } from "@/modules/agent/agentProjectRequest";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -48,7 +48,10 @@ import {
   usePluginStore,
 } from "@/modules/plugins";
 import { useTaskbarUnreadBadge } from "@/modules/plugins/taskbar-unread/useTaskbarUnreadBadge";
-import { composeExplorerPathDropTargets, createAgentComposerPathDropTarget } from "@/modules/agent/drop";
+import {
+  composeExplorerPathDropTargets,
+  createAgentComposerPathDropTarget,
+} from "@/modules/agent/drop";
 import { invoke } from "@tauri-apps/api/core";
 import {
   type ShortcutHandlers,
@@ -138,7 +141,10 @@ export default function App() {
   const gitUiEnabled = usePreferencesStore((state) => state.gitUiEnabled);
   const gitInboxEnabled = usePreferencesStore((state) => state.gitInboxEnabled);
   useEffect(() => {
-    void useAgentStore.getState().initDesktop().catch(() => undefined);
+    void useAgentStore
+      .getState()
+      .initDesktop()
+      .catch(() => undefined);
   }, []);
   const prefsHydrated = usePreferencesStore((state) => state.hydrated);
   useEffect(() => {
@@ -221,9 +227,16 @@ export default function App() {
   const { zoomIn, zoomOut, zoomReset } = useZoom();
   useApplyEditorFontSize();
   const terminalPathDropTarget = useTerminalFileDrop();
-  const agentComposerPathDropTarget = useMemo(createAgentComposerPathDropTarget, []);
+  const agentComposerPathDropTarget = useMemo(
+    createAgentComposerPathDropTarget,
+    [],
+  );
   const explorerPathDropTarget = useMemo(
-    () => composeExplorerPathDropTargets(agentComposerPathDropTarget, terminalPathDropTarget),
+    () =>
+      composeExplorerPathDropTargets(
+        agentComposerPathDropTarget,
+        terminalPathDropTarget,
+      ),
     [agentComposerPathDropTarget, terminalPathDropTarget],
   );
   const explorerRef = useRef<FileExplorerHandle>(null);
@@ -271,12 +284,7 @@ export default function App() {
       ...(agentEnabled ? ["agent" as const] : []),
       ...(gitInboxEnabled ? ["git-inbox" as const] : []),
     ],
-    [
-      jsonFormatterEnabled,
-      agentEnabled,
-      textDiffEnabled,
-      gitInboxEnabled,
-    ],
+    [jsonFormatterEnabled, agentEnabled, textDiffEnabled, gitInboxEnabled],
   );
   const dockTabs = useMemo(
     () => dockOrder.filter((tab) => availableDockTabs.includes(tab)),
@@ -1544,14 +1552,12 @@ export default function App() {
                               .replace(/\\/g, "/")
                               .replace(/^\/+([A-Za-z]:\/)/u, "$1");
                             const matchedRoot = workspaceRoots.find((root) =>
-                              normalized
-                                .toLowerCase()
-                                .startsWith(
-                                  root
-                                    .replace(/\\/g, "/")
-                                    .replace(/^\/+([A-Za-z]:\/)/u, "$1")
-                                    .toLowerCase(),
-                                ),
+                              normalized.toLowerCase().startsWith(
+                                root
+                                  .replace(/\\/g, "/")
+                                  .replace(/^\/+([A-Za-z]:\/)/u, "$1")
+                                  .toLowerCase(),
+                              ),
                             );
                             const parent =
                               normalized.replace(/[\\/][^\\/]+$/, "") ||

@@ -26,8 +26,8 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: "dist-agent-host",
-    emptyOutDir: false,
+    outDir: "dist",
+    emptyOutDir: true,
     target:
       process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome120" : "es2022",
     chunkSizeWarningLimit: 1500,

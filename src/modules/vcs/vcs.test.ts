@@ -2,10 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildCommitGraphLayout } from "./CommitGraph";
 import { mergeConflictAcceptBoth, parseUnifiedHunks } from "./hunks";
 import { uiState } from "@/lib/uiState";
-import {
-  buildRepoBadgeIndex,
-  findSnapshotForPath,
-} from "./store";
+import { buildRepoBadgeIndex, findSnapshotForPath } from "./store";
 import { forgeCommentsCacheKey, useForgeStore } from "@/modules/forge/store";
 import { parseVcsError, type VcsCommit, type VcsSnapshot } from "./types";
 
@@ -13,7 +10,9 @@ describe("VCS frontend utilities", () => {
   it("parses structured [vcs:Code] error messages", () => {
     expect(
       parseVcsError(
-        new Error("[vcs:MissingAuthorIdentity] 尚未配置 Git 提交姓名或邮箱（去配置）"),
+        new Error(
+          "[vcs:MissingAuthorIdentity] 尚未配置 Git 提交姓名或邮箱（去配置）",
+        ),
       ),
     ).toEqual({
       code: "MissingAuthorIdentity",
@@ -71,7 +70,10 @@ describe("VCS frontend utilities", () => {
     expect(idx.dirs.get("d:/repo/app/src")).toBe("conflict");
     expect(idx.dirs.get("d:/repo/app/src/deep")).toBe("conflict");
 
-    const found = findSnapshotForPath({ "d:/repo/app": snap }, "D:\\repo\\app\\src\\a.ts");
+    const found = findSnapshotForPath(
+      { "d:/repo/app": snap },
+      "D:\\repo\\app\\src\\a.ts",
+    );
     expect(found?.repoName).toBe("app");
   });
 
@@ -96,7 +98,9 @@ describe("VCS frontend utilities", () => {
     expect(parsed.hunks[1].deletions).toBe(1);
     expect(parsed.hunks[1].patch).toContain("diff --git a/foo.ts b/foo.ts");
 
-    expect(mergeConflictAcceptBoth("ours\n", "theirs\n")).toBe("ours\ntheirs\n");
+    expect(mergeConflictAcceptBoth("ours\n", "theirs\n")).toBe(
+      "ours\ntheirs\n",
+    );
   });
 
   it("assigns commit graph lanes for forks and merge commits", () => {
@@ -198,7 +202,8 @@ describe("VCS frontend utilities", () => {
       "nicheerfeng/trade-pharma",
     );
     expect(
-      useForgeStore.getState().inboxes["nicheerfeng/trade-pharma"]?.repo?.fullName,
+      useForgeStore.getState().inboxes["nicheerfeng/trade-pharma"]?.repo
+        ?.fullName,
     ).toBe("nicheerfeng/trade-pharma");
   });
 });

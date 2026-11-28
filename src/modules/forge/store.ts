@@ -51,7 +51,9 @@ function writeUiJson(key: string, value: unknown): void {
   }
 }
 
-function computeTotalUnread(inboxes: Record<string, ForgeInboxSnapshot>): number {
+function computeTotalUnread(
+  inboxes: Record<string, ForgeInboxSnapshot>,
+): number {
   return Object.values(inboxes).reduce(
     (sum, inbox) => sum + (inbox.unreadCount ?? 0),
     0,
@@ -77,7 +79,10 @@ function trimInboxesForCache(
   return out;
 }
 
-export function forgeCommentsCacheKey(target: ForgeTarget, number: number): string {
+export function forgeCommentsCacheKey(
+  target: ForgeTarget,
+  number: number,
+): string {
   const payload = toForgeTargetPayload(target);
   const scope =
     payload.repoFullName?.toLowerCase() ||
@@ -135,14 +140,8 @@ export type ForgeStoreState = {
     number: number,
   ) => Promise<ForgeComment[]>;
   fetchForgeImage: (url: string) => Promise<string>;
-  fetchPrChecks: (
-    target: ForgeTarget,
-    sha: string,
-  ) => Promise<ForgeCheckRun[]>;
-  fetchPrFiles: (
-    target: ForgeTarget,
-    number: number,
-  ) => Promise<ForgePrFile[]>;
+  fetchPrChecks: (target: ForgeTarget, sha: string) => Promise<ForgeCheckRun[]>;
+  fetchPrFiles: (target: ForgeTarget, number: number) => Promise<ForgePrFile[]>;
   createComment: (
     target: ForgeTarget,
     number: number,

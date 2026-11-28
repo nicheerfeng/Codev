@@ -31,7 +31,7 @@ import { focusAgentSession, useAgentStore } from "./store";
 import {
   finishAgentProjectRequest,
   useAgentProjectRequest,
-} from "@/modules/plugins/agentProjectRequest";
+} from "./agentProjectRequest";
 import { useNativeAgentDrop } from "./drop";
 import { isBusy, type SessionView } from "./types";
 import "./agent.css";

@@ -77,7 +77,9 @@ export function ForgeInboxPanel({
   const dispatchIssueToAgent = useForgeStore((s) => s.dispatchIssueToAgent);
 
   const [tab, setTab] = useState<InboxTab>("notifications");
-  const [stateFilter, setStateFilter] = useState<"open" | "closed" | "all">("open");
+  const [stateFilter, setStateFilter] = useState<"open" | "closed" | "all">(
+    "open",
+  );
   const [syncing, setSyncing] = useState(false);
   const [reposLoading, setReposLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -158,16 +160,14 @@ export function ForgeInboxPanel({
   }, [snapshot]);
 
   const selectedRepoFullName =
-    activeInboxRepo ??
-    activeSnapRepoName ??
-    repoOptions[0]?.fullName ??
-    null;
+    activeInboxRepo ?? activeSnapRepoName ?? repoOptions[0]?.fullName ?? null;
 
   const selectedOption = useMemo(
     () =>
       selectedRepoFullName
         ? (repoOptions.find(
-            (r) => r.fullName.toLowerCase() === selectedRepoFullName.toLowerCase(),
+            (r) =>
+              r.fullName.toLowerCase() === selectedRepoFullName.toLowerCase(),
           ) ?? null)
         : null,
     [repoOptions, selectedRepoFullName],
@@ -193,11 +193,16 @@ export function ForgeInboxPanel({
       return {
         repoFullName: selectedRepoFullName,
         host: selectedOption?.host,
-        root: localDispatchRoot || (targetRoot || undefined),
+        root: localDispatchRoot || targetRoot || undefined,
       };
     }
     return targetRoot ? { root: targetRoot } : null;
-  }, [selectedRepoFullName, selectedOption?.host, localDispatchRoot, targetRoot]);
+  }, [
+    selectedRepoFullName,
+    selectedOption?.host,
+    localDispatchRoot,
+    targetRoot,
+  ]);
 
   // Match active inbox by selected repo, active workspace remote, or first cached inbox
   const matchedInbox = useMemo(() => {
@@ -324,7 +329,14 @@ export function ForgeInboxPanel({
     return () => {
       cancelled = true;
     };
-  }, [fetchComments, fetchPrChecks, fetchPrFiles, forgeTarget, selectedIssue, selectedPr]);
+  }, [
+    fetchComments,
+    fetchPrChecks,
+    fetchPrFiles,
+    forgeTarget,
+    selectedIssue,
+    selectedPr,
+  ]);
 
   const handleSelectRepo = (fullName: string) => {
     setActiveInboxRepo(fullName);
@@ -343,7 +355,9 @@ export function ForgeInboxPanel({
     htmlUrl?: string;
   }) => {
     if (!localDispatchRoot) {
-      toast.info("请先将该仓库的本地目录添加到左侧工作区，即可派单 Agent Worktree");
+      toast.info(
+        "请先将该仓库的本地目录添加到左侧工作区，即可派单 Agent Worktree",
+      );
       return;
     }
     setBusy(true);
@@ -434,7 +448,9 @@ export function ForgeInboxPanel({
   const manualRepoCandidate = useMemo(() => {
     const raw = repoQuery.trim().replace(/^\/+|\/+$/g, "");
     if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(raw)) return null;
-    if (repoOptions.some((r) => r.fullName.toLowerCase() === raw.toLowerCase())) {
+    if (
+      repoOptions.some((r) => r.fullName.toLowerCase() === raw.toLowerCase())
+    ) {
       return null;
     }
     return raw;
@@ -443,7 +459,8 @@ export function ForgeInboxPanel({
   const notifications = matchedInbox?.notifications ?? [];
   const issues = matchedInbox?.issues ?? [];
   const pulls = matchedInbox?.pulls ?? [];
-  const auth = matchedInbox?.auth ?? forgeAuth ?? Object.values(inboxes)[0]?.auth;
+  const auth =
+    matchedInbox?.auth ?? forgeAuth ?? Object.values(inboxes)[0]?.auth;
   const displayRepoTitle =
     matchedInbox?.repo?.fullName ?? selectedRepoFullName ?? "选择 GitHub 仓库";
 
@@ -451,7 +468,11 @@ export function ForgeInboxPanel({
     <div className="flex h-full min-h-0 flex-col bg-card text-xs">
       <header className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-border/60 px-3">
         <div className="flex min-w-0 items-center gap-1.5">
-          <HugeiconsIcon icon={Notification01Icon} size={13} className="shrink-0 text-primary" />
+          <HugeiconsIcon
+            icon={Notification01Icon}
+            size={13}
+            className="shrink-0 text-primary"
+          />
           <Popover open={repoPickerOpen} onOpenChange={setRepoPickerOpen}>
             <PopoverTrigger asChild>
               <button
@@ -467,7 +488,10 @@ export function ForgeInboxPanel({
                 />
               </button>
             </PopoverTrigger>
-            <PopoverContent align="start" className="w-72 space-y-2 p-2 text-xs">
+            <PopoverContent
+              align="start"
+              className="w-72 space-y-2 p-2 text-xs"
+            >
               <div className="flex items-center gap-1.5">
                 <Input
                   autoFocus
@@ -476,7 +500,8 @@ export function ForgeInboxPanel({
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
-                      const pick = manualRepoCandidate ?? filteredRepos[0]?.fullName;
+                      const pick =
+                        manualRepoCandidate ?? filteredRepos[0]?.fullName;
                       if (pick) handleSelectRepo(pick);
                     }
                   }}
@@ -504,7 +529,9 @@ export function ForgeInboxPanel({
                     onClick={() => handleSelectRepo(manualRepoCandidate)}
                     className="flex w-full items-center justify-between rounded bg-primary/10 px-2 py-1.5 text-left text-[11px] text-primary hover:bg-primary/20"
                   >
-                    <span className="truncate">切换到 {manualRepoCandidate}</span>
+                    <span className="truncate">
+                      切换到 {manualRepoCandidate}
+                    </span>
                     <span className="shrink-0 text-[10px]">回车/点击</span>
                   </button>
                 )}
@@ -625,7 +652,12 @@ export function ForgeInboxPanel({
             placeholder="输入 GitHub Personal Access Token（留空保存即清除）…"
             className="h-7 flex-1 text-[11px]"
           />
-          <Button size="sm" className="h-7 text-[11px]" disabled={busy} onClick={() => void handleSavePat()}>
+          <Button
+            size="sm"
+            className="h-7 text-[11px]"
+            disabled={busy}
+            onClick={() => void handleSavePat()}
+          >
             保存 PAT
           </Button>
         </div>
@@ -647,10 +679,20 @@ export function ForgeInboxPanel({
             className="w-full resize-none rounded border border-border/70 bg-background/60 p-2 text-[11px] outline-none"
           />
           <div className="flex justify-end gap-1.5">
-            <Button size="sm" variant="ghost" className="h-6 text-[10.5px]" onClick={() => setNewIssueOpen(false)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 text-[10.5px]"
+              onClick={() => setNewIssueOpen(false)}
+            >
               取消
             </Button>
-            <Button size="sm" className="h-6 text-[10.5px]" disabled={busy || !newIssueTitle.trim()} onClick={() => void handleCreateIssue()}>
+            <Button
+              size="sm"
+              className="h-6 text-[10.5px]"
+              disabled={busy || !newIssueTitle.trim()}
+              onClick={() => void handleCreateIssue()}
+            >
               提交 Issue
             </Button>
           </div>
@@ -675,7 +717,8 @@ export function ForgeInboxPanel({
 
       {!forgeTarget ? (
         <div className="p-4 text-[11px] text-muted-foreground">
-          请先打开工作区，或在左上角下拉框选择 / 输入个人 GitHub 仓库（如 owner/repo）。
+          请先打开工作区，或在左上角下拉框选择 / 输入个人 GitHub 仓库（如
+          owner/repo）。
         </div>
       ) : !matchedInbox?.repo ? (
         syncing ? (
@@ -771,7 +814,8 @@ export function ForgeInboxPanel({
             <div
               className={cn(
                 "min-w-0 flex-1 overflow-y-auto divide-y divide-border/40",
-                (selectedIssue || selectedPr) && "hidden max-w-[44%] border-r border-border/60 md:block",
+                (selectedIssue || selectedPr) &&
+                  "hidden max-w-[44%] border-r border-border/60 md:block",
               )}
             >
               {tab === "notifications" &&
@@ -800,7 +844,9 @@ export function ForgeInboxPanel({
                             );
                           }
                           if (n.subjectType === "Issue" && n.number) {
-                            const hit = issues.find((i) => i.number === n.number);
+                            const hit = issues.find(
+                              (i) => i.number === n.number,
+                            );
                             if (hit) {
                               setTab("issues");
                               setSelectedIssue(hit);
@@ -808,7 +854,9 @@ export function ForgeInboxPanel({
                             }
                           }
                           if (n.subjectType === "PullRequest" && n.number) {
-                            const hit = pulls.find((p) => p.number === n.number);
+                            const hit = pulls.find(
+                              (p) => p.number === n.number,
+                            );
                             if (hit) {
                               setTab("pulls");
                               setSelectedPr(hit);
@@ -839,7 +887,8 @@ export function ForgeInboxPanel({
                           type="button"
                           className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
                           onClick={() =>
-                            forgeTarget && void markNotificationRead(forgeTarget, n.id)
+                            forgeTarget &&
+                            void markNotificationRead(forgeTarget, n.id)
                           }
                         >
                           已读
@@ -1011,7 +1060,9 @@ export function ForgeInboxPanel({
                 <div className="reader-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto p-3 text-[11px]">
                   {(selectedIssue ?? selectedPr)!.body && (
                     <div className="rounded border border-border/50 bg-card/70 p-3 text-foreground/90">
-                      <ForgeMarkdown content={(selectedIssue ?? selectedPr)!.body} />
+                      <ForgeMarkdown
+                        content={(selectedIssue ?? selectedPr)!.body}
+                      />
                     </div>
                   )}
 
@@ -1051,9 +1102,15 @@ export function ForgeInboxPanel({
                             onClick={() => {
                               setConfirmMergePr(null);
                               if (!forgeTarget) return;
-                              void mergePr(forgeTarget, selectedPr.number, "squash")
+                              void mergePr(
+                                forgeTarget,
+                                selectedPr.number,
+                                "squash",
+                              )
                                 .then(() => {
-                                  toast.success(`已 Squash Merge PR #${selectedPr.number}`);
+                                  toast.success(
+                                    `已 Squash Merge PR #${selectedPr.number}`,
+                                  );
                                   void reload(true);
                                 })
                                 .catch((e) => toast.error(String(e)));
@@ -1074,12 +1131,18 @@ export function ForgeInboxPanel({
                         )}
                       </div>
 
-                      {prDetailsLoading && checks.length === 0 && prFiles.length === 0 && (
-                        <div className="flex items-center gap-1.5 rounded border border-border/50 bg-card/40 px-2.5 py-2 text-[10.5px] text-muted-foreground">
-                          <HugeiconsIcon icon={Refresh01Icon} size={11} className="animate-spin text-primary" />
-                          <span>正在加载 PR 检查与变更文件…</span>
-                        </div>
-                      )}
+                      {prDetailsLoading &&
+                        checks.length === 0 &&
+                        prFiles.length === 0 && (
+                          <div className="flex items-center gap-1.5 rounded border border-border/50 bg-card/40 px-2.5 py-2 text-[10.5px] text-muted-foreground">
+                            <HugeiconsIcon
+                              icon={Refresh01Icon}
+                              size={11}
+                              className="animate-spin text-primary"
+                            />
+                            <span>正在加载 PR 检查与变更文件…</span>
+                          </div>
+                        )}
 
                       {checks.length > 0 && (
                         <div className="space-y-1 rounded border border-border/50 p-2">
@@ -1127,10 +1190,16 @@ export function ForgeInboxPanel({
                               key={f.filename}
                               className="flex items-center justify-between gap-2 text-[10.5px]"
                             >
-                              <span className="truncate font-mono">{f.filename}</span>
+                              <span className="truncate font-mono">
+                                {f.filename}
+                              </span>
                               <span className="shrink-0 font-mono text-[10px]">
-                                <span className="text-emerald-400">+{f.additions}</span>{" "}
-                                <span className="text-rose-400">-{f.deletions}</span>
+                                <span className="text-emerald-400">
+                                  +{f.additions}
+                                </span>{" "}
+                                <span className="text-rose-400">
+                                  -{f.deletions}
+                                </span>
                               </span>
                             </div>
                           ))}
@@ -1144,7 +1213,11 @@ export function ForgeInboxPanel({
                       <span>评论动态（{comments.length}）</span>
                       {detailLoading && (
                         <span className="inline-flex items-center gap-1 text-primary">
-                          <HugeiconsIcon icon={Refresh01Icon} size={10} className="animate-spin" />
+                          <HugeiconsIcon
+                            icon={Refresh01Icon}
+                            size={10}
+                            className="animate-spin"
+                          />
                           <span>同步中…</span>
                         </span>
                       )}
@@ -1176,7 +1249,9 @@ export function ForgeInboxPanel({
                           className="rounded border border-border/50 bg-card/50 p-2.5"
                         >
                           <div className="mb-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
-                            <span className="font-medium text-foreground/90">@{c.author}</span>
+                            <span className="font-medium text-foreground/90">
+                              @{c.author}
+                            </span>
                             <span>{c.createdAt.slice(0, 10)}</span>
                           </div>
                           <div className="text-foreground/85">

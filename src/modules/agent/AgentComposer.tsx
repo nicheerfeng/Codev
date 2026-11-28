@@ -9,7 +9,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { VoiceInputButton } from "@/modules/voice/VoiceInputButton";
-import { SkillMentionInput } from "@/modules/plugins/SkillMentionInput";
+import { SkillMentionInput } from "@/modules/agent/SkillMentionInput";
 import { ZoomableImage } from "@/modules/reader/ZoomableImage";
 import { draftHasPayload, withAttachmentPrompt } from "./attachments";
 import {

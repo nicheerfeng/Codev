@@ -1,8 +1,4 @@
-import {
-  STORAGE_KEYS,
-  readJson,
-  writeJson,
-} from "@/lib/clientStorage";
+import { STORAGE_KEYS, readJson, writeJson } from "@/lib/clientStorage";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   useEffect,
@@ -43,7 +39,7 @@ import {
 import {
   moveDisplayedItem,
   promoteLiveOrder,
-} from "@/modules/plugins/sidebarOrder";
+} from "@/modules/agent/sidebarOrder";
 import { useAgentStore } from "./store";
 import { ArchivedSessionsSection } from "./ArchivedSessionsSection";
 import { HarnessIcon } from "./HarnessIcon";

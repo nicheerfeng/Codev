@@ -30,22 +30,18 @@ Codev 基于 Tauri 2、Rust 和 React。桌面工作方式保留多项目、多�
 
 ## 模块地图
 
-- `modules/agent`：统一 Agent 右侧界面、项目会话栏、多视口、消息、输入区、主机设置、手机配对页面。
+- `modules/agent`：统一 Agent 右侧界面、项目会话栏、多视口、消息、输入区、主机设置、手机配对页面、事件总线（`hostEvents.ts`）与协议操作常量表（`protocolOps.ts`）。
+- `modules/vcs`：Git 本地仓库状态、Diff、分支/提交历史、冲突处理、环境诊断与回合基线。
+- `modules/forge`：独立 GitHub 收件箱（`useForgeStore`）、Issue/PR 同步与评论渲染。
 - `modules/voice`：从原插件分离的桌面公共语音能力，沿用既有默认语音存储以保持配置兼容。
-- `modules/plugins`：轻量工具开关与右侧工具容器，不再承载各代理的独立运行时。
-- `modules/explorer`、`modules/editor`、`modules/markdown`、`modules/reader`：文件工作区和阅读编辑能力。
-- `modules/terminal`：普通终端、多视口、Shell 集成和搜索；已解除旧混合工作台耦合。
+- `modules/plugins`：轻量工具开关与右侧工具容器（JSON 格式化、文本对比、任务栏未读），不再承载各代理的独立运行时。
+- `modules/explorer`、`modules/editor`、`modules/markdown`、`modules/reader`：文件工作区和阅读编辑能力（PDF.js 静态资源通过 `build/pdfAssets.ts` 在构建时输出到 `dist/pdf-assets/`）。
+- `modules/terminal`：普通终端、多视口、Shell 集成和搜索；与 Agent 面板独立维护。
 - `modules/settings`、`modules/theme`、`modules/spaces`、`modules/tabs`：基础桌面体验。
-
-## 旧代码隔离
-
-用户要求尽量避免删除。旧 `pi-agent`、`codex-agent`、`antigravity-agent`、`workbench` 和依赖它的旧浏览器插件已退出入口和依赖图。当前文件权限同时阻止目录重命名，因此这些原文件暂时原位保留，并从 TypeScript、代码检查和测试入口中排除，供用户后续处理。
-
-Rust 旧 `pi_agent`、`codex_agent`、`antigravity_agent` 不再由模块表、状态管理或原生命令注册引用。不要为了通过旧测试重新暴露这些入口。
 
 ## 构建与审核
 
-新前端产物输出到 `dist-agent-host/`，避免清空旧 `dist`。其中 `mobile.html` 是手机浏览器入口；桌面包携带同目录资源，独立服务也可通过 `CODEV_WEB_DIR` 指定资源路径。
+前端统一构建产物输出到仓库根目录 `dist/`（桌面壳、设置页、手机端 `mobile.html` 以及 `pdf-assets/` 均位于此目录）。桌面包通过 Tauri 资源映射打包为 `web/`，独立服务也可通过 `CODEV_WEB_DIR` 指定资源路径。
 
 所有 Rust/Tauri 命令必须经过 `scripts/with-cargo-cache.mjs`，不能写仓库内 `target`，不能并行编译。
 
