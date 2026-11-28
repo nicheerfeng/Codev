@@ -1,5 +1,7 @@
 //! Shared Rust agent host: desktop and remote clients use the same service.
 mod acp;
+mod adapter;
+mod admin_commands;
 mod antigravity_history;
 mod asset_inventory;
 mod auth;
