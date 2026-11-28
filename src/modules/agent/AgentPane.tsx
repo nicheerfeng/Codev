@@ -93,6 +93,7 @@ function Conversation({
 }
 export function AgentPane({
   active = true,
+  dockSide = "right",
   workspaceRoots = [],
   onOpenFile,
   onOpenDiff,
@@ -100,6 +101,7 @@ export function AgentPane({
   mobile = false,
 }: {
   active?: boolean;
+  dockSide?: "left" | "right";
   workspaceRoots?: string[];
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (
@@ -531,7 +533,9 @@ export function AgentPane({
           </button>
         </div>
       )}
-      <div className="agent-body">
+      <div
+        className={`agent-body ${dockSide === "left" ? "is-dock-left" : ""}`}
+      >
         <main className="agent-main">
           {!state.selected &&
           !state.slots.some(Boolean) &&
@@ -870,13 +874,15 @@ export function AgentPane({
                   const original = sidebarWidth;
                   const node = event.currentTarget;
                   node.setPointerCapture(event.pointerId);
-                  const move = (e: PointerEvent) =>
+                  const move = (e: PointerEvent) => {
+                    const delta =
+                      dockSide === "left"
+                        ? e.clientX - start
+                        : start - e.clientX;
                     setSidebarWidth(
-                      Math.max(
-                        180,
-                        Math.min(420, original + start - e.clientX),
-                      ),
+                      Math.max(180, Math.min(420, original + delta)),
                     );
+                  };
                   const end = () => {
                     node.removeEventListener("pointermove", move);
                     node.removeEventListener("pointerup", end);

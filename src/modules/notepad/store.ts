@@ -85,7 +85,10 @@ type NotePadState = NotePad & {
   toggleDoneCollapsed: (projectId: string) => void;
   setAllCollapsed: (collapsed: boolean) => void;
   replaceFromMarkdown: (markdown: string) => void;
-  importJsonPad: (raw: unknown) => { projectsAdded: number; itemsAdded: number };
+  importJsonPad: (raw: unknown) => {
+    projectsAdded: number;
+    itemsAdded: number;
+  };
   moveNoteItem: (
     fromList: NoteListId,
     from: number,
@@ -365,12 +368,10 @@ export const useNotePad = create<NotePadState>((set, get) => ({
 
   emptyTrash: () =>
     patch(set, get, (pad) => ({
-      projects: pad.projects
-        .filter(isActiveProject)
-        .map((project) => ({
-          ...project,
-          items: project.items.filter(isActiveItem),
-        })),
+      projects: pad.projects.filter(isActiveProject).map((project) => ({
+        ...project,
+        items: project.items.filter(isActiveItem),
+      })),
     })),
 
   toggleProjectCollapsed: (projectId) =>
@@ -481,7 +482,9 @@ export const useNotePad = create<NotePadState>((set, get) => ({
   reorderProject: (from, to) =>
     patch(set, get, (pad) => {
       const active = pad.projects.filter(isActiveProject);
-      const deleted = pad.projects.filter((project) => !isActiveProject(project));
+      const deleted = pad.projects.filter(
+        (project) => !isActiveProject(project),
+      );
       return {
         projects: [...moveItem(active, from, to), ...deleted],
       };

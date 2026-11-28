@@ -127,7 +127,10 @@ export function NoteInlineMarkdown({
         {rest.length > 0 ? (
           <div className="line-clamp-1 break-words border-l border-border/60 pl-2 text-[10.5px] leading-[1.4] text-muted-foreground">
             {renderInlineTokens(
-              rest.map((line) => line.trim()).filter(Boolean).join(" "),
+              rest
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .join(" "),
               "r",
             )}
           </div>

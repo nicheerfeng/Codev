@@ -289,25 +289,68 @@ impl Host {
         auth.pending.clear();
     }
     pub fn remote_status(&self) -> Value {
+        let tailscale_ip = detect_tailscale_ip();
+        let tailscale_ip_str = tailscale_ip.map(|ip| ip.to_string());
         if let Some(listener) = lock(&self.remote).as_ref() {
             let port = listener.port;
-            let mut addresses = vec![format!("http://127.0.0.1:{port}")];
+            let mut addresses: Vec<String> = Vec::new();
+            if let Some(v4) = tailscale_ip {
+                addresses.push(format!("http://{v4}:{port}"));
+            }
             // Discover the route's LAN address without opening an outbound connection.
             if let Ok(socket) = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)) {
                 if socket.connect("192.0.2.1:80").is_ok() {
                     if let Ok(addr) = socket.local_addr() {
-                        if !addr.ip().is_loopback()
-                            && addr.ip() != IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+                        let ip = addr.ip();
+                        if !ip.is_loopback()
+                            && ip != IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+                            && !is_proxy_tun_ip(ip)
                         {
-                            addresses.push(format!("http://{}:{port}", addr.ip()));
+                            let lan_url = format!("http://{ip}:{port}");
+                            if !addresses.contains(&lan_url) {
+                                addresses.push(lan_url);
+                            }
                         }
                     }
                 }
             }
-            json!({"enabled":true,"port":port,"addresses":addresses,"encrypted":false})
+            addresses.push(format!("http://127.0.0.1:{port}"));
+            json!({
+                "enabled": true,
+                "port": port,
+                "addresses": addresses,
+                "encrypted": tailscale_ip.is_some(),
+                "tailscaleIp": tailscale_ip_str,
+            })
         } else {
-            json!({"enabled":false})
+            json!({
+                "enabled": false,
+                "tailscaleIp": tailscale_ip_str,
+            })
         }
+    }
+}
+
+fn detect_tailscale_ip() -> Option<Ipv4Addr> {
+    let socket = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.connect("100.100.100.100:80").ok()?;
+    let addr = socket.local_addr().ok()?;
+    if let IpAddr::V4(v4) = addr.ip() {
+        let octets = v4.octets();
+        if octets[0] == 100 && (octets[1] & 0xC0) == 64 {
+            return Some(v4);
+        }
+    }
+    None
+}
+
+fn is_proxy_tun_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let octets = v4.octets();
+            octets[0] == 198 && (octets[1] == 18 || octets[1] == 19)
+        }
+        IpAddr::V6(_) => false,
     }
 }
 

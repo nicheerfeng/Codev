@@ -11,14 +11,25 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowDown01Icon,
+  ArrowTurnBackwardIcon,
   ArrowUp01Icon,
   Cancel01Icon,
+  Copy01Icon,
   File01Icon,
+  GitForkIcon,
   PencilEdit01Icon,
+  StopIcon,
+  Tick02Icon,
+  VolumeHighIcon,
 } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -40,6 +51,7 @@ import {
   speakVoice,
   stopVoiceOutput,
   useVoiceOutput,
+  useVoiceScopeConfig,
 } from "@/modules/voice/output";
 import { splitInlineThinking } from "./inlineThinking";
 import { usePreferencesStore } from "@/modules/settings/preferences";
@@ -98,26 +110,39 @@ function formatClockTime(ts?: number): string {
 const Message = memo(function Message({
   message,
   canFork,
+  canEdit,
+  voicePlaybackEnabled,
   hideThinking,
   recoveredAfterFailure,
   onFork,
+  onEditToComposer,
   onOpenDiff,
 }: {
   message: AgentMessage;
   canFork?: boolean;
+  canEdit?: boolean;
+  voicePlaybackEnabled?: boolean;
   hideThinking?: boolean;
   recoveredAfterFailure?: boolean;
   onFork?: (entryId: string) => void;
+  onEditToComposer?: (text: string) => void;
   onOpenDiff?: (path: string, diff: string) => void;
 }) {
   const voice = useVoiceOutput();
   const [speakingThis, setSpeakingThis] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (voice.status !== "playing" && speakingThis) {
       setSpeakingThis(false);
     }
   }, [voice.status, speakingThis]);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
 
   if (message.kind === "toolCall" || message.kind === "toolResult") {
     const desc = describeToolCall(message);
@@ -304,20 +329,38 @@ const Message = memo(function Message({
         <div className="agent-message-actions">
           {clock && <span className="agent-msg-time">{clock}</span>}
           {resolved.text && (
-            <button
+            <Button
               type="button"
-              onClick={() =>
-                void navigator.clipboard
-                  ?.writeText(resolved.text)
-                  .catch((error) => useAgentStore.getState().report(error))
-              }
+              variant="ghost"
+              size="icon-xs"
+              title={copied ? "已复制" : "复制消息"}
+              aria-label={copied ? "已复制" : "复制消息"}
+              onClick={() => {
+                const copyOp = writeText(resolved.text).catch(() =>
+                  navigator.clipboard?.writeText(resolved.text),
+                );
+                void copyOp
+                  .then(() => {
+                    setCopied(true);
+                    toast.success("已复制到剪贴板");
+                  })
+                  .catch((error) => useAgentStore.getState().report(error));
+              }}
             >
-              复制
-            </button>
+              <HugeiconsIcon
+                icon={copied ? Tick02Icon : Copy01Icon}
+                size={13}
+                className={copied ? "text-emerald-500" : undefined}
+              />
+            </Button>
           )}
-          {!user && resolved.text && (
-            <button
+          {!user && voicePlaybackEnabled && resolved.text && (
+            <Button
               type="button"
+              variant="ghost"
+              size="icon-xs"
+              title={isPlaying ? "停止朗读" : "朗读消息"}
+              aria-label={isPlaying ? "停止朗读" : "朗读消息"}
               onClick={() => {
                 if (isPlaying) {
                   stopVoiceOutput();
@@ -328,23 +371,40 @@ const Message = memo(function Message({
                 }
               }}
             >
-              {isPlaying ? "停止朗读" : "朗读"}
-            </button>
+              <HugeiconsIcon
+                icon={isPlaying ? StopIcon : VolumeHighIcon}
+                size={13}
+              />
+            </Button>
           )}
-          {user &&
-            canFork &&
+          {user && canEdit && resolved.text && onEditToComposer && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              title="撤回到输入框重编辑"
+              aria-label="撤回到输入框重编辑"
+              onClick={() => onEditToComposer(resolved.text)}
+            >
+              <HugeiconsIcon icon={ArrowTurnBackwardIcon} size={13} />
+            </Button>
+          )}
+          {canFork &&
             message.sourceEventId &&
             onFork &&
             (() => {
               const entryId = message.sourceEventId;
               return (
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  title="从此消息分叉为新会话"
+                  aria-label="从此消息分叉为新会话"
                   onClick={() => onFork(entryId)}
-                  title="从这条消息分叉为新会话"
                 >
-                  分叉
-                </button>
+                  <HugeiconsIcon icon={GitForkIcon} size={13} />
+                </Button>
               );
             })()}
         </div>
@@ -834,6 +894,49 @@ export function AgentTranscript({
       behavior: "smooth",
     });
   };
+  const voiceScope = useVoiceScopeConfig();
+  const voicePlaybackEnabled = !!(
+    voiceScope?.enabled && voiceScope?.tts?.enabled
+  );
+  const lastUserMessageId = useMemo(() => {
+    for (let i = session.messages.length - 1; i >= 0; i -= 1) {
+      const m = session.messages[i];
+      if (m.role === "user") return m.id;
+    }
+    return undefined;
+  }, [session.messages]);
+  const handleEditToComposer = (text: string) => {
+    const store = useAgentStore.getState();
+    const current = store.sessions[session.id];
+    if (current && lastUserMessageId) {
+      const idx = current.messages.findIndex((m) => m.id === lastUserMessageId);
+      if (idx >= 0) {
+        useAgentStore.setState((state) => {
+          const target = state.sessions[session.id];
+          if (!target) return state;
+          return {
+            sessions: {
+              ...state.sessions,
+              [session.id]: {
+                ...target,
+                messages: target.messages.slice(0, idx),
+              },
+            },
+          };
+        });
+      }
+    }
+    store.setDraft(session.id, { text });
+    const root = scroll.current?.closest(".agent-viewport") ?? document;
+    const input = root.querySelector<HTMLTextAreaElement>(
+      ".agent-composer textarea",
+    );
+    if (input) {
+      input.focus();
+      const len = text.length;
+      input.setSelectionRange(len, len);
+    }
+  };
   const query = filter.trim().toLowerCase();
   const matches = useMemo(
     () =>
@@ -1162,7 +1265,15 @@ export function AgentTranscript({
                       canFork={
                         !session.readOnly && !!session.capabilities.supportsFork
                       }
+                      canEdit={
+                        !session.readOnly &&
+                        !running &&
+                        block.message.role === "user" &&
+                        block.message.id === lastUserMessageId
+                      }
+                      voicePlaybackEnabled={voicePlaybackEnabled}
                       onFork={onFork}
+                      onEditToComposer={handleEditToComposer}
                       onOpenDiff={onOpenDiff}
                     />
                   </div>
@@ -1224,21 +1335,34 @@ export function AgentTranscript({
       {userTurns.length >= 4 && (
         <nav className="agent-conv-nav" aria-label="对话回合快速跳转">
           {userTurns.slice(-12).map((turn) => (
-            <button
-              key={turn.id}
-              type="button"
-              title={`#${turn.index} ${turn.label}`}
-              onClick={() => {
-                userUntil.current = performance.now() + 1000;
-                scroll.current
-                  ?.querySelector<HTMLElement>(
-                    `[data-agent-message-id="${CSS.escape(turn.id)}"]`,
-                  )
-                  ?.scrollIntoView({ block: "start", behavior: "smooth" });
-              }}
-            >
-              {turn.index}
-            </button>
+            <Tooltip key={turn.id}>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={`跳转到第 ${turn.index} 轮`}
+                  onClick={() => {
+                    userUntil.current = performance.now() + 1000;
+                    scroll.current
+                      ?.querySelector<HTMLElement>(
+                        `[data-agent-message-id="${CSS.escape(turn.id)}"]`,
+                      )
+                      ?.scrollIntoView({ block: "start", behavior: "smooth" });
+                  }}
+                >
+                  {turn.index}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent
+                side="left"
+                sideOffset={8}
+                className="max-w-72 whitespace-pre-wrap break-words text-[11px] leading-relaxed"
+              >
+                <span className="mr-1.5 font-mono text-muted-foreground">
+                  #{turn.index}
+                </span>
+                {turn.label}
+              </TooltipContent>
+            </Tooltip>
           ))}
         </nav>
       )}

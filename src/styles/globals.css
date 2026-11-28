@@ -829,26 +829,71 @@ html *::-webkit-scrollbar {
 
 /* Compact bottom-right toast notifications */
 [data-sonner-toast][data-styled="true"] {
-  padding: 8px 12px;
-  font-size: 12px;
-  gap: 6px;
+  padding: 7px 11px !important;
+  min-height: 0 !important;
+  font-size: 12px !important;
+  gap: 6px !important;
 }
 [data-sonner-toast][data-styled="true"] [data-title] {
-  line-height: 1.35;
+  line-height: 1.3 !important;
 }
 [data-sonner-toast][data-styled="true"] [data-description] {
-  font-size: 11px;
-  line-height: 1.35;
+  font-size: 11px !important;
+  line-height: 1.3 !important;
 }
 [data-sonner-toast][data-styled="true"] [data-icon] {
-  width: 14px;
-  height: 14px;
+  width: 14px !important;
+  height: 14px !important;
 }
 [data-sonner-toast][data-styled="true"] [data-close-button] {
-  width: 16px;
-  height: 16px;
+  width: 16px !important;
+  height: 16px !important;
 }
 
+/* 全局开关统一采用低饱和莫兰迪雾蓝 + 清晰描边层次，兼顾注意力优先与状态辨识度 */
+[data-slot="switch"][data-state="unchecked"] {
+  background-color: color-mix(in srgb, var(--foreground) 9%, var(--background)) !important;
+  border-color: color-mix(in srgb, var(--foreground) 18%, transparent) !important;
+}
+[data-slot="switch"][data-state="unchecked"] [data-slot="switch-thumb"] {
+  background-color: color-mix(in srgb, var(--foreground) 48%, var(--background)) !important;
+  box-shadow: none !important;
+}
+[data-slot="switch"][data-state="checked"] {
+  background-color: color-mix(in srgb, #5b7a9d 58%, var(--background)) !important;
+  border-color: color-mix(in srgb, #7fa1c3 72%, transparent) !important;
+}
+[data-slot="switch"][data-state="checked"] [data-slot="switch-thumb"] {
+  background-color: #f4f7fb !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35) !important;
+}
+
+/* 全局设置界面（主设置窗口 + Agent 设置弹窗）统一采用注意力优先的克制风格 */
+:is(.agent-settings-dialog, .codev-settings-surface) [data-slot="button"][data-variant="default"] {
+  background-color: color-mix(in srgb, var(--foreground) 10%, var(--background)) !important;
+  color: var(--foreground) !important;
+  border: 1px solid color-mix(in srgb, var(--foreground) 24%, transparent) !important;
+  box-shadow: none !important;
+}
+:is(.agent-settings-dialog, .codev-settings-surface) [data-slot="button"][data-variant="default"]:hover {
+  background-color: color-mix(in srgb, var(--foreground) 16%, var(--background)) !important;
+}
+:is(.agent-settings-dialog, .codev-settings-surface) [data-slot="select-trigger"] {
+  height: 28px;
+  border-radius: 6px;
+  padding: 0 9px;
+  font-size: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  background: var(--background);
+}
+:is(.agent-settings-dialog, .codev-settings-surface) [data-slot="input"] {
+  height: 28px;
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  background: var(--background);
+}
 /* Notepad floating button subtle rotating border arc */
 @keyframes notepad-fab-spin {
   from {

@@ -38,6 +38,7 @@ function JsonFormatterTool() {
 export function ToolPanel({
   tool = "agent",
   active = true,
+  dockSide = "right",
   onOpenFile,
   onOpenDiff,
   workspaceRoots = [],
@@ -47,8 +48,13 @@ export function ToolPanel({
 }: {
   tool?: ToolId;
   active?: boolean;
+  dockSide?: "left" | "right";
   onOpenFile?: (path: string) => void;
-  onOpenDiff?: (path: string, diff: string, options?: { activate?: boolean }) => void;
+  onOpenDiff?: (
+    path: string,
+    diff: string,
+    options?: { activate?: boolean },
+  ) => void;
   workspaceRoots?: string[];
   activeRoot?: string | null;
   onAddWorkspaceRoot?: (path: string) => void;
@@ -105,6 +111,7 @@ export function ToolPanel({
             >
               <AgentPane
                 active={active && tool === "agent"}
+                dockSide={dockSide}
                 onOpenFile={onOpenFile}
                 onOpenDiff={onOpenDiff}
                 workspaceRoots={workspaceRoots}

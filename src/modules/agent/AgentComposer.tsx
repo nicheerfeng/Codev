@@ -22,7 +22,6 @@ import {
   ArrowUp01Icon,
   Delete02Icon,
   PencilEdit01Icon,
-  StopIcon,
 } from "@hugeicons/core-free-icons";
 import {
   canAcceptViewportSlot,
@@ -163,21 +162,30 @@ export function AgentComposer({ session }: { session: SessionView }) {
   ]);
 
   const readHistory = () => {
+    const seen = new Set<string>();
+    const merged: string[] = [];
+    const push = (raw: unknown) => {
+      if (typeof raw !== "string") return;
+      const text = raw.trim();
+      if (!text || seen.has(text)) return;
+      seen.add(text);
+      merged.push(text);
+    };
     try {
       const saved = JSON.parse(
         localStorage.getItem(`codev.agent.prompts:${session.id}`) ?? "[]",
       );
-      return Array.isArray(saved)
-        ? saved
-            .filter(
-              (item): item is string =>
-                typeof item === "string" && !!item.trim(),
-            )
-            .slice(0, 50)
-        : [];
+      if (Array.isArray(saved)) {
+        for (const item of saved) push(item);
+      }
     } catch {
-      return [];
+      /* optional prompt history */
     }
+    for (let i = session.messages.length - 1; i >= 0; i -= 1) {
+      const m = session.messages[i];
+      if (m.role === "user") push(m.text);
+    }
+    return merged.slice(0, 50);
   };
   const recordPrompt = (text: string) => {
     const value = text.trim();
@@ -586,6 +594,33 @@ export function AgentComposer({ session }: { session: SessionView }) {
           })}
         </div>
       )}
+      {(() => {
+        if (!session.statuses) return null;
+        const items = Object.entries(session.statuses)
+          .filter(
+            ([key, val]) =>
+              key !== "turnGit" &&
+              typeof val === "string" &&
+              val.trim().length > 0,
+          )
+          .map(([, val]) =>
+            String(val)
+              .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+              .replace(/\s+/g, " ")
+              .trim(),
+          )
+          .filter(Boolean);
+        if (!items.length) return null;
+        const joined = items.join(" · ");
+        return (
+          <div
+            className="mx-auto mb-1.5 max-w-[768px] truncate px-2 text-center text-[11px] text-muted-foreground/85 select-none"
+            title={joined}
+          >
+            {joined}
+          </div>
+        );
+      })()}
       <div className="agent-composer" data-agent-composer={session.id}>
         {!!draft.images.length && (
           <div className="agent-images">
@@ -983,13 +1018,13 @@ export function AgentComposer({ session }: { session: SessionView }) {
             <Button
               size="icon-sm"
               variant="secondary"
-              className="rounded-full"
+              className="rounded-full agent-stop-pulse"
               title="停止当前任务"
               aria-label="停止当前任务"
               disabled={!connected || session.state === "stopping"}
               onClick={() => void action("session.cancel")}
             >
-              <HugeiconsIcon icon={StopIcon} size={14} />
+              <span className="size-2.5 rounded-xs bg-current" />
             </Button>
           )}
           {(!busy || session.capabilities.supportsQueue) && (

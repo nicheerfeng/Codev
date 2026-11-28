@@ -19,7 +19,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  SettingCard,
+  SettingRow,
+  SettingSectionHeader,
+} from "@/modules/agent/SettingPrimitives";
 import { listVoiceConfig, readVoiceSecret, saveVoiceConfig } from "./native";
+import { notifyVoiceScopeConfigChanged } from "./output";
 import {
   VOICE_OPTIONS,
   type AsrConfig,
@@ -111,6 +117,7 @@ export function VoiceSettingsPanel({
     try {
       const all = await saveVoiceConfig(SCOPE, { ...draft, key });
       const next = all[SCOPE];
+      notifyVoiceScopeConfigChanged(next);
       setValue(next);
       setDraft(cloneInput(next));
       const secret = next.hasKey ? await readVoiceSecret(SCOPE) : "";
@@ -125,6 +132,193 @@ export function VoiceSettingsPanel({
       setBusy(false);
     }
   };
+
+  if (embedded) {
+    return (
+      <div className="space-y-4">
+        <SettingSectionHeader
+          title="小米语音"
+          description="一个 API Key 用于桌面 Agent 工作区的流式识别和朗读。"
+          actions={
+            <div className="flex items-center gap-1.5">
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  if (
+                    !dirty ||
+                    window.confirm("有未保存的语音设置，确定刷新？")
+                  )
+                    void load();
+                }}
+              >
+                <HugeiconsIcon icon={Refresh01Icon} size={14} />
+                刷新
+              </Button>
+              <Button size="sm" disabled={busy} onClick={() => void save()}>
+                <HugeiconsIcon icon={FloppyDiskIcon} size={14} />
+                保存
+              </Button>
+            </div>
+          }
+        />
+        <SettingCard>
+          <SettingRow
+            htmlFor="voice-enabled-switch"
+            title="启用小米语音"
+            description="开启后可使用下方的流式语音输入与消息朗读。"
+            control={
+              <Switch
+                id="voice-enabled-switch"
+                checked={draft.enabled}
+                onCheckedChange={(enabled) =>
+                  setDraft((current) =>
+                    current ? { ...current, enabled } : current,
+                  )
+                }
+                disabled={busy}
+                aria-label="启用小米语音"
+              />
+            }
+          />
+          <SettingRow
+            title="API Key"
+            description={
+              <span className="font-mono text-[10px]" title={path}>
+                {path}
+              </span>
+            }
+          >
+            <div className="flex items-center gap-2">
+              <Input
+                type={showKey ? "text" : "password"}
+                value={key}
+                placeholder="填写小米 MiMo API Key"
+                disabled={busy}
+                autoComplete="off"
+                onChange={(event) => setKey(event.target.value)}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                disabled={busy}
+                aria-label={showKey ? "隐藏 API Key" : "查看 API Key"}
+                title={showKey ? "隐藏 API Key" : "查看 API Key"}
+                onClick={() =>
+                  void (async () => {
+                    if (showKey) {
+                      setShowKey(false);
+                      return;
+                    }
+                    if (!key && value.hasKey)
+                      setKey(await readVoiceSecret(SCOPE));
+                    setShowKey(true);
+                  })()
+                }
+              >
+                <HugeiconsIcon
+                  icon={showKey ? ViewOffIcon : ViewIcon}
+                  size={14}
+                />
+              </Button>
+            </div>
+          </SettingRow>
+          <SettingRow
+            title="语音输入"
+            description="在输入框中使用流式语音识别转文字。"
+            control={
+              <div className="flex items-center gap-2">
+                <Select
+                  value={draft.asr.language}
+                  onValueChange={(language) =>
+                    updateAsr({ language: language as AsrConfig["language"] })
+                  }
+                  disabled={busy || !draft.enabled}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    aria-label="识别语言"
+                    className="w-24"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="zh">中文</SelectItem>
+                    <SelectItem value="en">英文</SelectItem>
+                    <SelectItem value="auto">自动检测</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Switch
+                  checked={draft.asr.enabled}
+                  onCheckedChange={(enabled) => updateAsr({ enabled })}
+                  disabled={busy || !draft.enabled}
+                  aria-label="启用语音输入"
+                />
+              </div>
+            }
+          />
+          <SettingRow
+            title="语音播放"
+            description="开启后，在助手回复下方显示朗读图标按钮。"
+            control={
+              <div className="flex items-center gap-2">
+                <Select
+                  value={draft.tts.voice}
+                  onValueChange={(voice) => updateTts({ voice })}
+                  disabled={busy || !draft.enabled}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    aria-label="朗读音色"
+                    className="w-24"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {VOICE_OPTIONS.map(([id, label]) => (
+                      <SelectItem key={id} value={id}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={draft.tts.mode}
+                  onValueChange={(mode) =>
+                    updateTts({ mode: mode as TtsConfig["mode"] })
+                  }
+                  disabled={busy || !draft.enabled}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    aria-label="播放方式"
+                    className="w-28"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="manual">点击播放</SelectItem>
+                    <SelectItem value="auto">自动播放</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Switch
+                  checked={draft.tts.enabled}
+                  onCheckedChange={(enabled) => updateTts({ enabled })}
+                  disabled={busy || !draft.enabled}
+                  aria-label="启用语音播放"
+                />
+              </div>
+            }
+          />
+        </SettingCard>
+        {message && (
+          <p className="text-[11px] text-muted-foreground">{message}</p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -216,8 +410,8 @@ export function VoiceSettingsPanel({
         </div>
       </section>
 
-      <div className="mt-3 flex gap-2">
-        <section className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/70 p-3">
+      <div className="mt-3 grid grid-cols-1 gap-2">
+        <section className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-border/70 p-3">
           <h3 className="shrink-0 text-xs font-medium">语音输入</h3>
           <Select
             value={draft.asr.language}
@@ -243,14 +437,14 @@ export function VoiceSettingsPanel({
             aria-label="启用语音输入"
           />
         </section>
-        <section className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/70 p-3">
+        <section className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-border/70 p-3">
           <h3 className="shrink-0 text-xs font-medium">语音播放</h3>
           <Select
             value={draft.tts.voice}
             onValueChange={(voice) => updateTts({ voice })}
             disabled={busy || !draft.enabled}
           >
-            <SelectTrigger aria-label="朗读音色" className="w-20">
+            <SelectTrigger aria-label="朗读音色" className="w-24">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -268,7 +462,7 @@ export function VoiceSettingsPanel({
             }
             disabled={busy || !draft.enabled}
           >
-            <SelectTrigger aria-label="播放方式" className="w-24">
+            <SelectTrigger aria-label="播放方式" className="w-28">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

@@ -5,6 +5,9 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import type { Layout, LayoutChangedMeta } from "react-resizable-panels";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { ArrowLeftRightIcon } from "@hugeicons/core-free-icons";
+import { GlobalTitleTooltip } from "@/components/GlobalTitleTooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -274,6 +277,12 @@ export default function App() {
   useEffect(() => {
     uiState.setItem("codev.dock.order", JSON.stringify(dockOrder));
   }, [dockOrder]);
+  const [dockSide, setDockSide] = useState<"left" | "right">(() =>
+    uiState.getItem("codev.dock.side") === "left" ? "left" : "right",
+  );
+  useEffect(() => {
+    uiState.setItem("codev.dock.side", dockSide);
+  }, [dockSide]);
 
   const totalForgeUnread = useForgeStore((state) => state.totalForgeUnread);
   const availableDockTabs = useMemo<DockTab[]>(
@@ -1333,267 +1342,331 @@ export default function App() {
           )}
 
           <main className="zoom-content flex min-h-0 flex-1 flex-col">
-            <ResizablePanelGroup
-              elementRef={panelGroupElementRef}
-              orientation="horizontal"
-              className="min-h-0 flex-1"
-              onLayoutChanged={(
-                _: Layout,
-                { isUserInteraction }: LayoutChangedMeta,
-              ) => {
-                if (!hasMeasurablePanelLayout()) return;
-                const width = sidebarRef.current?.getSize().inPixels ?? 0;
-                persistSidebarWidth(width, isUserInteraction);
-                const terminalWidth =
-                  terminalPanelRef.current?.getSize().inPixels ?? 0;
-                persistTerminalWidth(terminalWidth, isUserInteraction);
-              }}
-            >
-              <ResizablePanel
-                id="sidebar"
-                panelRef={sidebarRef}
-                defaultSize={
-                  needsInitialLayout
-                    ? `${initialFirstSizes.sidebar}px`
-                    : initialSidebarCollapsed
-                      ? "0px"
-                      : `${sidebarWidthRef.current}px`
-                }
-                minSize={`${SIDEBAR_MIN_WIDTH}px`}
-                collapsible
-                collapsedSize={0}
-                onResize={(size) => {
-                  if (!hasMeasurablePanelLayout()) return;
-                  persistSidebarCollapsed(size.inPixels <= 0);
-                }}
-              >
-                <div className="flex h-full min-h-0 flex-col border-r border-border/60 bg-card">
-                  <div className="min-h-0 flex-1 codev-panel-in">
-                    <PanelErrorBoundary title="文件树">
-                      <FileExplorer
-                        ref={explorerRef}
-                        roots={workspaceRoots}
-                        activeRoot={activeRoot}
-                        onAddRoot={(p) => void addRoot(p)}
-                        onRemoveRoot={(p) => void removeRoot(p)}
-                        onRenameRoot={renameWorkspaceRoot}
-                        onReorderRoot={reorderRoot}
-                        onSetActiveRoot={(p) => void setActiveRoot(p)}
-                        onOpenGit={
-                          gitUiEnabled
-                            ? (root) => {
-                                void setActiveRoot(root);
-                                setVcsModalRoot(root);
-                                setVcsModalOpen(true);
-                              }
-                            : undefined
-                        }
-                        onOpenGitDiff={(input) => openGitDiffTab(input)}
-                        activeFilePath={explorerActiveFilePath}
-                        onOpenFile={handleOpenFile}
-                        onOpenFileToSide={handleOpenFileToSide}
-                        onPathRenamed={handlePathRenamed}
-                        onPathDeleted={handlePathDeleted}
-                        onRevealInTerminal={cdInNewTab}
-                        pathDropTarget={explorerPathDropTarget}
-                      />
-                    </PanelErrorBoundary>
-                  </div>
-                </div>
-              </ResizablePanel>
-              <ResizableHandle withHandle />
-              <ResizablePanel id="main-content" minSize="60px">
-                <div className="relative h-full min-h-0">
-                  <WorkspaceSurface
-                    primaryTabs={primaryEditorTabs}
-                    primaryActiveId={primaryActiveId}
-                    secondaryTabs={secondaryEditorTabs}
-                    secondaryActiveId={secondaryActiveId}
-                    workspaceRoots={workspaceRoots}
-                    onSelectPrimary={selectPrimaryEditor}
-                    onSelectSecondary={selectSecondaryEditor}
-                    onClose={handleClose}
-                    onCloseTabsToLeft={handleCloseTabsToLeftInGroup}
-                    onCloseTabsToRight={handleCloseTabsToRightInGroup}
-                    onCloseAllTabs={handleCloseAllTabsInGroup}
-                    onPin={pinTab}
-                    onRename={handleRenameTab}
-                    onReorderPrimary={reorderPrimaryEditors}
-                    onReorderSecondary={reorderSecondaryEditors}
-                    onOverrideLanguage={setOverrideLanguage}
-                    onMoveToGroup={moveEditorToGroup}
-                    registerEditorHandle={registerEditorHandle}
-                    onEditorDirtyChange={handleEditorDirty}
-                    onSetMarkdownView={setMarkdownView}
-                    onSetHtmlView={setHtmlView}
-                    onFocusSearch={() => searchInlineRef.current?.focus()}
-                    onFocusEditor={focusEditor}
-                    onOpenGitDiff={(input) => openGitDiffTab(input)}
-                  />
-                </div>
-              </ResizablePanel>
-              <ResizableHandle withHandle />
-              <ResizablePanel
-                id="terminal-panel"
-                panelRef={terminalPanelRef}
-                defaultSize={
-                  needsInitialLayout
-                    ? `${initialFirstSizes.terminal}px`
-                    : initialTerminalCollapsed || terminalTabs.length === 0
-                      ? "0px"
-                      : `${terminalWidthRef.current}px`
-                }
-                minSize={`${TERMINAL_MIN_WIDTH}px`}
-                collapsible
-                collapsedSize={0}
-                onResize={(size) => {
-                  if (!hasMeasurablePanelLayout()) return;
-                  persistTerminalCollapsed(size.inPixels <= 1);
-                }}
-              >
-                <div className="flex h-full min-h-0 flex-col bg-card">
-                  {pluginEnabled && (
-                    <header
-                      ref={dockReorder.headerRef}
-                      className="flex h-8 shrink-0 items-center gap-1 border-b border-border/60 px-2"
-                    >
-                      {dockTabs.map((tab, index) => {
-                        const active =
-                          tab === "terminal"
-                            ? rightDockView === "terminal"
-                            : rightDockView === "tools" && toolView === tab;
-                        const label =
-                          tab === "terminal"
-                            ? "终端"
-                            : tab === "json"
-                              ? "JSON格式化"
-                              : tab === "diff"
-                                ? "文本对照"
-                                : tab === "git-inbox"
-                                  ? "Git 收件箱"
-                                  : "Agent";
-                        return (
-                          <Fragment key={tab}>
-                            {dockReorder.dropIndex === index && (
-                              <span
-                                aria-hidden="true"
-                                className="h-5 w-0.5 shrink-0 rounded-full bg-accent"
-                              />
-                            )}
-                            <button
-                              type="button"
-                              className={`flex h-6 cursor-grab items-center gap-1 rounded-sm px-2 text-[11px] active:cursor-grabbing ${
-                                active
-                                  ? "bg-accent text-foreground"
-                                  : "text-muted-foreground hover:bg-muted"
-                              } ${dockReorder.draggingTab === tab ? "opacity-50" : ""}`}
-                              onClick={() => selectDockTab(tab)}
-                              {...dockReorder.tabProps(tab)}
-                            >
-                              <span>{label}</span>
-                              {tab === "git-inbox" && totalForgeUnread > 0 && (
-                                <span className="rounded-full bg-primary/20 px-1 text-[9.5px] font-semibold text-primary">
-                                  {totalForgeUnread}
-                                </span>
-                              )}
-                            </button>
-                          </Fragment>
-                        );
-                      })}
-                      {dockReorder.dropIndex === dockTabs.length && (
-                        <span
-                          aria-hidden="true"
-                          className="h-5 w-0.5 shrink-0 rounded-full bg-accent"
+            {(() => {
+              const sidebarPanel = (
+                <ResizablePanel
+                  key="sidebar"
+                  id="sidebar"
+                  panelRef={sidebarRef}
+                  defaultSize={
+                    needsInitialLayout
+                      ? `${initialFirstSizes.sidebar}px`
+                      : initialSidebarCollapsed
+                        ? "0px"
+                        : `${sidebarWidthRef.current}px`
+                  }
+                  minSize={`${SIDEBAR_MIN_WIDTH}px`}
+                  collapsible
+                  collapsedSize={0}
+                  onResize={(size) => {
+                    if (!hasMeasurablePanelLayout()) return;
+                    persistSidebarCollapsed(size.inPixels <= 0);
+                  }}
+                >
+                  <div
+                    className={`flex h-full min-h-0 flex-col bg-card ${
+                      dockSide === "left"
+                        ? "border-l border-border/60"
+                        : "border-r border-border/60"
+                    }`}
+                  >
+                    <div className="min-h-0 flex-1 codev-panel-in">
+                      <PanelErrorBoundary title="文件树">
+                        <FileExplorer
+                          ref={explorerRef}
+                          roots={workspaceRoots}
+                          activeRoot={activeRoot}
+                          onAddRoot={(p) => void addRoot(p)}
+                          onRemoveRoot={(p) => void removeRoot(p)}
+                          onRenameRoot={renameWorkspaceRoot}
+                          onReorderRoot={reorderRoot}
+                          onSetActiveRoot={(p) => void setActiveRoot(p)}
+                          onOpenGit={
+                            gitUiEnabled
+                              ? (root) => {
+                                  void setActiveRoot(root);
+                                  setVcsModalRoot(root);
+                                  setVcsModalOpen(true);
+                                }
+                              : undefined
+                          }
+                          onOpenGitDiff={(input) => openGitDiffTab(input)}
+                          activeFilePath={explorerActiveFilePath}
+                          onOpenFile={handleOpenFile}
+                          onOpenFileToSide={handleOpenFileToSide}
+                          onPathRenamed={handlePathRenamed}
+                          onPathDeleted={handlePathDeleted}
+                          onRevealInTerminal={cdInNewTab}
+                          pathDropTarget={explorerPathDropTarget}
                         />
-                      )}
-                      <div className="flex-1" />
-                    </header>
-                  )}
-                  <div className="relative min-h-0 flex-1">
-                    <div
-                      className={
-                        rightDockView === "terminal"
-                          ? "absolute inset-0"
-                          : "hidden absolute inset-0"
-                      }
-                    >
-                      <TerminalPanel
-                        tabs={terminalTabs}
-                        showHeader={!pluginEnabled}
-                        visible={
-                          rightDockView === "terminal" &&
-                          !terminalPanelCollapsed
-                        }
-                        activeId={terminalActiveId}
-                        onSelect={setActiveId}
-                        onClose={handleClose}
-                        onNew={openNewTab}
-                        onDuplicate={newTab}
-                        onShowTerminals={showTerminals}
-                        onRename={handleRenameTab}
-                        onReorder={reorderTerminals}
-                        registerHandle={registerTerminalHandle}
-                        onSearchReady={handleSearchReady}
-                        onCwd={handleTerminalCwd}
-                        onExit={handleLeafExit}
-                        onFocusLeaf={handleFocusLeaf}
-                      />
+                      </PanelErrorBoundary>
                     </div>
+                  </div>
+                </ResizablePanel>
+              );
+
+              const mainPanel = (
+                <ResizablePanel
+                  key="main-content"
+                  id="main-content"
+                  minSize="60px"
+                >
+                  <div className="relative h-full min-h-0">
+                    <WorkspaceSurface
+                      primaryTabs={primaryEditorTabs}
+                      primaryActiveId={primaryActiveId}
+                      secondaryTabs={secondaryEditorTabs}
+                      secondaryActiveId={secondaryActiveId}
+                      workspaceRoots={workspaceRoots}
+                      onSelectPrimary={selectPrimaryEditor}
+                      onSelectSecondary={selectSecondaryEditor}
+                      onClose={handleClose}
+                      onCloseTabsToLeft={handleCloseTabsToLeftInGroup}
+                      onCloseTabsToRight={handleCloseTabsToRightInGroup}
+                      onCloseAllTabs={handleCloseAllTabsInGroup}
+                      onPin={pinTab}
+                      onRename={handleRenameTab}
+                      onReorderPrimary={reorderPrimaryEditors}
+                      onReorderSecondary={reorderSecondaryEditors}
+                      onOverrideLanguage={setOverrideLanguage}
+                      onMoveToGroup={moveEditorToGroup}
+                      registerEditorHandle={registerEditorHandle}
+                      onEditorDirtyChange={handleEditorDirty}
+                      onSetMarkdownView={setMarkdownView}
+                      onSetHtmlView={setHtmlView}
+                      onFocusSearch={() => searchInlineRef.current?.focus()}
+                      onFocusEditor={focusEditor}
+                      onOpenGitDiff={(input) => openGitDiffTab(input)}
+                    />
+                  </div>
+                </ResizablePanel>
+              );
+
+              const dockPanel = (
+                <ResizablePanel
+                  key="terminal-panel"
+                  id="terminal-panel"
+                  panelRef={terminalPanelRef}
+                  defaultSize={
+                    needsInitialLayout
+                      ? `${initialFirstSizes.terminal}px`
+                      : initialTerminalCollapsed || terminalTabs.length === 0
+                        ? "0px"
+                        : `${terminalWidthRef.current}px`
+                  }
+                  minSize={`${TERMINAL_MIN_WIDTH}px`}
+                  collapsible
+                  collapsedSize={0}
+                  onResize={(size) => {
+                    if (!hasMeasurablePanelLayout()) return;
+                    persistTerminalCollapsed(size.inPixels <= 1);
+                  }}
+                >
+                  <div
+                    className={`flex h-full min-h-0 flex-col bg-card ${
+                      dockSide === "left" ? "border-r border-border/60" : ""
+                    }`}
+                  >
                     {pluginEnabled && (
+                      <header
+                        ref={dockReorder.headerRef}
+                        className="flex h-8 shrink-0 items-center gap-1 border-b border-border/60 px-2"
+                      >
+                        {dockTabs.map((tab, index) => {
+                          const active =
+                            tab === "terminal"
+                              ? rightDockView === "terminal"
+                              : rightDockView === "tools" && toolView === tab;
+                          const label =
+                            tab === "terminal"
+                              ? "终端"
+                              : tab === "json"
+                                ? "JSON格式化"
+                                : tab === "diff"
+                                  ? "文本对照"
+                                  : tab === "git-inbox"
+                                    ? "Git 收件箱"
+                                    : "Agent";
+                          return (
+                            <Fragment key={tab}>
+                              {dockReorder.dropIndex === index && (
+                                <span
+                                  aria-hidden="true"
+                                  className="h-5 w-0.5 shrink-0 rounded-full bg-accent"
+                                />
+                              )}
+                              <button
+                                type="button"
+                                className={`flex h-6 cursor-grab items-center gap-1 rounded-sm px-2 text-[11px] active:cursor-grabbing ${
+                                  active
+                                    ? "bg-accent text-foreground"
+                                    : "text-muted-foreground hover:bg-muted"
+                                } ${dockReorder.draggingTab === tab ? "opacity-50" : ""}`}
+                                onClick={() => selectDockTab(tab)}
+                                {...dockReorder.tabProps(tab)}
+                              >
+                                <span>{label}</span>
+                                {tab === "git-inbox" &&
+                                  totalForgeUnread > 0 && (
+                                    <span className="rounded-full bg-primary/20 px-1 text-[9.5px] font-semibold text-primary">
+                                      {totalForgeUnread}
+                                    </span>
+                                  )}
+                              </button>
+                            </Fragment>
+                          );
+                        })}
+                        {dockReorder.dropIndex === dockTabs.length && (
+                          <span
+                            aria-hidden="true"
+                            className="h-5 w-0.5 shrink-0 rounded-full bg-accent"
+                          />
+                        )}
+                        <div className="flex-1" />
+                        <button
+                          type="button"
+                          title={
+                            dockSide === "right"
+                              ? "左右切换 Agent 与文件树位置（当前：Agent 在右）"
+                              : "左右切换 Agent 与文件树位置（当前：Agent 在左）"
+                          }
+                          aria-label="左右切换文件树与 Agent 面板位置"
+                          className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                          onClick={() =>
+                            setDockSide((prev) =>
+                              prev === "right" ? "left" : "right",
+                            )
+                          }
+                        >
+                          <HugeiconsIcon icon={ArrowLeftRightIcon} size={13} />
+                        </button>
+                      </header>
+                    )}
+                    <div className="relative min-h-0 flex-1">
                       <div
                         className={
-                          rightDockView === "tools"
+                          rightDockView === "terminal"
                             ? "absolute inset-0"
                             : "hidden absolute inset-0"
                         }
                       >
-                        <ToolPanel
-                          tool={toolView}
-                          active={rightDockView === "tools"}
-                          onOpenFile={(path) => handleOpenFile(path, false)}
-                          onOpenDiff={(path, diff, options) => {
-                            const normalized = path
-                              .replace(/\\/g, "/")
-                              .replace(/^\/+([A-Za-z]:\/)/u, "$1");
-                            const matchedRoot = workspaceRoots.find((root) =>
-                              normalized.toLowerCase().startsWith(
-                                root
-                                  .replace(/\\/g, "/")
-                                  .replace(/^\/+([A-Za-z]:\/)/u, "$1")
-                                  .toLowerCase(),
-                              ),
-                            );
-                            const parent =
-                              normalized.replace(/[\\/][^\\/]+$/, "") ||
-                              normalized;
-                            const repoRoot = matchedRoot ?? parent;
-                            const normRepo = repoRoot
-                              .replace(/\\/g, "/")
-                              .replace(/^\/+([A-Za-z]:\/)/u, "$1")
-                              .replace(/\/+$/, "");
-                            const relPath = normalized
-                              .toLowerCase()
-                              .startsWith(`${normRepo.toLowerCase()}/`)
-                              ? normalized.slice(normRepo.length + 1)
-                              : normalized;
-                            openGitDiffTab({
-                              repoRoot: normRepo,
-                              path: relPath,
-                              diff,
-                              activate: options?.activate,
-                            });
-                          }}
-                          workspaceRoots={workspaceRoots}
-                          activeRoot={activeRoot}
-                          onAddWorkspaceRoot={(path) => void addRoot(path)}
-                          onFocusAgentTab={() => selectDockTab("agent")}
+                        <TerminalPanel
+                          tabs={terminalTabs}
+                          showHeader={!pluginEnabled}
+                          visible={
+                            rightDockView === "terminal" &&
+                            !terminalPanelCollapsed
+                          }
+                          activeId={terminalActiveId}
+                          onSelect={setActiveId}
+                          onClose={handleClose}
+                          onNew={openNewTab}
+                          onDuplicate={newTab}
+                          onShowTerminals={showTerminals}
+                          onRename={handleRenameTab}
+                          onReorder={reorderTerminals}
+                          registerHandle={registerTerminalHandle}
+                          onSearchReady={handleSearchReady}
+                          onCwd={handleTerminalCwd}
+                          onExit={handleLeafExit}
+                          onFocusLeaf={handleFocusLeaf}
                         />
                       </div>
-                    )}
+                      {pluginEnabled && (
+                        <div
+                          className={
+                            rightDockView === "tools"
+                              ? "absolute inset-0"
+                              : "hidden absolute inset-0"
+                          }
+                        >
+                          <ToolPanel
+                            tool={toolView}
+                            active={rightDockView === "tools"}
+                            dockSide={dockSide}
+                            onOpenFile={(path) => handleOpenFile(path, false)}
+                            onOpenDiff={(path, diff, options) => {
+                              const normalized = path
+                                .replace(/\\/g, "/")
+                                .replace(/^\/+([A-Za-z]:\/)/u, "$1");
+                              const matchedRoot = workspaceRoots.find((root) =>
+                                normalized.toLowerCase().startsWith(
+                                  root
+                                    .replace(/\\/g, "/")
+                                    .replace(/^\/+([A-Za-z]:\/)/u, "$1")
+                                    .toLowerCase(),
+                                ),
+                              );
+                              const parent =
+                                normalized.replace(/[\\/][^\\/]+$/, "") ||
+                                normalized;
+                              const repoRoot = matchedRoot ?? parent;
+                              const normRepo = repoRoot
+                                .replace(/\\/g, "/")
+                                .replace(/^\/+([A-Za-z]:\/)/u, "$1")
+                                .replace(/\/+$/, "");
+                              const relPath = normalized
+                                .toLowerCase()
+                                .startsWith(`${normRepo.toLowerCase()}/`)
+                                ? normalized.slice(normRepo.length + 1)
+                                : normalized;
+                              openGitDiffTab({
+                                repoRoot: normRepo,
+                                path: relPath,
+                                diff,
+                                activate: options?.activate,
+                              });
+                            }}
+                            workspaceRoots={workspaceRoots}
+                            activeRoot={activeRoot}
+                            onAddWorkspaceRoot={(path) => void addRoot(path)}
+                            onFocusAgentTab={() => selectDockTab("agent")}
+                          />
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </ResizablePanel>
-            </ResizablePanelGroup>
+                </ResizablePanel>
+              );
+
+              return (
+                <ResizablePanelGroup
+                  key={dockSide}
+                  elementRef={panelGroupElementRef}
+                  orientation="horizontal"
+                  className="min-h-0 flex-1"
+                  onLayoutChanged={(
+                    _: Layout,
+                    { isUserInteraction }: LayoutChangedMeta,
+                  ) => {
+                    if (!hasMeasurablePanelLayout()) return;
+                    const width = sidebarRef.current?.getSize().inPixels ?? 0;
+                    persistSidebarWidth(width, isUserInteraction);
+                    const terminalWidth =
+                      terminalPanelRef.current?.getSize().inPixels ?? 0;
+                    persistTerminalWidth(terminalWidth, isUserInteraction);
+                  }}
+                >
+                  {dockSide === "left" ? (
+                    <>
+                      {dockPanel}
+                      <ResizableHandle withHandle />
+                      {mainPanel}
+                      <ResizableHandle withHandle />
+                      {sidebarPanel}
+                    </>
+                  ) : (
+                    <>
+                      {sidebarPanel}
+                      <ResizableHandle withHandle />
+                      {mainPanel}
+                      <ResizableHandle withHandle />
+                      {dockPanel}
+                    </>
+                  )}
+                </ResizablePanelGroup>
+              );
+            })()}
           </main>
 
           <Toaster position="bottom-right" />
@@ -1637,6 +1710,7 @@ export default function App() {
           )}
 
           {notepadEnabled && <NotepadPopover />}
+          <GlobalTitleTooltip />
           <ImageLightbox />
           <CloseDialogs
             tabs={tabs}

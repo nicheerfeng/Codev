@@ -1,3 +1,4 @@
+import { GlobalTitleTooltip } from "@/components/GlobalTitleTooltip";
 import { WindowControls } from "@/components/WindowControls";
 import { useT } from "@/lib/i18n";
 import { IS_MAC, USE_CUSTOM_WINDOW_CONTROLS } from "@/lib/platform";
@@ -21,7 +22,7 @@ export function SettingsApp() {
   }, [init]);
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground select-none">
+    <div className="codev-settings-surface flex h-screen flex-col overflow-hidden bg-background text-foreground select-none">
       <header
         data-tauri-drag-region
         className={`flex h-10 shrink-0 items-center border-b border-border/60 bg-card/60 ${
@@ -79,6 +80,7 @@ export function SettingsApp() {
           </TabsContent>
         </Tabs>
       </main>
+      <GlobalTitleTooltip />
     </div>
   );
 }

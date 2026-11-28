@@ -1,10 +1,22 @@
 import { usePreferencesStore } from "@/modules/settings/preferences";
-import { setAutoCheckUpdates, setUpdateCheckHours } from "@/modules/settings/store";
+import {
+  setAutoCheckUpdates,
+  setUpdateCheckHours,
+} from "@/modules/settings/store";
 import { useCallback, useEffect, useState } from "react";
 import { getIdentifier, getVersion } from "@tauri-apps/api/app";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Refresh01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { SettingCard, SettingRow } from "@/modules/agent/SettingPrimitives";
 import {
   EMPTY_VERSION_CHANNEL,
   VersionChannelCard,
@@ -20,8 +32,8 @@ import {
 
 /** 主设置只负责 Codev 本机版本和 GitHub 发行检测。 */
 export function VersionSection() {
-  const enabled = usePreferencesStore(state => state.autoCheckUpdates);
-  const hours = usePreferencesStore(state => state.updateCheckHours);
+  const enabled = usePreferencesStore((state) => state.autoCheckUpdates);
+  const hours = usePreferencesStore((state) => state.updateCheckHours);
   const [channel, setChannel] = useState<VersionChannelState>({
     ...EMPTY_VERSION_CHANNEL,
     releaseUrl: CODEV_RELEASES_URL,
@@ -95,14 +107,46 @@ export function VersionSection() {
           />
         </Button>
       </div>
-      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border p-3 text-xs">
-        <label className="flex items-center gap-2"><input type="checkbox" checked={enabled} onChange={event => void setAutoCheckUpdates(event.target.checked)} />自动检查更新</label>
-        <label className="ml-auto flex items-center gap-2">检查间隔
-          <select aria-label="更新检查间隔" className="rounded border border-border bg-background px-2 py-1" value={hours} disabled={!enabled} onChange={event => void setUpdateCheckHours(Number(event.target.value))}>
-            {[1, 2, 4, 8, 12, 24, 48, 168].map(value => <option key={value} value={value}>{value} 小时</option>)}
-          </select>
-        </label>
-      </div>
+      <SettingCard>
+        <SettingRow
+          htmlFor="settings-auto-check-updates"
+          title="自动检查更新"
+          description="定时检查 GitHub 最新发行版本。"
+          control={
+            <Switch
+              id="settings-auto-check-updates"
+              checked={enabled}
+              onCheckedChange={(checked) => void setAutoCheckUpdates(checked)}
+            />
+          }
+        />
+        <SettingRow
+          title="检查间隔"
+          description="两次自动检查更新之间的时间间隔。"
+          control={
+            <Select
+              value={String(hours)}
+              disabled={!enabled}
+              onValueChange={(value) => void setUpdateCheckHours(Number(value))}
+            >
+              <SelectTrigger
+                size="sm"
+                className="w-24"
+                aria-label="更新检查间隔"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {[1, 2, 4, 8, 12, 24, 48, 168].map((value) => (
+                  <SelectItem key={value} value={String(value)}>
+                    {value} 小时
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          }
+        />
+      </SettingCard>
       <VersionChannelCard
         title="本机 Codev"
         fallback="未探测到"

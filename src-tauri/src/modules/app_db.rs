@@ -184,13 +184,48 @@ impl AppDb {
     }
 
     fn ensure_notepad_columns(connection: &Connection) -> Result<(), String> {
-        Self::ensure_column(connection, "notepad_projects", "collapsed", "INTEGER NOT NULL DEFAULT 0")?;
-        Self::ensure_column(connection, "notepad_projects", "done_collapsed", "INTEGER NOT NULL DEFAULT 1")?;
-        Self::ensure_column(connection, "notepad_projects", "created_at", "INTEGER NOT NULL DEFAULT 0")?;
-        Self::ensure_column(connection, "notepad_projects", "deleted_at", "INTEGER DEFAULT NULL")?;
-        Self::ensure_column(connection, "notepad_items", "created_at", "INTEGER NOT NULL DEFAULT 0")?;
-        Self::ensure_column(connection, "notepad_items", "done_at", "INTEGER DEFAULT NULL")?;
-        Self::ensure_column(connection, "notepad_items", "deleted_at", "INTEGER DEFAULT NULL")?;
+        Self::ensure_column(
+            connection,
+            "notepad_projects",
+            "collapsed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        Self::ensure_column(
+            connection,
+            "notepad_projects",
+            "done_collapsed",
+            "INTEGER NOT NULL DEFAULT 1",
+        )?;
+        Self::ensure_column(
+            connection,
+            "notepad_projects",
+            "created_at",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        Self::ensure_column(
+            connection,
+            "notepad_projects",
+            "deleted_at",
+            "INTEGER DEFAULT NULL",
+        )?;
+        Self::ensure_column(
+            connection,
+            "notepad_items",
+            "created_at",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        Self::ensure_column(
+            connection,
+            "notepad_items",
+            "done_at",
+            "INTEGER DEFAULT NULL",
+        )?;
+        Self::ensure_column(
+            connection,
+            "notepad_items",
+            "deleted_at",
+            "INTEGER DEFAULT NULL",
+        )?;
         Ok(())
     }
 
@@ -288,8 +323,7 @@ impl AppDb {
         let tx = self.connection.transaction().map_err(|e| e.to_string())?;
         let mut keep_project_ids: std::collections::HashSet<String> =
             std::collections::HashSet::new();
-        let mut keep_item_ids: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut keep_item_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for (p_idx, project) in pad.projects.iter().enumerate() {
             keep_project_ids.insert(project.id.clone());
@@ -498,7 +532,12 @@ impl AppDb {
         Ok(())
     }
 
-    pub fn record_shell_command(&self, shell: &str, cwd: &str, command: &str) -> Result<(), String> {
+    pub fn record_shell_command(
+        &self,
+        shell: &str,
+        cwd: &str,
+        command: &str,
+    ) -> Result<(), String> {
         let cmd = command.trim();
         if cmd.is_empty() {
             return Ok(());
@@ -566,7 +605,11 @@ impl AppDbState {
         Ok(())
     }
 
-    pub fn with_db<T>(&self, app: &AppHandle, f: impl FnOnce(&mut AppDb) -> Result<T, String>) -> Result<T, String> {
+    pub fn with_db<T>(
+        &self,
+        app: &AppHandle,
+        f: impl FnOnce(&mut AppDb) -> Result<T, String>,
+    ) -> Result<T, String> {
         let mut guard = self.inner.lock().map_err(|e| e.to_string())?;
         if guard.is_none() {
             let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -678,7 +721,10 @@ mod tests {
         assert_eq!(redundant_name, "Codev");
 
         let ui = db.load_ui_all().unwrap();
-        assert_eq!(ui.get("codev.sidebar.width").map(String::as_str), Some("320"));
+        assert_eq!(
+            ui.get("codev.sidebar.width").map(String::as_str),
+            Some("320")
+        );
         let cat: String = db
             .connection
             .query_row(
@@ -689,8 +735,10 @@ mod tests {
             .unwrap();
         assert_eq!(cat, "dock");
 
-        db.record_shell_command("pwsh", "D:/repo", "pnpm test").unwrap();
-        db.record_shell_command("pwsh", "D:/repo", "pnpm test").unwrap();
+        db.record_shell_command("pwsh", "D:/repo", "pnpm test")
+            .unwrap();
+        db.record_shell_command("pwsh", "D:/repo", "pnpm test")
+            .unwrap();
         let hist = db.load_shell_commands(10).unwrap();
         assert_eq!(hist.len(), 1);
         assert_eq!(hist[0].hit_count, 2);

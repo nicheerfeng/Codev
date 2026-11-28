@@ -86,10 +86,7 @@ pub fn fs_properties_inspect(
         .map(|n| n.to_string_lossy().into_owned())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| canon.clone());
-    let parent = p
-        .parent()
-        .map(super::to_canon)
-        .unwrap_or_default();
+    let parent = p.parent().map(super::to_canon).unwrap_or_default();
 
     Ok(PathPropertiesInitial {
         path: canon,

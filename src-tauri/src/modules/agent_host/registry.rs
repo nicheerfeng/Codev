@@ -286,11 +286,31 @@ fn codex_config_has_auth(codex_dir: &Path) -> bool {
 }
 
 pub fn diagnose_harness(d: &HarnessDescriptor) -> serde_json::Value {
-    let resolved = launch(d)
-        .ok()
-        .map(|(p, _)| super::metadata::display_path(&p));
+    let managed_codex_entry = if d.id == "acp:codex" {
+        managed_codex()
+    } else {
+        None
+    };
+    let codex_cli_path = if d.id == "acp:codex" {
+        resolve_binary("codex").map(|p| super::metadata::display_path(&p))
+    } else {
+        None
+    };
+    let resolved = if d.id == "acp:codex" {
+        if let Some((_, ref entry)) = managed_codex_entry {
+            Some(super::metadata::display_path(entry))
+        } else {
+            launch(d)
+                .ok()
+                .map(|(p, _)| super::metadata::display_path(&p))
+        }
+    } else {
+        launch(d)
+            .ok()
+            .map(|(p, _)| super::metadata::display_path(&p))
+    };
     let node_path = resolve_binary("node").map(|p| super::metadata::display_path(&p));
-    let managed = d.id == "acp:codex" && managed_codex().is_some();
+    let managed = managed_codex_entry.is_some();
     let mut hints: Vec<String> = vec![];
     let verdict = match d.id.as_str() {
         "pi" => {
@@ -321,7 +341,7 @@ pub fn diagnose_harness(d: &HarnessDescriptor) -> serde_json::Value {
                 .as_ref()
                 .is_some_and(|dir| dir.join("auth.json").is_file() || codex_config_has_auth(dir));
             let has_api_key = std::env::var_os("OPENAI_API_KEY").is_some_and(|v| !v.is_empty());
-            let codex_native = resolve_binary("codex").is_some();
+            let codex_native = codex_cli_path.is_some();
             if resolved.is_none() {
                 if node_path.is_none() {
                     hints.push("未检测到 Node.js，codex-acp 需要 Node 才可运行。".into());
@@ -368,6 +388,7 @@ pub fn diagnose_harness(d: &HarnessDescriptor) -> serde_json::Value {
         "verdict": verdict,
         "installed": resolved.is_some(),
         "resolvedPath": resolved,
+        "codexCliPath": codex_cli_path,
         "nodePath": node_path,
         "managedCodex": managed,
         "hints": hints,

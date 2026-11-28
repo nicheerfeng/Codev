@@ -587,6 +587,28 @@ impl Host {
         let operation = command.operation.as_str();
         let payload = &command.payload;
         match operation {
+            "host.quick_harnesses.get" => {
+                principal.require_desktop()?;
+                Ok(lock(&self.store)
+                    .preference("quickHarnesses")
+                    .unwrap_or(Value::Null))
+            }
+            "host.quick_harnesses.set" => {
+                principal.require_desktop()?;
+                let ids = payload
+                    .get("harnessIds")
+                    .and_then(Value::as_array)
+                    .ok_or("缺少代理列表")?;
+                let available = self.harnesses();
+                if ids.iter().any(|id| {
+                    !id.as_str()
+                        .is_some_and(|id| available.iter().any(|h| h.id == id))
+                }) {
+                    return Err("代理列表包含未注册的代理".into());
+                }
+                lock(&self.store).set_preference("quickHarnesses", &json!(ids))?;
+                Ok(json!({}))
+            }
             "host.project_harnesses.get" => {
                 principal.require_desktop()?;
                 Ok(lock(&self.store)
@@ -689,6 +711,25 @@ impl Host {
             "host.remote.disable" => {
                 principal.require_desktop()?;
                 self.disable_remote();
+                Ok(self.remote_status())
+            }
+            "host.remote.reset" => {
+                principal.require_desktop()?;
+                self.disable_remote();
+                let store = lock(&self.store);
+                let devices = store.devices()?;
+                for device in devices {
+                    let revoked = device
+                        .get("revoked")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    if !revoked {
+                        if let Some(id) = device.get("id").and_then(Value::as_str) {
+                            let _ = store.revoke_device(id);
+                        }
+                    }
+                }
+                let _ = store.set_preference("remoteWriteDevices", &json!([]));
                 Ok(self.remote_status())
             }
             "host.pair.start" => {

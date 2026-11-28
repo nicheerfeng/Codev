@@ -65,6 +65,9 @@ html[data-theme-material="frosted-glass"] :is(.bg-popover, [data-slot="popover-c
   border: 1px solid var(--frost-edge);
   box-shadow: var(--frost-shadow), inset 0 1px 0 var(--frost-edge);
 }
+html[data-theme-material="frosted-glass"] [data-slot="tooltip-content"] {
+  color: var(--popover-foreground) !important;
+}
 @media (prefers-reduced-transparency: reduce), (forced-colors: active) {
   html[data-theme-material="frosted-glass"] body { background: #eef2f6 !important; }
   html.dark[data-theme-material="frosted-glass"] body { background: #1b222b !important; }

@@ -1,12 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import {
-  Folder01Icon,
-  PlusSignIcon,
-  Settings01Icon,
-  Tick02Icon,
-  VolumeHighIcon,
-} from "@hugeicons/core-free-icons";
+import { Settings01Icon } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -16,13 +10,6 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { VoiceSettingsPanel } from "@/modules/voice/VoiceSettingsPanel";
 import {
@@ -43,7 +30,6 @@ import { PiAssetsPanel } from "./PiAssetsPanel";
 import { PiModelsPanel } from "./PiModelsPanel";
 import {
   SettingCard,
-  SettingNote,
   SettingRow,
   SettingSectionHeader,
 } from "./SettingPrimitives";
@@ -61,6 +47,7 @@ type DocsInfo = {
 };
 
 type HarnessTab = "general" | "models" | "skills" | "plugins";
+type GeneralTab = "prefs" | "voice" | "remote";
 
 const HARNESS_PANELS = [
   { id: "pi", label: "Pi" },
@@ -75,25 +62,11 @@ const HARNESS_TABS: ReadonlyArray<readonly [HarnessTab, string]> = [
   ["plugins", "插件"],
 ];
 
-function RemotePhoneGlyph() {
-  return (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className="shrink-0"
-    >
-      <rect x="6" y="2" width="12" height="20" rx="2.5" />
-      <line x1="11" y1="18.5" x2="13" y2="18.5" />
-    </svg>
-  );
-}
+const GENERAL_TABS: ReadonlyArray<readonly [GeneralTab, string]> = [
+  ["prefs", "偏好"],
+  ["voice", "语音"],
+  ["remote", "手机连接"],
+];
 
 export function AgentSettings({
   open,
@@ -103,19 +76,17 @@ export function AgentSettings({
   onClose: () => void;
 }) {
   const harnesses = useAgentStore((s) => s.harnesses);
-  const workspaces = useAgentStore((s) => s.workspaces);
-  const projectHarnesses = useAgentStore((s) => s.projectHarnesses);
-  const setProjectHarnesses = useAgentStore((s) => s.setProjectHarnesses);
+  const quickHarnesses = useAgentStore((s) => s.quickHarnesses);
+  const setQuickHarnesses = useAgentStore((s) => s.setQuickHarnesses);
   const [panel, setPanel] = useState("pi");
   const [piTab, setPiTab] = useState<HarnessTab>("general");
+  const [generalTab, setGeneralTab] = useState<GeneralTab>("prefs");
   const [acpTabs, setAcpTabs] = useState<Record<string, HarnessTab>>({});
   const [modelsOpened, setModelsOpened] = useState(false);
   const [modelsDirty, setModelsDirty] = useState(false);
   const [acpModelsDirty, setAcpModelsDirty] = useState(false);
   const [voiceOpened, setVoiceOpened] = useState(false);
   const [voiceDirty, setVoiceDirty] = useState(false);
-  const [projectId, setProjectId] = useState("");
-  const [savingProject, setSavingProject] = useState(false);
   const [piVersion, setPiVersion] = useState("");
   const [settingsError, setSettingsError] = useState("");
   const [remote, setRemote] = useState<Remote>({ enabled: false });
@@ -123,7 +94,6 @@ export function AgentSettings({
   const [devices, setDevices] = useState<Devices>({ devices: [], pending: [] });
   const [diagnoses, setDiagnoses] = useState<Record<string, Diagnosis>>({});
   const [policies, setPolicies] = useState<PolicyMap>({});
-  const [trustedExt, setTrustedExt] = useState<Record<string, boolean>>({});
   const [docsInfo, setDocsInfo] = useState<DocsInfo | null>(null);
   const [piAppendDraft, setPiAppendDraft] = useState("");
   const [codexAgentsDraft, setCodexAgentsDraft] = useState("");
@@ -152,7 +122,6 @@ export function AgentSettings({
           .command<{ items?: Diagnosis[] }>("harness.diagnose"),
         useAgentStore.getState().command<{
           policies?: PolicyMap;
-          trustedPiExtensions?: Record<string, boolean>;
         }>("host.policy.get"),
       ]);
       setRemote(remote);
@@ -161,7 +130,6 @@ export function AgentSettings({
         Object.fromEntries((diag?.items ?? []).map((item) => [item.id, item])),
       );
       setPolicies(pol?.policies ?? {});
-      setTrustedExt(pol?.trustedPiExtensions ?? {});
     } catch (e) {
       setSettingsError(String(e));
       report(e);
@@ -282,21 +250,6 @@ export function AgentSettings({
     }
   };
 
-  const addProject = async () => {
-    try {
-      const { open: openDirectory } = await import("@tauri-apps/plugin-dialog");
-      const cwd = await openDirectory({
-        directory: true,
-        multiple: false,
-        title: "选择 Agent 工作目录",
-      });
-      if (typeof cwd === "string")
-        await useAgentStore.getState().addWorkspace(cwd);
-    } catch (error) {
-      showError(error);
-    }
-  };
-
   const isHarnessPanel =
     panel === "pi" || panel === "acp:codex" || panel === "acp:antigravity";
   const activeTab: HarnessTab =
@@ -313,17 +266,11 @@ export function AgentSettings({
           title: "Antigravity",
           subtitle: "Google Antigravity CLI (ACP)",
         };
-      case "projects":
-        return {
-          title: "项目配置",
-          subtitle: "每个工作区的快捷创建入口与信任边界",
-        };
       case "general":
-        return { title: "通用设置", subtitle: "桌面通知与统一工作区行为" };
-      case "remote":
-        return { title: "手机连接", subtitle: "局域网移动控制与配对授权" };
-      case "voice":
-        return { title: "语音", subtitle: "流式语音输入与朗读配置" };
+        return {
+          title: "通用设置",
+          subtitle: "桌面通知、语音配置与手机连接",
+        };
       default:
         return { title: "Agent 设置", subtitle: "" };
     }
@@ -350,7 +297,7 @@ export function AgentSettings({
           >
             <div className="agent-settings-brand">
               <h2>Agent 设置</h2>
-              <p>代理 · 项目 · 工作区</p>
+              <p>代理 · 工作区</p>
             </div>
 
             <div className="agent-settings-nav-section">
@@ -388,24 +335,6 @@ export function AgentSettings({
             </div>
 
             <div className="agent-settings-nav-section">
-              <span className="agent-settings-nav-label">项目</span>
-              <Button
-                size="sm"
-                variant={panel === "projects" ? "secondary" : "ghost"}
-                className={cn(
-                  "w-full justify-start gap-2 px-2.5 text-xs",
-                  panel === "projects"
-                    ? "font-medium text-foreground"
-                    : "text-muted-foreground",
-                )}
-                onClick={() => setPanel("projects")}
-              >
-                <HugeiconsIcon icon={Folder01Icon} size={15} />
-                <span className="flex-1 truncate text-left">项目配置</span>
-              </Button>
-            </div>
-
-            <div className="agent-settings-nav-section">
               <span className="agent-settings-nav-label">工作区</span>
               <Button
                 size="sm"
@@ -416,44 +345,16 @@ export function AgentSettings({
                     ? "font-medium text-foreground"
                     : "text-muted-foreground",
                 )}
-                onClick={() => setPanel("general")}
-              >
-                <HugeiconsIcon icon={Settings01Icon} size={15} />
-                <span className="flex-1 truncate text-left">通用</span>
-              </Button>
-              <Button
-                size="sm"
-                variant={panel === "remote" ? "secondary" : "ghost"}
-                className={cn(
-                  "w-full justify-start gap-2 px-2.5 text-xs",
-                  panel === "remote"
-                    ? "font-medium text-foreground"
-                    : "text-muted-foreground",
-                )}
-                onClick={() => setPanel("remote")}
-              >
-                <RemotePhoneGlyph />
-                <span className="flex-1 truncate text-left">手机连接</span>
-                {remote.enabled && (
-                  <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" />
-                )}
-              </Button>
-              <Button
-                size="sm"
-                variant={panel === "voice" ? "secondary" : "ghost"}
-                className={cn(
-                  "w-full justify-start gap-2 px-2.5 text-xs",
-                  panel === "voice"
-                    ? "font-medium text-foreground"
-                    : "text-muted-foreground",
-                )}
                 onClick={() => {
-                  setPanel("voice");
+                  setPanel("general");
                   setVoiceOpened(true);
                 }}
               >
-                <HugeiconsIcon icon={VolumeHighIcon} size={15} />
-                <span className="flex-1 truncate text-left">语音</span>
+                <HugeiconsIcon icon={Settings01Icon} size={15} />
+                <span className="flex-1 truncate text-left">通用</span>
+                {remote.enabled && (
+                  <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" />
+                )}
               </Button>
             </div>
           </nav>
@@ -491,6 +392,39 @@ export function AgentSettings({
                               [panel]: id,
                             }));
                           }
+                        }}
+                      >
+                        {label}
+                      </Button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {panel === "general" && (
+                <div
+                  className="inline-flex shrink-0 items-center gap-0.5 rounded-lg border border-border/75 bg-muted/40 p-0.5"
+                  role="tablist"
+                  aria-label="通用设置"
+                >
+                  {GENERAL_TABS.map(([id, label]) => {
+                    const selected = generalTab === id;
+                    return (
+                      <Button
+                        key={id}
+                        role="tab"
+                        aria-selected={selected}
+                        size="xs"
+                        variant={selected ? "secondary" : "ghost"}
+                        className={cn(
+                          "px-2.5 text-xs",
+                          selected
+                            ? "font-medium shadow-xs"
+                            : "text-muted-foreground",
+                        )}
+                        onClick={() => {
+                          setGeneralTab(id);
+                          if (id === "voice") setVoiceOpened(true);
                         }}
                       >
                         {label}
@@ -578,277 +512,104 @@ export function AgentSettings({
                     <PiAssetsPanel kind={piTab} />
                   )}
 
-                {harnesses
-                  .filter((harness) =>
-                    ["pi", "acp:codex", "acp:antigravity"].includes(harness.id),
-                  )
-                  .map((harness) => {
-                    const docConfig =
-                      harness.id === "pi"
+                {HARNESS_PANELS.map(({ id, label }) => {
+                  const harness = harnesses.find((item) => item.id === id) ?? {
+                    id,
+                    displayName: label,
+                    kind:
+                      id === "pi" ? ("nativePi" as const) : ("acp" as const),
+                    installed: diagnoses[id]?.installed ?? false,
+                    supportsResume: true,
+                    supportsModels: true,
+                    supportsThinking: id !== "acp:antigravity",
+                  };
+                  const docConfig =
+                    harness.id === "pi"
+                      ? {
+                          id: "agent-pi-instructions",
+                          label: "Pi 全局追加指令",
+                          path: docsInfo?.piAppendSystemPath,
+                          value: piAppendDraft,
+                          savedValue: docsInfo?.piAppendSystem,
+                          disabled: !docsInfo,
+                          onChange: setPiAppendDraft,
+                          onSave: () =>
+                            void saveDocument("piAppendSystem", piAppendDraft),
+                        }
+                      : harness.id === "acp:codex"
                         ? {
-                            id: "agent-pi-instructions",
-                            label: "Pi 全局追加指令",
-                            path: docsInfo?.piAppendSystemPath,
-                            value: piAppendDraft,
-                            savedValue: docsInfo?.piAppendSystem,
+                            id: "agent-codex-instructions",
+                            label: "Codex 全局指令",
+                            path: docsInfo?.codexAgentsPath,
+                            value: codexAgentsDraft,
+                            savedValue: docsInfo?.codexAgents,
                             disabled: !docsInfo,
-                            onChange: setPiAppendDraft,
+                            onChange: setCodexAgentsDraft,
                             onSave: () =>
                               void saveDocument(
-                                "piAppendSystem",
-                                piAppendDraft,
+                                "codexAgents",
+                                codexAgentsDraft,
                               ),
                           }
-                        : harness.id === "acp:codex"
-                          ? {
-                              id: "agent-codex-instructions",
-                              label: "Codex 全局指令",
-                              path: docsInfo?.codexAgentsPath,
-                              value: codexAgentsDraft,
-                              savedValue: docsInfo?.codexAgents,
-                              disabled: !docsInfo,
-                              onChange: setCodexAgentsDraft,
-                              onSave: () =>
-                                void saveDocument(
-                                  "codexAgents",
-                                  codexAgentsDraft,
-                                ),
-                            }
-                          : {
-                              id: "agent-antigravity-instructions",
-                              label: "Antigravity 全局指令",
-                              path: docsInfo?.antigravityAgentsPath,
-                              value: antigravityAgentsDraft,
-                              savedValue: docsInfo?.antigravityAgents,
-                              disabled: !docsInfo,
-                              onChange: setAntigravityAgentsDraft,
-                              onSave: () =>
-                                void saveDocument(
-                                  "antigravityAgents",
-                                  antigravityAgentsDraft,
-                                ),
-                            };
-                    return (
-                      <div
-                        key={harness.id}
-                        hidden={
-                          panel !== harness.id ||
-                          (harness.id === "pi" && piTab !== "general") ||
-                          (harness.kind === "acp" &&
-                            (acpTabs[harness.id] ?? "general") !== "general")
-                        }
-                      >
-                        <HarnessGeneralPanel
-                          harness={harness}
-                          diagnosis={diagnoses[harness.id]}
-                          policy={policies[harness.id]}
-                          piVersion={piVersion}
-                          docConfig={docConfig}
-                          onSavePolicy={async (harnessId, patch) => {
-                            if (
-                              await act("host.policy.set", {
-                                harnessId,
-                                ...patch,
-                              })
-                            )
-                              toast.success("已更新代理权限策略");
-                          }}
-                        />
-                      </div>
-                    );
-                  })}
+                        : {
+                            id: "agent-antigravity-instructions",
+                            label: "Antigravity 全局指令",
+                            path: docsInfo?.antigravityAgentsPath,
+                            value: antigravityAgentsDraft,
+                            savedValue: docsInfo?.antigravityAgents,
+                            disabled: !docsInfo,
+                            onChange: setAntigravityAgentsDraft,
+                            onSave: () =>
+                              void saveDocument(
+                                "antigravityAgents",
+                                antigravityAgentsDraft,
+                              ),
+                          };
+                  const isVisible =
+                    panel === harness.id &&
+                    (harness.id === "pi"
+                      ? piTab === "general"
+                      : (acpTabs[harness.id] ?? "general") === "general");
+                  if (!isVisible) return null;
+                  return (
+                    <div key={harness.id}>
+                      <HarnessGeneralPanel
+                        harness={harness}
+                        diagnosis={diagnoses[harness.id]}
+                        policy={policies[harness.id]}
+                        piVersion={piVersion}
+                        quickCreateEnabled={quickHarnesses.includes(harness.id)}
+                        onToggleQuickCreate={(enabled) => {
+                          const next = enabled
+                            ? Array.from(
+                                new Set([...quickHarnesses, harness.id]),
+                              )
+                            : quickHarnesses.filter(
+                                (item) => item !== harness.id,
+                              );
+                          void setQuickHarnesses(next).catch(showError);
+                        }}
+                        docConfig={docConfig}
+                        onSavePolicy={async (harnessId, patch) => {
+                          if (
+                            await act("host.policy.set", {
+                              harnessId,
+                              ...patch,
+                            })
+                          )
+                            toast.success("已更新代理权限策略");
+                        }}
+                      />
+                    </div>
+                  );
+                })}
 
-                {panel === "projects" && (
+                {panel === "general" && generalTab === "prefs" && (
                   <section className="space-y-4">
                     <SettingSectionHeader
-                      title="已加载项目"
-                      count={workspaces.length}
-                      description="管理手动加入的 Agent 工作区目录，以及每个项目的快速创建入口与扩展信任级别。"
-                      actions={
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void addProject()}
-                        >
-                          <HugeiconsIcon icon={PlusSignIcon} size={13} />
-                          添加项目
-                        </Button>
-                      }
+                      title="工作区偏好"
+                      description="管理桌面端通知等全局行为。"
                     />
-                    {workspaces.length ? (
-                      (() => {
-                        const workspace =
-                          workspaces.find((item) => item.id === projectId) ??
-                          workspaces[0];
-                        const enabled = (
-                          projectHarnesses[workspace.id] ?? [
-                            "pi",
-                            "acp:codex",
-                            "acp:antigravity",
-                          ]
-                        ).filter((id) =>
-                          harnesses.some((harness) => harness.id === id),
-                        );
-                        const trustValue =
-                          trustedExt[workspace.cwd] === undefined
-                            ? "default"
-                            : trustedExt[workspace.cwd]
-                              ? "allow"
-                              : "deny";
-
-                        return (
-                          <div className="space-y-4">
-                            <SettingCard>
-                              <SettingRow
-                                title="当前项目"
-                                description={
-                                  <span className="font-mono text-[11px]">
-                                    {workspace.cwd}
-                                  </span>
-                                }
-                                control={
-                                  <Select
-                                    value={workspace.id}
-                                    onValueChange={setProjectId}
-                                  >
-                                    <SelectTrigger
-                                      size="sm"
-                                      className="w-52"
-                                      aria-label="选择项目"
-                                    >
-                                      <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {workspaces.map((item) => (
-                                        <SelectItem
-                                          key={item.id}
-                                          value={item.id}
-                                        >
-                                          {item.title}
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                }
-                              />
-
-                              <SettingRow
-                                title="新建线程快捷入口"
-                                description="勾选后，在右侧项目栏悬停该项目时将直接展示对应代理的新建按钮。"
-                              >
-                                <div className="flex flex-wrap gap-2">
-                                  {harnesses.map((harness) => {
-                                    const checked = enabled.includes(
-                                      harness.id,
-                                    );
-                                    return (
-                                      <button
-                                        key={harness.id}
-                                        type="button"
-                                        aria-pressed={checked}
-                                        disabled={savingProject}
-                                        onClick={() => {
-                                          setSavingProject(true);
-                                          void setProjectHarnesses(
-                                            workspace.id,
-                                            checked
-                                              ? enabled.filter(
-                                                  (id) => id !== harness.id,
-                                                )
-                                              : [...enabled, harness.id],
-                                          )
-                                            .catch(showError)
-                                            .finally(() =>
-                                              setSavingProject(false),
-                                            );
-                                        }}
-                                        className={cn(
-                                          "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors disabled:opacity-50",
-                                          checked
-                                            ? "border-primary/45 bg-primary/10 font-medium text-foreground"
-                                            : "border-border/70 bg-background/60 text-muted-foreground hover:border-border hover:text-foreground",
-                                        )}
-                                      >
-                                        <HarnessIcon
-                                          harnessId={harness.id}
-                                          harness={harness}
-                                          size={14}
-                                        />
-                                        <span>{harness.displayName}</span>
-                                        <span
-                                          aria-hidden="true"
-                                          className={cn(
-                                            "inline-flex size-4 items-center justify-center rounded-sm border",
-                                            checked
-                                              ? "border-primary bg-primary text-primary-foreground"
-                                              : "border-border bg-transparent",
-                                          )}
-                                        >
-                                          {checked && (
-                                            <HugeiconsIcon
-                                              icon={Tick02Icon}
-                                              size={11}
-                                            />
-                                          )}
-                                        </span>
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              </SettingRow>
-
-                              <SettingRow
-                                title="Pi 项目信任"
-                                description="控制 Pi 是否加载此项目的设置、资源和扩展；重新连接后生效。"
-                                control={
-                                  <Select
-                                    value={trustValue}
-                                    onValueChange={(value) =>
-                                      void act("host.policy.set", {
-                                        trustWorkspaceCwd: workspace.cwd,
-                                        trusted:
-                                          value === "default"
-                                            ? null
-                                            : value === "allow",
-                                      })
-                                    }
-                                  >
-                                    <SelectTrigger
-                                      size="sm"
-                                      className="w-40"
-                                      aria-label="Pi 项目信任"
-                                    >
-                                      <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      <SelectItem value="default">
-                                        Pi 默认设置
-                                      </SelectItem>
-                                      <SelectItem value="allow">
-                                        信任项目
-                                      </SelectItem>
-                                      <SelectItem value="deny">
-                                        不信任项目
-                                      </SelectItem>
-                                    </SelectContent>
-                                  </Select>
-                                }
-                              />
-                            </SettingCard>
-                          </div>
-                        );
-                      })()
-                    ) : (
-                      <SettingNote>
-                        暂无项目，点击右上角「添加项目」选择工作目录。
-                      </SettingNote>
-                    )}
-                  </section>
-                )}
-
-                {panel === "general" && (
-                  <section className="space-y-4">
-                    <SettingSectionHeader title="工作区偏好" />
                     <SettingCard>
                       <SettingRow
                         htmlFor="agent-notify-switch"
@@ -870,7 +631,7 @@ export function AgentSettings({
                 )}
 
                 {open && voiceOpened && (
-                  <div hidden={panel !== "voice"}>
+                  <div hidden={panel !== "general" || generalTab !== "voice"}>
                     <VoiceSettingsPanel
                       embedded
                       onDirtyChange={setVoiceDirty}
@@ -878,7 +639,7 @@ export function AgentSettings({
                   </div>
                 )}
 
-                {panel === "remote" && (
+                {panel === "general" && generalTab === "remote" && (
                   <RemoteSettingsPanel
                     remote={remote}
                     port={port}
@@ -905,6 +666,23 @@ export function AgentSettings({
                         })
                         .catch(showError)
                     }
+                    onRefreshStatus={() => void refresh()}
+                    onReset={() => {
+                      if (
+                        !window.confirm(
+                          "确定停止手机连接服务并清空所有已配对设备与配置？",
+                        )
+                      )
+                        return;
+                      void act("host.remote.reset").then((ok) => {
+                        if (!ok) return;
+                        setPair(null);
+                        setQr("");
+                        setAddress("");
+                        setPort("7331");
+                        toast.success("已清空手机连接配置");
+                      });
+                    }}
                     onAct={act}
                   />
                 )}

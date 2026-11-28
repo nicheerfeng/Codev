@@ -50,12 +50,14 @@ type State = {
   drafts: Record<string, Draft>;
   sendRevisions: Record<string, number>;
   temporarySessions: string[];
+  quickHarnesses: string[];
   projectHarnesses: Record<string, string[]>;
   unread: string[];
   initDesktop: () => Promise<void>;
   connectRemote: (options: ConnectionOptions) => void;
   select: (id: string, viewport?: number) => Promise<void>;
   createSession: (workspaceId?: string, harnessId?: string) => Promise<void>;
+  setQuickHarnesses: (harnessIds: string[]) => Promise<void>;
   setProjectHarnesses: (
     workspaceId: string,
     harnessIds: string[],
@@ -515,6 +517,14 @@ function establish(options: ConnectionOptions, mobile: boolean) {
     const state = useAgentStore.getState();
     if (!mobile) {
       void agentClient
+        .request<string[] | null>("host.quick_harnesses.get")
+        .then((quickHarnesses) => {
+          if (Array.isArray(quickHarnesses)) {
+            useAgentStore.setState({ quickHarnesses });
+          }
+        })
+        .catch(state.report);
+      void agentClient
         .request<Record<string, string[]> | null>("host.project_harnesses.get")
         .then(async (projectHarnesses) => {
           if (projectHarnesses === null) {
@@ -588,6 +598,7 @@ export const useAgentStore = create<State>((set, get) => ({
   drafts: readStored<Record<string, Draft>>("codev.agent.drafts", {}),
   sendRevisions: {},
   temporarySessions: readStored<string[]>("codev.agent.temporarySessions", []),
+  quickHarnesses: ["pi", "acp:codex", "acp:antigravity"],
   projectHarnesses: {},
   unread: [],
   initDesktop: () => {
@@ -684,6 +695,10 @@ export const useAgentStore = create<State>((set, get) => ({
     set({ temporarySessions });
     storeView(view);
     await get().select(view.id);
+  },
+  setQuickHarnesses: async (harnessIds) => {
+    await get().command("host.quick_harnesses.set", { harnessIds });
+    set({ quickHarnesses: harnessIds });
   },
   setProjectHarnesses: async (workspaceId, harnessIds) => {
     await get().command("host.project_harnesses.set", {

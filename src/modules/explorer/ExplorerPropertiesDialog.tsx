@@ -46,7 +46,8 @@ function formatBytes(bytes: number): string {
     value /= 1024;
     idx += 1;
   }
-  const formatted = idx === 0 ? `${Math.round(value)}` : value.toFixed(value >= 100 ? 1 : 2);
+  const formatted =
+    idx === 0 ? `${Math.round(value)}` : value.toFixed(value >= 100 ? 1 : 2);
   return `${formatted} ${units[idx]}（${bytes.toLocaleString()} 字节）`;
 }
 
@@ -225,7 +226,9 @@ export function ExplorerPropertiesDialog({
                       </span>
                     ) : null}
                     {progress.cancelled ? (
-                      <span className="text-[11px] text-amber-500">已停止统计</span>
+                      <span className="text-[11px] text-amber-500">
+                        已停止统计
+                      </span>
                     ) : null}
                   </div>
                 </>
@@ -241,16 +244,24 @@ export function ExplorerPropertiesDialog({
               ) : null}
 
               <span className="text-muted-foreground">只读</span>
-              <span className="text-foreground">{info.readonly ? "是" : "否"}</span>
+              <span className="text-foreground">
+                {info.readonly ? "是" : "否"}
+              </span>
 
               <span className="text-muted-foreground">创建时间</span>
-              <span className="text-foreground">{formatTime(info.createdAt)}</span>
+              <span className="text-foreground">
+                {formatTime(info.createdAt)}
+              </span>
 
               <span className="text-muted-foreground">修改时间</span>
-              <span className="text-foreground">{formatTime(info.modifiedAt)}</span>
+              <span className="text-foreground">
+                {formatTime(info.modifiedAt)}
+              </span>
 
               <span className="text-muted-foreground">访问时间</span>
-              <span className="text-foreground">{formatTime(info.accessedAt)}</span>
+              <span className="text-foreground">
+                {formatTime(info.accessedAt)}
+              </span>
             </div>
 
             <div className="flex items-center justify-end gap-2 border-t border-border/60 pt-2.5">

@@ -21,7 +21,9 @@ let streamReady: Promise<void> | null = null;
 
 function publish(next: VoiceOutputState) {
   state = next;
-  listeners.forEach((listener) => { listener(); });
+  listeners.forEach((listener) => {
+    listener();
+  });
 }
 
 class PcmPlayer {
@@ -88,7 +90,9 @@ function decodeAudio(value: string): Uint8Array {
 
 function ensureStream() {
   streamReady ??= onVoiceStream((event) => {
-    streamHandlers.forEach((handler) => { handler(event); });
+    streamHandlers.forEach((handler) => {
+      handler(event);
+    });
   }).then(() => undefined);
   return streamReady;
 }
@@ -145,7 +149,9 @@ export async function speakVoice(text: string) {
         publish({ scope: null, status: "idle", error: null });
     });
     playback = player;
-    pendingAudio.get(streamId)?.forEach((chunk) => { player.push(chunk); });
+    pendingAudio.get(streamId)?.forEach((chunk) => {
+      player.push(chunk);
+    });
     pendingAudio.delete(streamId);
     if (finishedStreams.delete(streamId)) player.finish();
   } catch (error) {
@@ -176,17 +182,35 @@ export function onVoiceEvents(handler: (event: VoiceStreamEvent) => void) {
   return () => streamHandlers.delete(handler);
 }
 
+const configListeners = new Set<() => void>();
+let cachedScopeConfig: VoiceScopeView | null = null;
+
+export function notifyVoiceScopeConfigChanged(next: VoiceScopeView) {
+  cachedScopeConfig = next;
+  for (const listener of configListeners) listener();
+}
+
 export function useVoiceScopeConfig(): VoiceScopeView | null {
-  const [config, setConfig] = useState<VoiceScopeView | null>(null);
+  const [config, setConfig] = useState<VoiceScopeView | null>(
+    cachedScopeConfig,
+  );
   useEffect(() => {
     let cancelled = false;
-    void listVoiceConfig()
-      .then((value) => {
-        if (!cancelled) setConfig(value[SCOPE]);
-      })
-      .catch(() => undefined);
+    const sync = () => {
+      if (!cancelled && cachedScopeConfig) setConfig(cachedScopeConfig);
+    };
+    configListeners.add(sync);
+    if (!cachedScopeConfig) {
+      void listVoiceConfig()
+        .then((value) => {
+          cachedScopeConfig = value[SCOPE];
+          if (!cancelled) setConfig(cachedScopeConfig);
+        })
+        .catch(() => undefined);
+    }
     return () => {
       cancelled = true;
+      configListeners.delete(sync);
     };
   }, []);
   return config;

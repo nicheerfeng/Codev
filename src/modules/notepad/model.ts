@@ -344,7 +344,11 @@ export function markdownToNotePad(markdown: string, current: NotePad): NotePad {
       });
       continue;
     }
-    if (/^\s{2,}/.test(line) && activeSection && activeSection.items.length > 0) {
+    if (
+      /^\s{2,}/.test(line) &&
+      activeSection &&
+      activeSection.items.length > 0
+    ) {
       const last = activeSection.items[activeSection.items.length - 1];
       last.text = `${last.text}\n${line.slice(2)}`;
       continue;
@@ -391,7 +395,9 @@ export function markdownToNotePad(markdown: string, current: NotePad): NotePad {
           done: entry.done,
           doneAt: entry.done ? (matchedItem.doneAt ?? now) : null,
           updatedAt:
-            matchedItem.done !== entry.done ? now : (matchedItem.updatedAt ?? now),
+            matchedItem.done !== entry.done
+              ? now
+              : (matchedItem.updatedAt ?? now),
         };
       }
       return createItem(entry.text, entry.done);
@@ -421,9 +427,7 @@ export function markdownToNotePad(markdown: string, current: NotePad): NotePad {
 
   // Projects deleted in Markdown view are also soft-deleted (except locked tmp).
   const removedProjects = current.projects
-    .filter(
-      (p) => isActiveProject(p) && !usedProjectIds.has(p.id) && !p.locked,
-    )
+    .filter((p) => isActiveProject(p) && !usedProjectIds.has(p.id) && !p.locked)
     .map((p) => ({ ...p, deletedAt: now, updatedAt: now }));
 
   const hasTmp = nextActiveProjects.some((p) => p.id === "tmp");

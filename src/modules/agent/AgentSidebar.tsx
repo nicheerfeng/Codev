@@ -147,7 +147,7 @@ export function AgentSidebar({
     harnesses,
     unread,
     mobile,
-    projectHarnesses,
+    quickHarnesses,
   } = useAgentStore();
   const [search, setSearch] = useState("");
   const [archive, setArchive] = useState(false);
@@ -748,13 +748,7 @@ export function AgentSidebar({
                             </button>
                             {!mobile && (
                               <div className="agent-project-actions">
-                                {(
-                                  projectHarnesses[workspace.id] ?? [
-                                    "pi",
-                                    "acp:codex",
-                                    "acp:antigravity",
-                                  ]
-                                ).map((id) => {
+                                {quickHarnesses.map((id) => {
                                   const harness = harnesses.find(
                                     (item) => item.id === id,
                                   );

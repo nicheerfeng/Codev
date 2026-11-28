@@ -53,7 +53,10 @@ export function ContextViz({
       setCompactStartedAt(Date.now());
       setCompactPendingUsage(false);
       setElapsedSec(0);
-    } else if (session.state !== "compacting" && prevState.current === "compacting") {
+    } else if (
+      session.state !== "compacting" &&
+      prevState.current === "compacting"
+    ) {
       setCompactStartedAt(null);
       setCompactPendingUsage(true);
     }
@@ -90,9 +93,6 @@ export function ContextViz({
     percent !== null;
   if (!canShow) return null;
 
-  const r = 6;
-  const c = 2 * Math.PI * r;
-  const dash = percent !== null ? ((100 - percent) / 100) * c : c;
   const toneClass =
     percent !== null && percent >= 85
       ? "text-destructive"
@@ -100,49 +100,25 @@ export function ContextViz({
         ? "text-amber-500"
         : "text-muted-foreground";
 
+  const labelText =
+    session.state === "compacting"
+      ? `压缩中 ${elapsedSec}s`
+      : compactPendingUsage
+        ? "已压缩 · 待更新"
+        : percent !== null
+          ? `${percent.toFixed(0)}%`
+          : "0%";
+
   return (
     <Popover>
       <PopoverTrigger asChild>
         <button
           type="button"
-          className={`agent-context-pill ${toneClass}`}
+          className={`agent-context-pill tabular-nums ${toneClass}`}
           title="查看上下文占用明细与压缩操作"
           aria-label="查看上下文占用明细与压缩操作"
         >
-          <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-            <circle
-              cx="8"
-              cy="8"
-              r={r}
-              fill="none"
-              stroke="currentColor"
-              strokeOpacity="0.2"
-              strokeWidth="2"
-            />
-            {percent !== null && (
-              <circle
-                cx="8"
-                cy="8"
-                r={r}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeDasharray={c}
-                strokeDashoffset={dash}
-                strokeLinecap="round"
-                transform="rotate(-90 8 8)"
-              />
-            )}
-          </svg>
-          <span>
-            {session.state === "compacting"
-              ? `压缩中 ${elapsedSec}s`
-              : compactPendingUsage
-                ? "已压缩 · 待更新"
-                : percent !== null
-                  ? `${percent.toFixed(0)}%`
-                  : null}
-          </span>
+          <span>{labelText}</span>
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-64 p-3 text-xs">
