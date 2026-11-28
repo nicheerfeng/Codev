@@ -66,6 +66,8 @@ export type RootTreeHandle = {
   refreshPath: (path: string) => void;
   revealPath: (path: string) => void;
   expandedPaths: () => string[];
+  /** 若当前选中的唯一条目是目录则返回其路径，否则返回 null。 */
+  selectedDir: () => string | null;
 };
 
 export type RootTreeProps = {
@@ -98,6 +100,8 @@ export type RootTreeProps = {
   onSelectPath?: (path: string, multi: boolean) => void;
   /** Activates the root when the user interacts with its visible entries. */
   onActivateRoot?: () => void;
+  /** 隐藏单根内置搜索，交由 FileExplorer 顶部统一搜索栏托管。 */
+  onSearchInFolder?: (dirPath: string) => void;
   /** Hides the per-root toolbar when FileExplorer owns the workspace toolbar. */
   showToolbar?: boolean;
   /** Opens a file in the secondary editor group. */
@@ -246,6 +250,7 @@ export const RootTree = memo(
       showToolbar = true,
       onOpenFileToSide,
       onOpenGitDiff,
+      onSearchInFolder,
       pathDropTarget,
       sharedScroll = false,
     },
@@ -478,22 +483,30 @@ export const RootTree = memo(
         refreshPath: (path: string) => tree.refresh(path),
         revealPath: queueRevealPath,
         expandedPaths: () => [...tree.expanded],
+        selectedDir: () => {
+          if (selectedPaths.length !== 1) return null;
+          const path = selectedPaths[0];
+          return isDirAt(path) ? path : null;
+        },
       }),
       [
         entryPaths,
         scrollEntryIntoView,
         selectedPath,
+        selectedPaths,
         selectPath,
         rootPath,
         tree.beginCreate,
         tree.refresh,
         tree.expanded,
+        isDirAt,
         queueRevealPath,
       ],
     );
 
     useGlobalShortcuts({
       "explorer.search": () => {
+        if (onSearchInFolder) return;
         if (searchRef.current?.isFocused()) {
           setIsSearchOpen(false);
           return;
@@ -733,23 +746,25 @@ export const RootTree = memo(
           </div>
         ) : null}
 
-        <ExplorerSearch
-          ref={searchRef}
-          rootPath={rootPath}
-          onOpenFile={onOpenFile}
-          onRevealDirectory={revealSearchDirectory}
-          open={isSearchOpen}
-          onRequestClose={() => setIsSearchOpen(false)}
-          onActiveChange={setIsSearchActive}
-          onRevealInTerminal={onRevealInTerminal}
-          onAddAsRoot={onAddAsRoot}
-          onCopyPaths={onCopyPaths}
-          onCutPaths={onCutPaths}
-          clipboardAvailable={clipboardAvailable}
-          onPasteTo={onPasteTo}
-          selectedPaths={selectedPaths}
-          onSelectPath={selectPath}
-        />
+        {!onSearchInFolder ? (
+          <ExplorerSearch
+            ref={searchRef}
+            rootPath={rootPath}
+            onOpenFile={onOpenFile}
+            onRevealDirectory={revealSearchDirectory}
+            open={isSearchOpen}
+            onRequestClose={() => setIsSearchOpen(false)}
+            onActiveChange={setIsSearchActive}
+            onRevealInTerminal={onRevealInTerminal}
+            onAddAsRoot={onAddAsRoot}
+            onCopyPaths={onCopyPaths}
+            onCutPaths={onCutPaths}
+            clipboardAvailable={clipboardAvailable}
+            onPasteTo={onPasteTo}
+            selectedPaths={selectedPaths}
+            onSelectPath={selectPath}
+          />
+        ) : null}
 
         {!isSearchActive ? (
           <ContextMenu
@@ -960,6 +975,14 @@ export const RootTree = memo(
                         </ContextMenuItem>
                       )}
                     </>
+                  )}
+                  {onSearchInFolder && menuTarget.isDir && (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={() => onSearchInFolder(menuTarget.path)}
+                    >
+                      在此文件夹中搜索
+                    </ContextMenuItem>
                   )}
                   {onRevealInTerminal && (
                     <ContextMenuItem

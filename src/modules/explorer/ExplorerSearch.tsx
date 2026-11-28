@@ -54,6 +54,10 @@ const DEBOUNCE_MS = 300;
 
 type Props = {
   rootPath: string;
+  /** 可选：范围标签（用于显示当前限定搜索的子目录相对路径或目录名）。 */
+  scopeLabel?: string;
+  /** 清除子目录范围，切回根目录搜索。 */
+  onClearScope?: () => void;
   onOpenFile: (path: string) => void;
   onRevealDirectory?: (path: string) => void;
   onAddAsRoot?: (path: string) => void;
@@ -125,6 +129,8 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
   function ExplorerSearch(
     {
       rootPath,
+      scopeLabel,
+      onClearScope,
       onOpenFile,
       onRevealDirectory,
       onAddAsRoot,
@@ -311,6 +317,16 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
                   onRequestClose();
                   return;
                 }
+                if (
+                  e.key === "Backspace" &&
+                  !query &&
+                  scopeLabel &&
+                  onClearScope
+                ) {
+                  e.preventDefault();
+                  onClearScope();
+                  return;
+                }
                 if (visible.length > 0) {
                   if (e.key === "ArrowDown") {
                     e.preventDefault();
@@ -342,7 +358,49 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
               >
                 <HugeiconsIcon icon={Cancel01Icon} size={11} strokeWidth={2} />
               </button>
-            ) : null}
+            ) : (
+              <button
+                type="button"
+                onClick={onRequestClose}
+                className="absolute top-1/2 right-3.5 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                aria-label={t("Close")}
+                title="关闭搜索 (Esc)"
+              >
+                <HugeiconsIcon icon={Cancel01Icon} size={11} strokeWidth={2} />
+              </button>
+            )}
+          </div>
+        ) : null}
+        {open && scopeLabel ? (
+          <div className="flex shrink-0 items-center gap-1 border-b border-border/50 bg-muted/25 px-2.5 py-1 text-[11px] text-muted-foreground">
+            <span className="shrink-0">范围:</span>
+            <span
+              className="inline-flex min-w-0 items-center gap-1 rounded bg-accent/70 px-1.5 py-0.5 text-foreground"
+              title={rootPath}
+            >
+              <HugeiconsIcon
+                icon={Folder01Icon}
+                size={11}
+                strokeWidth={2}
+                className="shrink-0 text-muted-foreground"
+              />
+              <span className="truncate">{scopeLabel}</span>
+              {onClearScope ? (
+                <button
+                  type="button"
+                  onClick={onClearScope}
+                  className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-background/60 hover:text-foreground"
+                  aria-label="切回整个根目录搜索"
+                  title="切回整个根目录搜索"
+                >
+                  <HugeiconsIcon
+                    icon={Cancel01Icon}
+                    size={10}
+                    strokeWidth={2}
+                  />
+                </button>
+              ) : null}
+            </span>
           </div>
         ) : null}
 

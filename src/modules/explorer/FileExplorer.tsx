@@ -37,6 +37,8 @@ import { currentWorkspaceEnv } from "@/modules/workspace";
 import { copyToClipboard } from "./lib/contextActions";
 import { COMPACT_CONTENT, COMPACT_ITEM } from "./lib/menuItemClass";
 import { RootTree, type RootTreeHandle, type RootTreeProps } from "./RootTree";
+import { ExplorerSearch, type ExplorerSearchHandle } from "./ExplorerSearch";
+import { useGlobalShortcuts } from "@/modules/shortcuts";
 import { folderIconUrl } from "./lib/iconResolver";
 import { useFileTransfer } from "./lib/useFileTransfer";
 import { useSelectedFileMeta } from "./lib/useSelectedFileMeta";
@@ -183,6 +185,7 @@ function RootSection({
   onRename,
   onCreateFile,
   onCreateFolder,
+  onSearchInFolder,
   onOpenTerminal,
   onPaste,
   open,
@@ -205,6 +208,7 @@ function RootSection({
   onRename: (name: string) => void;
   onCreateFile: () => void;
   onCreateFolder: () => void;
+  onSearchInFolder?: () => void;
   onOpenTerminal?: () => void;
   onPaste?: () => void;
   open: boolean;
@@ -363,6 +367,14 @@ function RootSection({
           {onPaste ? (
             <ContextMenuItem className={COMPACT_ITEM} onSelect={onPaste}>
               {t("Paste")}
+            </ContextMenuItem>
+          ) : null}
+          {onSearchInFolder ? (
+            <ContextMenuItem
+              className={COMPACT_ITEM}
+              onSelect={onSearchInFolder}
+            >
+              在此文件夹中搜索
             </ContextMenuItem>
           ) : null}
           <AgentProjectMenuItems cwd={root} />
@@ -881,10 +893,61 @@ export const FileExplorer = memo(
       [onSetActiveRoot, roots],
     );
 
-    /** 在当前项目根打开文件搜索。 */
+    const [searchOpen, setSearchOpen] = useState(false);
+    const [searchActive, setSearchActive] = useState(false);
+    const [searchScope, setSearchScope] = useState<string | null>(null);
+    const searchRef = useRef<ExplorerSearchHandle>(null);
+
+    const searchRoot = searchScope ?? activeRoot ?? roots[0] ?? null;
+
+    const searchScopeLabel = (() => {
+      if (!searchRoot) return undefined;
+      const norm = searchRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+      const owner = roots.find((r) => {
+        const rn = r.replace(/\\/g, "/").replace(/\/+$/, "");
+        return norm === rn || norm.startsWith(`${rn}/`);
+      });
+      if (!owner) return basename(searchRoot) || searchRoot;
+      const on = owner.replace(/\\/g, "/").replace(/\/+$/, "");
+      const base = basename(owner) || owner;
+      if (norm === on) return base;
+      return `${base}/${norm.slice(on.length + 1)}`;
+    })();
+
+    const openSearchInFolder = useCallback((dirPath?: string | null) => {
+      setSearchScope(dirPath ?? null);
+      setSearchOpen(true);
+      requestAnimationFrame(() => searchRef.current?.focus());
+    }, []);
+
+    /** 在当前选中的目录（或项目根）打开文件搜索。 */
     const focusActiveSearch = useCallback(() => {
-      getActiveTree()?.focusSearch();
-    }, [getActiveTree]);
+      if (selectedPaths.length === 1) {
+        const chosen = selectedPaths[0];
+        if (roots.includes(chosen)) {
+          openSearchInFolder(chosen);
+          return;
+        }
+        for (const handle of treeRefs.current.values()) {
+          const dir = handle.selectedDir();
+          if (dir) {
+            openSearchInFolder(dir);
+            return;
+          }
+        }
+      }
+      openSearchInFolder(activeRoot ?? roots[0] ?? null);
+    }, [activeRoot, openSearchInFolder, roots, selectedPaths]);
+
+    useGlobalShortcuts({
+      "explorer.search": () => {
+        if (searchRef.current?.isFocused()) {
+          setSearchOpen(false);
+          return;
+        }
+        focusActiveSearch();
+      },
+    });
 
     /** 在当前项目根创建文件。 */
     const createActiveFile = useCallback(() => {
@@ -913,9 +976,9 @@ export const FileExplorer = memo(
           const active = document.activeElement;
           return active instanceof Node && c.contains(active);
         },
-        focusSearch: () => getActiveTree()?.focusSearch(),
+        focusSearch: () => focusActiveSearch(),
       }),
-      [getActiveTree],
+      [focusActiveSearch, getActiveTree],
     );
 
     return (
@@ -1074,6 +1137,35 @@ export const FileExplorer = memo(
           </ContextMenuContent>
         </ContextMenu>
 
+        {searchRoot ? (
+          <ExplorerSearch
+            ref={searchRef}
+            rootPath={searchRoot}
+            scopeLabel={searchScopeLabel}
+            onClearScope={
+              searchScope && activeRoot && searchScope !== activeRoot
+                ? () => setSearchScope(activeRoot)
+                : undefined
+            }
+            onOpenFile={treeProps.onOpenFile}
+            onRevealDirectory={(path) => {
+              setSearchOpen(false);
+              revealSearchDirectory(path);
+            }}
+            open={searchOpen}
+            onRequestClose={() => setSearchOpen(false)}
+            onActiveChange={setSearchActive}
+            onRevealInTerminal={treeProps.onRevealInTerminal}
+            onAddAsRoot={onAddRoot}
+            onCopyPaths={copyPaths}
+            onCutPaths={cutPaths}
+            clipboardAvailable={pasteAvailable}
+            onPasteTo={(path) => void pasteClipboard(path)}
+            selectedPaths={selectedPaths}
+            onSelectPath={selectPath}
+          />
+        ) : null}
+
         {roots.length === 0 ? (
           <ContextMenu>
             <ContextMenuTrigger asChild>
@@ -1113,7 +1205,10 @@ export const FileExplorer = memo(
                 : undefined
             }
           >
-            <div className="min-h-0 min-w-0 flex-1" data-explorer-empty="">
+            <div
+              className={`min-h-0 min-w-0 flex-1 ${searchActive ? "hidden" : ""}`}
+              data-explorer-empty=""
+            >
               <ScrollArea className="explorer-scroll-flow h-full min-h-0 min-w-0">
                 <div className="min-w-0">
                   {roots.map((root, index) => (
@@ -1142,6 +1237,7 @@ export const FileExplorer = memo(
                       onCreateFolder={() =>
                         treeRefs.current.get(root)?.createFolder()
                       }
+                      onSearchInFolder={() => openSearchInFolder(root)}
                       onOpenTerminal={
                         treeProps.onRevealInTerminal
                           ? () => treeProps.onRevealInTerminal?.(root)
@@ -1167,6 +1263,7 @@ export const FileExplorer = memo(
                         selectedPaths={selectedPaths}
                         onSelectPath={selectPath}
                         onActivateRoot={() => onSetActiveRoot(root)}
+                        onSearchInFolder={openSearchInFolder}
                         showToolbar={false}
                         {...treeProps}
                         onPathRenamed={handleTreePathRenamed}
